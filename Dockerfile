@@ -12,7 +12,7 @@ RUN dotnet restore src/M3Undle.Web/M3Undle.Web.csproj
 
 COPY src/ src/
 COPY branding/ branding/
-RUN dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -c Release -o /app/publish --no-restore /p:UseAppHost=false
+RUN dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -c Release -o /app/publish /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
