@@ -1,0 +1,252 @@
+@using M3Undle.Web.Contracts.Providers
+@using System.Text.Json
+@inject HttpClient Http
+
+<MudDrawer Open="@Open" OpenChanged="@OnMudOpenChanged" Anchor="Anchor.End" Elevation="2"
+           Variant="DrawerVariant.Temporary" Width="600px">
+    <MudDrawerHeader>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.h6">Import from config.yaml</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Providers discovered in M3UNDLE_CONFIG_DIR</MudText>
+            </MudStack>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
+                               OnClick="() => OnReloadRequested.InvokeAsync()" Disabled="IsLoading" />
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               OnClick="() => OnMudOpenChanged(false)" />
+            </MudStack>
+        </MudStack>
+    </MudDrawerHeader>
+    <div class="pa-4" style="overflow-y:auto">
+        @if (!string.IsNullOrWhiteSpace(_importError))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_importError</MudAlert>
+        }
+        @if (!string.IsNullOrWhiteSpace(ConfigError))
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">@ConfigError</MudAlert>
+        }
+        @if (IsLoading)
+        {
+            <MudProgressCircular Indeterminate="true" />
+        }
+        else if (ConfigProviders.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
+        }
+        else
+        {
+            <MudTable Items="ConfigProviders" Hover="true" Dense="true">
+                <HeaderContent>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Playlist URL</MudTh>
+                    <MudTh>Status</MudTh>
+                    <MudTh></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Name</MudTd>
+                    <MudTd Style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        @context.PlaylistUrl
+                    </MudTd>
+                    <MudTd>
+                        @if (context.MissingEnvVars.Count > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                                Missing: @string.Join(", ", context.MissingEnvVars)
+                            </MudChip>
+                        }
+                        else if (IsAlreadyImported(context.Name))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Imported</MudChip>
+                        }
+                        else if (_probeStates.TryGetValue(context.Name, out var probe))
+                        {
+                            if (probe.IsProbing)
+                            {
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                            }
+                            else if (probe.Ok == true)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success">@($"{probe.ChannelCount:N0} channels")</MudChip>
+                            }
+                            else
+                            {
+                                <MudTooltip Text="@probe.Error">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Failed</MudChip>
+                                </MudTooltip>
+                            }
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Ready</MudChip>
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudStack Row="true" Spacing="1">
+                            @if (!IsAlreadyImported(context.Name) && context.MissingEnvVars.Count == 0)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                                           Disabled="@IsProbing(context.Name)"
+                                           OnClick="() => ProbeAsync(context.Name)">Test</MudButton>
+                            }
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       Disabled="@(IsAlreadyImported(context.Name) || context.MissingEnvVars.Count > 0 || _importingName == context.Name)"
+                                       OnClick="() => ImportAsync(context.Name)">
+                                @(_importingName == context.Name ? "Importing..." : "Import")
+                            </MudButton>
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </div>
+</MudDrawer>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public List<ConfigYamlProviderDto> ConfigProviders { get; set; } = [];
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public string? ConfigError { get; set; }
+    [Parameter] public List<ProviderDto> ImportedProviders { get; set; } = [];
+    [Parameter] public EventCallback OnReloadRequested { get; set; }
+    [Parameter] public EventCallback<string> OnImported { get; set; }
+
+    private string? _importError;
+    private string? _importingName;
+    private readonly Dictionary<string, ProbeState> _probeStates = new();
+
+    private sealed class ProbeState
+    {
+        public bool IsProbing { get; set; }
+        public bool? Ok { get; set; }
+        public int? ChannelCount { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private void OnMudOpenChanged(bool value)
+    {
+        if (!value)
+        {
+            _importError = null;
+            _probeStates.Clear();
+            OpenChanged.InvokeAsync(false);
+        }
+    }
+
+    private bool IsAlreadyImported(string name) =>
+        ImportedProviders.Any(p => p.Name == name);
+
+    private bool IsProbing(string name) =>
+        _probeStates.TryGetValue(name, out var s) && s.IsProbing;
+
+    private async Task ProbeAsync(string name)
+    {
+        if (!_probeStates.TryGetValue(name, out var state))
+        {
+            state = new ProbeState();
+            _probeStates[name] = state;
+        }
+
+        state.IsProbing = true;
+        state.Ok = null;
+        state.ChannelCount = null;
+        state.Error = null;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/v1/providers/config/probe",
+                new ProbeConfigProviderRequest { Name = name });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                state.Ok = false;
+                state.Error = await ReadErrorAsync(response);
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<ProbeConfigProviderResultDto>();
+            state.Ok = result?.Ok ?? false;
+            state.ChannelCount = result?.ChannelCount;
+            state.Error = result?.Error;
+        }
+        catch (Exception ex)
+        {
+            state.Ok = false;
+            state.Error = ex.Message;
+        }
+        finally
+        {
+            state.IsProbing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ImportAsync(string name)
+    {
+        _importError = null;
+        _importingName = name;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/v1/providers/config/import",
+                new ImportConfigProviderRequest { Name = name });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _importError = await ReadErrorAsync(response);
+                return;
+            }
+
+            var dto = await response.Content.ReadFromJsonAsync<ProviderDto>();
+            await OnImported.InvokeAsync(dto?.ProviderId ?? string.Empty);
+        }
+        catch (Exception ex)
+        {
+            _importError = $"Failed to import provider: {ex.Message}";
+        }
+        finally
+        {
+            _importingName = null;
+        }
+    }
+
+    private static async Task<string> ReadErrorAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(body))
+            return $"Request failed: {(int)response.StatusCode} {response.ReasonPhrase}";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.RootElement.TryGetProperty("title", out var title))
+                {
+                    var detail = doc.RootElement.TryGetProperty("detail", out var detailProp)
+                        ? detailProp.GetString()
+                        : null;
+                    return string.IsNullOrWhiteSpace(detail)
+                        ? title.GetString() ?? "Request failed"
+                        : $"{title.GetString()}: {detail}";
+                }
+
+                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var error in errors.EnumerateObject())
+                    {
+                        var first = error.Value.EnumerateArray().FirstOrDefault().GetString();
+                        if (!string.IsNullOrWhiteSpace(first)) return first;
+                    }
+                }
+            }
+        }
+        catch (JsonException) { }
+
+        return body;
+    }
+}
+

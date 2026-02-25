@@ -1,0 +1,102 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Web GUI (HTTP)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-web",
+      "program": "${workspaceFolder}/src/M3Undle.Web/bin/Debug/net10.0/M3Undle.Web.dll",
+      "cwd": "${workspaceFolder}/src/M3Undle.Web",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:5283",
+        "M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config"
+      },
+      "serverReadyAction": {
+        "action": "openExternally",
+        "pattern": "\\bNow listening on:\\s+https?://\\S+:([0-9]+)",
+        "uriFormat": "http://localhost:%s/"
+      }
+    },
+    {
+      "name": "Containers: Debug Web GUI (Docker, existing image)",
+      "type": "docker",
+      "request": "launch",
+      "preLaunchTask": "docker-run: m3undle-debug",
+      "platform": "netCore",
+      "netCore": {
+        "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
+      },
+      "dockerServerReadyAction": {
+        "action": "openExternally",
+        "pattern": "\\bNow listening on:\\s+https?://\\S+:([0-9]+)",
+        "uriFormat": "http://localhost:%s/"
+      }
+    },
+    {
+      "name": "Containers: Debug Web GUI (Docker, force rebuild)",
+      "type": "docker",
+      "request": "launch",
+      "preLaunchTask": "docker-run: force-debug",
+      "platform": "netCore",
+      "netCore": {
+        "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
+      },
+      "dockerServerReadyAction": {
+        "action": "openExternally",
+        "pattern": "\\bNow listening on:\\s+https?://\\S+:([0-9]+)",
+        "uriFormat": "http://localhost:%s/"
+      }
+    },
+    {
+      "name": "Debug CLI - Run Command",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/M3Undle.Cli/bin/Debug/net10.0/bndl.dll",
+      "args": [
+        "run",
+        "--config",
+        ".config/config.yaml",
+        "--profile",
+        "default",
+        "--verbose"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Debug CLI - Groups Command",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/M3Undle.Cli/bin/Debug/net10.0/bndl.dll",
+      "args": [
+        "groups",
+        "--config",
+        ".config/config.yaml",
+        "--profile",
+        "default",
+        "--verbose"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    },
+    {
+      "name": "Debug CLI - Version",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/M3Undle.Cli/bin/Debug/net10.0/bndl.dll",
+      "args": ["--version"],
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    }
+  ]
+}

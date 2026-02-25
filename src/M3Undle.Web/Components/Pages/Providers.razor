@@ -1,0 +1,489 @@
+@page "/providers"
+@using System.Text.Json
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts.Providers
+@inject HttpClient Http
+@inject AppEventBus EventBus
+@inject IRefreshTrigger RefreshTrigger
+@inject IDialogService DialogService
+@implements IDisposable
+
+<PageTitle>M3Undle</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Providers</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Configure upstream playlists, associate a profile, and preview discovered groups/channels.</MudText>
+        </MudStack>
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="OpenAddDrawer">Add</MudButton>
+            <MudBadge Content="@_configProviders.Count" Color="Color.Info" Overlap="true"
+                      Visible="@(_configProviders.Count > 0)">
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FileDownload"
+                           OnClick="() => _importDrawerOpen = true" Disabled="_isConfigLoading">Import</MudButton>
+            </MudBadge>
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@if (_isRefreshing)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            <span>Snapshot refresh in progress — Delete, Set Active, and Preview are disabled until it completes.</span>
+        </MudStack>
+    </MudAlert>
+}
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+}
+
+<MudPaper Class="pa-4" Elevation="1">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.h6">Configured Providers</MudText>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="_isLoading">Reload</MudButton>
+    </MudStack>
+
+    @if (_isLoading)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (_providers.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers configured yet.</MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_providers" Hover="true" Dense="true">
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Enabled</MudTh>
+                <MudTh>Last Refresh</MudTh>
+                <MudTh>Snapshots</MudTh>
+                <MudTh>Active</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Name</MudTd>
+                <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
+                <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
+                <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
+                <MudTd>
+                    @if (context.IsActive)
+                    {
+                        @if (context.LastRefresh?.Status == "fail")
+                        {
+                            @if (context.LatestSnapshots.Any(s => s.Status == "active"))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
+                            }
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">Active</MudChip>
+                        }
+                    }
+                    else
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" OnClick="() => SetActiveAsync(context)" Disabled="@_isRefreshing">Set Active</MudButton>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudStack Row="true" Spacing="1">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => BeginEdit(context)" />
+                        <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@_isRefreshing" />
+                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@_isRefreshing">Preview</MudButton>
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudPaper>
+
+@if (_isPreviewLoading || _preview is not null)
+{
+    <MudPaper Class="pa-4 mt-4" Elevation="1">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+            <MudText Typo="Typo.h6">Preview</MudText>
+            <MudSpacer />
+            <MudNumericField T="int" Label="Sample Size" @bind-Value="_previewSampleSize" Min="1" Max="50" Style="max-width: 120px;" />
+            <MudTextField Label="Group Filter" @bind-Value="_previewGroupFilter" Style="max-width: 220px;" />
+        </MudStack>
+
+        @if (_isPreviewLoading)
+        {
+            <MudProgressCircular Indeterminate="true" />
+        }
+        else if (_preview is not null)
+        {
+            <MudStack Spacing="1" Class="mb-3">
+                <MudText Typo="Typo.caption">Provider: @_preview.ProviderId</MudText>
+                <MudText Typo="Typo.caption">Source fetch: @_preview.Source.FetchRunId (@_preview.Source.FetchStartedUtc.ToString("u"))</MudText>
+                <MudText Typo="Typo.caption">Totals: @_preview.Totals.GroupCount groups, @_preview.Totals.ChannelCount channels</MudText>
+            </MudStack>
+
+            @if (_preview.Groups.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups available for this preview.</MudAlert>
+            }
+            else
+            {
+                <MudExpansionPanels>
+                    @foreach (var group in _preview.Groups)
+                    {
+                        <MudExpansionPanel Text="@($"{group.GroupName} ({group.ChannelCount})")">
+                            <MudTable Items="group.SampleChannels" Dense="true" Hover="true">
+                                <HeaderContent>
+                                    <MudTh>Channel</MudTh>
+                                    <MudTh>tvg-id</MudTh>
+                                    <MudTh>Stream</MudTh>
+                                </HeaderContent>
+                                <RowTemplate>
+                                    <MudTd>@context.DisplayName</MudTd>
+                                    <MudTd>@(context.TvgId ?? "-")</MudTd>
+                                    <MudTd>@(context.StreamUrlRedacted ?? (context.HasStreamUrl ? "Available" : "None"))</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        </MudExpansionPanel>
+                    }
+                </MudExpansionPanels>
+            }
+        }
+    </MudPaper>
+}
+
+<ProviderFormDrawer @bind-Open="_addDrawerOpen"
+                    EditingProvider="_editingProvider"
+                    Profiles="_profiles"
+                    Providers="_providers"
+                    OnSaved="OnProviderSaved" />
+
+<ProviderImportDrawer @bind-Open="_importDrawerOpen"
+                      ConfigProviders="_configProviders"
+                      IsLoading="_isConfigLoading"
+                      ConfigError="@_configError"
+                      ImportedProviders="_providers"
+                      OnReloadRequested="LoadConfigProvidersAsync"
+                      OnImported="OnProviderImported" />
+
+@code {
+    private readonly List<ProviderDto> _providers = [];
+    private readonly List<ProfileListItemDto> _profiles = [];
+    private readonly List<ConfigYamlProviderDto> _configProviders = [];
+
+    private bool _isLoading;
+    private bool _isRefreshing;
+    private bool _isConfigLoading;
+    private bool _isPreviewLoading;
+    private bool _addDrawerOpen;
+    private bool _importDrawerOpen;
+    private ProviderDto? _editingProvider;
+    private int _previewSampleSize = 10;
+    private string? _previewGroupFilter;
+    private ProviderPreviewDto? _preview;
+    private string? _error;
+    private string? _configError;
+
+    private readonly CancellationTokenSource _cts = new();
+    private IDisposable? _eventSubscription;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isRefreshing = RefreshTrigger.IsRefreshing;
+
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+
+        await Task.WhenAll(LoadAsync(), LoadConfigProvidersAsync());
+    }
+
+    private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.RefreshStarted)
+                {
+                    _isRefreshing = true;
+                    await InvokeAsync(StateHasChanged);
+                }
+                else if (evt.Kind == AppEventKind.RefreshCompleted)
+                {
+                    _isRefreshing = false;
+                    if (!_isLoading)
+                        await InvokeAsync(LoadAsync);
+                }
+                else if (!_isLoading)
+                {
+                    await InvokeAsync(LoadAsync);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
+    }
+
+    private void OpenAddDrawer()
+    {
+        _editingProvider = null;
+        _addDrawerOpen = true;
+    }
+
+    private void BeginEdit(ProviderDto provider)
+    {
+        _editingProvider = provider;
+        _addDrawerOpen = true;
+    }
+
+    private async Task OnProviderSaved() => await LoadAsync();
+
+    private async Task OnProviderImported(string importedProviderId)
+    {
+        await LoadAsync();
+
+        if (!_providers.Any(p => p.IsActive))
+        {
+            var imported = _providers.FirstOrDefault(p => p.ProviderId == importedProviderId);
+            if (imported is not null)
+            {
+                var confirmed = await DialogService.ShowMessageBox(
+                    "Set Active Provider",
+                    $"No provider is active. Set \"{imported.Name}\" as the active provider now?",
+                    yesText: "Set Active",
+                    cancelText: "Skip");
+
+                if (confirmed == true)
+                    await SetActiveAsync(imported);
+            }
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        _error = null;
+
+        try
+        {
+            var profiles = await Http.GetFromJsonAsync<List<ProfileListItemDto>>("/api/v1/profiles");
+            var providers = await Http.GetFromJsonAsync<List<ProviderDto>>("/api/v1/providers");
+
+            _profiles.Clear();
+            _profiles.AddRange(profiles ?? []);
+
+            _providers.Clear();
+            _providers.AddRange(providers ?? []);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load provider data: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteAsync(ProviderDto provider)
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            "Delete Provider",
+            $"Are you sure you want to delete \"{provider.Name}\"? This will permanently remove the provider and all associated data (fetch history, channel data, and profile links).",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true) return;
+
+        _error = null;
+
+        try
+        {
+            var response = await Http.DeleteAsync($"/api/v1/providers/{provider.ProviderId}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorAsync(response);
+                return;
+            }
+
+            if (_preview?.ProviderId == provider.ProviderId)
+                _preview = null;
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to delete provider: {ex.Message}";
+        }
+    }
+
+    private async Task ToggleEnabledAsync(ProviderDto provider)
+    {
+        _error = null;
+
+        try
+        {
+            var response = await Http.PatchAsync($"/api/v1/providers/{provider.ProviderId}/enabled",
+                JsonContent.Create(new SetProviderEnabledRequest { Enabled = !provider.Enabled }));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorAsync(response);
+                return;
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to toggle provider enabled: {ex.Message}";
+        }
+    }
+
+    private async Task SetActiveAsync(ProviderDto provider)
+    {
+        _error = null;
+
+        try
+        {
+            var response = await Http.PatchAsync($"/api/v1/providers/{provider.ProviderId}/active",
+                JsonContent.Create(new SetProviderActiveRequest { IsActive = true }));
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorAsync(response);
+                return;
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to set provider active: {ex.Message}";
+        }
+    }
+
+    private async Task LoadConfigProvidersAsync()
+    {
+        _isConfigLoading = true;
+        _configError = null;
+
+        try
+        {
+            var result = await Http.GetFromJsonAsync<List<ConfigYamlProviderDto>>("/api/v1/providers/config/available");
+            _configProviders.Clear();
+            _configProviders.AddRange(result ?? []);
+        }
+        catch (Exception ex)
+        {
+            _configError = $"Failed to load config.yaml providers: {ex.Message}";
+        }
+        finally
+        {
+            _isConfigLoading = false;
+        }
+    }
+
+    private async Task RefreshPreviewAsync(string providerId)
+    {
+        _isPreviewLoading = true;
+        _error = null;
+
+        try
+        {
+            var payload = new RefreshPreviewRequest
+            {
+                SampleSize = _previewSampleSize,
+                GroupContains = _previewGroupFilter,
+            };
+
+            using var response = await Http.PostAsJsonAsync($"/api/v1/providers/{providerId}/refresh-preview", payload);
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorAsync(response);
+                _preview = null;
+                return;
+            }
+
+            _preview = await response.Content.ReadFromJsonAsync<ProviderPreviewDto>();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to refresh preview: {ex.Message}";
+            _preview = null;
+        }
+        finally
+        {
+            _isPreviewLoading = false;
+        }
+    }
+
+    private static string FormatRefresh(ProviderLastRefreshDto? refresh)
+    {
+        if (refresh is null) return "No refresh yet";
+        if (refresh.Status == "running") return $"running since {refresh.StartedUtc:u}";
+        return $"{refresh.Status} @ {refresh.FinishedUtc?.ToString("u") ?? "?"}";
+    }
+
+    private static string FormatSnapshots(List<ProviderLatestSnapshotDto> snapshots)
+    {
+        if (snapshots.Count == 0) return "None";
+        return string.Join(" | ", snapshots.Select(x => $"{x.ProfileId}:{x.Status}:{x.CreatedUtc:u}"));
+    }
+
+    private static async Task<string> ReadErrorAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(body))
+            return $"Request failed: {(int)response.StatusCode} {response.ReasonPhrase}";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.RootElement.TryGetProperty("title", out var title))
+                {
+                    var detail = doc.RootElement.TryGetProperty("detail", out var detailProp)
+                        ? detailProp.GetString()
+                        : null;
+                    return string.IsNullOrWhiteSpace(detail)
+                        ? title.GetString() ?? "Request failed"
+                        : $"{title.GetString()}: {detail}";
+                }
+
+                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var error in errors.EnumerateObject())
+                    {
+                        var first = error.Value.EnumerateArray().FirstOrDefault().GetString();
+                        if (!string.IsNullOrWhiteSpace(first)) return first;
+                    }
+                }
+            }
+        }
+        catch (JsonException) { }
+
+        return body;
+    }
+}
+

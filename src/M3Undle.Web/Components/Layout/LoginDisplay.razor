@@ -1,0 +1,57 @@
+@using M3Undle.Web.Application
+@inject ISiteSettingsService SiteSettings
+@implements IDisposable
+
+@if (_authEnabled)
+{
+    <AuthorizeView>
+        <Authorized>
+            <MudMenu Label="@UserName" Color="Color.Inherit">
+                <MudMenuItem Href="Account/Manage">Manage Account</MudMenuItem>
+                <MudMenuItem>
+                    <form action="Account/Logout" method="post" class="d-inline">
+                        <AntiforgeryToken />
+                        <input type="hidden" name="ReturnUrl" value="@CurrentPath" />
+                        <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Text" Color="Color.Inherit">Logout</MudButton>
+                    </form>
+                </MudMenuItem>
+            </MudMenu>
+        </Authorized>
+        <NotAuthorized>
+            <MudButton Href="Account/Login" Variant="Variant.Text" Color="Color.Inherit">Login</MudButton>
+        </NotAuthorized>
+    </AuthorizeView>
+}
+
+@code {
+    [Inject]
+    private NavigationManager NavigationManager { get; set; } = default!;
+
+    private string UserName => Context?.User.Identity?.Name ?? "Account";
+    private string CurrentPath => NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthenticationStateTask { get; set; } = default!;
+
+    private AuthenticationState? Context { get; set; }
+    private bool _authEnabled;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Context = await AuthenticationStateTask;
+        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        SiteSettings.OnSettingsChanged += HandleSettingsChanged;
+    }
+
+    private async void HandleSettingsChanged()
+    {
+        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        SiteSettings.OnSettingsChanged -= HandleSettingsChanged;
+    }
+}
+

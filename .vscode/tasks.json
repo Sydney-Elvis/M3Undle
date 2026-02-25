@@ -1,0 +1,192 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build",
+			"type": "process",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"${workspaceFolder}/src/M3Undle.Cli/M3Undle.Cli.csproj",
+				"/property:GenerateFullPaths=true",
+				"/consoleloggerparameters:NoSummary"
+			],
+			"problemMatcher": "$msCompile",
+			"group": "build"
+		},
+		{
+			"label": "build-web",
+			"type": "process",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
+				"/property:GenerateFullPaths=true",
+				"/consoleloggerparameters:NoSummary"
+			],
+			"problemMatcher": "$msCompile"
+		},
+		{
+			"label": "watch-web",
+			"type": "process",
+			"command": "dotnet",
+			"args": [
+				"watch",
+				"--project",
+				"${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
+				"--",
+				"--urls",
+				"http://localhost:5283"
+			],
+			"options": {
+				"env": {
+					"ASPNETCORE_ENVIRONMENT": "Development",
+					"M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config"
+				}
+			},
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "mscompile",
+				"pattern": "$msCompile",
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "dotnet watch",
+					"endsPattern": "Now listening on:"
+				}
+			}
+		},
+		{
+			"type": "docker-build",
+			"label": "docker-build: debug",
+			"dockerBuild": {
+				"tag": "m3undle:web-debug",
+				"target": "final",
+				"dockerfile": "${workspaceFolder}/Dockerfile",
+				"context": "${workspaceFolder}"
+			},
+			"netCore": {
+				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
+			}
+		},
+		{
+			"type": "docker-run",
+			"label": "docker-run: m3undle-debug",
+			"dependsOn": [
+				"docker-build: debug"
+			],
+			"dockerRun": {
+				"containerName": "m3undle-dev",
+				"image": "m3undle:web-debug",
+				"env": {
+					"ASPNETCORE_ENVIRONMENT": "Development",
+					"ASPNETCORE_URLS": "http://+:8080",
+					"M3UNDLE_CONFIG_DIR": "/config"
+				},
+				"volumes": [
+					{
+						"localPath": "${workspaceFolder}/.config",
+						"containerPath": "/config",
+						"permissions": "ro"
+					}
+				],
+				"customOptions": "--user root --rm",
+				"ports": [
+					{
+						"hostPort": 8080,
+						"containerPort": 8080
+					}
+				]
+			},
+			"netCore": {
+				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
+				"enableDebugging": true
+			}
+		},
+		{
+			"type": "docker-run",
+			"label": "docker-run: force-debug",
+			"dependsOn": [
+				"docker-build: force-debug"
+			],
+			"dockerRun": {
+				"containerName": "m3undle-dev",
+				"env": {
+					"ASPNETCORE_ENVIRONMENT": "Development",
+					"ASPNETCORE_URLS": "http://+:8080",
+					"M3UNDLE_CONFIG_DIR": "/config"
+				},
+				"volumes": [
+					{
+						"localPath": "${workspaceFolder}/.config",
+						"containerPath": "/config",
+						"permissions": "ro"
+					}
+				],
+				"customOptions": "--user root --rm",
+				"ports": [
+					{
+						"hostPort": 8080,
+						"containerPort": 8080
+					}
+				]
+			},
+			"netCore": {
+				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
+				"enableDebugging": true
+			}
+		},
+		{
+			"type": "docker-run",
+			"label": "docker-run: release",
+			"dependsOn": [
+				"docker-build: debug"
+			],
+			"dockerRun": {
+				"customOptions": "--user root --rm",
+				"ports": [
+					{
+						"hostPort": 8080,
+						"containerPort": 8080
+					}
+				]
+			}
+		},
+		{
+			"label": "docker-stop: m3undle-debug",
+			"type": "process",
+			"command": "docker",
+			"args": [
+				"rm",
+				"-f",
+				"m3undle-debug"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "docker-clean: debug image",
+			"type": "process",
+			"command": "docker",
+			"args": [
+				"image",
+				"rm",
+				"-f",
+				"m3undle:web-debug"
+			],
+			"problemMatcher": []
+		},
+		{
+			"type": "docker-build",
+			"label": "docker-build: force-debug",
+			"dockerBuild": {
+				"tag": "m3undle:web-debug",
+				"target": "final",
+				"dockerfile": "${workspaceFolder}/Dockerfile",
+				"context": "${workspaceFolder}",
+				"customOptions": "--no-cache"
+			},
+			"netCore": {
+				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
+			}
+		}
+	]
+}

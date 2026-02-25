@@ -1,0 +1,123 @@
+@using Microsoft.AspNetCore.Components.Routing
+@using M3Undle.Web.Application
+@inject HttpClient Http
+@inject ISnackbar Snackbar
+@inject ISiteSettingsService SiteSettings
+@implements IDisposable
+
+<MudNavMenu>
+    <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home" OnClick="HandleNavClick">Overview</MudNavLink>
+    <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns" OnClick="HandleNavClick">Providers</MudNavLink>
+    <MudNavLink Href="settings" Icon="@Icons.Material.Filled.Settings" OnClick="HandleNavClick">Settings</MudNavLink>
+    <MudNavLink Href="logs" Icon="@Icons.Material.Filled.Article" OnClick="HandleNavClick">Logs</MudNavLink>
+</MudNavMenu>
+
+<MudDivider Class="my-2" />
+
+<MudNavMenu>
+    <MudNavLink Icon="@Icons.Material.Filled.Refresh" OnClick="TriggerRefreshAsync" Disabled="_isRefreshing">
+        @(_isRefreshing ? "Refreshing…" : "Trigger Refresh")
+    </MudNavLink>
+</MudNavMenu>
+
+@if (_authEnabled)
+{
+    <MudDivider Class="my-4" />
+
+    <AuthorizeView>
+        <Authorized>
+            <MudNavMenu>
+                <MudNavLink Href="Account/Manage" Icon="@Icons.Material.Filled.Person" OnClick="HandleNavClick">@context.User.Identity?.Name</MudNavLink>
+            </MudNavMenu>
+            <form action="Account/Logout" method="post" class="mt-2">
+                <AntiforgeryToken />
+                <input type="hidden" name="ReturnUrl" value="@_currentPath" />
+                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Logout" OnClick="HandleNavClick">
+                    Logout
+                </MudButton>
+            </form>
+        </Authorized>
+        <NotAuthorized>
+            <MudNavMenu>
+                <MudNavLink Href="Account/Register" Icon="@Icons.Material.Filled.PersonAdd" OnClick="HandleNavClick">Register</MudNavLink>
+                <MudNavLink Href="Account/Login" Icon="@Icons.Material.Filled.Login" OnClick="HandleNavClick">Login</MudNavLink>
+            </MudNavMenu>
+        </NotAuthorized>
+    </AuthorizeView>
+}
+
+@code {
+    [Parameter]
+    public EventCallback OnNavigate { get; set; }
+
+    [Inject]
+    private NavigationManager NavigationManager { get; set; } = default!;
+
+    private string _currentPath = string.Empty;
+    private bool _isRefreshing;
+    private bool _authEnabled;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        SiteSettings.OnSettingsChanged += HandleSettingsChanged;
+    }
+
+    private async void HandleSettingsChanged()
+    {
+        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        SiteSettings.OnSettingsChanged -= HandleSettingsChanged;
+    }
+
+    private Task HandleNavClick(MouseEventArgs _)
+    {
+        if (OnNavigate.HasDelegate)
+        {
+            return OnNavigate.InvokeAsync();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task TriggerRefreshAsync()
+    {
+        if (_isRefreshing) return;
+
+        _isRefreshing = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsync("/api/v1/snapshots/refresh", null);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Accepted)
+            {
+                Snackbar.Add("Refresh triggered — status will update when complete.", Severity.Success);
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+            {
+                Snackbar.Add("A refresh is already in progress.", Severity.Info);
+            }
+            else
+            {
+                Snackbar.Add($"Unexpected response: {(int)response.StatusCode}", Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to trigger refresh: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isRefreshing = false;
+            StateHasChanged();
+        }
+    }
+}
+

@@ -1,0 +1,100 @@
+@page "/logs"
+@using M3Undle.Web.Logging
+@using System.Threading.Channels
+@inject LogBroadcastSink Sink
+@inject InMemoryLogStore Store
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Logs — M3Undle</PageTitle>
+
+<MudText Typo="Typo.h5" Class="mb-4">Live Log</MudText>
+
+<MudPaper Elevation="2" Class="pa-0" Style="overflow:hidden">
+    <div id="log-container"
+         style="overflow-y:auto; max-height:75vh; font-family:monospace; font-size:0.80rem; padding:8px 12px">
+        @foreach (var entry in _entries)
+        {
+            <div style="margin-bottom:2px; white-space:pre-wrap; word-break:break-all">
+                <span style="color:var(--mud-palette-text-secondary)">@entry.Timestamp.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</span>
+                <MudChip T="string" Size="Size.Small" Color="@LevelColor(entry.Level)" Variant="Variant.Filled"
+                         Style="height:18px; font-size:0.70rem; padding:0 6px; margin:0 4px; vertical-align:middle">@entry.Level[..3].ToUpperInvariant()</MudChip>
+                @if (!string.IsNullOrEmpty(entry.EventType))
+                {
+                    <span style="color:var(--mud-palette-text-secondary); margin-right:6px">[@entry.EventType]</span>
+                }
+                <span>@entry.Message</span>
+                @if (!string.IsNullOrEmpty(entry.Exception))
+                {
+                    <div style="color:var(--mud-palette-error-text); margin-left:2em; white-space:pre-wrap">@entry.Exception</div>
+                }
+            </div>
+        }
+    </div>
+</MudPaper>
+
+@code {
+    private readonly List<LogEntry> _entries = [];
+    private readonly CancellationTokenSource _cts = new();
+    private IDisposable? _subscription;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _entries.AddRange(Store.GetRecent());
+
+        var reader = Sink.Subscribe(out _subscription);
+        _ = StreamLogsAsync(reader, _cts.Token);
+
+        await ScrollToBottomAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await ScrollToBottomAsync();
+    }
+
+    private async Task StreamLogsAsync(ChannelReader<LogEntry> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var entry in reader.ReadAllAsync(ct))
+            {
+                _entries.Add(entry);
+                if (_entries.Count > 500)
+                    _entries.RemoveAt(0);
+
+                await InvokeAsync(StateHasChanged);
+                await ScrollToBottomAsync();
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("scrollToBottom", "log-container");
+        }
+        catch (JSException) { }
+        catch (TaskCanceledException) { }
+    }
+
+    private static Color LevelColor(string level) => level switch
+    {
+        "Fatal" or "Error" => Color.Error,
+        "Warning" => Color.Warning,
+        "Information" => Color.Success,
+        "Debug" or "Verbose" => Color.Info,
+        _ => Color.Default,
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        await _cts.CancelAsync();
+        _cts.Dispose();
+        _subscription?.Dispose();
+    }
+}
+

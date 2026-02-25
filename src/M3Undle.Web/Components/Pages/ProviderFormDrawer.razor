@@ -1,0 +1,317 @@
+@using M3Undle.Web.Contracts.Providers
+@using System.Text.Json
+@inject HttpClient Http
+
+<MudDrawer Open="@Open" OpenChanged="@OnMudOpenChanged" Anchor="Anchor.End" Elevation="2"
+           Variant="DrawerVariant.Temporary" Width="440px">
+    <MudDrawerHeader>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
+            <MudText Typo="Typo.h6">@(EditingProvider is not null ? "Edit Provider" : "Add Provider")</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           OnClick="() => OnMudOpenChanged(false)" />
+        </MudStack>
+    </MudDrawerHeader>
+    <div class="pa-4" style="overflow-y:auto">
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+        }
+        <MudForm @ref="_form">
+            <MudStack Spacing="2">
+                <MudTextField Label="Name" @bind-Value="_model.Name" Required="true" RequiredError="Name is required." />
+                <MudTextField Label="Playlist URL or local file" @bind-Value="_model.PlaylistUrl" Required="true" RequiredError="A playlist URL or local file path is required."
+                              HelperText="http/https URL, or file:///path/to/file.m3u for a server-side local file" />
+                <MudTextField Label="XMLTV URL or local file (optional)" @bind-Value="_model.XmltvUrl"
+                              HelperText="http/https URL, or file:///path/to/guide.xml for a server-side local file" />
+                <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="3" />
+                <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent" />
+                <MudNumericField T="int" Label="Timeout Seconds" @bind-Value="_model.TimeoutSeconds" Min="1" Max="300" />
+
+                <MudSelect T="string" Label="Associated Profile" @bind-Value="_model.ProfileId"
+                           ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(None)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
+                    <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
+                    @foreach (var profile in AvailableProfiles)
+                    {
+                        <MudSelectItem T="string" Value="@profile.ProfileId">@profile.Name (@profile.MergeMode)</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @if (!_showCreateProfile)
+                {
+                    <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="ShowCreateProfile" Style="align-self:flex-start">New Profile</MudButton>
+                }
+                else
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudTextField Label="New Profile Name" @bind-Value="_newProfileName" Style="flex:1"
+                                      Disabled="_isCreatingProfile" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                                       OnClick="CreateProfileAsync" Disabled="_isCreatingProfile" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                       OnClick="CancelCreateProfile" Disabled="_isCreatingProfile" />
+                    </MudStack>
+                }
+
+                <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
+                <MudStack Row="true" Spacing="2" Class="mt-2">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_isSaving" OnClick="SaveAsync">
+                        @(_isSaving ? "Saving..." : (EditingProvider is not null ? "Update" : "Create"))
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" Disabled="_isSaving" OnClick="() => OnMudOpenChanged(false)">Cancel</MudButton>
+                </MudStack>
+            </MudStack>
+        </MudForm>
+    </div>
+</MudDrawer>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public ProviderDto? EditingProvider { get; set; }
+    [Parameter] public List<ProfileListItemDto> Profiles { get; set; } = [];
+    [Parameter] public List<ProviderDto> Providers { get; set; } = [];
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private MudForm? _form;
+    private bool _isSaving;
+    private string? _error;
+    private bool _wasOpen;
+    private ProviderEditModel _model = new();
+    private List<ProfileListItemDto> _localProfiles = [];
+    private bool _showCreateProfile;
+    private string _newProfileName = string.Empty;
+    private bool _isCreatingProfile;
+
+    private IEnumerable<ProfileListItemDto> AvailableProfiles => _localProfiles.Where(p =>
+        p.ProfileId == _model.ProfileId ||
+        !Providers.Any(prov =>
+            prov.ProviderId != EditingProvider?.ProviderId &&
+            prov.AssociatedProfileIds.Contains(p.ProfileId)));
+
+    protected override void OnParametersSet()
+    {
+        if (!Open || _wasOpen)
+        {
+            _wasOpen = Open;
+            return;
+        }
+
+        _wasOpen = true;
+        _error = null;
+        _localProfiles = [.. Profiles];
+        _showCreateProfile = false;
+        _newProfileName = string.Empty;
+
+        if (EditingProvider is not null)
+        {
+            _model = new ProviderEditModel
+            {
+                Name = EditingProvider.Name,
+                PlaylistUrl = EditingProvider.PlaylistUrl,
+                XmltvUrl = EditingProvider.XmltvUrl,
+                HeadersJson = EditingProvider.HeadersJson,
+                UserAgent = EditingProvider.UserAgent,
+                Enabled = EditingProvider.Enabled,
+                TimeoutSeconds = EditingProvider.TimeoutSeconds,
+                ProfileId = EditingProvider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
+            };
+        }
+        else
+        {
+            _model = new ProviderEditModel
+            {
+                Enabled = true,
+                TimeoutSeconds = 20,
+                ProfileId = AvailableProfiles.FirstOrDefault(x => x.Enabled)?.ProfileId ?? string.Empty,
+            };
+        }
+    }
+
+    private void OnMudOpenChanged(bool value)
+    {
+        if (!value)
+        {
+            _wasOpen = false;
+            OpenChanged.InvokeAsync(false);
+        }
+    }
+
+    private void ShowCreateProfile()
+    {
+        _newProfileName = string.Empty;
+        _showCreateProfile = true;
+    }
+
+    private void CancelCreateProfile()
+    {
+        _showCreateProfile = false;
+        _newProfileName = string.Empty;
+    }
+
+    private async Task CreateProfileAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newProfileName)) return;
+
+        _isCreatingProfile = true;
+        _error = null;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/v1/profiles",
+                new CreateProfileRequest { Name = _newProfileName.Trim() });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorAsync(response);
+                return;
+            }
+
+            var created = await response.Content.ReadFromJsonAsync<ProfileListItemDto>();
+            if (created is not null)
+            {
+                _localProfiles.Add(created);
+                _model.ProfileId = created.ProfileId;
+            }
+
+            _showCreateProfile = false;
+            _newProfileName = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to create profile: {ex.Message}";
+        }
+        finally
+        {
+            _isCreatingProfile = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _isSaving = true;
+
+        try
+        {
+            if (_form is not null)
+            {
+                await _form.Validate();
+                if (!_form.IsValid) return;
+            }
+
+            var profileIds = string.IsNullOrWhiteSpace(_model.ProfileId)
+                ? null
+                : new List<string> { _model.ProfileId };
+
+            HttpResponseMessage response;
+
+            if (EditingProvider is not null)
+            {
+                var request = new UpdateProviderRequest
+                {
+                    Name = _model.Name,
+                    PlaylistUrl = _model.PlaylistUrl,
+                    XmltvUrl = _model.XmltvUrl,
+                    HeadersJson = _model.HeadersJson,
+                    UserAgent = _model.UserAgent,
+                    Enabled = _model.Enabled,
+                    TimeoutSeconds = _model.TimeoutSeconds,
+                    AssociateToProfileIds = profileIds,
+                };
+                response = await Http.PutAsJsonAsync($"/api/v1/providers/{EditingProvider.ProviderId}", request);
+            }
+            else
+            {
+                var request = new CreateProviderRequest
+                {
+                    Name = _model.Name,
+                    PlaylistUrl = _model.PlaylistUrl,
+                    XmltvUrl = _model.XmltvUrl,
+                    HeadersJson = _model.HeadersJson,
+                    UserAgent = _model.UserAgent,
+                    Enabled = _model.Enabled,
+                    TimeoutSeconds = _model.TimeoutSeconds,
+                    AssociateToProfileIds = profileIds,
+                };
+                response = await Http.PostAsJsonAsync("/api/v1/providers", request);
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _error = await ReadErrorAsync(response);
+                return;
+            }
+
+            _wasOpen = false;
+            await OpenChanged.InvokeAsync(false);
+            await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to save provider: {ex.Message}";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private static async Task<string> ReadErrorAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        if (string.IsNullOrWhiteSpace(body))
+            return $"Request failed: {(int)response.StatusCode} {response.ReasonPhrase}";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                // Check field-level validation errors first — ASP.NET Core puts them in "errors"
+                // and the "title" is the unhelpful "One or more validation errors occurred."
+                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Object)
+                {
+                    var messages = new List<string>();
+                    foreach (var error in errors.EnumerateObject())
+                    {
+                        foreach (var msg in error.Value.EnumerateArray())
+                        {
+                            var text = msg.GetString();
+                            if (!string.IsNullOrWhiteSpace(text))
+                                messages.Add(text);
+                        }
+                    }
+                    if (messages.Count > 0)
+                        return string.Join("; ", messages);
+                }
+
+                if (doc.RootElement.TryGetProperty("title", out var title))
+                {
+                    var detail = doc.RootElement.TryGetProperty("detail", out var detailProp)
+                        ? detailProp.GetString()
+                        : null;
+                    return string.IsNullOrWhiteSpace(detail)
+                        ? title.GetString() ?? "Request failed"
+                        : $"{title.GetString()}: {detail}";
+                }
+            }
+        }
+        catch (JsonException) { }
+
+        return body;
+    }
+
+    private sealed class ProviderEditModel
+    {
+        public string Name { get; set; } = string.Empty;
+        public string PlaylistUrl { get; set; } = string.Empty;
+        public string? XmltvUrl { get; set; }
+        public string? HeadersJson { get; set; }
+        public string? UserAgent { get; set; }
+        public bool Enabled { get; set; } = true;
+        public int TimeoutSeconds { get; set; } = 20;
+        public string ProfileId { get; set; } = string.Empty;
+    }
+}
+

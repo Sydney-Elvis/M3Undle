@@ -1,0 +1,264 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager NavigationManager
+@inject M3Undle.Web.Application.AppEventBus EventBus
+@inject M3Undle.Web.Application.IRefreshTrigger RefreshTrigger
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@using System.Reflection
+@using System.Threading.Channels
+
+<MudThemeProvider @ref="_themeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.Start" Variant="DrawerVariant.Temporary">
+        <MudDrawerHeader Style="white-space: nowrap; padding: 0;">
+            <a href="/" @onclick="CloseDrawer" style="display:flex;align-items:center;text-decoration:none;color:inherit;padding:16px;width:100%;">
+                <img src="logo-32.png" alt="" aria-hidden="true" style="width:36px;height:36px;border-radius:6px;margin-right:10px;flex-shrink:0;" />
+                <MudText Typo="Typo.h6">M3Undle</MudText>
+            </a>
+        </MudDrawerHeader>
+        <NavMenu OnNavigate="CloseDrawer" />
+    </MudDrawer>
+
+    <MudMainContent>
+        <MudAppBar Elevation="0">
+            <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
+            <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;">
+                <img src="favicon-32x32.png" alt="" aria-hidden="true" style="width:28px;height:28px;margin-left:8px;" />
+                <MudText Typo="Typo.h6" Class="ms-2">M3Undle</MudText>
+            </a>
+            <MudSpacer />
+            @if (_isRefreshing)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
+                    <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
+                    <MudText Typo="Typo.caption" Color="Color.Primary">Building snapshot…</MudText>
+                </MudStack>
+            }
+            <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
+                <MudIconButton Icon="@ThemeModeIcon" Color="Color.Inherit" OnClick="CycleThemeMode" />
+            </MudTooltip>
+            <LoginDisplay />
+        </MudAppBar>
+
+        <MudContainer MaxWidth="MaxWidth.False" Class="pa-6">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+
+    <MudAppBar Bottom="true" Elevation="1" Dense="true"
+               Style="height:24px; min-height:24px; font-size:0.70rem; padding:0 12px;">
+        <MudText Typo="Typo.caption" Style="font-size:0.70rem; opacity:0.8;">v@(_version)</MudText>
+        <MudSpacer />
+    </MudAppBar>
+</MudLayout>
+
+@code {
+    private bool _drawerOpen;
+    private bool _isDarkMode;
+    private bool _systemIsDark;
+    private bool _isRefreshing;
+    private bool _pendingProviderSwitchNotification;
+    private IDisposable? _eventSubscription;
+    private readonly CancellationTokenSource _cts = new();
+    private MudThemeProvider _themeProvider = default!;
+
+    private static readonly string _version =
+        typeof(MainLayout).Assembly
+            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
+
+    private enum ThemeMode { Auto, Light, Dark }
+    private ThemeMode _mode = ThemeMode.Auto;
+
+    private string ThemeModeIcon => _mode switch
+    {
+        ThemeMode.Light => Icons.Material.Filled.LightMode,
+        ThemeMode.Dark => Icons.Material.Filled.DarkMode,
+        _ => Icons.Material.Filled.SettingsBrightness
+    };
+
+    private string ThemeModeTitle => _mode switch
+    {
+        ThemeMode.Light => "Light mode — click for dark",
+        ThemeMode.Dark => "Dark mode — click for auto",
+        _ => "Auto (system) — click for light"
+    };
+
+    private static readonly MudTheme _theme = new()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#1FB6A6",
+            PrimaryContrastText = "#FFFFFF",
+            PrimaryDarken = "#179386",
+            PrimaryLighten = "#2ED8C5",
+            Secondary = "#2563EB",
+            SecondaryContrastText = "#FFFFFF",
+            SecondaryDarken = "#1D4ED8",
+            SecondaryLighten = "#3B82F6",
+            Background = "#F3F6F9",
+            Surface = "#FFFFFF",
+            AppbarBackground = "#0E3535",
+            AppbarText = "#FFFFFF",
+            DrawerBackground = "#0E2B2B",
+            DrawerText = "#CBD5E1",
+            DrawerIcon = "#1FB6A6",
+            TextPrimary = "#1E293B",
+            TextSecondary = "#475569",
+            TextDisabled = "#94A3B8",
+            Divider = "#D6E0EA",
+            Success = "#16A34A",
+            Warning = "#D97706",
+            Error = "#DC2626",
+            Info = "#0284C7",
+        },
+        LayoutProperties = new LayoutProperties
+        {
+            DrawerWidthLeft = "260px",
+        },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#1FB6A6",
+            PrimaryContrastText = "#081314",
+            PrimaryDarken = "#179386",
+            PrimaryLighten = "#2ED8C5",
+            Secondary = "#3B82F6",
+            SecondaryContrastText = "#FFFFFF",
+            SecondaryDarken = "#2563EB",
+            SecondaryLighten = "#60A5FA",
+            Background = "#0F1720",
+            Surface = "#111B26",
+            AppbarBackground = "#0E3535",
+            AppbarText = "#E6EDF3",
+            DrawerBackground = "#0A2020",
+            DrawerText = "#A8CECC",
+            DrawerIcon = "#1FB6A6",
+            TextPrimary = "#E6EDF3",
+            TextSecondary = "#9FB2C4",
+            TextDisabled = "#5F7489",
+            Divider = "#1F2D3A",
+            ActionDefault = "#1FB6A6",
+            Success = "#22C55E",
+            Warning = "#F59E0B",
+            Error = "#EF4444",
+            Info = "#38BDF8",
+        }
+    };
+
+    protected override void OnInitialized()
+    {
+        _isRefreshing = RefreshTrigger.IsRefreshing;
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            NavigationManager.LocationChanged += OnLocationChanged;
+            _systemIsDark = await _themeProvider.GetSystemDarkModeAsync();
+            _isDarkMode = _systemIsDark;
+            await _themeProvider.WatchSystemDarkModeAsync(OnSystemDarkModeChanged);
+            StateHasChanged();
+        }
+    }
+
+    private async Task ListenForEventsAsync(ChannelReader<M3Undle.Web.Application.AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == M3Undle.Web.Application.AppEventKind.RefreshStarted)
+                {
+                    _isRefreshing = true;
+                    await InvokeAsync(StateHasChanged);
+                }
+                else if (evt.Kind == M3Undle.Web.Application.AppEventKind.RefreshCompleted)
+                {
+                    _isRefreshing = false;
+                    await InvokeAsync(StateHasChanged);
+
+                    if (_pendingProviderSwitchNotification && evt.Succeeded)
+                    {
+                        _pendingProviderSwitchNotification = false;
+                        await InvokeAsync(() => DialogService.ShowMessageBox(
+                            "Active Provider Updated",
+                            "The new snapshot is ready. Your IPTV clients (Jellyfin, Plex, Emby, etc.) need to refresh or re-scan their channel list to pick up the updated lineup.",
+                            yesText: "Got It"));
+                    }
+                    else if (!evt.Succeeded && evt.ErrorSummary is not null)
+                    {
+                        await InvokeAsync(() => Snackbar.Add(
+                            $"Snapshot refresh failed: {evt.ErrorSummary}",
+                            Severity.Error,
+                            options => { options.VisibleStateDuration = 8000; }));
+                    }
+                }
+                else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderActivated)
+                {
+                    _pendingProviderSwitchNotification = true;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        _drawerOpen = false;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private Task OnSystemDarkModeChanged(bool newValue)
+    {
+        _systemIsDark = newValue;
+        if (_mode == ThemeMode.Auto)
+        {
+            _isDarkMode = newValue;
+            StateHasChanged();
+        }
+        return Task.CompletedTask;
+    }
+
+    private void CycleThemeMode()
+    {
+        _mode = _mode switch
+        {
+            ThemeMode.Auto => ThemeMode.Light,
+            ThemeMode.Light => ThemeMode.Dark,
+            ThemeMode.Dark => ThemeMode.Auto,
+            _ => ThemeMode.Auto
+        };
+        _isDarkMode = _mode switch
+        {
+            ThemeMode.Auto => _systemIsDark,
+            ThemeMode.Light => false,
+            ThemeMode.Dark => true,
+            _ => _systemIsDark
+        };
+    }
+
+    private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+
+    private Task CloseDrawer()
+    {
+        _drawerOpen = false;
+        return Task.CompletedTask;
+    }
+}
+

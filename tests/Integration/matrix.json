@@ -1,0 +1,93 @@
+{
+  "scenarios": [
+    {
+      "name": "basic-playlist-filter",
+      "description": "Download playlist and filter by groups file",
+      "command": "run",
+      "args": [
+        "--playlist-url", "{playlist_url}",
+        "--groups-file", "/opt/integration/data/sample_drop_list.txt",
+        "--out-playlist", "{scenario_dir}/filtered.m3u"
+  ],
+      "expectSuccess": true,
+      "validateOutputs": ["filtered.m3u"]
+    },
+    {
+  "name": "epg-download",
+ "description": "Download both playlist and EPG",
+      "command": "run",
+      "args": [
+        "--playlist-url", "{playlist_url}",
+        "--epg-url", "{epg_url}",
+      "--out-playlist", "{scenario_dir}/playlist.m3u",
+      "--out-epg", "{scenario_dir}/epg.xml"
+      ],
+      "expectSuccess": true,
+      "validateOutputs": ["playlist.m3u", "epg.xml"]
+    },
+    {
+      "name": "live-only-filter",
+ "description": "Filter to live channels only (exclude VOD)",
+      "command": "run",
+      "args": [
+        "--playlist-url", "{playlist_url}",
+        "--live",
+        "--out-playlist", "{scenario_dir}/live-only.m3u"
+      ],
+      "expectSuccess": true,
+      "validateOutputs": ["live-only.m3u"]
+    },
+    {
+      "name": "groups-command",
+      "description": "Generate groups file from playlist",
+   "command": "groups",
+    "args": [
+        "--playlist-url", "{playlist_url}",
+        "--out-groups", "{scenario_dir}/groups.txt"
+      ],
+      "expectSuccess": true,
+      "validateOutputs": ["groups.txt"]
+    },
+    {
+      "name": "verbose-output",
+      "description": "Run with verbose logging",
+      "command": "run",
+  "args": [
+        "--playlist-url", "{playlist_url}",
+    "--out-playlist", "{scenario_dir}/output.m3u",
+  "--verbose"
+      ],
+  "expectSuccess": true,
+      "validateOutputs": ["output.m3u"]
+    },
+    {
+  "name": "stdout-streaming",
+      "description": "Output playlist to stdout (no file)",
+      "command": "run",
+      "args": [
+        "--playlist-url", "{playlist_url}"
+ ],
+    "expectSuccess": true,
+      "validateOutputs": []
+    },
+    {
+      "name": "invalid-url",
+      "description": "Test error handling with invalid URL",
+      "command": "run",
+      "args": [
+        "--playlist-url", "http://invalid.example.test/not-found.m3u",
+     "--out-playlist", "{scenario_dir}/should-not-exist.m3u"
+      ],
+      "expectSuccess": false,
+      "validateOutputs": []
+ },
+  {
+      "name": "missing-required-arg",
+      "description": "Test error when required argument missing",
+      "command": "run",
+      "args": [],
+      "expectSuccess": false,
+      "validateOutputs": []
+    }
+  ]
+}

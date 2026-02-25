@@ -1,0 +1,25 @@
+services:
+  guidedog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: iptvguidedog:local
+    container_name: iptvguidedog
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+    volumes:
+      - guidedog_data:/app/Data
+      - guidedog_snapshots:/app/snapshots
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  guidedog_data:
+  guidedog_snapshots:

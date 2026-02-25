@@ -1,0 +1,15 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="usa.news.cnn" tvg-name="CNN" tvg-logo="http://example.com/logos/cnn.png" group-title="USA | News",CNN
+http://example.com/live/cnn/index.m3u8
+#EXTINF:-1 tvg-id="usa.news.fox" tvg-name="FOX News" group-title="USA | News",FOX News
+http://example.com/live/foxnews/index.m3u8
+#EXTINF:-1 tvg-id="usa.sports.espn" tvg-name="ESPN" group-title="USA | Sports",ESPN
+http://example.com/live/espn/index.m3u8
+#EXTINF:-1 tvg-id="usa.sports.nfl" tvg-name="NFL Network" group-title="USA | Sports",NFL Network
+http://example.com/live/nfl/index.m3u8
+#EXTINF:-1 tvg-id="uk.bbc1" tvg-name="BBC One" group-title="UK | General",BBC One
+http://example.com/live/bbc1/index.m3u8
+#EXTINF:-1 tvg-id="movie.action.1" tvg-name="Action Movie 1" group-title="Movies | Action",Die Hard
+http://example.com/vod/movies/diehard.mkv
+#EXTINF:-1 tvg-id="series.drama.1" tvg-name="Drama Series S01E01" group-title="Series | Drama",Breaking Bad S01E01
+http://example.com/vod/series/breakingbad-s01e01.mkv

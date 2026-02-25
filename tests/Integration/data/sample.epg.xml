@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv generator-info-name="Sample EPG">
+  <channel id="usa.news.cnn">
+    <display-name>CNN</display-name>
+  </channel>
+  <channel id="usa.sports.espn">
+    <display-name>ESPN</display-name>
+  </channel>
+  <programme start="20240101000000 +0000" stop="20240101010000 +0000" channel="usa.news.cnn">
+    <title lang="en">Breaking News</title>
+    <desc lang="en">Latest news and analysis</desc>
+  </programme>
+  <programme start="20240101000000 +0000" stop="20240101030000 +0000" channel="usa.sports.espn">
+    <title lang="en">SportsCenter</title>
+    <desc lang="en">Sports highlights and scores</desc>
+  </programme>
+</tv>

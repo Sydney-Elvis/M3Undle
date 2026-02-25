@@ -1,0 +1,14 @@
+# Integration test outputs
+test-output/
+runtime/
+artifacts/
+scenarios/
+diffs/
+
+# Provider credentials
+*.env
+!sample.env
+
+# Temporary files
+*.tmp
+*.bak

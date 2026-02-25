@@ -1,0 +1,34 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>bndl</AssemblyName>
+    <!-- Version properties now inherited from Directory.Build.props -->
+    <!-- Explicitly NOT self-contained during normal builds -->
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <!-- Self-contained single-file publishing - ONLY when explicitly publishing -->
+  <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Suppress IL2104 from YamlDotNet: We knowingly support YAML via reflection.
+         Users are informed via code attributes that JSON is the trim-compatible alternative. -->
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" Version="0.54.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\M3Undle.Core\M3Undle.Core.csproj" />
+  </ItemGroup>
+
+</Project>

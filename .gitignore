@@ -1,0 +1,100 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build results
+bin/
+obj/
+out/
+*.exe
+*.dll
+*.pdb
+*.cache
+*.log
+
+# NuGet packages
+*.nupkg
+*.snupkg
+packages/
+*.nuspec
+
+# Dotnet-specific
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Others
+*.dbmdl
+*.bak
+*.sql
+*.sqlite
+*.db
+*.mdf
+*.ldf
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+!.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# AI and local artifacts
+.ai_docs/
+.local_artifacts/
+.claude/
+AGENTS.md
+CLAUDE.md
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment files (contains credentials)
+.env
+*.env
+
+.config/
+
+# Groups files (contains user preferences and may be large)
+groups.txt
+groups.txt.bak*
+
+# Local provider configuration (contains private URLs)
+cli/config.yaml
+
+# Local git hooks (may carry private urls)
+.githooks/pre-commit
+
+# Integration artifacts
+test-output/
+
+# Publish output directories
+publish/
+!publish/.gitkeep
+
+# Runtime snapshot artifacts (channel_index.json, guide data, etc.)
+src/M3Undle.Web/Data/snapshots/
+!src/M3Undle.Web/Data/snapshots/.gitkeep
+
+.DS_Store
+.ai_docs/
+m3undle.db*

@@ -1,0 +1,28 @@
+profiles:
+  default:
+    inputs:
+      playlist:
+        # Replace {{PLAYLIST_URL}} with your provider URL (supports %USER% and %PASS% placeholders)
+        url: "{{PLAYLIST_URL}}"
+      epg:
+        # Replace {{EPG_URL}} with your provider EPG URL
+        url: "{{EPG_URL}}"
+        allowCompressed: true
+
+    filters:
+      includeGroups:
+        - "USA | News"
+        - "USA | Sports"
+      excludeGroups:
+        - "International"
+      dropListFile: "groups.txt"
+
+    output:
+      playlistPath: "/data/out/playlist.m3u"
+      epgPath: "/data/out/epg.xml"
+      atomicWrites: true
+      gzip: false
+
+    logging:
+      level: "Information"
+      file: "/data/logs/iptv-run.log"

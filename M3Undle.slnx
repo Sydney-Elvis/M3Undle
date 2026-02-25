@@ -1,0 +1,8 @@
+<Solution>
+<Project Path="src\M3Undle.Cli\M3Undle.Cli.csproj" />
+  <Project Path="src\M3Undle.Core\M3Undle.Core.csproj" />
+  <Project Path="src\M3Undle.Web\M3Undle.Web.csproj" />
+  <Project Path="tests\M3Undle.Cli.Tests\M3Undle.Cli.Tests.csproj" />
+  <Project Path="tests\M3Undle.Web.Tests\M3Undle.Web.Tests.csproj" />
+</Solution>
+

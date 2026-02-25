@@ -1,0 +1,289 @@
+@page "/"
+@using M3Undle.Web.Application
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject AppEventBus EventBus
+@inject IRefreshTrigger RefreshTrigger
+@implements IDisposable
+
+<PageTitle>M3Undle</PageTitle>
+
+@if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_loadError</MudAlert>
+}
+
+<MudGrid Spacing="3">
+    <!-- System Status -->
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.h6">System Status</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadStatusAsync" Disabled="_isLoading" />
+            </MudStack>
+
+            @if (_isLoading)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else if (_status is null)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">Status unavailable.</MudAlert>
+            }
+            else
+            {
+                <MudStack Spacing="3">
+                    <div>
+                        <MudChip T="string"
+                                 Color="@(_status.Status == "ok" ? Color.Success : _status.Status == "degraded" ? Color.Warning : Color.Error)"
+                                 Icon="@(_status.Status == "ok" ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Warning)">
+                            @(_status.Status == "ok" ? "Output Active" : _status.Status == "degraded" ? "Degraded — refresh failing" : "No Active Snapshot")
+                        </MudChip>
+                    </div>
+
+                    <MudDivider />
+
+                    @{ var lineup = _status.Lineup; }
+
+                    @if (lineup?.ActiveProvider is not null)
+                    {
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Active Provider</MudText>
+                            <MudText Typo="Typo.body1">@lineup.ActiveProvider.Name</MudText>
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                            No active provider — go to <MudLink Href="providers">Providers</MudLink> to set one active.
+                        </MudAlert>
+                    }
+
+                    <MudStack Spacing="1">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Last Refresh</MudText>
+                        @if (_isRefreshing)
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                                <MudText Typo="Typo.body2">Refreshing…</MudText>
+                            </MudStack>
+                        }
+                        else if (lineup?.LastRefresh is not null)
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(lineup.LastRefresh.Status == "ok" ? Color.Success : lineup.LastRefresh.Status == "running" ? Color.Info : Color.Error)">
+                                    @lineup.LastRefresh.Status
+                                </MudChip>
+                                @if (lineup.LastRefresh.FinishedUtc.HasValue)
+                                {
+                                    <MudText Typo="Typo.body2">@lineup.LastRefresh.FinishedUtc.Value.ToString("u")</MudText>
+                                }
+                            </MudStack>
+                            @if (lineup.LastRefresh.ChannelCountSeen.HasValue)
+                            {
+                                <MudText Typo="Typo.caption">@lineup.LastRefresh.ChannelCountSeen.Value.ToString("N0") channels seen</MudText>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(lineup.LastRefresh.ErrorSummary))
+                            {
+                                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-1">
+                                    @lineup.LastRefresh.ErrorSummary
+                                    @if (lineup.ActiveSnapshot is not null)
+                                    {
+                                        <text> Serving last known-good snapshot.</text>
+                                    }
+                                </MudAlert>
+                            }
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">No refresh yet</MudText>
+                        }
+                    </MudStack>
+
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Active Snapshot</MudText>
+                        @if (lineup?.ActiveSnapshot is not null)
+                        {
+                            <MudText Typo="Typo.body2">
+                                @lineup.ActiveSnapshot.ChannelCountPublished.ToString("N0") channels published
+                            </MudText>
+                            <MudText Typo="Typo.caption">@lineup.ActiveSnapshot.CreatedUtc.ToString("u")</MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">None</MudText>
+                        }
+                        @if (_isRefreshing)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Info">Building new snapshot…</MudText>
+                        }
+                    </MudStack>
+                </MudStack>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <!-- Output URLs -->
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
+            <MudText Typo="Typo.h6" Class="mb-3">Output URLs</MudText>
+            <MudText Typo="Typo.body2" Class="mb-4">
+                Point your client at these URLs. They are stable — the service handles provider changes transparently.
+            </MudText>
+
+            <MudStack Spacing="4">
+                <div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">M3U Playlist</MudText>
+                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                        <MudTextField Value="@_m3uUrl" ReadOnly="true" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" FullWidth="true" />
+                        <MudTooltip Text="Copy">
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                           Size="Size.Small" OnClick="() => CopyAsync(_m3uUrl)" />
+                        </MudTooltip>
+                    </MudStack>
+                </div>
+
+                <div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">XMLTV Guide</MudText>
+                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                        <MudTextField Value="@_xmltvUrl" ReadOnly="true" Variant="Variant.Outlined"
+                                      Margin="Margin.Dense" FullWidth="true" />
+                        <MudTooltip Text="Copy">
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                           Size="Size.Small" OnClick="() => CopyAsync(_xmltvUrl)" />
+                        </MudTooltip>
+                    </MudStack>
+                </div>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private StatusResponse? _status;
+    private bool _isLoading;
+    private bool _isRefreshing;
+    private string? _loadError;
+
+    private string _m3uUrl = string.Empty;
+    private string _xmltvUrl = string.Empty;
+
+    private readonly CancellationTokenSource _cts = new();
+    private IDisposable? _eventSubscription;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var baseUri = Nav.BaseUri.TrimEnd('/');
+        _m3uUrl = $"{baseUri}/m3u/m3undle.m3u";
+        _xmltvUrl = $"{baseUri}/xmltv/m3undle.xml";
+
+        _isRefreshing = RefreshTrigger.IsRefreshing;
+
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+
+        await LoadStatusAsync();
+    }
+
+    private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.RefreshStarted)
+                {
+                    _isRefreshing = true;
+                    await InvokeAsync(StateHasChanged);
+                }
+                else if (evt.Kind == AppEventKind.RefreshCompleted)
+                {
+                    _isRefreshing = false;
+                    if (!_isLoading)
+                        await InvokeAsync(LoadStatusAsync);
+                }
+                else if (!_isLoading)
+                {
+                    await InvokeAsync(LoadStatusAsync);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task LoadStatusAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+
+        try
+        {
+            _status = await Http.GetFromJsonAsync<StatusResponse>("/status", _cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Component disposed while loading — discard
+            return;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load status: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
+    }
+
+    private async Task CopyAsync(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        }
+        catch
+        {
+            // Clipboard access may be unavailable in non-secure or iframe contexts
+        }
+    }
+
+    // DTOs matching /status endpoint camelCase JSON
+    private sealed record StatusResponse(string Status, IReadOnlyList<LineupStatusInfo>? Lineups)
+    {
+        public LineupStatusInfo? Lineup => Lineups?.FirstOrDefault(l => l.Name == "m3undle") ?? Lineups?.FirstOrDefault();
+    }
+
+    private sealed record LineupStatusInfo(
+        string Name,
+        string Status,
+        ActiveProviderInfo? ActiveProvider,
+        ActiveSnapshotInfo? ActiveSnapshot,
+        FetchRunInfo? LastRefresh);
+
+    private sealed record ActiveProviderInfo(string ProviderId, string Name);
+
+    private sealed record ActiveSnapshotInfo(
+        string SnapshotId,
+        string ProfileId,
+        DateTime CreatedUtc,
+        int ChannelCountPublished);
+
+    private sealed record FetchRunInfo(
+        string Status,
+        DateTime StartedUtc,
+        DateTime? FinishedUtc,
+        int? ChannelCountSeen,
+        string? ErrorSummary);
+}
+

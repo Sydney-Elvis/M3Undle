@@ -1,0 +1,22 @@
+<Project>
+  <!-- Import version information from a separate file for easier management -->
+  <Import Project="Version.props" />
+  
+  <PropertyGroup>
+    <!-- Optional: Additional metadata -->
+    <Company>M3Undle</Company>
+    <Product>M3Undle</Product>
+    <Copyright>Copyright © $(Company) $([System.DateTime]::Now.Year)</Copyright>
+    <Authors>M3Undle Contributors</Authors>
+    
+    <!-- Optional: Build information -->
+    <RepositoryUrl>https://github.com/jake1164/IPTVGuideDog</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!-- Normalize build output paths on non-Windows to avoid literal backslash directories (for example, "bin\Debug"). -->
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux')) Or $([MSBuild]::IsOSPlatform('OSX'))">
+    <BaseIntermediateOutputPath>obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin/</BaseOutputPath>
+  </PropertyGroup>
+</Project>

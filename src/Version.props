@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <!-- Central version management for all projects -->
+    <Version>1.0.0-alpha.1</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <!-- Prevent git commit hash from being appended to the informational version -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>
