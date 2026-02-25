@@ -1,19 +1,19 @@
-# IPTV CLI – Commands & Usage
+# BNDL CLI – Commands & Usage
 
-This document defines the command surface and runtime behavior for the `iptv` CLI. It references the shared configuration described separately in **Config – Schema**.
+This document defines the command surface and runtime behavior for the `bndl` CLI. It references the shared configuration described separately in **Config – Schema**.
 
 ---
 
 ## Subcommands
 
 ```
-iptv groups   [options]
-iptv run      [options]
+bndl groups   [options]
+bndl run      [options]
 ```
 
 ---
 
-## Command: `iptv groups`
+## Command: `bndl groups`
 
 Create or refresh the **group selection file** used by filtering.
 
@@ -33,7 +33,7 @@ Create or refresh the **group selection file** used by filtering.
   - URLs with `type=vod`, `type=movie`, `type=series`, `kind=vod`, `kind=movie`, or `kind=series` query parameters are excluded
   - Everything else is considered a live stream
   
-  This approach is more reliable than trying to detect live streams directly, as VOD content has consistent URL patterns across most IPTV providers.
+  This approach is more reliable than trying to detect live streams directly, as VOD content has consistent URL patterns across most M3U Clients.
 
 ### Note on `--force` flag
 
@@ -46,7 +46,7 @@ Create or refresh the **group selection file** used by filtering.
 ### Examples
 
 ```bash
-iptv groups \
+bndl groups \
   --playlist-url "https://host/get.php?username=U&password=P&type=m3u_plus&output=ts" \
   --out-groups ./groups.txt \
   --preserve-comments \
@@ -56,12 +56,12 @@ iptv groups \
 ```
 
 ```bash
-iptv groups --config /etc/iptv/config.yml --profile default --out-groups /config/groups.txt --verbose --live
+bndl groups --config /etc/m3undle/config.yml --profile default --out-groups /config/groups.txt --verbose --live
 ```
 
 ---
 
-## Command: `iptv run`
+## Command: `bndl run`
 
 One-shot pipeline: **fetch → filter → write**.
 
@@ -95,7 +95,7 @@ One-shot pipeline: **fetch → filter → write**.
   - URLs with `type=vod`, `type=movie`, `type=series`, `kind=vod`, `kind=movie`, or `kind=series` query parameters are excluded
   - Everything else is considered a live stream
   
-  This filter is applied **before** reading and applying the groups file, making it more efficient. This approach is more reliable than trying to detect live streams directly, as VOD content has consistent URL patterns across most IPTV providers.
+  This filter is applied **before** reading and applying the groups file, making it more efficient. This approach is more reliable than trying to detect live streams directly, as VOD content has consistent URL patterns across most M3U Clients.
 #### Note on Stdout behavior
 - If **only a playlist** is being produced and `--out-playlist` is **omitted**, the playlist is written to **stdout**.
 - If an **EPG** is also being produced, at least one of `--out-playlist` or `--out-epg` must be provided; alternatively, pass `--out-playlist -` or `--out-epg -` to write that artifact to **stdout**.
@@ -117,7 +117,7 @@ One-shot pipeline: **fetch → filter → write**.
 ### Examples
 
 ```bash
-iptv run \
+bndl run \
   --playlist-url "https://host/get.php?username=U&password=P&type=m3u_plus&output=ts" \
   --epg-url "https://host/xmltv.php?username=U&password=P" \
   --groups-file ./groups.txt \
@@ -130,20 +130,20 @@ iptv run \
 **Config-driven:**
 
 ```bash
-iptv run --config /etc/iptv/config.yml --profile default --verbose --live
-# If /etc/iptv/.env exists, any matching %VAR% tokens in playlist/EPG URLs are replaced before download.
+bndl run --config /etc/m3undle/config.yml --profile default --verbose --live
+# If /etc/m3undle/.env exists, any matching %VAR% tokens in playlist/EPG URLs are replaced before download.
 ```
 
 **Using credentials from .env:**
 
 ```powershell
 # PowerShell example
-iptv groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
+bndl groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
 ```
 
 ```bash
 # Bash/Linux example
-iptv groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
+bndl groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
 ```
 
 ---
@@ -174,4 +174,4 @@ iptv groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&
 ## Minimal cron example
 
 ```bash
-*/30 * * * * root iptv run --config /etc/iptv/config.yml --profile default --live
+*/30 * * * * root bndl run --config /etc/m3undle/config.yml --profile default --live

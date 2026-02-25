@@ -15,7 +15,7 @@ $RepoRoot = Resolve-Path "$ScriptDir\..\.."
 
 function Show-Usage {
     Write-Host @"
-IPTV Integration Test Runner
+M3Undle Integration Test Runner
 
 Usage:
   .\run-tests.ps1 [OPTIONS]
@@ -51,7 +51,7 @@ $OutputDir = if ($Output) { $Output } else { Join-Path $RepoRoot "test-output" }
 # Build image if requested
 if ($Build) {
     Write-Host "Building Docker image..." -ForegroundColor Cyan
-    docker build -t iptv-integration-tests `
+    docker build -t m3undle-integration-tests `
         -f "$RepoRoot\tests\Integration\Dockerfile" `
     $RepoRoot
     if ($LASTEXITCODE -ne 0) {
@@ -61,10 +61,10 @@ if ($Build) {
 }
 
 # Check if image exists
-$imageExists = docker image inspect iptv-integration-tests 2>$null
+$imageExists = docker image inspect m3undle-integration-tests 2>$null
 if (-not $imageExists) {
     Write-Host "Docker image not found. Building..." -ForegroundColor Yellow
-    docker build -t iptv-integration-tests `
+    docker build -t m3undle-integration-tests `
      -f "$RepoRoot\tests\Integration\Dockerfile" `
         $RepoRoot
     if ($LASTEXITCODE -ne 0) {
@@ -95,7 +95,7 @@ if ($Provider) {
 }
 
 # Add image name
-$dockerArgs += "iptv-integration-tests"
+$dockerArgs += "m3undle-integration-tests"
 
 # Run the tests
 Write-Host ""

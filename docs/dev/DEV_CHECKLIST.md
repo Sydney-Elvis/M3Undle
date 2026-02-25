@@ -175,7 +175,7 @@ Fixed-interval background refresh is sufficient for A1. A2 adds user control.
 
 ### Security
 - [ ] Output endpoint protection: secret token embedded in URL path
-  (not header-based — IPTV clients cannot set custom headers)
+  (not header-based — Media Players cannot set custom headers)
 - [ ] Token generation and rotation UI
 
 ### Remaining Items

@@ -54,7 +54,7 @@ It:
 - Publishes compatibility endpoints expected by clients
 
 It is not just a playlist filter.
-It is a system for managing IPTV catalogs at scale.
+It is a system for managing Playlist catalogs at scale.
 
 ---
 

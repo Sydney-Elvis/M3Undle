@@ -7,7 +7,7 @@ namespace M3Undle.Core.Configuration;
     PropertyNameCaseInsensitive = true,
     ReadCommentHandling = JsonCommentHandling.Skip,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
-[JsonSerializable(typeof(IptvConfig))]
+[JsonSerializable(typeof(MediaConfig))]
 [JsonSerializable(typeof(ProfileConfig))]
 [JsonSerializable(typeof(InputsConfig))]
 [JsonSerializable(typeof(EndpointConfig))]
@@ -16,11 +16,11 @@ namespace M3Undle.Core.Configuration;
 [JsonSerializable(typeof(Dictionary<string, ProfileConfig>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(List<string>))]
-internal partial class IptvConfigJsonContext : JsonSerializerContext
+internal partial class MediaConfigJsonContext : JsonSerializerContext
 {
 }
 
-public sealed class IptvConfig
+public sealed class MediaConfig
 {
     public Dictionary<string, ProfileConfig> Profiles { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }

@@ -1,6 +1,6 @@
 ######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.          ######
-######  Created with iptv version 0.40 ######
+######  Created with bndl version 0.40 ######
 
 #USA | News
 #USA | Sports

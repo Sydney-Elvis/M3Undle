@@ -9,7 +9,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 print_usage() {
   cat <<EOF
-IPTV Integration Test Runner
+M3Undle Integration Test Runner
 
 Usage:
   $(basename "$0") [OPTIONS]
@@ -74,15 +74,15 @@ done
 # Build image if requested
 if [[ $BUILD_IMAGE -eq 1 ]]; then
   echo "Building Docker image..."
-  docker build -t iptv-integration-tests \
+  docker build -t m3undle-integration-tests \
     -f "${REPO_ROOT}/tests/Integration/Dockerfile" \
     "${REPO_ROOT}"
 fi
 
 # Check if image exists
-if ! docker image inspect iptv-integration-tests > /dev/null 2>&1; then
+if ! docker image inspect m3undle-integration-tests > /dev/null 2>&1; then
   echo "Docker image not found. Building..."
-  docker build -t iptv-integration-tests \
+  docker build -t m3undle-integration-tests \
     -f "${REPO_ROOT}/tests/Integration/Dockerfile" \
     "${REPO_ROOT}"
 fi
@@ -108,7 +108,7 @@ else
 fi
 
 # Add image name
-DOCKER_CMD+=(iptv-integration-tests)
+DOCKER_CMD+=(m3undle-integration-tests)
 
 # Run the tests
 echo "Running integration tests..."

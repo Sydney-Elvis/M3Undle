@@ -6,7 +6,7 @@ using M3Undle.Cli;
 if (args.Length == 1 && (args[0] == "--version" || args[0] == "-v"))
 {
     var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown";
-    Console.WriteLine($"iptv version {version}");
+    Console.WriteLine($"bndl version {version}");
     return 0;
 }
 

@@ -13,19 +13,19 @@ RUN apt-get update \
 WORKDIR /workspace
 
 # Copy solution and project files for restore
-COPY IPTVGuideDog.sln ./
-COPY src/IPTVGuideDog.Cli/IPTVGuideDog.Cli.csproj src/IPTVGuideDog.Cli/
-COPY src/IPTVGuideDog.Core/IPTVGuideDog.Core.csproj src/IPTVGuideDog.Core/
-COPY src/IPTVGuideDog.Web/IPTVGuideDog.Web.csproj src/IPTVGuideDog.Web/
-COPY src/IPTVGuideDog.SocketHost/IPTVGuideDog.SocketHost.csproj src/IPTVGuideDog.SocketHost/
+COPY M3Undle.sln ./
+COPY src/M3Undle.Cli/M3Undle.Cli.csproj src/M3Undle.Cli/
+COPY src/M3Undle.Core/M3Undle.Core.csproj src/M3Undle.Core/
+COPY src/M3Undle.Web/M3Undle.Web.csproj src/M3Undle.Web/
+COPY src/M3Undle.SocketHost/M3Undle.SocketHost.csproj src/M3Undle.SocketHost/
 
-RUN dotnet restore IPTVGuideDog.sln
+RUN dotnet restore M3Undle.sln
 
 # Copy all source
 COPY src/ src/
 
 # Build the CLI project
-RUN dotnet build src/IPTVGuideDog.Cli/IPTVGuideDog.Cli.csproj -c Release --no-restore
+RUN dotnet build src/M3Undle.Cli/M3Undle.Cli.csproj -c Release --no-restore
 
 # Copy integration test assets
 COPY tests/Integration/ /opt/integration/

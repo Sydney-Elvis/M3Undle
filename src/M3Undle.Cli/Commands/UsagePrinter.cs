@@ -5,9 +5,9 @@ public static class UsagePrinter
     public static void PrintUsage(TextWriter stdout)
     {
         stdout.WriteLine("Usage:");
-        stdout.WriteLine("  iptv groups   [options]");
-        stdout.WriteLine("  iptv run      [options]");
-        stdout.WriteLine("  iptv --version | -v");
+        stdout.WriteLine("  bndl groups   [options]");
+        stdout.WriteLine("  bndl run      [options]");
+        stdout.WriteLine("  bndl --version | -v");
         stdout.WriteLine();
         stdout.WriteLine("Commands:");
         stdout.WriteLine("  groups    Create or refresh the group selection file.");

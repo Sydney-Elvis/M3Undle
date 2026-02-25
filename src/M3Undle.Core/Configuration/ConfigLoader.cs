@@ -36,7 +36,7 @@ public static class ConfigLoader
 
     [UnconditionalSuppressMessage("Trimming", "IL2026:RequiresUnreferencedCode", 
         Justification = "ParseYaml is only called for YAML files. Users are informed via attributes that JSON is the trim-compatible format.")]
-    private static IptvConfig ParseConfiguration(string configPath, string rawText)
+    private static MediaConfig ParseConfiguration(string configPath, string rawText)
     {
         return IsYaml(configPath, rawText)
             ? ParseYaml(rawText)
@@ -45,7 +45,7 @@ public static class ConfigLoader
 
     [RequiresUnreferencedCode("YAML deserialization uses reflection and is not trim-compatible. Consider using JSON configuration instead.")]
     [RequiresDynamicCode("YAML deserialization may require dynamic code generation.")]
-    private static IptvConfig ParseYaml(string yaml)
+    private static MediaConfig ParseYaml(string yaml)
     {
         var deserializer = new DeserializerBuilder()
             .WithNamingConvention(CamelCaseNamingConvention.Instance)
@@ -54,7 +54,7 @@ public static class ConfigLoader
 
         try
         {
-            var config = deserializer.Deserialize<IptvConfig>(new StringReader(yaml));
+            var config = deserializer.Deserialize<MediaConfig>(new StringReader(yaml));
             return NormalizeConfig(config);
         }
         catch (Exception ex)
@@ -63,11 +63,11 @@ public static class ConfigLoader
         }
     }
 
-    private static IptvConfig ParseJson(string json)
+    private static MediaConfig ParseJson(string json)
     {
         try
         {
-            var config = JsonSerializer.Deserialize(json, IptvConfigJsonContext.Default.IptvConfig);
+            var config = JsonSerializer.Deserialize(json, MediaConfigJsonContext.Default.MediaConfig);
             return NormalizeConfig(config);
         }
         catch (Exception ex)
@@ -76,11 +76,11 @@ public static class ConfigLoader
         }
     }
 
-    private static IptvConfig NormalizeConfig(IptvConfig? config)
+    private static MediaConfig NormalizeConfig(MediaConfig? config)
     {
         if (config is null)
         {
-            return new IptvConfig();
+            return new MediaConfig();
         }
 
         var profiles = config.Profiles ?? new Dictionary<string, ProfileConfig>();
@@ -89,7 +89,7 @@ public static class ConfigLoader
             profiles = new Dictionary<string, ProfileConfig>(profiles, StringComparer.OrdinalIgnoreCase);
         }
 
-        return new IptvConfig
+        return new MediaConfig
         {
             Profiles = profiles,
         };

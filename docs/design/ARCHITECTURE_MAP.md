@@ -4,7 +4,7 @@
 A single unified process (`M3Undle.Web`) provides:
 - Web UI (configuration + status) — Blazor Server
 - REST API for UI communication (`/api/v1/*`)
-- HTTP compatibility endpoints for IPTV clients:
+- HTTP compatibility endpoints for Media Players:
   - M3U — `/m3u/m3undle.m3u` (output name locked in Core)
   - XMLTV — `/xmltv/m3undle.xml`
   - Stream proxy — `/stream/<streamKey>`

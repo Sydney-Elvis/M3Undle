@@ -16,7 +16,7 @@ die() {
   exit 1
 }
 
-log "====== IPTV Integration Test Suite ======"
+log "====== BNDL Integration Test Suite ======"
 log "Workspace: ${WORKSPACE}"
 log "Output directory: ${TEST_OUTPUT_DIR}"
 log "Configuration: ${DOTNET_CONFIGURATION}"
@@ -28,15 +28,15 @@ log "Configuration: ${DOTNET_CONFIGURATION}"
 mkdir -p "${TEST_OUTPUT_DIR}"/{artifacts,scenarios,diffs,runtime}
 
 # Build the CLI
-log "Building IPTV CLI..."
+log "Building BNDL CLI..."
 cd "${WORKSPACE}"
-dotnet build src/IPTVGuideDog.Cli/IPTVGuideDog.Cli.csproj \
+dotnet build src/M3Undle.Cli/M3Undle.Cli.csproj \
   -c "${DOTNET_CONFIGURATION}" \
   --nologo \
   -v quiet
 
 # Get CLI path
-CLI_BINARY="${WORKSPACE}/src/IPTVGuideDog.Cli/bin/${DOTNET_CONFIGURATION}/net10.0/iptv"
+CLI_BINARY="${WORKSPACE}/src/M3Undle.Cli/bin/${DOTNET_CONFIGURATION}/net10.0/bndl"
 
 if [[ ! -f "${CLI_BINARY}" ]]; then
   die "CLI binary not found at ${CLI_BINARY}"

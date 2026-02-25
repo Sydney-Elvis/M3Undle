@@ -1,8 +1,8 @@
 # M3Undle Plan
 
 ## Product Goal
-A self-hosted IPTV lineup manager that:
-- connects to an IPTV provider
+A self-hosted Media lineup manager that:
+- connects to an M3U Source
 - publishes client-friendly endpoints (M3U, XMLTV, stream proxy)
 - prevents DVR churn by keeping stable channel identity and stable numbering
 - gives users clear control over what gets published

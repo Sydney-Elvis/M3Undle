@@ -75,7 +75,7 @@ plugins load against these contracts. Do not build filtering as concrete classes
 - Plugin loader (external assembly discovery, plugin manifest format)
 - Extension contracts: `ISettingsContributor`, `IEndpointModule`, `IUiTheme`
 - Endpoint security: secret token embedded in URL path
-  (not headers — IPTV clients cannot set custom headers)
+  (not headers — Media Players cannot set custom headers)
 - Token generation and rotation UI
 - Any remaining core items before Beta
 

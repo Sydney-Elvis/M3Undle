@@ -1,4 +1,4 @@
-# IPTV Config – Schema
+# M3Undle Config – Schema
 
 This document defines the **shared configuration schema** used by the CLI, Blazor Server app, and Docker image. Keep it source‑of‑truth so all entry points behave identically.
 
@@ -62,13 +62,13 @@ filters:
   excludeGroups: []                     # list<string>; removed even if included elsewhere
   excludeTitleRegex: "(?i)\\b(4k|uhd)\\b"  # string; .NET regex; optional
   dropListFile: "/config/drop-groups.txt"   # path to LF/CRLF text file, one group per line; optional
-  groupsFile: "/config/groups.txt"          # path for curated groups list (preferred destination for `iptv groups`)
+  groupsFile: "/config/groups.txt"          # path for curated groups list (preferred destination for `bndl groups`)
 ```
 
 **Notes**
 - Matching is **exact** for group names (case-sensitive by default). Consider normalizing names in `mapping` if needed.
 - Regex uses .NET engine. Invalid regex → config validation error.
-- `iptv groups --config /path/config.yaml --profile my-profile` writes the curated group list to `filters.groupsFile` when it is set; otherwise it falls back to `filters.dropListFile`. That means your remove list stays aligned with the CLI workflow even when you drive everything from config files.
+- `bndl groups --config /path/config.yaml --profile my-profile` writes the curated group list to `filters.groupsFile` when it is set; otherwise it falls back to `filters.dropListFile`. That means your remove list stays aligned with the CLI workflow even when you drive everything from config files.
 
 ---
 
@@ -120,7 +120,7 @@ Controls verbosity and optional file logging.
 ```yaml
 logging:
   level: "Information"                  # "Debug" | "Information" | "Warning" | "Error"
-  file: "/data/logs/iptv-run.log"       # optional; rotate policy TBD
+  file: "/data/logs/bndl-run.log"       # optional; rotate policy TBD
   format: "text"                         # "text" | "json" (CLI may override with --json)
 ```
 
@@ -172,7 +172,7 @@ profiles:
 
     logging:
       level: "Information"
-      file: "/data/logs/iptv-run.log"
+      file: "/data/logs/bndl-run.log"
 ```
 
 ---
@@ -226,10 +226,10 @@ profiles:
         allowCompressed: true
     filters:
       includeGroups: ["USA | Sports", "USA | News"]
-      groupsFile: "/var/lib/iptv/m3u/primary.groups.txt"
+      groupsFile: "/var/lib/m3undle/m3u/primary.groups.txt"
     output:
-      playlistPath: "/var/lib/iptv/m3u/primary.m3u"
-      epgPath: "/var/lib/iptv/m3u/primary.xml"
+      playlistPath: "/var/lib/m3undle/m3u/primary.m3u"
+      epgPath: "/var/lib/m3undle/m3u/primary.xml"
 
   secondary:
     inputs:
@@ -239,13 +239,13 @@ profiles:
         url: "https://provider-b.example/api/xmltv?user=%SECONDARY_USER%&token=%SECONDARY_TOKEN%"
     filters:
       excludeGroups: ["VOD", "International"]
-      dropListFile: "/var/lib/iptv/m3u/secondary.remove.txt"
+      dropListFile: "/var/lib/m3undle/m3u/secondary.remove.txt"
     output:
-      playlistPath: "/var/lib/iptv/m3u/secondary.m3u"
-      epgPath: "/var/lib/iptv/m3u/secondary.xml"
+      playlistPath: "/var/lib/m3undle/m3u/secondary.m3u"
+      epgPath: "/var/lib/m3undle/m3u/secondary.xml"
 ```
 
-Store this config alongside `iptv/scripts/.env` so the `%PRIMARY_*%` and `%SECONDARY_*%` placeholders are resolved. Running `iptv groups --config iptv/scripts/config.yaml --profile primary` updates `/var/lib/iptv/m3u/primary.groups.txt`, while the same command with `--profile secondary` falls back to `/var/lib/iptv/m3u/secondary.remove.txt` (your remove list). Filtering with `iptv run --config ... --profile ...` writes playlists/EPGs directly into `/var/lib/iptv/m3u/*.m3u` and `.xml` paths.
+Store this config alongside `m3undle/scripts/.env` so the `%PRIMARY_*%` and `%SECONDARY_*%` placeholders are resolved. Running `bndl groups --config m3undle/scripts/config.yaml --profile primary` updates `/var/lib/m3undle/m3u/primary.groups.txt`, while the same command with `--profile secondary` falls back to `/var/lib/m3undle/m3u/secondary.remove.txt` (your remove list). Filtering with `bndl run --config ... --profile ...` writes playlists/EPGs directly into `/var/lib/bndl/m3u/*.m3u` and `.xml` paths.
 
 ---
 

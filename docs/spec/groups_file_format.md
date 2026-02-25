@@ -1,7 +1,7 @@
 # Groups File Format and Validation
 
 ## Overview
-The groups file is a text-based configuration file used to specify which IPTV channel groups to keep or drop during playlist filtering.
+The groups file is a text-based configuration file used to specify which bndl channel groups to keep or drop during playlist filtering.
 
 ## File Format
 
@@ -12,7 +12,7 @@ Every groups file must contain the following header lines:
 ######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
 ######  New groups are marked with '##' for easy identification.                ######
-######  Created with iptv version 0.40                                          ######
+######  Created with bndl version 0.40                                          ######
 ```
 
 All header lines are exactly 88 characters wide with aligned trailing `######`.
@@ -56,14 +56,14 @@ When an invalid file is detected:
 
 Example warning:
 ```
-Warning: File was created with iptv version 2.0 but current version is 0.40 (major version mismatch)
+Warning: File was created with bndl version 2.0 but current version is 0.40 (major version mismatch)
 The file will NOT be modified.
 Use --force to override this check.
 ```
 
 With `--force`:
 ```
-Warning: File was created with iptv version 2.0 but current version is 0.40 (major version mismatch)
+Warning: File was created with bndl version 2.0 but current version is 0.40 (major version mismatch)
 Proceeding due to --force flag.
 Added 3 new group(s) to groups.txt
 Backup saved to: groups.txt.bak
@@ -92,7 +92,7 @@ Backups are created:
 
 ### Creating a New Groups File
 ```bash
-iptv groups --playlist-url https://provider.com/playlist.m3u --out-groups groups.txt
+bndl groups --playlist-url https://provider.com/playlist.m3u --out-groups groups.txt
 ```
 
 Creates `groups.txt` with:
@@ -101,7 +101,7 @@ Creates `groups.txt` with:
 
 ### Updating an Existing Groups File
 ```bash
-iptv groups --playlist-url https://provider.com/playlist.m3u --out-groups groups.txt
+bndl groups --playlist-url https://provider.com/playlist.m3u --out-groups groups.txt
 ```
 
 If `groups.txt` exists:
@@ -126,7 +126,7 @@ The file will contain:
 ######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
 ######  New groups are marked with '##' for easy identification.                ######
-######  Created with iptv version 1.0 ######
+######  Created with bndl version 1.0 ######
 
 #Sports
 News
@@ -137,7 +137,7 @@ News
 
 ### No New Groups
 ```bash
-iptv groups --playlist-url https://provider.com/playlist.m3u --out-groups groups.txt
+bndl groups --playlist-url https://provider.com/playlist.m3u --out-groups groups.txt
 ```
 
 Output:
@@ -186,7 +186,7 @@ If you need to use a groups file from a different major version:
 - If starting fresh, delete the file and let the tool create a new one
 
 ### "Major version mismatch"
-**Cause**: The file was created with a different major version of iptv.
+**Cause**: The file was created with a different major version of bndl.
 
 **Solution**:
 - Create a new groups file with the current version

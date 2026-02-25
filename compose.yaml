@@ -3,15 +3,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: iptvguidedog:local
-    container_name: iptvguidedog
+    image: m3undle:local
+    container_name: m3undle
     ports:
       - "8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
     volumes:
-      - guidedog_data:/app/Data
-      - guidedog_snapshots:/app/snapshots
+      - m3undle_data:/app/Data
+      - m3undle_snapshots:/app/snapshots
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
@@ -21,5 +21,5 @@ services:
       start_period: 30s
 
 volumes:
-  guidedog_data:
-  guidedog_snapshots:
+  m3undle_data:
+  m3undle_snapshots:

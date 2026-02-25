@@ -31,7 +31,7 @@ tests/Integration/
 
 ## What These Tests Do
 
-The integration tests run your **actual CLI application** against **real IPTV providers** to validate:
+The integration tests run your **actual CLI application** against **real M3U Clients** to validate:
 
 ? Playlist downloading and parsing  
 ? EPG data fetching  
@@ -82,13 +82,13 @@ You can also run the tests directly with Docker:
 
 ```bash
 # Build the image
-docker build -t iptv-integration-tests -f tests/Integration/Dockerfile .
+docker build -t m3undle-integration-tests -f tests/Integration/Dockerfile .
 
 # Run with sample data
-docker run --rm -v "$(pwd)":/workspace iptv-integration-tests
+docker run --rm -v "$(pwd)":/workspace m3undle-integration-tests
 
 # Run with your provider
-docker run --rm -v "$(pwd)":/workspace --env-file my-provider.env iptv-integration-tests
+docker run --rm -v "$(pwd)":/workspace --env-file my-provider.env m3undle-integration-tests
 ```
 
 ## Test Scenarios

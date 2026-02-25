@@ -44,4 +44,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/jake1164/iptvguidedog:${{ steps.vars.outputs.tag }}
+          tags: ghcr.io/sydney-elvis/m3undle:${{ steps.vars.outputs.tag }}

@@ -1,6 +1,6 @@
 # Environment Variable Usage (.env file)
 
-This guide explains how to use `.env` files for credential management with the IPTV CLI.
+This guide explains how to use `.env` files for credential management with the BNDL CLI.
 
 ---
 
@@ -27,19 +27,19 @@ Reference them later as `%USER%`, `%PASS%`, `%SECONDARY_TOKEN%`, etc.
 ### PowerShell Example
 
 ```powershell
-iptv groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
+bndl groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
 ```
 
 ### Bash/Linux Example
 
 ```bash
-iptv groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
+bndl groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
 ```
 
 ### Windows CMD Example
 
 ```cmd
-iptv groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
+bndl groups --playlist-url "http://host/get.php?username=%USER%&password=%PASS%&type=m3u_plus&output=ts" --out-groups groups.txt --verbose
 ```
 
 Swap `%USER%`/`%PASS%` with any `%VAR%` tokens you've defined (e.g., `%PRIMARY_USER%`, `%SECONDARY_TOKEN%`).
@@ -51,7 +51,7 @@ Swap `%USER%`/`%PASS%` with any `%VAR%` tokens you've defined (e.g., `%PRIMARY_U
 1. **Where `.env` is read from (search order):**
    - When `--config` is supplied, the CLI only checks the directory that contains that config file.
    - Otherwise, it checks the current working directory.
-   - There is no additional fallback search; make sure `.env` lives right next to the config or inside the directory you execute `iptv` from.
+   - There is no additional fallback search; make sure `.env` lives right next to the config or inside the directory you execute `bndl` from.
 
 2. **Every key is recognized** (case-insensitive). Define as many variables as you need, e.g. `PRIMARY_USER`, `SECONDARY_TOKEN`, etc.
 
@@ -97,7 +97,7 @@ We use percent-delimited format because:
 When using a config file, place `.env` in the same directory—this is the only directory the CLI will scan when `--config` is passed:
 
 ```
-iptv/scripts/
+m3undle/scripts/
   |- config.yaml
   |- .env
 ```
@@ -117,7 +117,7 @@ profiles:
 Command:
 
 ```bash
-iptv run --config iptv/scripts/config.yaml --profile default
+bndl run --config m3undle/scripts/config.yaml --profile default
 ```
 
 ---
@@ -171,7 +171,7 @@ This ensures that even if logs are shared or visible to others, your credentials
 ## Example `.env` File
 
 ```env
-# IPTV Provider Credentials
+# M3U Source Credentials
 USER=myusername
 PASS=mypassword123
 
@@ -186,7 +186,7 @@ PASS=mypassword123
 If you prefer, you can embed credentials directly in URLs (not recommended for production):
 
 ```bash
-iptv groups --playlist-url "http://host/get.php?username=U&password=P&type=m3u_plus&output=ts"
+bndl groups --playlist-url "http://host/get.php?username=U&password=P&type=m3u_plus&output=ts"
 ```
 
 However, using `.env` files is more secure and maintainable.

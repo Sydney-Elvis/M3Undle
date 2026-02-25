@@ -30,7 +30,7 @@ public class GroupsFileValidatorTests
             var currentVersion = GroupsFileValidator.GetCurrentVersion();
             var content = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {currentVersion} ######
+######  Created with bndl version {currentVersion} ######
 
 #Sports
 News";
@@ -84,7 +84,7 @@ Just some random content";
         {
             var content = @"######  This is a DROP list. Put a '#' in front of any group you want to KEEP. ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.              ######
-######  Created with iptv version 99.0 ######
+######  Created with bndl version 99.0 ######
 
 #Sports";
             await File.WriteAllTextAsync(tmpFile, content);
@@ -118,7 +118,7 @@ Just some random content";
 
             var content = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {testVersion} ######
+######  Created with bndl version {testVersion} ######
 
 #Sports";
             await File.WriteAllTextAsync(tmpFile, content);
@@ -177,7 +177,7 @@ News";
             var testVersion = $"{currentMajor}.0";
             var content = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP. ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.              ######
-######  Created with iptv version {testVersion} ######
+######  Created with bndl version {testVersion} ######
 
 #Sports
 News";
@@ -209,7 +209,7 @@ News";
             var testVersion = $"{currentMajor}.0";
             var content = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {testVersion}                                          ######
+######  Created with bndl version {testVersion}                                          ######
 
 #Sports
 News";
@@ -340,7 +340,7 @@ News";
         var header = GroupsFileValidator.CreateHeader();
         var currentVersion = GroupsFileValidator.GetCurrentVersion();
 
-        var versionLine = Array.Find(header, l => l.Contains("Created with iptv version"));
+        var versionLine = Array.Find(header, l => l.Contains("Created with bndl version"));
         Assert.IsNotNull(versionLine);
         StringAssert.Contains(versionLine, currentVersion);
     }

@@ -280,11 +280,11 @@ public sealed class GroupsCommand
         foreach (var line in existingLines)
         {
             // Check if this is the version line
-            if (line.TrimStart().StartsWith("######  Created with iptv version ", StringComparison.Ordinal))
+            if (line.TrimStart().StartsWith("######  Created with bndl version ", StringComparison.Ordinal))
             {
                 // Update version line to current version with proper padding
                 var currentVersion = GroupsFileValidator.GetCurrentVersion();
-                var versionLine = $"######  Created with iptv version {currentVersion}";
+                var versionLine = $"######  Created with bndl version {currentVersion}";
                 const int totalLength = 88;
                 const string trailer = " ######";
                 var paddedVersionLine = versionLine.PadRight(totalLength - trailer.Length) + trailer;
@@ -319,7 +319,7 @@ public sealed class GroupsCommand
         if (!hasVersionLine)
         {
             var currentVersion = GroupsFileValidator.GetCurrentVersion();
-            var versionLine = $"######  Created with iptv version {currentVersion}";
+            var versionLine = $"######  Created with bndl version {currentVersion}";
             const int totalLength = 88;
             const string trailer = " ######";
             var paddedVersionLine = versionLine.PadRight(totalLength - trailer.Length) + trailer;

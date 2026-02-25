@@ -25,4 +25,4 @@ profiles:
 
     logging:
       level: "Information"
-      file: "/data/logs/iptv-run.log"
+      file: "/data/logs/bndl-run.log"

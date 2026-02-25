@@ -1,6 +1,6 @@
 # Integration Tests
 
-This directory contains Docker-based integration tests that run the IPTV Guide Dog CLI against **real IPTV providers** to validate end-to-end functionality.
+This directory contains Docker-based integration tests that run the M3Undle CLI against **real M3U Clients** to validate end-to-end functionality.
 
 ## Overview
 
@@ -17,7 +17,7 @@ The integration test harness:
 ### Build the Test Image
 
 ```bash
-docker build -t iptv-integration-tests -f tests/Integration/Dockerfile .
+docker build -t m3undle-integration-tests -f tests/Integration/Dockerfile .
 ```
 
 ### Run with Sample Data
@@ -25,7 +25,7 @@ docker build -t iptv-integration-tests -f tests/Integration/Dockerfile .
 ```bash
 docker run --rm \
   -v "$(pwd)":/workspace \
-  iptv-integration-tests
+  m3undle-integration-tests
 ```
 
 ### Run Against Real Provider
@@ -43,7 +43,7 @@ EOF
 docker run --rm \
   -v "$(pwd)":/workspace \
   --env-file provider.env \
-  iptv-integration-tests
+  m3undle-integration-tests
 ```
 
 ## Test Scenarios

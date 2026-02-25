@@ -4,13 +4,13 @@
   
   <PropertyGroup>
     <!-- Optional: Additional metadata -->
-    <Company>M3Undle</Company>
+    <Company>Sydney Elvis LLC</Company>
     <Product>M3Undle</Product>
     <Copyright>Copyright © $(Company) $([System.DateTime]::Now.Year)</Copyright>
     <Authors>M3Undle Contributors</Authors>
     
     <!-- Optional: Build information -->
-    <RepositoryUrl>https://github.com/jake1164/IPTVGuideDog</RepositoryUrl>
+    <RepositoryUrl>https://github.com/Sydney-Elvis/M3Undle</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 

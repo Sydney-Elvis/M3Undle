@@ -1,7 +1,7 @@
 # Test Coverage Summary
 
 ## Overview
-Comprehensive test suite for the IPTV CLI application command-line argument parsing and processing.
+Comprehensive test suite for the M3Undle CLI application command-line argument parsing and processing.
 
 ## Test Files Added
 

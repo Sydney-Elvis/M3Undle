@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "IPTVGuideDog.Cli": {
+    "M3Undle.Cli": {
       "commandName": "Project"
     },
     "Run with Onyx": {
@@ -31,7 +31,7 @@
     "Groups cmd for Delta": {
       "commandName": "Project",
       "commandLineArgs": "groups --playlist-url %DELTA_URL%/get.php?username=%DELTA_USER%&password=%DELTA_PASS%&type=m3u_plus --verbose --out-groups ..\\.local_artifacts\\delta_remove.txt",
-      "workingDirectory": "D:\\github\\IPTVGuideDog\\.config"
+      "workingDirectory": "$(ProjectDir)../.."
     }
   }
 }

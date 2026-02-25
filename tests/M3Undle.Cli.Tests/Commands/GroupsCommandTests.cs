@@ -73,7 +73,7 @@ http://example.com/2";
             var currentMajor = GroupsFileValidator.GetCurrentVersion().Split('.')[0];
             var existingContent = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {currentMajor}.0 ######
+######  Created with bndl version {currentMajor}.0 ######
 
 #Sports
 News
@@ -149,7 +149,7 @@ http://example.com/3";
             var currentMajor = GroupsFileValidator.GetCurrentVersion().Split('.')[0];
             var existingContent = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {currentMajor}.0 ######
+######  Created with bndl version {currentMajor}.0 ######
 
 #Sports
 
@@ -215,7 +215,7 @@ http://example.com/2";
             var currentVersion = GroupsFileValidator.GetCurrentVersion();
             var existingContent = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {currentVersion}                                          ######
+######  Created with bndl version {currentVersion}                                          ######
 
 #Sports
 News";
@@ -266,7 +266,7 @@ http://example.com/2";
             var currentMajor = GroupsFileValidator.GetCurrentVersion().Split('.')[0];
             var existingContent = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {currentMajor}.0 ######
+######  Created with bndl version {currentMajor}.0 ######
 
 #SPORTS";
             await File.WriteAllTextAsync(tmpFile, existingContent);
@@ -381,7 +381,7 @@ http://example.com/1";
             // Create a file with a different major version
             var oldVersionContent = @"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version 99.0 ######
+######  Created with bndl version 99.0 ######
 
 #Sports";
             await File.WriteAllTextAsync(tmpFile, oldVersionContent);
@@ -490,7 +490,7 @@ http://example.com/2";
             // Create a file with a different major version
             var oldVersionContent = @"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version 99.0 ######
+######  Created with bndl version 99.0 ######
 
 #Sports";
             await File.WriteAllTextAsync(tmpFile, oldVersionContent);
@@ -553,7 +553,7 @@ http://example.com/2";
             
             var oldVersionContent = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {differentMinorVersion}                                          ######
+######  Created with bndl version {differentMinorVersion}                                          ######
 
 #Sports
 News";
@@ -591,7 +591,7 @@ http://example.com/3";
             CollectionAssert.Contains(lines, "##Movies");
             
             // Version line should be updated to current version
-            var versionLine = lines.FirstOrDefault(l => l.Contains("Created with iptv version"));
+            var versionLine = lines.FirstOrDefault(l => l.Contains("Created with bndl version"));
             Assert.IsNotNull(versionLine);
             StringAssert.Contains(versionLine, $"version {currentVersion}");
             
@@ -601,7 +601,7 @@ http://example.com/3";
             
             // Verify backup has the old version
             var backupLines = await File.ReadAllLinesAsync(backupPath);
-            var backupVersionLine = backupLines.FirstOrDefault(l => l.Contains("Created with iptv version"));
+            var backupVersionLine = backupLines.FirstOrDefault(l => l.Contains("Created with bndl version"));
             Assert.IsNotNull(backupVersionLine);
             StringAssert.Contains(backupVersionLine, $"version {differentMinorVersion}");
             
@@ -630,7 +630,7 @@ http://example.com/3";
             
             var oldVersionContent = $@"######  This is a DROP list. Put a '#' in front of any group you want to KEEP.  ######
 ######  Lines without '#' will be DROPPED. Blank lines are ignored.             ######
-######  Created with iptv version {differentMinorVersion}                                          ######
+######  Created with bndl version {differentMinorVersion}                                          ######
 
 #Sports
 News";
@@ -664,7 +664,7 @@ http://example.com/2";
             var lines = await File.ReadAllLinesAsync(tmpFile);
             
             // Version line should be updated to current version
-            var versionLine = lines.FirstOrDefault(l => l.Contains("Created with iptv version"));
+            var versionLine = lines.FirstOrDefault(l => l.Contains("Created with bndl version"));
             Assert.IsNotNull(versionLine);
             StringAssert.Contains(versionLine, $"version {currentVersion}");
             
