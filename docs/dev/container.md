@@ -7,6 +7,17 @@ This document covers local container build/run for development.
 - Docker Desktop (or Docker Engine + Compose plugin)
 - Repo root as current directory
 
+## Setup
+
+The compose file uses `user: "${PUID}:${PGID}"` so the container runs as your own user account. Create a `.env` file in the repo root before the first run:
+
+```bash
+echo "PUID=$(id -u)" >> .env
+echo "PGID=$(id -g)" >> .env
+```
+
+The `.env` file is already in `.gitignore`.
+
 ## Build And Run
 
 Start the service with the provided compose file:
@@ -85,5 +96,5 @@ docker inspect --format='{{json .State.Health}}' m3undle
 
 - DB schema migrations run on app startup.
 - App health endpoint is `GET /health`.
-- The container runs as UID `64198` (the built-in `app` user from the .NET runtime image).
+- The container runs as whatever user is set by `PUID`/`PGID` in `.env`.
 - If Docker in WSL is unavailable, enable WSL integration in Docker Desktop.

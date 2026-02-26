@@ -24,6 +24,7 @@ services:
   m3undle:
     image: ghcr.io/sydney-elvis/m3undle:alpha
     container_name: m3undle
+    user: "${PUID}:${PGID}"
     ports:
       - "8080:8080"
     environment:
@@ -32,6 +33,21 @@ services:
       - ./config:/config
       - ./data:/data
     restart: unless-stopped
+```
+
+Create a `.env` file next to `compose.yaml` with your user and group IDs:
+
+```env
+PUID=1000
+PGID=1000
+```
+
+Find your IDs on Linux with `id`:
+
+```bash
+$ id
+uid=1000(jake) gid=1000(jake) groups=1000(jake),998(docker)
+# PUID=1000  PGID=1000
 ```
 
 Then open `http://<host>:8080`.
@@ -43,6 +59,7 @@ mkdir -p m3undle/config m3undle/data && cd m3undle
 
 docker run -d \
   --name m3undle \
+  --user "$(id -u):$(id -g)" \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -v ./config:/config \
@@ -63,17 +80,6 @@ docker run -d \
 Both are required for data to persist across container restarts.
 
 **Why bind mounts?** Bind mounts put files in a known place on the host. You can edit `config.yaml` with any editor, inspect logs, or wipe the data directory without going through Docker commands.
-
-### Linux: ownership
-
-The container runs as a non-root user (UID `64198`). On Linux with bind mounts, pre-create the directories with the correct owner before starting the container:
-
-```bash
-mkdir -p config data
-chown -R 64198:64198 config data
-```
-
-Docker Desktop on Mac and Windows handles this automatically.
 
 ### Named volumes (alternative)
 

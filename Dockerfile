@@ -18,18 +18,16 @@ FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl gosu \
+    && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish ./
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN mkdir -p /data /config \
-    && chown -R app:app /app \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN mkdir -p /data /config
 
 ENV ASPNETCORE_URLS=http://+:8080 \
     ASPNETCORE_HTTP_PORTS=8080 \
+    HOME=/data \
     ConnectionStrings__DefaultConnection="DataSource=/data/m3undle.db;Cache=Shared" \
     M3Undle__Logging__LogDirectory=/data/logs \
     M3Undle__Snapshot__Directory=/data/snapshots \
@@ -41,5 +39,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --fail --silent http://127.0.0.1:8080/health || exit 1
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["dotnet", "M3Undle.Web.dll"]
+ENTRYPOINT ["dotnet", "M3Undle.Web.dll"]

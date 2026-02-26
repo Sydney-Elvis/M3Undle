@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: m3undle:local
     container_name: m3undle
+    user: "${PUID}:${PGID}"
     ports:
       - "8080:8080"
     environment:
