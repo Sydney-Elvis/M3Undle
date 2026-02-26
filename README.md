@@ -95,6 +95,25 @@ See: `docs/SERVICE.md`
 
 ---
 
+## Docker
+
+```bash
+docker run -d \
+  --name m3undle \
+  -p 8080:8080 \
+  -e TZ=America/New_York \
+  -v ./data:/data \
+  -v ./config:/config \
+  --restart unless-stopped \
+  ghcr.io/sydney-elvis/m3undle:alpha
+```
+
+Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+
+See [`docs/DOCKER.md`](docs/DOCKER.md) for Compose example, volume layout, and all environment variables.
+
+---
+
 ## Compatibility Endpoints
 
 M3Undle publishes endpoints compatible with common clients:

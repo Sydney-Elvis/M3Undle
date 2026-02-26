@@ -1,6 +1,6 @@
 # M3Undle Container Usage
 
-This document covers local container build/run for the Alpha packaging flow.
+This document covers local container build/run for development.
 
 ## Prerequisites
 
@@ -27,15 +27,15 @@ Compose publishes:
 
 - `8080` on host -> `8080` in container
 
-Persistent named volumes:
+Bind-mounted host directories (created alongside `compose.yaml`):
 
-- `m3undle_data` -> `/app/Data` (SQLite database)
-- `m3undle_snapshots` -> `/app/snapshots` (snapshot files)
+- `./config` -> `/config` (config.yaml and .env)
+- `./data` -> `/data` (SQLite database, snapshots, logs)
 
-To remove everything including persisted data:
+To wipe all persisted data:
 
 ```bash
-docker compose down -v
+rm -rf ./data ./config
 ```
 
 ## Smoke Tests
@@ -55,7 +55,7 @@ curl -f http://localhost:8080/m3u/m3undle.m3u
 Stream relay (extract first `/stream/<streamKey>` from playlist):
 
 ```bash
-key_path=$(curl -fsS http://localhost:8080/m3u/m3undle.m3u | rg -o '/stream/[^[:space:]]+' -m 1)
+key_path=$(curl -fsS http://localhost:8080/m3u/m3undle.m3u | grep -o '/stream/[^[:space:]]*' | head -1)
 curl -f "http://localhost:8080${key_path}" -o /dev/null
 ```
 
@@ -78,12 +78,12 @@ docker compose logs -f m3undle
 Inspect health:
 
 ```bash
-docker inspect --format='{{json .State.Health}}' M3Undle
+docker inspect --format='{{json .State.Health}}' m3undle
 ```
 
 ## Notes
 
 - DB schema migrations run on app startup.
 - App health endpoint is `GET /health`.
+- The container runs as UID `64198` (the built-in `app` user from the .NET runtime image).
 - If Docker in WSL is unavailable, enable WSL integration in Docker Desktop.
-

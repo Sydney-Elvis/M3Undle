@@ -118,7 +118,7 @@ public sealed class SnapshotBuilder(
 
         // 7. Write snapshot files
         var snapshotId = Guid.NewGuid().ToString();
-        var snapshotDir = Path.Combine(env.ContentRootPath, "Data", "snapshots", "m3undle", snapshotId);
+        var snapshotDir = GetSnapshotDir(snapshotId);
         Directory.CreateDirectory(snapshotDir);
 
         var channelIndexPath = Path.Combine(snapshotDir, "channel_index.json");
@@ -237,7 +237,7 @@ public sealed class SnapshotBuilder(
 
         foreach (var snapshot in toDelete)
         {
-            var dir = Path.Combine(env.ContentRootPath, "Data", "snapshots", "m3undle", snapshot.SnapshotId);
+            var dir = GetSnapshotDir(snapshot.SnapshotId);
             try
             {
                 if (Directory.Exists(dir))
@@ -253,6 +253,14 @@ public sealed class SnapshotBuilder(
 
         db.Snapshots.RemoveRange(toDelete);
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private string GetSnapshotDir(string snapshotId)
+    {
+        var baseDir = snapshotOptions.Value.Directory;
+        if (!Path.IsPathRooted(baseDir))
+            baseDir = Path.Combine(env.ContentRootPath, baseDir);
+        return Path.Combine(baseDir, "m3undle", snapshotId);
     }
 
     private async Task FailFetchRunAsync(FetchRun fetchRun, string errorSummary)

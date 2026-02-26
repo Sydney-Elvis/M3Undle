@@ -95,6 +95,10 @@ publish/
 src/M3Undle.Web/Data/snapshots/
 !src/M3Undle.Web/Data/snapshots/.gitkeep
 
+# Local compose bind-mount directories (created by docker compose up)
+/data/
+/config/
+
 .DS_Store
 .ai_docs/
 m3undle.db*

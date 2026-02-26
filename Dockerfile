@@ -22,15 +22,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish ./
-RUN mkdir -p /app/Data \
-    && chown -R app:app /app
+
+RUN mkdir -p /data /config \
+    && chown -R app:app /app /data /config
 
 USER app
 
 ENV ASPNETCORE_URLS=http://+:8080 \
-    ASPNETCORE_HTTP_PORTS=8080
+    ASPNETCORE_HTTP_PORTS=8080 \
+    ConnectionStrings__DefaultConnection="DataSource=/data/m3undle.db;Cache=Shared" \
+    M3Undle__Logging__LogDirectory=/data/logs \
+    M3Undle__Snapshot__Directory=/data/snapshots \
+    M3UNDLE_CONFIG_DIR=/config
 
-VOLUME ["/app/Data"]
+VOLUME ["/data", "/config"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

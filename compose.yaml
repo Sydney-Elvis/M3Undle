@@ -1,5 +1,5 @@
 services:
-  guidedog:
+  m3undle:
     build:
       context: .
       dockerfile: Dockerfile
@@ -9,9 +9,10 @@ services:
       - "8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      TZ: UTC
     volumes:
-      - m3undle_data:/app/Data
-      - m3undle_snapshots:/app/snapshots
+      - ./config:/config
+      - ./data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
@@ -19,7 +20,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-
-volumes:
-  m3undle_data:
-  m3undle_snapshots:

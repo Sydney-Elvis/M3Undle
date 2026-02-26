@@ -10,5 +10,6 @@ public sealed class RefreshOptions
 public sealed class SnapshotOptions
 {
     public int RetentionCount { get; set; } = 3;
+    public string Directory { get; set; } = "Data/snapshots";
 }
 
