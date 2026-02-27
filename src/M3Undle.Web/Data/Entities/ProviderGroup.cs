@@ -9,8 +9,10 @@ public sealed class ProviderGroup
     public DateTime FirstSeenUtc { get; set; }
     public DateTime LastSeenUtc { get; set; }
     public bool Active { get; set; }
+    public int? ChannelCount { get; set; }
 
     public Provider Provider { get; set; } = null!;
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();
+    public ICollection<ProfileGroupFilter> ProfileGroupFilters { get; set; } = new List<ProfileGroupFilter>();
 }
 

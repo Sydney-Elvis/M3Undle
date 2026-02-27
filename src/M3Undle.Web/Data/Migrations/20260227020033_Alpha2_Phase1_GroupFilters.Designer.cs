@@ -3,6 +3,7 @@ using System;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260227020033_Alpha2_Phase1_GroupFilters")]
+    partial class Alpha2_Phase1_GroupFilters
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -450,37 +453,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("profiles", (string)null);
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupChannelFilter", b =>
-                {
-                    b.Property<string>("ProfileGroupChannelFilterId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("profile_group_channel_filter_id");
-
-                    b.Property<DateTime>("CreatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("created_utc");
-
-                    b.Property<string>("ProfileGroupFilterId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("profile_group_filter_id");
-
-                    b.Property<string>("ProviderChannelId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_channel_id");
-
-                    b.HasKey("ProfileGroupChannelFilterId");
-
-                    b.HasIndex("ProviderChannelId");
-
-                    b.HasIndex("ProfileGroupFilterId", "ProviderChannelId")
-                        .IsUnique()
-                        .HasDatabaseName("idx_pgcf_filter_channel_unique");
-
-                    b.ToTable("profile_group_channel_filters", (string)null);
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupFilter", b =>
                 {
                     b.Property<string>("ProfileGroupFilterId")
@@ -494,13 +466,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Property<int?>("AutoNumStart")
                         .HasColumnType("INTEGER")
                         .HasColumnName("auto_num_start");
-
-                    b.Property<string>("ChannelMode")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("all")
-                        .HasColumnName("channel_mode");
 
                     b.Property<DateTime>("CreatedUtc")
                         .HasColumnType("TEXT")
@@ -1161,25 +1126,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Provider");
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupChannelFilter", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.ProfileGroupFilter", "ProfileGroupFilter")
-                        .WithMany("ChannelFilters")
-                        .HasForeignKey("ProfileGroupFilterId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("M3Undle.Web.Data.Entities.ProviderChannel", "ProviderChannel")
-                        .WithMany("ChannelFilters")
-                        .HasForeignKey("ProviderChannelId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("ProfileGroupFilter");
-
-                    b.Navigation("ProviderChannel");
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupFilter", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.Profile", "Profile")
@@ -1418,11 +1364,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("StreamKeys");
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupFilter", b =>
-                {
-                    b.Navigation("ChannelFilters");
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Provider", b =>
                 {
                     b.Navigation("ChannelSources");
@@ -1438,8 +1379,6 @@ namespace M3Undle.Web.Data.Migrations
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProviderChannel", b =>
                 {
-                    b.Navigation("ChannelFilters");
-
                     b.Navigation("ChannelSources");
                 });
 

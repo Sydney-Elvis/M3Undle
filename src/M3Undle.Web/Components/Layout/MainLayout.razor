@@ -7,6 +7,8 @@
 @inject ISnackbar Snackbar
 @using System.Reflection
 @using System.Threading.Channels
+@using M3Undle.Web.Contracts
+@inject HttpClient Http
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
@@ -51,15 +53,33 @@
     </MudMainContent>
 
     <MudAppBar Bottom="true" Elevation="1" Dense="true"
-               Style="height:24px; min-height:24px; font-size:0.70rem; padding:0 12px;">
+               Style="height:28px; min-height:28px; font-size:0.70rem; padding:0 12px;">
         <MudText Typo="Typo.caption" Style="font-size:0.70rem; opacity:0.8;">v@(_version)</MudText>
         <MudSpacer />
+        @if (_channelStats is not null)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Style="font-size:0.70rem;">
+                @if (_channelStats.GroupsPending > 0)
+                {
+                    <MudLink Href="channels/groups" Style="font-size:0.70rem;" Color="Color.Warning">
+                        @_channelStats.GroupsPending pending
+                    </MudLink>
+                }
+                @if (_channelStats.ChannelsInOutput > 0)
+                {
+                    <MudLink Href="channels/groups" Style="font-size:0.70rem;" Color="Color.Inherit">
+                        @_channelStats.ChannelsInOutput.ToString("N0") ch
+                    </MudLink>
+                }
+            </MudStack>
+        }
     </MudAppBar>
 </MudLayout>
 
 @code {
     private bool _drawerOpen;
     private bool _isDarkMode;
+    private ChannelMappingStatsDto? _channelStats;
     private bool _systemIsDark;
     private bool _isRefreshing;
     private bool _pendingProviderSwitchNotification;
@@ -155,6 +175,17 @@
         _isRefreshing = RefreshTrigger.IsRefreshing;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
+        _ = LoadChannelStatsAsync();
+    }
+
+    private async Task LoadChannelStatsAsync()
+    {
+        try
+        {
+            _channelStats = await Http.GetFromJsonAsync<ChannelMappingStatsDto>("/api/v1/channel-stats", _cts.Token);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch { }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -180,9 +211,14 @@
                     _isRefreshing = true;
                     await InvokeAsync(StateHasChanged);
                 }
+                else if (evt.Kind == M3Undle.Web.Application.AppEventKind.GroupFiltersChanged)
+                {
+                    await LoadChannelStatsAsync();
+                }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.RefreshCompleted)
                 {
                     _isRefreshing = false;
+                    await LoadChannelStatsAsync();
                     await InvokeAsync(StateHasChanged);
 
                     if (_pendingProviderSwitchNotification && evt.Succeeded)

@@ -19,6 +19,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<Snapshot> Snapshots => Set<Snapshot>();
     public DbSet<StreamKey> StreamKeys => Set<StreamKey>();
     public DbSet<SiteSettings> SiteSettings => Set<SiteSettings>();
+    public DbSet<ProfileGroupFilter> ProfileGroupFilters => Set<ProfileGroupFilter>();
+    public DbSet<ProfileGroupChannelFilter> ProfileGroupChannelFilters => Set<ProfileGroupChannelFilter>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

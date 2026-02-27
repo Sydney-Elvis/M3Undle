@@ -1,13 +1,24 @@
 @using Microsoft.AspNetCore.Components.Routing
 @using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
 @inject HttpClient Http
 @inject ISnackbar Snackbar
 @inject ISiteSettingsService SiteSettings
+@inject AppEventBus EventBus
 @implements IDisposable
 
 <MudNavMenu>
     <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home" OnClick="HandleNavClick">Overview</MudNavLink>
     <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns" OnClick="HandleNavClick">Providers</MudNavLink>
+    <MudNavLink Href="channels/groups" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+            <span>Groups</span>
+            @if (_pendingGroupCount > 0)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ms-1">@_pendingGroupCount</MudChip>
+            }
+        </MudStack>
+    </MudNavLink>
     <MudNavLink Href="settings" Icon="@Icons.Material.Filled.Settings" OnClick="HandleNavClick">Settings</MudNavLink>
     <MudNavLink Href="logs" Icon="@Icons.Material.Filled.Article" OnClick="HandleNavClick">Logs</MudNavLink>
 </MudNavMenu>
@@ -56,12 +67,44 @@
     private string _currentPath = string.Empty;
     private bool _isRefreshing;
     private bool _authEnabled;
+    private int _pendingGroupCount;
+    private IDisposable? _eventSubscription;
+    private readonly CancellationTokenSource _cts = new();
 
     protected override async Task OnInitializedAsync()
     {
         _currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
         SiteSettings.OnSettingsChanged += HandleSettingsChanged;
+
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+
+        await LoadStatsAsync();
+    }
+
+    private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.RefreshCompleted || evt.Kind == AppEventKind.GroupFiltersChanged)
+                    await InvokeAsync(LoadStatsAsync);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task LoadStatsAsync()
+    {
+        try
+        {
+            var stats = await Http.GetFromJsonAsync<ChannelMappingStatsDto>("/api/v1/channel-stats", _cts.Token);
+            _pendingGroupCount = stats?.GroupsPending ?? 0;
+            StateHasChanged();
+        }
+        catch { }
     }
 
     private async void HandleSettingsChanged()
@@ -73,6 +116,9 @@
     public void Dispose()
     {
         SiteSettings.OnSettingsChanged -= HandleSettingsChanged;
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
     }
 
     private Task HandleNavClick(MouseEventArgs _)

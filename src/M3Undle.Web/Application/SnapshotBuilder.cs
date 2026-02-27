@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using M3Undle.Core.M3u;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -24,6 +25,8 @@ public sealed class SnapshotBuilder(
         WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
+
+    private sealed record GroupFilterConfig(string ProfileGroupFilterId, string ChannelMode, string OutputName, int? AutoNumStart, int? AutoNumEnd);
 
     public async Task<(bool Succeeded, string? ErrorSummary)> RunAsync(CancellationToken cancellationToken)
     {
@@ -113,8 +116,51 @@ public sealed class SnapshotBuilder(
             xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
         }
 
-        // 6. Build channel index directly from in-memory parsed channels
-        var channelIndex = BuildChannelIndex(playlistResult.Channels, profileId);
+        // 5b. Sync provider groups + channels to DB, then create pending filter rows for new groups.
+        var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
+        await SyncGroupFiltersAsync(profileId, provider.ProviderId, cancellationToken);
+        await SyncProviderChannelsAsync(profileId, provider.ProviderId, fetchRun.FetchRunId, playlistResult.Channels, groupNameToId, now, cancellationToken);
+
+        // 6. Load group filter config for this profile and build channel index
+        var groupFilters = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Include(x => x.ProviderGroup)
+            .Where(x => x.ProfileId == profileId && x.Decision == "include")
+            .ToListAsync(cancellationToken);
+
+        var includedGroups = groupFilters.ToDictionary(
+            f => f.ProviderGroup.RawName,
+            f => new GroupFilterConfig(
+                f.ProfileGroupFilterId,
+                f.ChannelMode,
+                f.OutputName ?? f.ProviderGroup.RawName,
+                f.AutoNumStart,
+                f.AutoNumEnd),
+            StringComparer.Ordinal);
+
+        // 6b. Load per-channel selections for groups in "select" mode
+        var selectModeFilterIds = includedGroups.Values
+            .Where(g => g.ChannelMode == "select")
+            .Select(g => g.ProfileGroupFilterId)
+            .ToList();
+
+        Dictionary<string, HashSet<string>> allowedStreamsByFilterId = [];
+        if (selectModeFilterIds.Count > 0)
+        {
+            var selections = await db.ProfileGroupChannelFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderChannel)
+                .Where(x => selectModeFilterIds.Contains(x.ProfileGroupFilterId))
+                .ToListAsync(cancellationToken);
+
+            allowedStreamsByFilterId = selections
+                .GroupBy(x => x.ProfileGroupFilterId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(x => x.ProviderChannel.StreamUrl).ToHashSet(StringComparer.Ordinal));
+        }
+
+        var channelIndex = BuildChannelIndex(playlistResult.Channels, profileId, includedGroups, allowedStreamsByFilterId);
 
         // 7. Write snapshot files
         var snapshotId = Guid.NewGuid().ToString();
@@ -169,30 +215,279 @@ public sealed class SnapshotBuilder(
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private static List<ChannelIndexEntry> BuildChannelIndex(IReadOnlyList<ParsedProviderChannel> channels, string profileId)
+    private static List<ChannelIndexEntry> BuildChannelIndex(
+        IReadOnlyList<ParsedProviderChannel> channels,
+        string profileId,
+        IReadOnlyDictionary<string, GroupFilterConfig> includedGroups,
+        IReadOnlyDictionary<string, HashSet<string>> allowedStreamsByFilterId)
     {
-        return channels
-            .Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl))
-            .OrderBy(x => x.DisplayName, StringComparer.Ordinal)
-            .ThenBy(x => x.StreamUrl, StringComparer.Ordinal)
-            .Select(channel =>
-            {
-                var stableKey = !string.IsNullOrWhiteSpace(channel.ProviderChannelKey)
-                    ? channel.ProviderChannelKey!
-                    : $"{channel.DisplayName}\u001f{channel.StreamUrl}";
+        // Pass-through mode: no filters configured yet — include all channels unchanged.
+        if (includedGroups.Count == 0)
+        {
+            return channels
+                .Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl))
+                .OrderBy(x => x.DisplayName, StringComparer.Ordinal)
+                .ThenBy(x => x.StreamUrl, StringComparer.Ordinal)
+                .Select(channel => BuildEntry(channel, channel.GroupTitle, null, profileId))
+                .ToList();
+        }
 
-                return new ChannelIndexEntry(
-                    StreamKey: DeriveStreamKey(stableKey, profileId),
-                    DisplayName: channel.DisplayName,
-                    TvgId: channel.TvgId,
-                    TvgName: channel.TvgName,
-                    LogoUrl: channel.LogoUrl,
-                    GroupTitle: channel.GroupTitle,
-                    TvgChno: null,
-                    ProviderChannelId: string.Empty,
-                    StreamUrl: channel.StreamUrl!);
+        // Filtered mode: only include channels whose GroupTitle matches an included group.
+        var result = new List<ChannelIndexEntry>();
+
+        var grouped = channels
+            .Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl)
+                     && !string.IsNullOrWhiteSpace(x.GroupTitle)
+                     && includedGroups.ContainsKey(x.GroupTitle!))
+            .GroupBy(x => includedGroups[x.GroupTitle!].OutputName, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal);
+
+        foreach (var group in grouped)
+        {
+            var outputName = group.Key;
+            var filter = includedGroups[group.First().GroupTitle!];
+            var sorted = group
+                .OrderBy(x => x.DisplayName, StringComparer.Ordinal)
+                .ThenBy(x => x.StreamUrl, StringComparer.Ordinal)
+                .ToList();
+
+            // Per-channel selection: only keep explicitly selected channels when in "select" mode.
+            if (filter.ChannelMode == "select"
+                && allowedStreamsByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var allowedStreams))
+            {
+                sorted = sorted.Where(c => allowedStreams.Contains(c.StreamUrl ?? string.Empty)).ToList();
+            }
+
+            int? nextNum = filter.AutoNumStart;
+            int? maxNum = filter.AutoNumEnd;
+
+            foreach (var channel in sorted)
+            {
+                int? assignedNum = null;
+                if (nextNum.HasValue)
+                {
+                    assignedNum = nextNum;
+                    nextNum++;
+                    if (maxNum.HasValue && nextNum > maxNum)
+                        nextNum = null;
+                }
+
+                result.Add(BuildEntry(channel, outputName, assignedNum, profileId));
+            }
+        }
+
+        return result;
+    }
+
+    private static ChannelIndexEntry BuildEntry(
+        ParsedProviderChannel channel,
+        string? groupTitle,
+        int? tvgChno,
+        string profileId)
+    {
+        var stableKey = !string.IsNullOrWhiteSpace(channel.ProviderChannelKey)
+            ? channel.ProviderChannelKey!
+            : $"{channel.DisplayName}\u001f{channel.StreamUrl}";
+
+        return new ChannelIndexEntry(
+            StreamKey: DeriveStreamKey(stableKey, profileId),
+            DisplayName: channel.DisplayName,
+            TvgId: channel.TvgId,
+            TvgName: channel.TvgName,
+            LogoUrl: channel.LogoUrl,
+            GroupTitle: groupTitle,
+            TvgChno: tvgChno,
+            ProviderChannelId: string.Empty,
+            StreamUrl: channel.StreamUrl!);
+    }
+
+    private async Task<Dictionary<string, string>> SyncProviderGroupsAsync(
+        string providerId,
+        IReadOnlyList<ParsedProviderChannel> channels,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var countByGroup = channels
+            .Where(x => !string.IsNullOrWhiteSpace(x.GroupTitle) && LiveClassifier.IsLive(x.StreamUrl))
+            .GroupBy(x => x.GroupTitle!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        var groupNames = countByGroup.Keys.ToList();
+
+        var existingGroups = await db.ProviderGroups
+            .Where(x => x.ProviderId == providerId)
+            .ToListAsync(cancellationToken);
+
+        var byName = existingGroups.ToDictionary(x => x.RawName, StringComparer.Ordinal);
+
+        foreach (var groupName in groupNames)
+        {
+            if (byName.TryGetValue(groupName, out var existing))
+            {
+                existing.LastSeenUtc = now;
+                existing.Active = true;
+                existing.ChannelCount = countByGroup[groupName];
+                continue;
+            }
+
+            db.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = Guid.NewGuid().ToString(),
+                ProviderId = providerId,
+                RawName = groupName,
+                FirstSeenUtc = now,
+                LastSeenUtc = now,
+                Active = true,
+                ChannelCount = countByGroup[groupName],
+            });
+        }
+
+        foreach (var group in existingGroups)
+        {
+            if (!countByGroup.ContainsKey(group.RawName))
+            {
+                group.Active = false;
+                group.ChannelCount = 0;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return await db.ProviderGroups
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId)
+            .ToDictionaryAsync(x => x.RawName, x => x.ProviderGroupId, StringComparer.Ordinal, cancellationToken);
+    }
+
+    private async Task SyncGroupFiltersAsync(
+        string profileId,
+        string providerId,
+        CancellationToken cancellationToken)
+    {
+        var allGroupIds = await db.ProviderGroups
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId)
+            .Select(x => x.ProviderGroupId)
+            .ToListAsync(cancellationToken);
+
+        var existingFilterGroupIds = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => x.ProviderGroupId)
+            .ToHashSetAsync(cancellationToken);
+
+        var now = DateTime.UtcNow;
+        var newFilters = allGroupIds
+            .Where(id => !existingFilterGroupIds.Contains(id))
+            .Select(id => new ProfileGroupFilter
+            {
+                ProfileGroupFilterId = Guid.NewGuid().ToString(),
+                ProfileId = profileId,
+                ProviderGroupId = id,
+                Decision = "pending",
+                TrackNewChannels = false,
+                CreatedUtc = now,
+                UpdatedUtc = now,
             })
             .ToList();
+
+        if (newFilters.Count > 0)
+        {
+            db.ProfileGroupFilters.AddRange(newFilters);
+            await db.SaveChangesAsync(cancellationToken);
+            logger.LogInformation("Created {Count} new pending group filter(s) for profile {ProfileId}.", newFilters.Count, profileId);
+        }
+    }
+
+    private async Task SyncProviderChannelsAsync(
+        string profileId,
+        string providerId,
+        string fetchRunId,
+        IReadOnlyList<ParsedProviderChannel> channels,
+        IReadOnlyDictionary<string, string> groupNameToId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        static string DeriveChannelKey(ParsedProviderChannel ch)
+        {
+            var stableKey = !string.IsNullOrWhiteSpace(ch.ProviderChannelKey)
+                ? ch.ProviderChannelKey!
+                : $"{ch.DisplayName}\u001f{ch.StreamUrl}";
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(stableKey));
+            return Convert.ToBase64String(hash).Replace('+', '-').Replace('/', '_').TrimEnd('=')[..16];
+        }
+
+        // Skip syncing channels for excluded groups — they get deactivated below via unseen-key sweep.
+        var excludedGroupIds = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Decision == "exclude")
+            .Select(x => x.ProviderGroupId)
+            .ToHashSetAsync(cancellationToken);
+
+        var existingChannels = await db.ProviderChannels
+            .Where(x => x.ProviderId == providerId)
+            .ToListAsync(cancellationToken);
+
+        var byKey = existingChannels
+            .Where(x => x.ProviderChannelKey is not null)
+            .ToDictionary(x => x.ProviderChannelKey!, StringComparer.Ordinal);
+
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var ch in channels)
+        {
+            if (string.IsNullOrWhiteSpace(ch.DisplayName) || string.IsNullOrWhiteSpace(ch.StreamUrl)) continue;
+            if (!LiveClassifier.IsLive(ch.StreamUrl)) continue;
+
+            var groupId = ch.GroupTitle is not null && groupNameToId.TryGetValue(ch.GroupTitle, out var gid)
+                ? (string?)gid : null;
+
+            // Lazy: skip channels from excluded groups entirely.
+            if (groupId is not null && excludedGroupIds.Contains(groupId)) continue;
+
+            var key = DeriveChannelKey(ch);
+            if (!seenKeys.Add(key)) continue; // skip duplicate channel keys within this batch
+
+            if (byKey.TryGetValue(key, out var entity))
+            {
+                entity.DisplayName = ch.DisplayName;
+                entity.TvgId = ch.TvgId;
+                entity.TvgName = ch.TvgName;
+                entity.LogoUrl = ch.LogoUrl;
+                entity.StreamUrl = ch.StreamUrl;
+                entity.GroupTitle = ch.GroupTitle;
+                entity.ProviderGroupId = groupId;
+                entity.LastSeenUtc = now;
+                entity.Active = true;
+                entity.LastFetchRunId = fetchRunId;
+            }
+            else
+            {
+                db.ProviderChannels.Add(new ProviderChannel
+                {
+                    ProviderChannelId = Guid.NewGuid().ToString(),
+                    ProviderId = providerId,
+                    ProviderChannelKey = key,
+                    DisplayName = ch.DisplayName,
+                    TvgId = ch.TvgId,
+                    TvgName = ch.TvgName,
+                    LogoUrl = ch.LogoUrl,
+                    StreamUrl = ch.StreamUrl,
+                    GroupTitle = ch.GroupTitle,
+                    ProviderGroupId = groupId,
+                    FirstSeenUtc = now,
+                    LastSeenUtc = now,
+                    Active = true,
+                    LastFetchRunId = fetchRunId,
+                });
+            }
+        }
+
+        foreach (var entity in existingChannels.Where(x => x.ProviderChannelKey is not null && !seenKeys.Contains(x.ProviderChannelKey!)))
+            entity.Active = false;
+
+        await db.SaveChangesAsync(cancellationToken);
+        logger.LogInformation("Synced {Count} provider channel(s) for provider {ProviderId}.", seenKeys.Count, providerId);
     }
 
     private static string DeriveStreamKey(string stableKey, string profileId)
@@ -272,4 +567,3 @@ public sealed class SnapshotBuilder(
         await db.SaveChangesAsync(CancellationToken.None);
     }
 }
-

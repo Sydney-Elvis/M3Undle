@@ -1,5 +1,6 @@
 @page "/"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
 @inject HttpClient Http
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -160,10 +161,54 @@
             </MudStack>
         </MudPaper>
     </MudItem>
+
+    <!-- Channel Mapping -->
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.h6">Channel Mapping</MudText>
+                <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="channels/groups">
+                    Configure Groups
+                </MudButton>
+            </MudStack>
+
+            @if (_channelStats is null)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                    No active provider configured. Set a provider active on the <MudLink Href="providers">Providers</MudLink> page.
+                </MudAlert>
+            }
+            else if (_channelStats.GroupsIncluded == 0 && _channelStats.GroupsPending == 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                    No groups configured yet — trigger a refresh, then <MudLink Href="channels/groups">configure groups</MudLink> to filter your output.
+                </MudAlert>
+            }
+            else
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap">
+                    <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle">
+                        @_channelStats.GroupsIncluded group@(_channelStats.GroupsIncluded == 1 ? "" : "s") included
+                    </MudChip>
+                    <MudChip T="string" Color="Color.Primary" Icon="@Icons.Material.Filled.Tv">
+                        @_channelStats.ChannelsInOutput.ToString("N0") channels in output
+                    </MudChip>
+                    @if (_channelStats.GroupsPending > 0)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
+                            @_channelStats.GroupsPending group@(_channelStats.GroupsPending == 1 ? "" : "s") pending review —
+                            <MudLink Href="channels/groups">review now</MudLink>
+                        </MudAlert>
+                    }
+                </MudStack>
+            }
+        </MudPaper>
+    </MudItem>
 </MudGrid>
 
 @code {
     private StatusResponse? _status;
+    private ChannelMappingStatsDto? _channelStats;
     private bool _isLoading;
     private bool _isRefreshing;
     private string? _loadError;
@@ -185,7 +230,7 @@
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
 
-        await LoadStatusAsync();
+        await Task.WhenAll(LoadStatusAsync(), LoadChannelStatsAsync());
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -203,7 +248,11 @@
                 {
                     _isRefreshing = false;
                     if (!_isLoading)
-                        await InvokeAsync(LoadStatusAsync);
+                        await InvokeAsync(async () => await Task.WhenAll(LoadStatusAsync(), LoadChannelStatsAsync()));
+                }
+                else if (evt.Kind == AppEventKind.GroupFiltersChanged)
+                {
+                    await InvokeAsync(LoadChannelStatsAsync);
                 }
                 else if (!_isLoading)
                 {
@@ -237,6 +286,18 @@
             _isLoading = false;
             StateHasChanged();
         }
+    }
+
+    private async Task LoadChannelStatsAsync()
+    {
+        try
+        {
+            _channelStats = await Http.GetFromJsonAsync<ChannelMappingStatsDto>("/api/v1/channel-stats", _cts.Token);
+        }
+        catch (OperationCanceledException) { return; }
+        catch { }
+
+        StateHasChanged();
     }
 
     public void Dispose()

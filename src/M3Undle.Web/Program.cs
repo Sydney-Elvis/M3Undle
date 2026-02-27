@@ -152,6 +152,7 @@ app.MapRazorComponents<App>()
 // Add additional endpoints required by the Identity /Account Razor components.
 app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
+app.MapChannelFilterApiEndpoints();
 app.MapCompatibilityEndpoints();
 app.MapHealthChecks("/health");
 

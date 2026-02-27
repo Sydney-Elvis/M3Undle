@@ -24,5 +24,6 @@ public sealed class ProviderChannel
     public ProviderGroup? ProviderGroup { get; set; }
     public FetchRun LastFetchRun { get; set; } = null!;
     public ICollection<ChannelSource> ChannelSources { get; set; } = new List<ChannelSource>();
+    public ICollection<ProfileGroupChannelFilter> ChannelFilters { get; set; } = new List<ProfileGroupChannelFilter>();
 }
 

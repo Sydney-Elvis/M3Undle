@@ -1,0 +1,1244 @@
+@page "/channels/groups"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@using System.Text.RegularExpressions
+@inject HttpClient Http
+@inject AppEventBus EventBus
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<PageTitle>M3Undle — Channel Groups</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Channel Groups</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Include or exclude provider groups. Rename and auto-number included groups to customise your M3U output.</MudText>
+        </MudStack>
+        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+    </MudStack>
+</MudPaper>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+}
+
+@if (_profileId is null && !_isLoading)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No active profile found. Set a provider active on the <MudLink Href="providers">Providers</MudLink> page first.
+    </MudAlert>
+}
+else
+{
+    <!-- Search + action toolbar — sticky below the AppBar -->
+    <MudPaper Elevation="2" Class="mb-2 pa-2" Style="position:sticky; top:var(--mud-appbar-height, 64px); z-index:100; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:4px;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+
+            <!-- Search field -->
+            <MudTextField T="string"
+                          Value="_searchTerm"
+                          ValueChanged="OnSearchTermChanged"
+                          Placeholder="Filter groups…  e.g.  CA   CA*   *CA*   ^LOCAL   !*USA*"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(!string.IsNullOrEmpty(_searchTerm) ? Icons.Material.Filled.Clear : Icons.Material.Filled.Search)"
+                          OnAdornmentClick="ClearSearch"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Style="min-width:300px; flex:1; max-width:520px;" />
+
+            <MudTooltip Placement="Placement.Right" Arrow="true"
+                        Text="CA=whole word | CA*=starts | *CA=ends | *CA*=contains | ^CA=str start | [CB]A=char class | !CA=negate | space=OR terms">
+                <MudIconButton Icon="@Icons.Material.Filled.HelpOutline" Size="Size.Small" Color="Color.Secondary" />
+            </MudTooltip>
+
+            @if (!string.IsNullOrEmpty(_searchError))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Error">@_searchError</MudText>
+            }
+
+            <MudDivider Vertical="true" FlexItem="true" />
+
+            <!-- Contextual action buttons for the active tab -->
+            @if (!_isLoading)
+            {
+                @if (_activeTabIndex == 0)
+                {
+                    @if (_selectedPending.Count > 0)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@_selectedPending.Count selected</MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle"
+                                   OnClick="IncludeSelectedPendingAsync" Disabled="_isBulkBusy">
+                            Include Selected
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Block"
+                                   OnClick="ExcludeSelectedPendingAsync" Disabled="_isBulkBusy">
+                            Exclude Selected
+                        </MudButton>
+                    }
+                    else if (FilteredPending.Count > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle"
+                                   OnClick="IncludeAllPendingAsync" Disabled="_isBulkBusy">
+                            Include All (@FilteredPending.Count)
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Block"
+                                   OnClick="ExcludeAllPendingAsync" Disabled="_isBulkBusy">
+                            Exclude All (@FilteredPending.Count)
+                        </MudButton>
+                    }
+                }
+                else if (_activeTabIndex == 1)
+                {
+                    @if (_selectedIncluded.Count > 0)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@_selectedIncluded.Count selected</MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Block"
+                                   OnClick="ExcludeSelectedIncludedAsync" Disabled="_isBulkBusy">
+                            Exclude Selected
+                        </MudButton>
+                    }
+                    else if (FilteredIncluded.Count > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.Block"
+                                   OnClick="ExcludeAllIncludedAsync" Disabled="_isBulkBusy">
+                            Exclude All (@FilteredIncluded.Count)
+                        </MudButton>
+                    }
+                }
+                else if (_activeTabIndex == 2)
+                {
+                    @if (_selectedExcluded.Count > 0)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@_selectedExcluded.Count selected</MudText>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle"
+                                   OnClick="IncludeSelectedExcludedAsync" Disabled="_isBulkBusy">
+                            Include Selected
+                        </MudButton>
+                    }
+                    else if (FilteredExcluded.Count > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle"
+                                   OnClick="IncludeAllExcludedAsync" Disabled="_isBulkBusy">
+                            Include All (@FilteredExcluded.Count)
+                        </MudButton>
+                    }
+                }
+            }
+
+        </MudStack>
+    </MudPaper>
+
+    <MudTabs Elevation="1" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4"
+             ActivePanelIndexChanged="OnTabChanged">
+
+        <!-- Pending tab -->
+        <MudTabPanel>
+            <TabContent>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <span>Pending</span>
+                    @if (_pendingFilters.Count > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@_pendingFilters.Count</MudChip>
+                    }
+                </MudStack>
+            </TabContent>
+            <ChildContent>
+                @if (_isLoading)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else if (_pendingFilters.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined">All groups have been reviewed.</MudAlert>
+                }
+                else if (FilteredPending.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups match your filter.</MudAlert>
+                }
+                else
+                {
+                    <MudTable Items="FilteredPending" Hover="true" Dense="true"
+                              MultiSelection="true"
+                              SelectedItems="_selectedPending"
+                              SelectedItemsChanged="@((HashSet<GroupFilterDto> s) => { _selectedPending = s; StateHasChanged(); })">
+                        <HeaderContent>
+                            <MudTh>Group</MudTh>
+                            <MudTh>Channels</MudTh>
+                            <MudTh>First seen</MudTh>
+                            <MudTh>Actions</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudLink OnClick="@(() => OpenChannelPanelAsync(context))" Color="Color.Inherit" Style="cursor:pointer;">
+                                        @context.ProviderGroupRawName
+                                    </MudLink>
+                                    @if (!context.ProviderGroupActive)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
+                                    }
+                                </MudStack>
+                            </MudTd>
+                            <MudTd>@(context.ChannelCount?.ToString("N0") ?? "—")</MudTd>
+                            <MudTd>@context.ProviderGroupFirstSeen.ToString("yyyy-MM-dd")</MudTd>
+                            <MudTd>
+                                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                               OnClick="@(() => IncludeAsync(context))">Include</MudButton>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                                               OnClick="@(() => ExcludeAsync(context))">Exclude</MudButton>
+                                    @* DEBUG - REMOVE *@
+                                    <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small" Color="Color.Info"
+                                                   OnClick="@(() => ShowRawM3uAsync(context))" />
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </ChildContent>
+        </MudTabPanel>
+
+        <!-- Included tab -->
+        <MudTabPanel>
+            <TabContent>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <span>Included</span>
+                    @if (_includedFilters.Count > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success">@_includedFilters.Count</MudChip>
+                    }
+                </MudStack>
+            </TabContent>
+            <ChildContent>
+                @if (_isLoading)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else if (_includedFilters.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups included yet. Review pending groups to add them.</MudAlert>
+                }
+                else if (FilteredIncluded.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups match your filter.</MudAlert>
+                }
+                else
+                {
+                    <MudTable Items="FilteredIncluded" Hover="true" Dense="true"
+                              MultiSelection="true"
+                              SelectedItems="_selectedIncluded"
+                              SelectedItemsChanged="@((HashSet<GroupFilterDto> s) => { _selectedIncluded = s; StateHasChanged(); })">
+                        <HeaderContent>
+                            <MudTh>Provider Group</MudTh>
+                            <MudTh>Output Name</MudTh>
+                            <MudTh Style="width:80px;">Start #</MudTh>
+                            <MudTh Style="width:80px;">End #</MudTh>
+                            <MudTh Style="width:56px;">Track</MudTh>
+                            <MudTh Style="width:60px;">Ch.</MudTh>
+                            <MudTh Style="width:32px;"></MudTh>
+                            <MudTh Style="width:48px;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudLink OnClick="@(() => OpenChannelPanelAsync(context))" Color="Color.Inherit" Style="cursor:pointer;">
+                                        @context.ProviderGroupRawName
+                                    </MudLink>
+                                    @if (!context.ProviderGroupActive)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">missing</MudChip>
+                                    }
+                                </MudStack>
+                            </MudTd>
+                            <MudTd>
+                                <MudTextField T="string"
+                                              Value="@(context.OutputName ?? string.Empty)"
+                                              ValueChanged="@(v => OnOutputNameChanged(context, v))"
+                                              Placeholder="@context.ProviderGroupRawName"
+                                              Margin="Margin.Dense"
+                                              Variant="Variant.Text"
+                                              Style="min-width:140px;"
+                                              DebounceInterval="800"
+                                              Immediate="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField T="int?"
+                                                Value="@context.AutoNumStart"
+                                                ValueChanged="@(v => OnAutoNumStartChanged(context, v))"
+                                                Placeholder="—"
+                                                Margin="Margin.Dense"
+                                                Variant="Variant.Text"
+                                                HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudNumericField T="int?"
+                                                Value="@context.AutoNumEnd"
+                                                ValueChanged="@(v => OnAutoNumEndChanged(context, v))"
+                                                Placeholder="—"
+                                                Margin="Margin.Dense"
+                                                Variant="Variant.Text"
+                                                HideSpinButtons="true" />
+                            </MudTd>
+                            <MudTd>
+                                <MudSwitch T="bool"
+                                           Value="@context.TrackNewChannels"
+                                           ValueChanged="@(v => OnTrackNewChannelsChanged(context, v))"
+                                           Size="Size.Small"
+                                           Color="Color.Primary" />
+                            </MudTd>
+                            <MudTd>
+                                <MudText Typo="Typo.body2">@(context.ChannelCount?.ToString("N0") ?? "—")</MudText>
+                            </MudTd>
+                            <MudTd>
+                                <MudTooltip Text="@(context.ChannelMode == "select" ? "Channel mapping (select mode)" : "Map channels")">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Tune"
+                                                   Color="@(context.ChannelMode == "select" ? Color.Primary : Color.Default)"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => OpenChannelMappingAsync(context))" />
+                                </MudTooltip>
+                            </MudTd>
+                            <MudTd>
+                                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => ExcludeAsync(context))" />
+                                    @* DEBUG - REMOVE *@
+                                    <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small" Color="Color.Info"
+                                                   OnClick="@(() => ShowRawM3uAsync(context))" />
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </ChildContent>
+        </MudTabPanel>
+
+        <!-- Excluded tab -->
+        <MudTabPanel>
+            <TabContent>
+                <span>Excluded</span>
+                @if (_excludedFilters.Count > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Class="ms-1">@_excludedFilters.Count</MudChip>
+                }
+            </TabContent>
+            <ChildContent>
+                @if (_isLoading)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else if (_excludedFilters.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups excluded.</MudAlert>
+                }
+                else if (FilteredExcluded.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups match your filter.</MudAlert>
+                }
+                else
+                {
+                    <MudTable Items="FilteredExcluded" Hover="true" Dense="true"
+                              MultiSelection="true"
+                              SelectedItems="_selectedExcluded"
+                              SelectedItemsChanged="@((HashSet<GroupFilterDto> s) => { _selectedExcluded = s; StateHasChanged(); })">
+                        <HeaderContent>
+                            <MudTh>Group</MudTh>
+                            <MudTh>Channels</MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudLink OnClick="@(() => OpenChannelPanelAsync(context))" Color="Color.Inherit" Style="cursor:pointer;">
+                                        @context.ProviderGroupRawName
+                                    </MudLink>
+                                    @if (!context.ProviderGroupActive)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
+                                    }
+                                </MudStack>
+                            </MudTd>
+                            <MudTd>@(context.ChannelCount?.ToString("N0") ?? "—")</MudTd>
+                            <MudTd>
+                                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                               OnClick="@(() => IncludeAsync(context))">Include</MudButton>
+                                    @* DEBUG - REMOVE *@
+                                    <MudIconButton Icon="@Icons.Material.Filled.Code" Size="Size.Small" Color="Color.Info"
+                                                   OnClick="@(() => ShowRawM3uAsync(context))" />
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </ChildContent>
+        </MudTabPanel>
+
+    </MudTabs>
+}
+
+@* DEBUG - REMOVE *@
+<MudDrawer @bind-Open="_m3uDrawerOpen" Anchor="Anchor.End" Elevation="1" Variant="DrawerVariant.Temporary" Width="700px">
+    <MudDrawerHeader>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%;">
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.subtitle1">Raw M3U — @_m3uGroupName</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Raw provider data — actual stream URLs from provider_channels</MudText>
+            </MudStack>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="@(() => _m3uDrawerOpen = false)" />
+        </MudStack>
+    </MudDrawerHeader>
+    <MudDivider />
+    <div style="padding:16px; overflow-y:auto; height:calc(100% - 64px);">
+        @if (_m3uLoading)
+        {
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+        }
+        else if (string.IsNullOrWhiteSpace(_m3uContent))
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                No lines found for group "@_m3uGroupName" in the current M3U output. Group may not be included or snapshot may be stale.
+            </MudAlert>
+        }
+        else
+        {
+            <pre style="font-size:0.72rem; white-space:pre-wrap; word-break:break-all; margin:0;">@_m3uContent</pre>
+        }
+    </div>
+</MudDrawer>
+
+<!-- Channel detail drawer -->
+<MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.End" Elevation="1" Variant="DrawerVariant.Temporary"
+           Width="420px">
+    <MudDrawerHeader>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%;">
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.subtitle1">@(_drawerFilter?.ProviderGroupRawName ?? string.Empty)</MudText>
+                @if (_drawerFilter?.OutputName is not null && _drawerFilter.OutputName != _drawerFilter.ProviderGroupRawName)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Output: @_drawerFilter.OutputName</MudText>
+                }
+            </MudStack>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="CloseChannelPanel" />
+        </MudStack>
+    </MudDrawerHeader>
+    <MudDivider />
+    <div style="padding:16px; overflow-y:auto; height:calc(100% - 64px);">
+        @if (_drawerLoading)
+        {
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+        }
+        else
+        {
+            @if (_drawerFilter is not null && _drawerFilter.Decision != "include")
+            {
+                <MudStack Row="true" Spacing="1" Class="mb-3">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.CheckCircle"
+                               OnClick="IncludeFromDrawerAsync">Include Group</MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Block"
+                               OnClick="ExcludeFromDrawerAsync">Exclude Group</MudButton>
+                </MudStack>
+                <MudDivider Class="mb-3" />
+            }
+
+            @if (_drawerFilter?.Decision == "include")
+            {
+                <!-- Channel mode toggle -->
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                    <MudButtonGroup Variant="Variant.Outlined" Size="Size.Small">
+                        <MudButton Color="@(_drawerChannelMode == "all" ? Color.Primary : Color.Default)"
+                                   Variant="@(_drawerChannelMode == "all" ? Variant.Filled : Variant.Outlined)"
+                                   OnClick="@(() => SetChannelModeAsync("all"))"
+                                   Disabled="_drawerSelectionSaving">
+                            All Channels
+                        </MudButton>
+                        <MudButton Color="@(_drawerChannelMode == "select" ? Color.Primary : Color.Default)"
+                                   Variant="@(_drawerChannelMode == "select" ? Variant.Filled : Variant.Outlined)"
+                                   OnClick="@(() => SetChannelModeAsync("select"))"
+                                   Disabled="_drawerSelectionSaving">
+                            Select Channels
+                        </MudButton>
+                    </MudButtonGroup>
+                    @if (_drawerChannelMode == "select" && _drawerSelectionDirty)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="SaveChannelSelectionsAsync"
+                                   Disabled="_drawerSelectionSaving">
+                            Save
+                        </MudButton>
+                    }
+                </MudStack>
+
+                @if (_drawerChannelMode == "select")
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @_drawerSelectedIds.Count of @_drawerAllChannels.Count selected
+                        </MudText>
+                        <MudLink Typo="Typo.caption" OnClick="SelectAllChannels" Style="cursor:pointer;">Select All</MudLink>
+                        <MudLink Typo="Typo.caption" OnClick="DeselectAllChannels" Style="cursor:pointer;">None</MudLink>
+                    </MudStack>
+
+                    @if (_drawerAllChannels.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                            No channel data yet — trigger a refresh to populate.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudList T="ProviderChannelSelectDto" Dense="true">
+                            @foreach (var ch in _drawerAllChannels)
+                            {
+                                <MudListItem T="ProviderChannelSelectDto" Dense="true">
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                        <MudCheckBox T="bool"
+                                                     Value="@_drawerSelectedIds.Contains(ch.ProviderChannelId)"
+                                                     ValueChanged="@(v => OnChannelChecked(ch.ProviderChannelId, v))"
+                                                     Size="Size.Small"
+                                                     Dense="true" />
+                                        <MudText Typo="Typo.body2">@ch.DisplayName</MudText>
+                                        @if (!ch.Active)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">gone</MudChip>
+                                        }
+                                    </MudStack>
+                                </MudListItem>
+                            }
+                        </MudList>
+                    }
+                }
+                else
+                {
+                    <!-- All mode: read-only channel list from snapshot -->
+                    @if (_drawerChannels.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                            No channels in output yet — trigger a refresh.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">@_drawerChannels.Count channel(s) in output</MudText>
+                        <MudList T="GroupChannelDto" Dense="true">
+                            @foreach (var ch in _drawerChannels)
+                            {
+                                <MudListItem T="GroupChannelDto">
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                        @if (ch.Number.HasValue)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:32px;text-align:right;">@ch.Number.Value</MudText>
+                                        }
+                                        <MudText Typo="Typo.body2">@ch.DisplayName</MudText>
+                                    </MudStack>
+                                </MudListItem>
+                            }
+                        </MudList>
+                    }
+                }
+            }
+            else
+            {
+                @if (_drawerChannels.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                        No channel data yet — trigger a refresh to populate.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">@_drawerChannels.Count channel(s) from provider</MudText>
+                    <MudList T="GroupChannelDto" Dense="true">
+                        @foreach (var ch in _drawerChannels)
+                        {
+                            <MudListItem T="GroupChannelDto">
+                                <MudText Typo="Typo.body2">@ch.DisplayName</MudText>
+                            </MudListItem>
+                        }
+                    </MudList>
+                }
+            }
+        }
+    </div>
+</MudDrawer>
+
+@code {
+    private string? _profileId;
+    private List<GroupFilterDto> _pendingFilters = [];
+    private List<GroupFilterDto> _includedFilters = [];
+    private List<GroupFilterDto> _excludedFilters = [];
+
+    private HashSet<GroupFilterDto> _selectedPending = [];
+    private HashSet<GroupFilterDto> _selectedIncluded = [];
+    private HashSet<GroupFilterDto> _selectedExcluded = [];
+
+    private int _activeTabIndex;
+    private bool _isLoading;
+    private bool _isBulkBusy;
+    private string? _error;
+
+    private bool _drawerOpen;
+    private bool _drawerLoading;
+    private GroupFilterDto? _drawerFilter;
+    private List<GroupChannelDto> _drawerChannels = [];
+
+    // Channel selection state (only active when drawer filter is in "include" state)
+    private string _drawerChannelMode = "all";
+    private List<ProviderChannelSelectDto> _drawerAllChannels = [];
+    private HashSet<string> _drawerSelectedIds = [];
+    private bool _drawerSelectionDirty;
+    private bool _drawerSelectionSaving;
+
+    private string _searchTerm = string.Empty;
+    private string? _searchError;
+    private Func<GroupFilterDto, bool>? _searchPredicate;
+
+    private List<GroupFilterDto> FilteredPending => ApplySearch(_pendingFilters);
+    private List<GroupFilterDto> FilteredIncluded => ApplySearch(_includedFilters);
+    private List<GroupFilterDto> FilteredExcluded => ApplySearch(_excludedFilters);
+
+    private readonly CancellationTokenSource _cts = new();
+    private IDisposable? _eventSubscription;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+
+        await LoadAsync();
+    }
+
+    private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.RefreshCompleted && !_isLoading)
+                    await InvokeAsync(() => LoadCoreAsync(showSpinner: false));
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void OnTabChanged(int index)
+    {
+        _activeTabIndex = index;
+        _selectedPending = [];
+        _selectedIncluded = [];
+        _selectedExcluded = [];
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
+    }
+
+    private Task LoadAsync() => LoadCoreAsync(showSpinner: true);
+
+    private async Task LoadCoreAsync(bool showSpinner)
+    {
+        if (showSpinner)
+        {
+            _isLoading = true;
+            _error = null;
+            StateHasChanged();
+        }
+
+        try
+        {
+            var profile = await Http.GetFromJsonAsync<ActiveProfileDto>("/api/v1/profiles/active", _cts.Token);
+            if (profile is null)
+            {
+                _profileId = null;
+                return;
+            }
+
+            _profileId = profile.ProfileId;
+
+            var filters = await Http.GetFromJsonAsync<List<GroupFilterDto>>(
+                $"/api/v1/profiles/{_profileId}/group-filters", _cts.Token) ?? [];
+
+            _pendingFilters = filters.Where(f => f.Decision == "pending").ToList();
+            _includedFilters = filters.Where(f => f.Decision == "include").ToList();
+            _excludedFilters = filters.Where(f => f.Decision == "exclude").ToList();
+
+            _selectedPending = [];
+            _selectedIncluded = [];
+            _selectedExcluded = [];
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _profileId = null;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (showSpinner)
+                _error = $"Failed to load group filters: {ex.Message}";
+        }
+        finally
+        {
+            if (showSpinner)
+                _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task IncludeAsync(GroupFilterDto filter) => SetDecisionAsync(filter, "include");
+    private Task ExcludeAsync(GroupFilterDto filter) => SetDecisionAsync(filter, "exclude");
+
+    private async Task SetDecisionAsync(GroupFilterDto filter, string decision)
+    {
+        if (_profileId is null) return;
+
+        try
+        {
+            var response = await Http.PatchAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}",
+                new UpdateGroupFilterRequest { Decision = decision });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Failed to update group: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            MoveFilter(filter, decision);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void MoveFilter(GroupFilterDto filter, string newDecision)
+    {
+        _pendingFilters.Remove(filter);
+        _includedFilters.Remove(filter);
+        _excludedFilters.Remove(filter);
+
+        _selectedPending = new HashSet<GroupFilterDto>(_selectedPending.Where(x => x != filter));
+        _selectedIncluded = new HashSet<GroupFilterDto>(_selectedIncluded.Where(x => x != filter));
+        _selectedExcluded = new HashSet<GroupFilterDto>(_selectedExcluded.Where(x => x != filter));
+
+        filter.Decision = newDecision;
+
+        if (newDecision == "include")
+            _includedFilters.Add(filter);
+        else if (newDecision == "exclude")
+            _excludedFilters.Add(filter);
+        else
+            _pendingFilters.Add(filter);
+    }
+
+    private async Task IncludeAllPendingAsync()
+    {
+        if (_profileId is null) return;
+        await BulkDecideAsync(FilteredPending, "include");
+    }
+
+    private async Task ExcludeAllPendingAsync()
+    {
+        if (_profileId is null) return;
+        await BulkDecideAsync(FilteredPending, "exclude");
+    }
+
+    private async Task IncludeSelectedPendingAsync()
+    {
+        if (_profileId is null || _selectedPending.Count == 0) return;
+        await BulkDecideAsync(_selectedPending.ToList(), "include");
+    }
+
+    private async Task ExcludeSelectedPendingAsync()
+    {
+        if (_profileId is null || _selectedPending.Count == 0) return;
+        await BulkDecideAsync(_selectedPending.ToList(), "exclude");
+    }
+
+    private async Task ExcludeSelectedIncludedAsync()
+    {
+        if (_profileId is null || _selectedIncluded.Count == 0) return;
+        await BulkDecideAsync(_selectedIncluded.ToList(), "exclude");
+    }
+
+    private async Task ExcludeAllIncludedAsync()
+    {
+        if (_profileId is null) return;
+        await BulkDecideAsync(FilteredIncluded, "exclude");
+    }
+
+    private async Task IncludeSelectedExcludedAsync()
+    {
+        if (_profileId is null || _selectedExcluded.Count == 0) return;
+        await BulkDecideAsync(_selectedExcluded.ToList(), "include");
+    }
+
+    private async Task IncludeAllExcludedAsync()
+    {
+        if (_profileId is null) return;
+        await BulkDecideAsync(FilteredExcluded, "include");
+    }
+
+    private async Task BulkDecideAsync(List<GroupFilterDto> filters, string decision)
+    {
+        if (filters.Count == 0) return;
+        _isBulkBusy = true;
+
+        try
+        {
+            var ids = filters.Select(f => f.ProviderGroupId).ToList();
+            var response = await Http.PostAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/bulk-decide",
+                new BulkGroupDecisionRequest { ProviderGroupIds = ids, Decision = decision });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Bulk update failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            foreach (var filter in filters)
+                MoveFilter(filter, decision);
+
+            Snackbar.Add($"{filters.Count} group(s) {decision}d.", Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isBulkBusy = false;
+        }
+    }
+
+    private async Task OnOutputNameChanged(GroupFilterDto filter, string value)
+    {
+        if (_profileId is null) return;
+
+        var trimmed = value.Trim();
+        var newValue = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+
+        if (newValue == filter.OutputName) return;
+
+        var req = new UpdateGroupFilterRequest
+        {
+            OutputName = newValue,
+            ClearOutputName = newValue is null,
+        };
+
+        await PatchFilterAsync(filter, req, f => { f.OutputName = newValue; });
+    }
+
+    private async Task OnAutoNumStartChanged(GroupFilterDto filter, int? value)
+    {
+        if (_profileId is null || value == filter.AutoNumStart) return;
+
+        var req = new UpdateGroupFilterRequest { AutoNumStart = value };
+        await PatchFilterAsync(filter, req, f => { f.AutoNumStart = value; });
+    }
+
+    private async Task OnAutoNumEndChanged(GroupFilterDto filter, int? value)
+    {
+        if (_profileId is null || value == filter.AutoNumEnd) return;
+
+        var req = new UpdateGroupFilterRequest { AutoNumEnd = value };
+        await PatchFilterAsync(filter, req, f => { f.AutoNumEnd = value; });
+    }
+
+    private async Task OnTrackNewChannelsChanged(GroupFilterDto filter, bool value)
+    {
+        if (_profileId is null || value == filter.TrackNewChannels) return;
+
+        var req = new UpdateGroupFilterRequest { TrackNewChannels = value };
+        await PatchFilterAsync(filter, req, f => { f.TrackNewChannels = value; });
+    }
+
+    private async Task PatchFilterAsync(GroupFilterDto filter, UpdateGroupFilterRequest req, Action<GroupFilterDto> mutate)
+    {
+        try
+        {
+            var response = await Http.PatchAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}",
+                req);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Save failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            mutate(filter);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private Task OpenChannelMappingAsync(GroupFilterDto filter) => OpenChannelPanelAsync(filter, openInSelectMode: true);
+
+    private async Task OpenChannelPanelAsync(GroupFilterDto filter, bool openInSelectMode = false)
+    {
+        _drawerFilter = filter;
+        _drawerChannels = [];
+        _drawerAllChannels = [];
+        _drawerSelectedIds = [];
+        _drawerSelectionDirty = false;
+        _drawerChannelMode = openInSelectMode ? "select" : filter.ChannelMode;
+        _drawerOpen = true;
+        _drawerLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            if (filter.Decision == "include")
+            {
+                await LoadChannelSelectionsAsync(filter);
+            }
+            else
+            {
+                var result = await Http.GetFromJsonAsync<GroupChannelsResponse>(
+                    $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}/channels",
+                    _cts.Token);
+
+                if (result is not null)
+                    _drawerChannels = result.Channels;
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load channels: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _drawerLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadChannelSelectionsAsync(GroupFilterDto filter)
+    {
+        if (_drawerChannelMode == "all")
+        {
+            // Load snapshot channels for read-only display
+            var result = await Http.GetFromJsonAsync<GroupChannelsResponse>(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}/channels",
+                _cts.Token);
+            if (result is not null)
+                _drawerChannels = result.Channels;
+        }
+        else
+        {
+            // Load all provider channels with selection state
+            var sel = await Http.GetFromJsonAsync<ChannelSelectionsDto>(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}/channel-selections",
+                _cts.Token);
+            if (sel is not null)
+            {
+                _drawerAllChannels = sel.Channels;
+                _drawerSelectedIds = sel.Channels.Where(c => c.IsSelected).Select(c => c.ProviderChannelId).ToHashSet();
+            }
+        }
+    }
+
+    private async Task SetChannelModeAsync(string mode)
+    {
+        if (_drawerFilter is null || mode == _drawerChannelMode) return;
+
+        _drawerChannelMode = mode;
+        _drawerSelectionDirty = false;
+        _drawerLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            if (mode == "all")
+            {
+                // Save "all" mode immediately (no channel IDs needed)
+                await Http.PutAsJsonAsync(
+                    $"/api/v1/profiles/{_profileId}/group-filters/{_drawerFilter.ProfileGroupFilterId}/channel-selections",
+                    new UpdateChannelSelectionsRequest { ChannelMode = "all" },
+                    _cts.Token);
+
+                _drawerFilter.ChannelMode = "all";
+                _drawerAllChannels = [];
+                _drawerSelectedIds = [];
+
+                var result = await Http.GetFromJsonAsync<GroupChannelsResponse>(
+                    $"/api/v1/profiles/{_profileId}/group-filters/{_drawerFilter.ProfileGroupFilterId}/channels",
+                    _cts.Token);
+                if (result is not null)
+                    _drawerChannels = result.Channels;
+            }
+            else
+            {
+                // Switch to "select" — load all channels, don't save yet
+                var sel = await Http.GetFromJsonAsync<ChannelSelectionsDto>(
+                    $"/api/v1/profiles/{_profileId}/group-filters/{_drawerFilter.ProfileGroupFilterId}/channel-selections",
+                    _cts.Token);
+                if (sel is not null)
+                {
+                    _drawerAllChannels = sel.Channels;
+                    _drawerSelectedIds = sel.Channels.Where(c => c.IsSelected).Select(c => c.ProviderChannelId).ToHashSet();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _drawerLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnChannelChecked(string channelId, bool isChecked)
+    {
+        if (isChecked)
+            _drawerSelectedIds.Add(channelId);
+        else
+            _drawerSelectedIds.Remove(channelId);
+
+        _drawerSelectionDirty = true;
+    }
+
+    private void SelectAllChannels()
+    {
+        _drawerSelectedIds = _drawerAllChannels.Select(c => c.ProviderChannelId).ToHashSet();
+        _drawerSelectionDirty = true;
+    }
+
+    private void DeselectAllChannels()
+    {
+        _drawerSelectedIds = [];
+        _drawerSelectionDirty = true;
+    }
+
+    private async Task SaveChannelSelectionsAsync()
+    {
+        if (_drawerFilter is null) return;
+
+        _drawerSelectionSaving = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PutAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{_drawerFilter.ProfileGroupFilterId}/channel-selections",
+                new UpdateChannelSelectionsRequest
+                {
+                    ChannelMode = "select",
+                    ProviderChannelIds = _drawerSelectedIds.ToList(),
+                });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _drawerFilter.ChannelMode = "select";
+                _drawerSelectionDirty = false;
+                Snackbar.Add($"{_drawerSelectedIds.Count} channel(s) selected.", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add($"Save failed: {response.ReasonPhrase}", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _drawerSelectionSaving = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CloseChannelPanel()
+    {
+        _drawerOpen = false;
+        _drawerFilter = null;
+        _drawerChannels = [];
+        _drawerAllChannels = [];
+        _drawerSelectedIds = [];
+        _drawerSelectionDirty = false;
+    }
+
+    private async Task IncludeFromDrawerAsync()
+    {
+        if (_drawerFilter is null) return;
+        var filter = _drawerFilter;
+        CloseChannelPanel();
+        await SetDecisionAsync(filter, "include");
+    }
+
+    private async Task ExcludeFromDrawerAsync()
+    {
+        if (_drawerFilter is null) return;
+        var filter = _drawerFilter;
+        CloseChannelPanel();
+        await SetDecisionAsync(filter, "exclude");
+    }
+
+    // --- DEBUG - REMOVE ---
+
+    private bool _m3uDrawerOpen;
+    private bool _m3uLoading;
+    private string _m3uGroupName = string.Empty;
+    private string _m3uContent = string.Empty;
+
+    private async Task ShowRawM3uAsync(GroupFilterDto filter)
+    {
+        _m3uGroupName = filter.ProviderGroupRawName;
+        _m3uContent = string.Empty;
+        _m3uDrawerOpen = true;
+        _m3uLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            _m3uContent = await Http.GetStringAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}/raw-provider-m3u",
+                _cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _m3uContent = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            _m3uLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    // --- Search ---
+
+    private void OnSearchTermChanged(string value)
+    {
+        _searchTerm = value;
+        _selectedPending = [];
+        _selectedIncluded = [];
+        _selectedExcluded = [];
+        _searchError = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _searchPredicate = null;
+            return;
+        }
+
+        try
+        {
+            _searchPredicate = BuildSearchPredicate(value);
+        }
+        catch (Exception ex)
+        {
+            _searchError = $"Invalid pattern: {ex.Message}";
+            _searchPredicate = null;
+        }
+    }
+
+    private void ClearSearch() => OnSearchTermChanged(string.Empty);
+
+    private List<GroupFilterDto> ApplySearch(List<GroupFilterDto> list)
+        => _searchPredicate is null ? list : [.. list.Where(_searchPredicate)];
+
+    private static Func<GroupFilterDto, bool> BuildSearchPredicate(string searchTerm)
+    {
+        var terms = searchTerm.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var posRegexes = terms.Where(t => !t.StartsWith('!')).Select(CompileTerm).ToList();
+        var negRegexes = terms.Where(t => t.StartsWith('!')).Select(t => CompileTerm(t[1..])).ToList();
+
+        return dto =>
+        {
+            var name = dto.ProviderGroupRawName ?? string.Empty;
+            if (negRegexes.Any(r => r.IsMatch(name))) return false;
+            if (posRegexes.Count == 0) return true;
+            return posRegexes.Any(r => r.IsMatch(name));
+        };
+    }
+
+    // Pattern rules (all case-insensitive):
+    //   plain term  → \bterm\b  (whole word)
+    //   CA*         → ^CA.*     (string starts with CA)
+    //   *CA         → .*CA$     (string ends with CA)
+    //   *CA*        → .*CA.*    (contains CA)
+    //   ^CA         → ^CA       (regex start anchor, no implicit end)
+    //   [CB]A       → regex char class
+    //   !term       → negated — caller strips '!' before calling CompileTerm
+    private static Regex CompileTerm(string raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+            return new Regex(".*", RegexOptions.IgnoreCase);
+
+        bool hasGlob = raw.Contains('*') || raw.StartsWith('^') || raw.Contains('[');
+
+        if (!hasGlob)
+            return new Regex($@"\b{Regex.Escape(raw)}\b", RegexOptions.IgnoreCase);
+
+        bool hasLeadingStar = raw.StartsWith('*');
+        bool hasTrailingStar = raw.EndsWith('*');
+        string pattern = GlobToRegex(raw);
+
+        if (!raw.StartsWith('^') && !hasLeadingStar)
+            pattern = "^" + pattern;
+
+        if (!hasTrailingStar && !raw.StartsWith('^') && !raw.EndsWith('$'))
+            pattern += "$";
+
+        return new Regex(pattern, RegexOptions.IgnoreCase);
+    }
+
+    private static string GlobToRegex(string pattern)
+    {
+        var sb = new System.Text.StringBuilder();
+        int i = 0;
+        while (i < pattern.Length)
+        {
+            char c = pattern[i];
+            switch (c)
+            {
+                case '*': sb.Append(".*"); break;
+                case '?': sb.Append('.'); break;
+                case '^': sb.Append('^'); break;
+                case '[':
+                    sb.Append('[');
+                    i++;
+                    while (i < pattern.Length && pattern[i] != ']')
+                        sb.Append(pattern[i++]);
+                    sb.Append(']');
+                    break;
+                default: sb.Append(Regex.Escape(c.ToString())); break;
+            }
+            i++;
+        }
+        return sb.ToString();
+    }
+}
