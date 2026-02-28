@@ -26,6 +26,7 @@ public sealed class UpdateGroupFilterRequest
     public int? AutoNumStart { get; set; }
     public bool ClearAutoNum { get; set; }
     public int? AutoNumEnd { get; set; }
+    public bool ClearAutoNumEnd { get; set; }
     public bool? TrackNewChannels { get; set; }
     public int? SortOverride { get; set; }
 }
@@ -71,6 +72,8 @@ public sealed class ProviderChannelSelectDto
     public string? TvgId { get; set; }
     public bool Active { get; set; }
     public bool IsSelected { get; set; }
+    public string? OutputGroupName { get; set; }
+    public int? ChannelNumber { get; set; }
 }
 
 public sealed class ChannelSelectionsDto
@@ -79,8 +82,15 @@ public sealed class ChannelSelectionsDto
     public List<ProviderChannelSelectDto> Channels { get; set; } = [];
 }
 
+public sealed class ChannelSelectionItem
+{
+    public string ProviderChannelId { get; set; } = string.Empty;
+    public string? OutputGroupName { get; set; }
+    public int? ChannelNumber { get; set; }
+}
+
 public sealed class UpdateChannelSelectionsRequest
 {
     public string ChannelMode { get; set; } = "all";
-    public List<string> ProviderChannelIds { get; set; } = [];
+    public List<ChannelSelectionItem> Channels { get; set; } = [];
 }

@@ -27,6 +27,7 @@ public sealed class SnapshotBuilder(
     };
 
     private sealed record GroupFilterConfig(string ProfileGroupFilterId, string ChannelMode, string OutputName, int? AutoNumStart, int? AutoNumEnd);
+    private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber);
 
     public async Task<(bool Succeeded, string? ErrorSummary)> RunAsync(CancellationToken cancellationToken)
     {
@@ -144,7 +145,8 @@ public sealed class SnapshotBuilder(
             .Select(g => g.ProfileGroupFilterId)
             .ToList();
 
-        Dictionary<string, HashSet<string>> allowedStreamsByFilterId = [];
+        // Maps: profileGroupFilterId → (streamUrl → ChannelOverride)
+        Dictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId = [];
         if (selectModeFilterIds.Count > 0)
         {
             var selections = await db.ProfileGroupChannelFilters
@@ -153,14 +155,17 @@ public sealed class SnapshotBuilder(
                 .Where(x => selectModeFilterIds.Contains(x.ProfileGroupFilterId))
                 .ToListAsync(cancellationToken);
 
-            allowedStreamsByFilterId = selections
+            channelOverridesByFilterId = selections
                 .GroupBy(x => x.ProfileGroupFilterId)
                 .ToDictionary(
                     g => g.Key,
-                    g => g.Select(x => x.ProviderChannel.StreamUrl).ToHashSet(StringComparer.Ordinal));
+                    g => g.ToDictionary(
+                        x => x.ProviderChannel.StreamUrl,
+                        x => new ChannelOverride(x.OutputGroupName, x.ChannelNumber),
+                        StringComparer.Ordinal));
         }
 
-        var channelIndex = BuildChannelIndex(playlistResult.Channels, profileId, includedGroups, allowedStreamsByFilterId);
+        var channelIndex = BuildChannelIndex(playlistResult.Channels, profileId, includedGroups, channelOverridesByFilterId);
 
         // 7. Write snapshot files
         var snapshotId = Guid.NewGuid().ToString();
@@ -219,7 +224,7 @@ public sealed class SnapshotBuilder(
         IReadOnlyList<ParsedProviderChannel> channels,
         string profileId,
         IReadOnlyDictionary<string, GroupFilterConfig> includedGroups,
-        IReadOnlyDictionary<string, HashSet<string>> allowedStreamsByFilterId)
+        IReadOnlyDictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId)
     {
         // Pass-through mode: no filters configured yet — include all channels unchanged.
         if (includedGroups.Count == 0)
@@ -233,35 +238,75 @@ public sealed class SnapshotBuilder(
         }
 
         // Filtered mode: only include channels whose GroupTitle matches an included group.
-        var result = new List<ChannelIndexEntry>();
+        // Channels may carry per-channel output group overrides, so we first collect all
+        // (effectiveOutputGroup, channel, channelNumber?) tuples and then group them.
+        var pending = new List<(string OutputGroup, ParsedProviderChannel Channel, int? ExplicitNumber)>();
 
-        var grouped = channels
+        var matched = channels
             .Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl)
                      && !string.IsNullOrWhiteSpace(x.GroupTitle)
-                     && includedGroups.ContainsKey(x.GroupTitle!))
-            .GroupBy(x => includedGroups[x.GroupTitle!].OutputName, StringComparer.Ordinal)
+                     && includedGroups.ContainsKey(x.GroupTitle!));
+
+        foreach (var channel in matched)
+        {
+            var filter = includedGroups[channel.GroupTitle!];
+
+            if (filter.ChannelMode == "select")
+            {
+                if (!channelOverridesByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var overrides))
+                    continue; // select mode with no selections → skip all
+                if (!overrides.TryGetValue(channel.StreamUrl ?? string.Empty, out var ov))
+                    continue; // not in selection list → skip
+
+                var effectiveGroup = string.IsNullOrWhiteSpace(ov.OutputGroupName)
+                    ? filter.OutputName
+                    : ov.OutputGroupName;
+                pending.Add((effectiveGroup, channel, ov.ChannelNumber));
+            }
+            else
+            {
+                pending.Add((filter.OutputName, channel, null));
+            }
+        }
+
+        // Group by effective output group and sort each group.
+        // Auto-numbering from the parent filter applies only to channels going into the
+        // parent's default output name and without an explicit channel number.
+        var result = new List<ChannelIndexEntry>();
+
+        var byOutputGroup = pending
+            .GroupBy(x => x.OutputGroup, StringComparer.Ordinal)
             .OrderBy(g => g.Key, StringComparer.Ordinal);
 
-        foreach (var group in grouped)
+        foreach (var group in byOutputGroup)
         {
             var outputName = group.Key;
-            var filter = includedGroups[group.First().GroupTitle!];
-            var sorted = group
-                .OrderBy(x => x.DisplayName, StringComparer.Ordinal)
-                .ThenBy(x => x.StreamUrl, StringComparer.Ordinal)
+
+            // Find the parent filter for auto-numbering (may not exist for pure override groups).
+            var parentFilter = includedGroups.Values
+                .FirstOrDefault(f => f.OutputName == outputName);
+
+            // Channels with explicit numbers first (sorted by number), then the rest sorted by display name.
+            var withNum = group
+                .Where(x => x.ExplicitNumber.HasValue)
+                .OrderBy(x => x.ExplicitNumber!.Value)
                 .ToList();
 
-            // Per-channel selection: only keep explicitly selected channels when in "select" mode.
-            if (filter.ChannelMode == "select"
-                && allowedStreamsByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var allowedStreams))
-            {
-                sorted = sorted.Where(c => allowedStreams.Contains(c.StreamUrl ?? string.Empty)).ToList();
-            }
+            var withoutNum = group
+                .Where(x => !x.ExplicitNumber.HasValue)
+                .OrderBy(x => x.Channel.DisplayName, StringComparer.Ordinal)
+                .ThenBy(x => x.Channel.StreamUrl, StringComparer.Ordinal)
+                .ToList();
 
-            int? nextNum = filter.AutoNumStart;
-            int? maxNum = filter.AutoNumEnd;
+            // Emit explicitly-numbered channels.
+            foreach (var (_, channel, num) in withNum)
+                result.Add(BuildEntry(channel, outputName, num, profileId));
 
-            foreach (var channel in sorted)
+            // Emit auto-numbered (or unnumbered) channels.
+            int? nextNum = parentFilter?.AutoNumStart;
+            int? maxNum = parentFilter?.AutoNumEnd;
+
+            foreach (var (_, channel, _) in withoutNum)
             {
                 int? assignedNum = null;
                 if (nextNum.HasValue)
@@ -271,7 +316,6 @@ public sealed class SnapshotBuilder(
                     if (maxNum.HasValue && nextNum > maxNum)
                         nextNum = null;
                 }
-
                 result.Add(BuildEntry(channel, outputName, assignedNum, profileId));
             }
         }

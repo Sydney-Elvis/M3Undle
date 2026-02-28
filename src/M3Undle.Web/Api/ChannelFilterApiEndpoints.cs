@@ -126,7 +126,9 @@ public static class ChannelFilterApiEndpoints
         {
             if (request.AutoNumStart is not null)
                 filter.AutoNumStart = request.AutoNumStart;
-            if (request.AutoNumEnd is not null)
+            if (request.ClearAutoNumEnd)
+                filter.AutoNumEnd = null;
+            else if (request.AutoNumEnd is not null)
                 filter.AutoNumEnd = request.AutoNumEnd;
         }
 
@@ -286,19 +288,26 @@ public static class ChannelFilterApiEndpoints
             .OrderBy(x => x.DisplayName)
             .ToListAsync(cancellationToken);
 
-        var selectedIds = await db.ProfileGroupChannelFilters
+        var existingSelections = await db.ProfileGroupChannelFilters
             .AsNoTracking()
             .Where(x => x.ProfileGroupFilterId == filterId)
-            .Select(x => x.ProviderChannelId)
-            .ToHashSetAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        var dtos = allChannels.Select(ch => new ProviderChannelSelectDto
+        var selectionByChannelId = existingSelections.ToDictionary(x => x.ProviderChannelId, StringComparer.Ordinal);
+
+        var dtos = allChannels.Select(ch =>
         {
-            ProviderChannelId = ch.ProviderChannelId,
-            DisplayName = ch.DisplayName,
-            TvgId = ch.TvgId,
-            Active = ch.Active,
-            IsSelected = selectedIds.Contains(ch.ProviderChannelId),
+            selectionByChannelId.TryGetValue(ch.ProviderChannelId, out var sel);
+            return new ProviderChannelSelectDto
+            {
+                ProviderChannelId = ch.ProviderChannelId,
+                DisplayName = ch.DisplayName,
+                TvgId = ch.TvgId,
+                Active = ch.Active,
+                IsSelected = sel is not null,
+                OutputGroupName = sel?.OutputGroupName,
+                ChannelNumber = sel?.ChannelNumber,
+            };
         }).ToList();
 
         return TypedResults.Ok(new ChannelSelectionsDto
@@ -329,16 +338,18 @@ public static class ChannelFilterApiEndpoints
             .Where(x => x.ProfileGroupFilterId == filterId)
             .ExecuteDeleteAsync(cancellationToken);
 
-        if (filter.ChannelMode == "select" && request.ProviderChannelIds.Count > 0)
+        if (filter.ChannelMode == "select" && request.Channels.Count > 0)
         {
             var now = DateTime.UtcNow;
-            foreach (var channelId in request.ProviderChannelIds)
+            foreach (var item in request.Channels)
             {
                 db.ProfileGroupChannelFilters.Add(new Data.Entities.ProfileGroupChannelFilter
                 {
                     ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                     ProfileGroupFilterId = filterId,
-                    ProviderChannelId = channelId,
+                    ProviderChannelId = item.ProviderChannelId,
+                    OutputGroupName = string.IsNullOrWhiteSpace(item.OutputGroupName) ? null : item.OutputGroupName.Trim(),
+                    ChannelNumber = item.ChannelNumber,
                     CreatedUtc = now,
                 });
             }
