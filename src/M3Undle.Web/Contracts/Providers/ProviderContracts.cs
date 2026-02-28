@@ -39,6 +39,8 @@ public sealed class ProviderDto
     public bool Enabled { get; set; }
     public bool IsActive { get; set; }
     public int TimeoutSeconds { get; set; }
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
     public List<string> AssociatedProfileIds { get; set; } = [];
     public ProviderLastRefreshDto? LastRefresh { get; set; }
     public List<ProviderLatestSnapshotDto> LatestSnapshots { get; set; } = [];
@@ -63,6 +65,8 @@ public sealed class CreateProviderRequest
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public bool Enabled { get; set; } = true;
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 
     [Range(1, 300)]
     public int TimeoutSeconds { get; set; } = 20;
@@ -82,6 +86,8 @@ public sealed class UpdateProviderRequest
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public bool Enabled { get; set; }
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 
     [Range(1, 300)]
     public int TimeoutSeconds { get; set; } = 20;
@@ -170,6 +176,8 @@ public sealed class ImportConfigProviderRequest
 {
     [Required]
     public string Name { get; set; } = string.Empty;
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 }
 
 public sealed class CreateProfileRequest

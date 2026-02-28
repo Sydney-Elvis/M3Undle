@@ -6,6 +6,7 @@ public sealed class GroupFilterDto
     public string ProviderGroupId { get; set; } = string.Empty;
     public string ProviderGroupRawName { get; set; } = string.Empty;
     public bool ProviderGroupActive { get; set; }
+    public string ProviderGroupContentType { get; set; } = "live";
     public DateTime ProviderGroupFirstSeen { get; set; }
     public DateTime ProviderGroupLastSeen { get; set; }
     public int? ChannelCount { get; set; }
@@ -44,6 +45,8 @@ public sealed class ChannelMappingStatsDto
     public int GroupsPending { get; set; }
     public int ChannelsInOutput { get; set; }
     public int? ChannelsInProvider { get; set; }
+    public int VodGroupsInProvider { get; set; }
+    public int SeriesGroupsInProvider { get; set; }
 }
 
 public sealed class ActiveProfileDto

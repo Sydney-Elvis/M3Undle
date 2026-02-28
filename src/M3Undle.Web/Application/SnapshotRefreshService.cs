@@ -14,11 +14,13 @@ public sealed class SnapshotRefreshService(
     ILogger<SnapshotRefreshService> logger)
     : BackgroundService, IRefreshTrigger
 {
+    private enum RefreshMode { FetchAndBuild, BuildOnly }
+
     // Semaphore guards the running refresh — at-most-one execution at a time
     private readonly SemaphoreSlim _executionGate = new(1, 1);
 
     // Bounded channel collapses multiple triggers to at-most-one queued run
-    private readonly Channel<bool> _triggerChannel = Channel.CreateBounded<bool>(
+    private readonly Channel<RefreshMode> _triggerChannel = Channel.CreateBounded<RefreshMode>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
 
     // -------------------------------------------------------------------------
@@ -30,11 +32,18 @@ public sealed class SnapshotRefreshService(
     public bool TriggerRefresh()
     {
         if (_executionGate.CurrentCount == 0)
-        {
             return false; // Already running — caller returns 409
-        }
 
-        _triggerChannel.Writer.TryWrite(true);
+        _triggerChannel.Writer.TryWrite(RefreshMode.FetchAndBuild);
+        return true;
+    }
+
+    public bool TriggerBuildOnly()
+    {
+        if (_executionGate.CurrentCount == 0)
+            return false; // Already running — caller returns 409
+
+        _triggerChannel.Writer.TryWrite(RefreshMode.BuildOnly);
         return true;
     }
 
@@ -58,13 +67,13 @@ public sealed class SnapshotRefreshService(
         }
 
         // Queue the first run immediately after startup delay
-        _triggerChannel.Writer.TryWrite(true);
+        _triggerChannel.Writer.TryWrite(RefreshMode.FetchAndBuild);
 
         // Start the schedule loop in background
         _ = ScheduleLoopAsync(stoppingToken);
 
         // Process triggers
-        await foreach (var _ in _triggerChannel.Reader.ReadAllAsync(stoppingToken))
+        await foreach (var mode in _triggerChannel.Reader.ReadAllAsync(stoppingToken))
         {
             // Non-blocking acquire: if something is already running, drop the trigger
             if (!await _executionGate.WaitAsync(0, stoppingToken))
@@ -76,7 +85,10 @@ public sealed class SnapshotRefreshService(
             try
             {
                 using var refreshScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
-                await RunRefreshAsync(stoppingToken);
+                if (mode == RefreshMode.BuildOnly)
+                    await RunBuildOnlyAsync(stoppingToken);
+                else
+                    await RunRefreshAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -110,7 +122,7 @@ public sealed class SnapshotRefreshService(
 
                 if (_executionGate.CurrentCount > 0)
                 {
-                    _triggerChannel.Writer.TryWrite(true);
+                    _triggerChannel.Writer.TryWrite(RefreshMode.FetchAndBuild);
                 }
                 else
                 {
@@ -145,5 +157,26 @@ public sealed class SnapshotRefreshService(
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary);
         }
     }
-}
 
+    private async Task RunBuildOnlyAsync(CancellationToken stoppingToken)
+    {
+        using var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        runCts.CancelAfter(TimeSpan.FromMinutes(refreshOptions.Value.TimeoutMinutes));
+
+        logger.LogInformation("Snapshot build-only started.");
+        eventBus.Publish(AppEventKind.RefreshStarted);
+        bool succeeded = false;
+        string? errorSummary = null;
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
+            (succeeded, errorSummary) = await builder.BuildOnlyAsync(runCts.Token);
+            logger.LogInformation("Snapshot build-only completed (published={Succeeded}).", succeeded);
+        }
+        finally
+        {
+            eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary);
+        }
+    }
+}

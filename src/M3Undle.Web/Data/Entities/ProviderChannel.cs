@@ -18,6 +18,7 @@ public sealed class ProviderChannel
     public DateTime FirstSeenUtc { get; set; }
     public DateTime LastSeenUtc { get; set; }
     public bool Active { get; set; }
+    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'
     public string LastFetchRunId { get; set; } = string.Empty;
 
     public Provider Provider { get; set; } = null!;

@@ -17,6 +17,8 @@ public sealed class Provider
     // Config source tracking
     public string? ConfigSourcePath { get; set; }  // Path to config.yaml if imported from there
     public bool NeedsEnvVarSubstitution { get; set; }  // True if URL contains %VAR% placeholders
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 
     public ICollection<ProfileProvider> ProfileProviders { get; set; } = new List<ProfileProvider>();
     public ICollection<FetchRun> FetchRuns { get; set; } = new List<FetchRun>();

@@ -447,6 +447,14 @@ public static class ChannelFilterApiEndpoints
             .OrderByDescending(x => x.StartedUtc)
             .FirstOrDefaultAsync(cancellationToken);
 
+        var vodGroups = await db.ProviderGroups
+            .AsNoTracking()
+            .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", cancellationToken);
+
+        var seriesGroups = await db.ProviderGroups
+            .AsNoTracking()
+            .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", cancellationToken);
+
         return TypedResults.Ok(new ChannelMappingStatsDto
         {
             ProfileId = profileId,
@@ -454,6 +462,8 @@ public static class ChannelFilterApiEndpoints
             GroupsPending = groupsPending,
             ChannelsInOutput = activeSnapshot?.ChannelCountPublished ?? 0,
             ChannelsInProvider = lastFetchRun?.ChannelCountSeen,
+            VodGroupsInProvider = vodGroups,
+            SeriesGroupsInProvider = seriesGroups,
         });
     }
 
@@ -469,6 +479,7 @@ public static class ChannelFilterApiEndpoints
         ProviderGroupActive = f.ProviderGroup.Active,
         ProviderGroupFirstSeen = f.ProviderGroup.FirstSeenUtc,
         ProviderGroupLastSeen = f.ProviderGroup.LastSeenUtc,
+        ProviderGroupContentType = f.ProviderGroup.ContentType,
         ChannelCount = f.ProviderGroup.ChannelCount,
         Decision = f.Decision,
         ChannelMode = f.ChannelMode,

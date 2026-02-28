@@ -56,6 +56,14 @@ else
     <!-- Search toolbar -->
     <MudPaper Elevation="2" Class="mb-2 pa-2" Style="position:sticky; top:var(--mud-appbar-height, 64px); z-index:100; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:4px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudButtonGroup Variant="Variant.Outlined" Size="Size.Small">
+                <MudButton Color="@(_decisionFilter == "include" ? Color.Success : Color.Default)"
+                           OnClick="@(() => { _decisionFilter = _decisionFilter == "include" ? "" : "include"; })">Included</MudButton>
+                <MudButton Color="@(_decisionFilter == "pending" ? Color.Warning : Color.Default)"
+                           OnClick="@(() => { _decisionFilter = _decisionFilter == "pending" ? "" : "pending"; })">Pending</MudButton>
+                <MudButton Color="@(_decisionFilter == "exclude" ? Color.Error : Color.Default)"
+                           OnClick="@(() => { _decisionFilter = _decisionFilter == "exclude" ? "" : "exclude"; })">Excluded</MudButton>
+            </MudButtonGroup>
             <MudTextField T="string"
                           Value="_searchTerm"
                           ValueChanged="OnSearchTermChanged"
@@ -81,9 +89,10 @@ else
     <!-- Summary chips -->
     @if (!_isLoading && _profileId is not null)
     {
-        var included = _allFilters.Where(f => f.Decision == "include").ToList();
-        var pending  = _allFilters.Where(f => f.Decision == "pending").ToList();
-        var excluded = _allFilters.Where(f => f.Decision == "exclude").ToList();
+        var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
+        var included = liveFilters.Where(f => f.Decision == "include").ToList();
+        var pending  = liveFilters.Where(f => f.Decision == "pending").ToList();
+        var excluded = liveFilters.Where(f => f.Decision == "exclude").ToList();
         // Use actual selected counts for loaded groups; fall back to provider total for unloaded
         var chIncluded = included.Sum(f =>
             _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
@@ -152,7 +161,6 @@ else
                     {
                         <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
                     }
-
                     <!-- Channel count + first-seen tooltip -->
                     @{
                         var loadedCount = _channelCache.TryGetValue(filterId, out var cachedChs) ? (int?)cachedChs.Count : null;
@@ -402,6 +410,9 @@ else
     private string? _searchError;
     private Func<GroupFilterDto, bool>? _searchPredicate;
 
+    // Decision filter — defaults to pending so new users see their groups immediately
+    private string _decisionFilter = "pending";
+
     // Stable display order set on load — groups don't jump around during interaction.
     private List<string> _displayOrderIds = [];
 
@@ -413,6 +424,8 @@ else
             var ordered = _displayOrderIds
                 .Where(id => byId.ContainsKey(id))
                 .Select(id => byId[id])
+                .Where(f => f.ProviderGroupContentType == "live")
+                .Where(f => _decisionFilter == "" || f.Decision == _decisionFilter)
                 .ToList();
             return _searchPredicate is null ? ordered : [.. ordered.Where(_searchPredicate)];
         }
@@ -593,7 +606,7 @@ else
 
         try
         {
-            var response = await Http.PostAsync("/api/v1/snapshots/refresh", null);
+            var response = await Http.PostAsync("/api/v1/snapshots/build", null);
             if (!response.IsSuccessStatusCode)
             {
                 var msg = response.StatusCode == System.Net.HttpStatusCode.Conflict

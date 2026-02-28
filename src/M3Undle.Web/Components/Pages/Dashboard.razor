@@ -130,17 +130,17 @@
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
             <MudText Typo="Typo.h6" Class="mb-3">Output URLs</MudText>
-            @if (_status?.Lineup?.ActiveSnapshot is null)
+            <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudChip T="string" Color="@(_channelStats?.ChannelsInOutput > 0 ? Color.Success : Color.Warning)"
+                         Icon="@Icons.Material.Filled.Tv">
+                    @(_channelStats?.ChannelsInOutput ?? 0) channels being served
+                </MudChip>
+            </MudStack>
+            @if (_channelStats is null || _channelStats.ChannelsInOutput == 0)
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                    These URLs will not return data until a provider is active and a snapshot has been built.
+                    No channels mapped yet — configure Channel Groups to start serving content.
                 </MudAlert>
-            }
-            else
-            {
-                <MudText Typo="Typo.body2" Class="mb-4">
-                    Point your client at these URLs. They are stable — the service handles provider changes transparently.
-                </MudText>
             }
 
             <MudStack Spacing="4">
@@ -171,44 +171,51 @@
         </MudPaper>
     </MudItem>
 
-    <!-- Channel Mapping — only shown once a snapshot exists -->
-    @if (_status?.Lineup?.ActiveSnapshot is not null)
+    @if (_channelStats?.ProfileId is not null)
     {
-        <MudItem xs="12">
-            <MudPaper Class="pa-4" Elevation="1">
-                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
-                    <MudText Typo="Typo.h6">Channel Mapping</MudText>
-                    <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="channels/groups">
-                        Configure Groups
-                    </MudButton>
-                </MudStack>
+    <!-- Channel Mapping -->
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.h6">Channel Mapping</MudText>
+                <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="channels/groups">
+                    Configure Groups
+                </MudButton>
+            </MudStack>
 
-                @if (_channelStats is null || (_channelStats.GroupsIncluded == 0 && _channelStats.GroupsPending == 0))
+            @if (_channelStats is null || (_channelStats.GroupsIncluded == 0 && _channelStats.GroupsPending == 0))
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                    No channels mapped yet — <MudLink Href="channels/groups">configure Channel Groups</MudLink> to start serving content.
+                </MudAlert>
+            }
+            else
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap">
+                    <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle">
+                        @_channelStats.GroupsIncluded group@(_channelStats.GroupsIncluded == 1 ? "" : "s") included
+                    </MudChip>
+                    <MudChip T="string" Color="Color.Primary" Icon="@Icons.Material.Filled.Tv">
+                        @_channelStats.ChannelsInOutput.ToString("N0") channels in output
+                    </MudChip>
+                    @if (_channelStats.GroupsPending > 0)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
+                            @_channelStats.GroupsPending group@(_channelStats.GroupsPending == 1 ? "" : "s") pending review —
+                            <MudLink Href="channels/groups">review now</MudLink>
+                        </MudAlert>
+                    }
+                </MudStack>
+                @if (_channelStats.VodGroupsInProvider > 0 || _channelStats.SeriesGroupsInProvider > 0)
                 {
-                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                        No groups configured yet — <MudLink Href="channels/groups">configure groups</MudLink> to filter your output.
-                    </MudAlert>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
+                        Provider has @_channelStats.VodGroupsInProvider VOD group@(_channelStats.VodGroupsInProvider == 1 ? "" : "s"),
+                        @_channelStats.SeriesGroupsInProvider Series group@(_channelStats.SeriesGroupsInProvider == 1 ? "" : "s") available
+                    </MudText>
                 }
-                else
-                {
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap">
-                        <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle">
-                            @_channelStats.GroupsIncluded group@(_channelStats.GroupsIncluded == 1 ? "" : "s") included
-                        </MudChip>
-                        <MudChip T="string" Color="Color.Primary" Icon="@Icons.Material.Filled.Tv">
-                            @_channelStats.ChannelsInOutput.ToString("N0") channels in output
-                        </MudChip>
-                        @if (_channelStats.GroupsPending > 0)
-                        {
-                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
-                                @_channelStats.GroupsPending group@(_channelStats.GroupsPending == 1 ? "" : "s") pending review —
-                                <MudLink Href="channels/groups">review now</MudLink>
-                            </MudAlert>
-                        }
-                    </MudStack>
-                }
-            </MudPaper>
-        </MudItem>
+            }
+        </MudPaper>
+    </MudItem>
     }
 </MudGrid>
 

@@ -36,6 +36,7 @@ public static class ProviderApiEndpoints
 
         var snapshots = app.MapGroup("/api/v1/snapshots");
         snapshots.MapPost("/refresh", TriggerRefreshAsync);
+        snapshots.MapPost("/build", TriggerBuildOnlyAsync);
 
         return app;
     }
@@ -159,6 +160,8 @@ public static class ProviderApiEndpoints
             HeadersJson = string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson,
             UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim(),
             TimeoutSeconds = request.TimeoutSeconds,
+            IncludeVod = request.IncludeVod,
+            IncludeSeries = request.IncludeSeries,
             CreatedUtc = now,
             UpdatedUtc = now,
         };
@@ -233,6 +236,8 @@ public static class ProviderApiEndpoints
         provider.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
         provider.Enabled = request.Enabled;
         provider.TimeoutSeconds = request.TimeoutSeconds;
+        provider.IncludeVod = request.IncludeVod;
+        provider.IncludeSeries = request.IncludeSeries;
         provider.UpdatedUtc = DateTime.UtcNow;
 
         var existingLinks = await db.ProfileProviders.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
@@ -560,6 +565,8 @@ public static class ProviderApiEndpoints
             TimeoutSeconds = configProvider.TimeoutSeconds,
             Enabled = configProvider.Enabled,
             IsActive = false,
+            IncludeVod = request.IncludeVod,
+            IncludeSeries = request.IncludeSeries,
             ConfigSourcePath = configProvider.SourcePath,
             NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
             CreatedUtc = now,
@@ -762,6 +769,19 @@ public static class ProviderApiEndpoints
             return Results.Accepted();
         }
         logger.LogDebug("Snapshot refresh trigger ignored — refresh already in progress.");
+        return Results.Conflict(new { message = "A refresh is already in progress." });
+    }
+
+    private static IResult TriggerBuildOnlyAsync(IRefreshTrigger trigger, ILogger<ProviderApiLog> logger)
+    {
+        var triggered = trigger.TriggerBuildOnly();
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
+        if (triggered)
+        {
+            logger.LogInformation("Snapshot build-only triggered manually.");
+            return Results.Accepted();
+        }
+        logger.LogDebug("Snapshot build-only trigger ignored — a refresh is already in progress.");
         return Results.Conflict(new { message = "A refresh is already in progress." });
     }
 
@@ -1038,6 +1058,8 @@ public static class ProviderApiEndpoints
                     Enabled = provider.Enabled,
                     IsActive = provider.IsActive,
                     TimeoutSeconds = provider.TimeoutSeconds,
+                    IncludeVod = provider.IncludeVod,
+                    IncludeSeries = provider.IncludeSeries,
                     AssociatedProfileIds = associatedProfileIds,
                     LastRefresh = latestRefresh is null
                         ? null

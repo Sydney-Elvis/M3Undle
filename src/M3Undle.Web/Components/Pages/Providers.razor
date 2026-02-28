@@ -22,7 +22,7 @@
             <MudBadge Content="@_configProviders.Count" Color="Color.Info" Overlap="true"
                       Visible="@(_configProviders.Count > 0)">
                 <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.FileDownload"
-                           OnClick="() => _importDrawerOpen = true" Disabled="_isConfigLoading">Import</MudButton>
+                           OnClick="OpenImportDialogAsync">Import</MudButton>
             </MudBadge>
         </MudStack>
     </MudStack>
@@ -168,14 +168,6 @@
                     Providers="_providers"
                     OnSaved="OnProviderSaved" />
 
-<ProviderImportDrawer @bind-Open="_importDrawerOpen"
-                      ConfigProviders="_configProviders"
-                      IsLoading="_isConfigLoading"
-                      ConfigError="@_configError"
-                      ImportedProviders="_providers"
-                      OnReloadRequested="LoadConfigProvidersAsync"
-                      OnImported="OnProviderImported" />
-
 @code {
     private readonly List<ProviderDto> _providers = [];
     private readonly List<ProfileListItemDto> _profiles = [];
@@ -183,16 +175,13 @@
 
     private bool _isLoading;
     private bool _isRefreshing;
-    private bool _isConfigLoading;
     private bool _isPreviewLoading;
     private bool _addDrawerOpen;
-    private bool _importDrawerOpen;
     private ProviderDto? _editingProvider;
     private int _previewSampleSize = 10;
     private string? _previewGroupFilter;
     private ProviderPreviewDto? _preview;
     private string? _error;
-    private string? _configError;
 
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
@@ -383,23 +372,24 @@
 
     private async Task LoadConfigProvidersAsync()
     {
-        _isConfigLoading = true;
-        _configError = null;
-
         try
         {
             var result = await Http.GetFromJsonAsync<List<ConfigYamlProviderDto>>("/api/v1/providers/config/available");
             _configProviders.Clear();
             _configProviders.AddRange(result ?? []);
+            StateHasChanged();
         }
-        catch (Exception ex)
+        catch { }
+    }
+
+    private Task OpenImportDialogAsync()
+    {
+        var parameters = new DialogParameters<ProviderImportDrawer>
         {
-            _configError = $"Failed to load config.yaml providers: {ex.Message}";
-        }
-        finally
-        {
-            _isConfigLoading = false;
-        }
+            { x => x.OnImported, EventCallback.Factory.Create<string>(this, OnProviderImported) }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
+        return DialogService.ShowAsync<ProviderImportDrawer>("Import from config.yaml", parameters, options);
     }
 
     private async Task RefreshPreviewAsync(string providerId)

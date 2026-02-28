@@ -19,6 +19,7 @@ public sealed class ProviderGroupConfiguration : IEntityTypeConfiguration<Provid
         builder.Property(x => x.LastSeenUtc).HasColumnName("last_seen_utc").IsRequired();
         builder.Property(x => x.Active).HasColumnName("active").IsRequired();
         builder.Property(x => x.ChannelCount).HasColumnName("channel_count");
+        builder.Property(x => x.ContentType).HasColumnName("content_type").IsRequired().HasDefaultValue("live");
 
         builder.HasIndex(x => new { x.ProviderId, x.RawName }).IsUnique();
         builder.HasIndex(x => new { x.ProviderId, x.Active }).HasDatabaseName("idx_provider_groups_provider_active");

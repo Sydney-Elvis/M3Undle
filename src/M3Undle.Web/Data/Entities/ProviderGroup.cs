@@ -10,6 +10,7 @@ public sealed class ProviderGroup
     public DateTime LastSeenUtc { get; set; }
     public bool Active { get; set; }
     public int? ChannelCount { get; set; }
+    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'|'mixed'
 
     public Provider Provider { get; set; } = null!;
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();

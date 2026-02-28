@@ -2,78 +2,68 @@ namespace M3Undle.Core.M3u;
 
 public static class LiveClassifier
 {
-    private static readonly string[] VodSegments = ["movie", "movies", "series"];
+    public static bool IsLive(string? url) => ClassifyContent(url) == "live";
 
-    public static bool IsLive(string? url)
+    /// <summary>Returns "live", "vod", or "series" based on URL structure.</summary>
+    public static string ClassifyContent(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))
-        {
-            return false;
-        }
+            return "live";
 
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
-        {
-            // If we can't parse it as a URI, check if it contains VOD segments
-            return !ContainsVodSegment(url);
-        }
+            return ClassifyBySubstring(url);
 
-        // Check if the path contains movie/movies/series segments
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Any(segment => VodSegments.Contains(segment, StringComparer.OrdinalIgnoreCase)))
+        foreach (var seg in segments)
         {
-            return false;
+            if (string.Equals(seg, "series", StringComparison.OrdinalIgnoreCase))
+                return "series";
+            if (string.Equals(seg, "movie", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(seg, "movies", StringComparison.OrdinalIgnoreCase))
+                return "vod";
         }
 
-        // If query contains type=vod or type=series, it's not live
-        if (QueryContainsVod(uri.Query))
+        var queryType = GetQueryTypeValue(uri.Query);
+        if (queryType is not null)
         {
-            return false;
+            if (string.Equals(queryType, "series", StringComparison.OrdinalIgnoreCase))
+                return "series";
+            if (string.Equals(queryType, "vod", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(queryType, "movie", StringComparison.OrdinalIgnoreCase))
+                return "vod";
         }
 
-        // Default: if it's not VOD, assume it's live
-        return true;
+        return "live";
     }
 
-    private static bool ContainsVodSegment(string url)
+    private static string ClassifyBySubstring(string url)
     {
-        return url.Contains("/movie/", StringComparison.OrdinalIgnoreCase)
-            || url.Contains("/movies/", StringComparison.OrdinalIgnoreCase)
-            || url.Contains("/series/", StringComparison.OrdinalIgnoreCase);
+        if (url.Contains("/series/", StringComparison.OrdinalIgnoreCase))
+            return "series";
+        if (url.Contains("/movie/", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("/movies/", StringComparison.OrdinalIgnoreCase))
+            return "vod";
+        return "live";
     }
 
-    private static bool QueryContainsVod(string query)
+    private static string? GetQueryTypeValue(string query)
     {
         if (string.IsNullOrEmpty(query))
-        {
-            return false;
-        }
+            return null;
 
-        var pairs = query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var pair in pairs)
+        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var kv = pair.Split('=', 2);
-            if (kv.Length == 0)
-            {
-                continue;
-            }
+            if (kv.Length == 0) continue;
 
             var key = Uri.UnescapeDataString(kv[0]);
             if (!string.Equals(key, "type", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(key, "kind", StringComparison.OrdinalIgnoreCase))
-            {
                 continue;
-            }
 
-            var value = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : string.Empty;
-            if (string.Equals(value, "vod", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "movie", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(value, "series", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
+            return kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : string.Empty;
         }
 
-        return false;
+        return null;
     }
 }
-

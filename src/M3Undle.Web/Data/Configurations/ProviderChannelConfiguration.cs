@@ -27,6 +27,7 @@ public sealed class ProviderChannelConfiguration : IEntityTypeConfiguration<Prov
         builder.Property(x => x.FirstSeenUtc).HasColumnName("first_seen_utc").IsRequired();
         builder.Property(x => x.LastSeenUtc).HasColumnName("last_seen_utc").IsRequired();
         builder.Property(x => x.Active).HasColumnName("active").IsRequired();
+        builder.Property(x => x.ContentType).HasColumnName("content_type").IsRequired().HasDefaultValue("live");
         builder.Property(x => x.LastFetchRunId).HasColumnName("last_fetch_run_id").IsRequired();
 
         builder.HasIndex(x => new { x.ProviderId, x.ProviderChannelKey })

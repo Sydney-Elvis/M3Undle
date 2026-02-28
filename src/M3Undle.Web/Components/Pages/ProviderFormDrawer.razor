@@ -54,6 +54,10 @@
                 }
 
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
+                <MudDivider Class="my-1" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
+                <MudSwitch @bind-Value="_model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
+                <MudSwitch @bind-Value="_model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
                 <MudStack Row="true" Spacing="2" Class="mt-2">
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_isSaving" OnClick="SaveAsync">
                         @(_isSaving ? "Saving..." : (EditingProvider is not null ? "Update" : "Create"))
@@ -114,6 +118,8 @@
                 UserAgent = EditingProvider.UserAgent,
                 Enabled = EditingProvider.Enabled,
                 TimeoutSeconds = EditingProvider.TimeoutSeconds,
+                IncludeVod = EditingProvider.IncludeVod,
+                IncludeSeries = EditingProvider.IncludeSeries,
                 ProfileId = EditingProvider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             };
         }
@@ -217,6 +223,8 @@
                     UserAgent = _model.UserAgent,
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
+                    IncludeVod = _model.IncludeVod,
+                    IncludeSeries = _model.IncludeSeries,
                     AssociateToProfileIds = profileIds,
                 };
                 response = await Http.PutAsJsonAsync($"/api/v1/providers/{EditingProvider.ProviderId}", request);
@@ -232,6 +240,8 @@
                     UserAgent = _model.UserAgent,
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
+                    IncludeVod = _model.IncludeVod,
+                    IncludeSeries = _model.IncludeSeries,
                     AssociateToProfileIds = profileIds,
                 };
                 response = await Http.PostAsJsonAsync("/api/v1/providers", request);
@@ -311,6 +321,8 @@
         public string? UserAgent { get; set; }
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 20;
+        public bool IncludeVod { get; set; }
+        public bool IncludeSeries { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }
 }

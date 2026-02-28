@@ -2,42 +2,30 @@
 @using System.Text.Json
 @inject HttpClient Http
 
-<MudDrawer Open="@Open" OpenChanged="@OnMudOpenChanged" Anchor="Anchor.End" Elevation="2"
-           Variant="DrawerVariant.Temporary" Width="600px">
-    <MudDrawerHeader>
-        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
-            <MudStack Spacing="0">
-                <MudText Typo="Typo.h6">Import from config.yaml</MudText>
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Providers discovered in M3UNDLE_CONFIG_DIR</MudText>
-            </MudStack>
-            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
-                               OnClick="() => OnReloadRequested.InvokeAsync()" Disabled="IsLoading" />
-                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
-                               OnClick="() => OnMudOpenChanged(false)" />
-            </MudStack>
-        </MudStack>
-    </MudDrawerHeader>
-    <div class="pa-4" style="overflow-y:auto">
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">Providers discovered in M3UNDLE_CONFIG_DIR</MudText>
+
         @if (!string.IsNullOrWhiteSpace(_importError))
         {
             <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_importError</MudAlert>
         }
-        @if (!string.IsNullOrWhiteSpace(ConfigError))
+        @if (!string.IsNullOrWhiteSpace(_loadError))
         {
-            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">@ConfigError</MudAlert>
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">@_loadError</MudAlert>
         }
-        @if (IsLoading)
+
+        @if (_isLoading)
         {
             <MudProgressCircular Indeterminate="true" />
         }
-        else if (ConfigProviders.Count == 0)
+        else if (_configProviders.Count == 0)
         {
             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
         }
         else
         {
-            <MudTable Items="ConfigProviders" Hover="true" Dense="true">
+            <MudTable Items="_configProviders" Hover="true" Dense="true">
                 <HeaderContent>
                     <MudTh>Name</MudTh>
                     <MudTh>Playlist URL</MudTh>
@@ -46,9 +34,7 @@
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>@context.Name</MudTd>
-                    <MudTd Style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                        @context.PlaylistUrl
-                    </MudTd>
+                    <MudTd>@context.PlaylistUrl</MudTd>
                     <MudTd>
                         @if (context.MissingEnvVars.Count > 0)
                         {
@@ -83,12 +69,17 @@
                         }
                     </MudTd>
                     <MudTd>
-                        <MudStack Row="true" Spacing="1">
+                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
                             @if (!IsAlreadyImported(context.Name) && context.MissingEnvVars.Count == 0)
                             {
                                 <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
                                            Disabled="@IsProbing(context.Name)"
                                            OnClick="() => ProbeAsync(context.Name)">Test</MudButton>
+                                var opts = GetImportOptions(context.Name);
+                                <MudCheckBox T="bool" @bind-Value="opts.IncludeVod" Size="Size.Small" Label="VOD"
+                                             Disabled="@(_importingName == context.Name)" />
+                                <MudCheckBox T="bool" @bind-Value="opts.IncludeSeries" Size="Size.Small" Label="Series"
+                                             Disabled="@(_importingName == context.Name)" />
                             }
                             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                                        Disabled="@(IsAlreadyImported(context.Name) || context.MissingEnvVars.Count > 0 || _importingName == context.Name)"
@@ -100,22 +91,26 @@
                 </RowTemplate>
             </MudTable>
         }
-    </div>
-</MudDrawer>
+    </DialogContent>
+    <DialogActions>
+        <MudButton StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="_isLoading">Reload</MudButton>
+        <MudSpacer />
+        <MudButton OnClick="() => MudDialog.Close()">Close</MudButton>
+    </DialogActions>
+</MudDialog>
 
 @code {
-    [Parameter] public bool Open { get; set; }
-    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
-    [Parameter] public List<ConfigYamlProviderDto> ConfigProviders { get; set; } = [];
-    [Parameter] public bool IsLoading { get; set; }
-    [Parameter] public string? ConfigError { get; set; }
-    [Parameter] public List<ProviderDto> ImportedProviders { get; set; } = [];
-    [Parameter] public EventCallback OnReloadRequested { get; set; }
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public EventCallback<string> OnImported { get; set; }
 
+    private readonly List<ConfigYamlProviderDto> _configProviders = [];
+    private readonly List<ProviderDto> _importedProviders = [];
+    private bool _isLoading;
+    private string? _loadError;
     private string? _importError;
     private string? _importingName;
     private readonly Dictionary<string, ProbeState> _probeStates = new();
+    private readonly Dictionary<string, ImportOptions> _importOptions = new();
 
     private sealed class ProbeState
     {
@@ -125,21 +120,55 @@
         public string? Error { get; set; }
     }
 
-    private void OnMudOpenChanged(bool value)
+    private sealed class ImportOptions
     {
-        if (!value)
+        public bool IncludeVod { get; set; }
+        public bool IncludeSeries { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+        StateHasChanged();
+
+        try
         {
-            _importError = null;
-            _probeStates.Clear();
-            OpenChanged.InvokeAsync(false);
+            var configTask = Http.GetFromJsonAsync<List<ConfigYamlProviderDto>>("/api/v1/providers/config/available");
+            var importedTask = Http.GetFromJsonAsync<List<ProviderDto>>("/api/v1/providers");
+            await Task.WhenAll(configTask, importedTask);
+
+            _configProviders.Clear();
+            _configProviders.AddRange(configTask.Result ?? []);
+            _importedProviders.Clear();
+            _importedProviders.AddRange(importedTask.Result ?? []);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load providers: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
         }
     }
 
-    private bool IsAlreadyImported(string name) =>
-        ImportedProviders.Any(p => p.Name == name);
+    private ImportOptions GetImportOptions(string name)
+    {
+        if (!_importOptions.TryGetValue(name, out var opts))
+        {
+            opts = new ImportOptions();
+            _importOptions[name] = opts;
+        }
+        return opts;
+    }
 
-    private bool IsProbing(string name) =>
-        _probeStates.TryGetValue(name, out var s) && s.IsProbing;
+    private bool IsAlreadyImported(string name) => _importedProviders.Any(p => p.Name == name);
+
+    private bool IsProbing(string name) => _probeStates.TryGetValue(name, out var s) && s.IsProbing;
 
     private async Task ProbeAsync(string name)
     {
@@ -191,8 +220,9 @@
 
         try
         {
+            var opts = GetImportOptions(name);
             var response = await Http.PostAsJsonAsync("/api/v1/providers/config/import",
-                new ImportConfigProviderRequest { Name = name });
+                new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries });
 
             if (!response.IsSuccessStatusCode)
             {
@@ -201,6 +231,7 @@
             }
 
             var dto = await response.Content.ReadFromJsonAsync<ProviderDto>();
+            if (dto is not null) _importedProviders.Add(dto);
             await OnImported.InvokeAsync(dto?.ProviderId ?? string.Empty);
         }
         catch (Exception ex)
@@ -210,6 +241,7 @@
         finally
         {
             _importingName = null;
+            StateHasChanged();
         }
     }
 
@@ -249,4 +281,3 @@
         return body;
     }
 }
-

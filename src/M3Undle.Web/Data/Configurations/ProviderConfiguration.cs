@@ -24,6 +24,8 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
         builder.Property(x => x.ConfigSourcePath).HasColumnName("config_source_path");
         builder.Property(x => x.NeedsEnvVarSubstitution).HasColumnName("needs_env_var_substitution").IsRequired();
+        builder.Property(x => x.IncludeVod).HasColumnName("include_vod").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.IncludeSeries).HasColumnName("include_series").IsRequired().HasDefaultValue(false);
 
         builder.HasIndex(x => x.Name).IsUnique();
         builder.HasIndex(x => x.Enabled).HasDatabaseName("idx_providers_enabled");
