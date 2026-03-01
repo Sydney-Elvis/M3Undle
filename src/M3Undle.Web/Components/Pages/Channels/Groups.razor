@@ -1,6 +1,7 @@
 @page "/channels/groups"
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
+@using System
 @using System.Text.RegularExpressions
 @inject HttpClient Http
 @inject AppEventBus EventBus
@@ -212,13 +213,6 @@ else
                             {
                                 <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
                             }
-
-                            <!-- Channel count -->
-                            <MudTooltip Text="@($"First seen: {filter.ProviderGroupFirstSeen:yyyy-MM-dd}")" Arrow="true" Placement="Placement.Top">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:52px; text-align:right; cursor:default;">
-                                    @GetChannelCountText(filter, filterId)
-                                </MudText>
-                            </MudTooltip>
                         }
 
                         @if (!isEditing)
@@ -236,6 +230,13 @@ else
                                          Style="width:72px;"
                                          DebounceInterval="800"
                                          Immediate="true" />
+
+                        <!-- Channel count (always n/n), to the right of Start # -->
+                        <MudTooltip Text="@($"First seen: {filter.ProviderGroupFirstSeen:yyyy-MM-dd}")" Arrow="true" Placement="Placement.Top">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right; cursor:default;">
+                                @GetChannelCountText(filter, filterId)
+                            </MudText>
+                        </MudTooltip>
 
                         <!-- Track toggle -->
                         <MudTooltip Text="Track new channels" Arrow="true">
@@ -404,6 +405,8 @@ else
                 var allExcluded  = parent.Members.All(m => m.Decision == "exclude");
                 var anyIncluded  = parent.Members.Any(m => m.Decision == "include");
                 var totalChannels = parent.Members.Sum(m => m.ChannelCount ?? 0);
+                var selectedChannels = parent.Members.Sum(m =>
+                    _channelSelections.GetValueOrDefault(m.ProfileGroupFilterId)?.Count(s => s.Value) ?? 0);
                 var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
@@ -445,11 +448,6 @@ else
                                            OnClick="@(() => ToggleParentEditor(parent.OutputName))" />
                         </MudTooltip>
 
-                        <!-- Channel count -->
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:52px; text-align:right;">
-                            @totalChannels.ToString("N0") ch
-                        </MudText>
-
                         <!-- Start # -->
                         <MudNumericField T="int?"
                                          Value="@((int?)GetParentStartNum(parent.OutputName))"
@@ -462,6 +460,11 @@ else
                                          HideSpinButtons="true"
                                          Style="width:72px;"
                                          Immediate="true" />
+
+                        <!-- Channel count (selected/total) -->
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right;">
+                            @($"{selectedChannels:N0}/{totalChannels:N0} ch")
+                        </MudText>
 
                         <!-- Expand channels button -->
                         <MudIconButton Icon="@(isParentExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
@@ -534,6 +537,7 @@ else
                         var totalSelected     = parent.Members
                             .Where(m => m.Decision == "include")
                             .Sum(m => _channelSelections.GetValueOrDefault(m.ProfileGroupFilterId)?.Count(s => s.Value) ?? 0);
+                        var selectableCount   = allParentChs.Count(e => e.Filter.Decision == "include");
                         var isAnyLoading = parent.Members.Any(m => _loadingChannels.Contains(m.ProfileGroupFilterId));
 
                         <MudDivider Class="mt-2 mb-2" />
@@ -541,14 +545,14 @@ else
                         @if (!anyIncluded)
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true">
-                                Include at least one member group to select channels for output.
+                                Preview only - include at least one member group to select channels for output.
                             </MudAlert>
                         }
 
-                        @if (anyIncluded && includedMembers.Count > 1)
+                        @if (parent.Members.Count > 1)
                         {
                             <MudStack Row="true" Spacing="2" Class="mb-1" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
-                                @foreach (var pm in includedMembers)
+                                @foreach (var pm in parent.Members)
                                 {
                                     var pmId    = pm.ProfileGroupFilterId;
                                     var pmVis   = !hiddenMembers.Contains(pmId);
@@ -580,7 +584,7 @@ else
                                 <MudDivider Vertical="true" FlexItem="true" />
                                 <MudLink Typo="Typo.caption" OnClick="@(() => SelectAllParentChannelsAsync(parent))" Style="cursor:pointer;">All</MudLink>
                                 <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllParentChannelsAsync(parent))" Style="cursor:pointer;">None</MudLink>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">@totalSelected of @allParentChs.Count selected</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@totalSelected of @selectableCount selected</MudText>
                             }
                             else
                             {
@@ -592,10 +596,10 @@ else
                         {
                             <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mt-1" />
                         }
-                        else if (allParentChs.Count == 0 && anyIncluded)
+                        else if (allParentChs.Count == 0)
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                                No channel data yet — trigger a refresh to populate.
+                                No channel data yet - trigger a refresh to populate.
                             </MudAlert>
                         }
                         else
@@ -607,18 +611,22 @@ else
                                     var ch           = entry.Channel;
                                     var mfid         = memberFilter.ProfileGroupFilterId;
                                     var isSelected   = _channelSelections.GetValueOrDefault(mfid)?.GetValueOrDefault(ch.ProviderChannelId) ?? false;
+                                    var canSelect    = memberFilter.Decision == "include";
                                     var numEntry     = _channelNumbers.GetValueOrDefault(mfid)?.GetValueOrDefault(ch.ProviderChannelId);
-                                    var conflictMsg  = isSelected && numEntry.HasValue &&
+                                    var conflictMsg  = canSelect && isSelected && numEntry.HasValue &&
                                         _numberIndex.TryGetValue(numEntry.Value, out var usedByP) &&
                                         (usedByP.FilterId != mfid || usedByP.ChannelId != ch.ProviderChannelId)
                                             ? $"#{numEntry.Value} already used by {usedByP.Description}" : null;
 
                                     <div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--mud-palette-divider); padding:2px 0;">
-                                        <MudCheckBox T="bool"
-                                                     Value="@isSelected"
-                                                     ValueChanged="@(v => OnChannelChecked(memberFilter, ch.ProviderChannelId, v))"
-                                                     Size="Size.Small"
-                                                     Dense="true" />
+                                        @if (canSelect)
+                                        {
+                                            <MudCheckBox T="bool"
+                                                         Value="@isSelected"
+                                                         ValueChanged="@(v => OnChannelChecked(memberFilter, ch.ProviderChannelId, v))"
+                                                         Size="Size.Small"
+                                                         Dense="true" />
+                                        }
                                         <MudText Typo="Typo.caption" Color="Color.Secondary"
                                                  Style="min-width:80px; max-width:160px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0;"
                                                  title="@($"{memberFilter.ProviderGroupRawName} ({memberFilter.ProviderName})")">
@@ -629,7 +637,7 @@ else
                                         {
                                             <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">gone</MudChip>
                                         }
-                                        @if (isSelected)
+                                        @if (canSelect && isSelected)
                                         {
                                             <MudNumericField T="int?"
                                                              Value="@numEntry"
@@ -891,13 +899,58 @@ else
         }
     }
 
-    private void BumpDefaultStartNum(int maxAssigned)
+    private HashSet<int> GetAssignedNumbers((string FilterId, string ChannelId)? except = null, IEnumerable<string>? exceptFilterIds = null)
     {
-        if (maxAssigned >= _defaultStartNum)
+        var used = new HashSet<int>();
+        var skipFilters = exceptFilterIds is null ? null : new HashSet<string>(exceptFilterIds);
+
+        foreach (var (fid, numDict) in _channelNumbers)
         {
-            _defaultStartNum = maxAssigned + 1;
-            _ = SaveDefaultStartNumAsync();
+            if (skipFilters is not null && skipFilters.Contains(fid))
+                continue;
+
+            foreach (var (cid, num) in numDict)
+            {
+                if (!num.HasValue) continue;
+                if (except.HasValue && except.Value.FilterId == fid && except.Value.ChannelId == cid)
+                    continue;
+                used.Add(num.Value);
+            }
         }
+
+        return used;
+    }
+
+    private static int NextUnused(int start, HashSet<int> used)
+    {
+        var n = start;
+        while (used.Contains(n)) n++;
+        used.Add(n);
+        return n;
+    }
+
+    private int GetGlobalNextAvailableNumber()
+    {
+        var used = GetAssignedNumbers();
+
+        if (used.Count == 0)
+            return _defaultStartNum;
+
+        var baseline = Math.Max(_defaultStartNum, used.Max() + 1);
+        return NextUnused(baseline, used);
+    }
+
+    private int GetNextNumberForGroup(GroupFilterDto filter, Dictionary<string, int?> numbers, HashSet<int> used)
+    {
+        var baseStart  = filter.AutoNumStart ?? _defaultStartNum;
+        var currentMax = numbers.Values
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .DefaultIfEmpty(baseStart - 1)
+            .Max();
+
+        var candidate = currentMax + 1;
+        return NextUnused(candidate, used);
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -1043,7 +1096,7 @@ else
             var req = new UpdateGroupFilterRequest { Decision = decision };
 
             if (decision == "include" && filter.AutoNumStart is null)
-                req.AutoNumStart = _defaultStartNum;
+                req.AutoNumStart = GetGlobalNextAvailableNumber();
 
             var response = await Http.PatchAsJsonAsync(
                 $"/api/v1/profiles/{_profileId}/group-filters/{filterId}", req);
@@ -1129,12 +1182,13 @@ else
     {
         var loadedCount = _channelCache.TryGetValue(filterId, out var cachedChs) ? (int?)cachedChs.Count : null;
         var denominator = loadedCount ?? filter.ChannelCount ?? 0;
-        var selCount    = _channelSelections.TryGetValue(filterId, out var selDict)
-            ? selDict.Count(s => s.Value) : (int?)null;
-        var displaySel  = filter.Decision == "include" ? (selCount ?? 0) : selCount;
-        return displaySel.HasValue
-            ? $"{displaySel.Value}/{denominator} ch"
-            : $"{(filter.ChannelCount.HasValue ? filter.ChannelCount.Value.ToString("N0") : "—")} ch";
+        var selected    = _channelSelections.TryGetValue(filterId, out var selDict)
+            ? selDict.Count(s => s.Value)
+            : 0;
+        if (denominator <= 0)
+            return "0/0 ch";
+
+        return $"{selected:N0}/{denominator:N0} ch";
     }
 
     private Task<IEnumerable<string>> SearchOutputNamesAsync(string searchText, CancellationToken _)
@@ -1225,7 +1279,7 @@ else
         StateHasChanged();
 
         var toLoad = parent.Members
-            .Where(m => m.Decision == "include" && !_channelCache.ContainsKey(m.ProfileGroupFilterId))
+            .Where(m => !_channelCache.ContainsKey(m.ProfileGroupFilterId))
             .Select(m => LoadChannelsAsync(m.ProfileGroupFilterId))
             .ToList();
 
@@ -1275,7 +1329,7 @@ else
     private List<ParentChannelEntry> GetAllParentChannels(VirtualParent parent)
     {
         var result = new List<ParentChannelEntry>();
-        foreach (var m in parent.Members.Where(m => m.Decision == "include"))
+        foreach (var m in parent.Members)
         {
             if (_channelCache.TryGetValue(m.ProfileGroupFilterId, out var chs))
                 foreach (var ch in chs)
@@ -1297,7 +1351,11 @@ else
     private async Task SelectAllParentChannelsAsync(VirtualParent parent)
     {
         var includedMembers = parent.Members.Where(m => m.Decision == "include").ToList();
-        int next = GetParentStartNum(parent.OutputName);
+        if (includedMembers.Count == 0) return;
+
+        var filterIds = includedMembers.Select(m => m.ProfileGroupFilterId).ToList();
+        var used      = GetAssignedNumbers(exceptFilterIds: filterIds);
+        int next      = NextUnused(GetParentStartNum(parent.OutputName), used);
 
         foreach (var member in includedMembers)
         {
@@ -1312,13 +1370,13 @@ else
             foreach (var ch in channels)
             {
                 freshSelections[ch.ProviderChannelId] = true;
-                freshNumbers[ch.ProviderChannelId]    = next++;
+                freshNumbers[ch.ProviderChannelId]    = next = NextUnused(next, used);
+                next++; // advance baseline
             }
             _channelSelections[filterId] = freshSelections;
             _channelNumbers[filterId]    = freshNumbers;
         }
 
-        BumpDefaultStartNum(next - 1);
         RebuildNumberIndex();
         StateHasChanged();
 
@@ -1393,21 +1451,21 @@ else
 
         if (!_channelCache.TryGetValue(filterId, out var channels)) return;
 
-        int next             = filter.AutoNumStart ?? _defaultStartNum;
-        var freshSelections  = new Dictionary<string, bool>();
-        var freshNumbers     = new Dictionary<string, int?>();
+        var freshSelections = new Dictionary<string, bool>();
+        var freshNumbers    = new Dictionary<string, int?>();
+        var used            = GetAssignedNumbers(exceptFilterIds: new[] { filterId });
+        int nextCandidate   = filter.AutoNumStart ?? _defaultStartNum;
 
         foreach (var ch in channels)
         {
             freshSelections[ch.ProviderChannelId] = true;
-            freshNumbers[ch.ProviderChannelId]    = next++;
+            var num = NextUnused(nextCandidate, used);
+            freshNumbers[ch.ProviderChannelId] = num;
+            nextCandidate = num + 1;
         }
 
         _channelSelections[filterId] = freshSelections;
         _channelNumbers[filterId]    = freshNumbers;
-
-        if (freshNumbers.Count > 0)
-            BumpDefaultStartNum(next - 1);
 
         RebuildNumberIndex();
         StateHasChanged();
@@ -1421,6 +1479,7 @@ else
         _channelSelections[filterId] = channels.ToDictionary(c => c.ProviderChannelId, _ => false);
         _channelNumbers[filterId]    = [];
 
+        RebuildNumberIndex();
         StateHasChanged();
         await ScheduleSaveChannelSelectionsAsync(filterId);
     }
@@ -1435,10 +1494,9 @@ else
 
         if (isChecked && (!numbers.ContainsKey(channelId) || numbers[channelId] is null))
         {
-            int next = numbers.Values.Where(v => v.HasValue).Select(v => v!.Value)
-                             .DefaultIfEmpty(_defaultStartNum - 1).Max() + 1;
+            var used = GetAssignedNumbers(except: (filterId, channelId), exceptFilterIds: new[] { filterId });
+            var next = GetNextNumberForGroup(filter, numbers, used);
             numbers[channelId] = next;
-            BumpDefaultStartNum(next);
         }
         else if (!isChecked)
         {
@@ -1456,11 +1514,19 @@ else
     private async Task OnChannelNumberChanged(string filterId, string channelId, int? value)
     {
         var numbers = _channelNumbers.GetValueOrDefault(filterId) ?? [];
-        numbers[channelId] = value;
-        _channelNumbers[filterId] = numbers;
-
         if (value.HasValue)
-            BumpDefaultStartNum(value.Value);
+        {
+            var used = GetAssignedNumbers(except: (filterId, channelId));
+            var unique = used.Contains(value.Value)
+                ? NextUnused(value.Value, used)
+                : value.Value;
+            numbers[channelId] = unique;
+        }
+        else
+        {
+            numbers.Remove(channelId);
+        }
+        _channelNumbers[filterId] = numbers;
 
         RebuildNumberIndex();
         StateHasChanged();
