@@ -10,6 +10,7 @@ public sealed class GroupFilterDto
     public DateTime ProviderGroupFirstSeen { get; set; }
     public DateTime ProviderGroupLastSeen { get; set; }
     public int? ChannelCount { get; set; }
+    public string ProviderName { get; set; } = string.Empty;
     public string Decision { get; set; } = "pending";
     public string ChannelMode { get; set; } = "all";
     public string? OutputName { get; set; }

@@ -81,7 +81,7 @@ public static class ChannelFilterApiEndpoints
     {
         var filters = await db.ProfileGroupFilters
             .AsNoTracking()
-            .Include(x => x.ProviderGroup)
+            .Include(x => x.ProviderGroup).ThenInclude(g => g.Provider)
             .Where(x => x.ProfileId == profileId)
             .ToListAsync(cancellationToken);
 
@@ -103,7 +103,7 @@ public static class ChannelFilterApiEndpoints
         CancellationToken cancellationToken)
     {
         var filter = await db.ProfileGroupFilters
-            .Include(x => x.ProviderGroup)
+            .Include(x => x.ProviderGroup).ThenInclude(g => g.Provider)
             .FirstOrDefaultAsync(x => x.ProfileGroupFilterId == filterId && x.ProfileId == profileId, cancellationToken);
 
         if (filter is null)
@@ -481,6 +481,7 @@ public static class ChannelFilterApiEndpoints
         ProviderGroupLastSeen = f.ProviderGroup.LastSeenUtc,
         ProviderGroupContentType = f.ProviderGroup.ContentType,
         ChannelCount = f.ProviderGroup.ChannelCount,
+        ProviderName = f.ProviderGroup.Provider.Name,
         Decision = f.Decision,
         ChannelMode = f.ChannelMode,
         OutputName = f.OutputName,
