@@ -107,9 +107,21 @@
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Active Snapshot</MudText>
                         @if (lineup?.ActiveSnapshot is not null)
                         {
-                            <MudText Typo="Typo.body2">
-                                @lineup.ActiveSnapshot.ChannelCountPublished.ToString("N0") channels published
-                            </MudText>
+                            @if (_channelStats is not null)
+                            {
+                                <MudText Typo="Typo.body2">
+                                    @_channelStats.ChannelsInOutput.ToString("N0") live channels published
+                                </MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @_channelStats.VodItemsInOutput.ToString("N0") movies, @_channelStats.SeriesItemsInOutput.ToString("N0") series published
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2">
+                                    @lineup.ActiveSnapshot.ChannelCountPublished.ToString("N0") entries published
+                                </MudText>
+                            }
                             <MudText Typo="Typo.caption">@lineup.ActiveSnapshot.CreatedUtc.ToString("u")</MudText>
                         }
                         else
@@ -133,8 +145,17 @@
             <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
                 <MudChip T="string" Color="@(_channelStats?.ChannelsInOutput > 0 ? Color.Success : Color.Warning)"
                          Icon="@Icons.Material.Filled.Tv">
-                    @(_channelStats?.ChannelsInOutput ?? 0) channels being served
+                    @(_channelStats?.ChannelsInOutput ?? 0) live channels being served
                 </MudChip>
+                @if (_channelStats is not null)
+                {
+                    <MudChip T="string" Color="@(_channelStats.VodEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Movie">
+                        Movies @(_channelStats.VodEnabled ? "On" : "Off"): @_channelStats.VodItemsInOutput.ToString("N0")
+                    </MudChip>
+                    <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.LiveTv">
+                        Series @(_channelStats.SeriesEnabled ? "On" : "Off"): @_channelStats.SeriesItemsInOutput.ToString("N0")
+                    </MudChip>
+                }
             </MudStack>
             @if (_channelStats is null || _channelStats.ChannelsInOutput == 0)
             {
@@ -196,7 +217,13 @@
                         @_channelStats.GroupsIncluded group@(_channelStats.GroupsIncluded == 1 ? "" : "s") included
                     </MudChip>
                     <MudChip T="string" Color="Color.Primary" Icon="@Icons.Material.Filled.Tv">
-                        @_channelStats.ChannelsInOutput.ToString("N0") channels in output
+                        @_channelStats.ChannelsInOutput.ToString("N0") live channels in output
+                    </MudChip>
+                    <MudChip T="string" Color="@(_channelStats.VodEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Movie">
+                        Movies @(_channelStats.VodEnabled ? "On" : "Off"): @_channelStats.VodItemsInOutput.ToString("N0")
+                    </MudChip>
+                    <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.LiveTv">
+                        Series @(_channelStats.SeriesEnabled ? "On" : "Off"): @_channelStats.SeriesItemsInOutput.ToString("N0")
                     </MudChip>
                     @if (_channelStats.GroupsPending > 0)
                     {
@@ -210,7 +237,8 @@
                 {
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2">
                         Provider has @_channelStats.VodGroupsInProvider VOD group@(_channelStats.VodGroupsInProvider == 1 ? "" : "s"),
-                        @_channelStats.SeriesGroupsInProvider Series group@(_channelStats.SeriesGroupsInProvider == 1 ? "" : "s") available
+                        @_channelStats.SeriesGroupsInProvider Series group@(_channelStats.SeriesGroupsInProvider == 1 ? "" : "s") available.
+                        Live group mapping only affects live channels.
                     </MudText>
                 }
             }

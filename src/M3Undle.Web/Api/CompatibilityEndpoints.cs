@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using M3Undle.Core.M3u;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,14 @@ public static class CompatibilityEndpoints
     {
         app.MapGet("/m3u/m3undle.m3u", ServeM3uAsync).AllowAnonymous();
         app.MapGet("/xmltv/m3undle.xml", ServeXmltvAsync).AllowAnonymous();
+        app.MapGet("/live/{streamKey}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/live/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/movie/{streamKey}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/movie/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/vod/{streamKey}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/vod/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/series/{streamKey}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/series/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
         app.MapGet("/stream/{streamKey}", ServeStreamAsync).AllowAnonymous();
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
 
@@ -70,7 +79,7 @@ public static class CompatibilityEndpoints
             {
                 sb.Append(BuildExtInf(channel));
                 sb.Append('\n');
-                sb.Append($"{baseUrl}/stream/{channel.StreamKey}");
+                sb.Append(BuildProxyStreamUrl(baseUrl, channel));
                 sb.Append('\n');
             }
 
@@ -331,6 +340,45 @@ public static class CompatibilityEndpoints
         return sb.ToString();
     }
 
+    private static string GetProxyRouteSegment(ChannelIndexEntry channel)
+        => LiveClassifier.ClassifyContent(channel.StreamUrl) switch
+        {
+            "series" => "series",
+            "vod" => "movie",
+            _ => "live",
+        };
+
+    private static string BuildProxyStreamUrl(string baseUrl, ChannelIndexEntry channel)
+    {
+        var routeSegment = GetProxyRouteSegment(channel);
+
+        // Keep live URLs short; for VOD/Series append the original filename segment so
+        // clients that key off file-style movie/series URLs can classify them.
+        if (routeSegment == "live")
+            return $"{baseUrl}/{routeSegment}/{channel.StreamKey}";
+
+        var tail = GetUpstreamTailSegment(channel.StreamUrl);
+        if (string.IsNullOrWhiteSpace(tail))
+            return $"{baseUrl}/{routeSegment}/{channel.StreamKey}";
+
+        return $"{baseUrl}/{routeSegment}/{channel.StreamKey}/{Uri.EscapeDataString(tail)}";
+    }
+
+    private static string? GetUpstreamTailSegment(string? streamUrl)
+    {
+        if (string.IsNullOrWhiteSpace(streamUrl))
+            return null;
+
+        if (Uri.TryCreate(streamUrl, UriKind.Absolute, out var uri))
+        {
+            var tail = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            return string.IsNullOrWhiteSpace(tail) ? null : tail;
+        }
+
+        var fallback = streamUrl.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return string.IsNullOrWhiteSpace(fallback) ? null : fallback;
+    }
+
     // -------------------------------------------------------------------------
     // Status response records
     // -------------------------------------------------------------------------
@@ -361,4 +409,3 @@ public static class CompatibilityEndpoints
         int? ChannelCountSeen,
         string? ErrorSummary);
 }
-

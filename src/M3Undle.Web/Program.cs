@@ -15,6 +15,10 @@ using Serilog;
 using Serilog.Formatting.Compact;
 using System.Data.Common;
 
+// Static web assets initialization expects the default web root directory to exist.
+// Ensure it's present so startup doesn't fail in environments/checkouts where it is missing.
+Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"));
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Register logging infrastructure before AddSerilog so the broadcast sink can be injected

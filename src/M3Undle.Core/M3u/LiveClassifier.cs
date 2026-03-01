@@ -19,7 +19,8 @@ public static class LiveClassifier
             if (string.Equals(seg, "series", StringComparison.OrdinalIgnoreCase))
                 return "series";
             if (string.Equals(seg, "movie", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(seg, "movies", StringComparison.OrdinalIgnoreCase))
+                string.Equals(seg, "movies", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(seg, "vod", StringComparison.OrdinalIgnoreCase))
                 return "vod";
         }
 
@@ -41,7 +42,8 @@ public static class LiveClassifier
         if (url.Contains("/series/", StringComparison.OrdinalIgnoreCase))
             return "series";
         if (url.Contains("/movie/", StringComparison.OrdinalIgnoreCase) ||
-            url.Contains("/movies/", StringComparison.OrdinalIgnoreCase))
+            url.Contains("/movies/", StringComparison.OrdinalIgnoreCase) ||
+            url.Contains("/vod/", StringComparison.OrdinalIgnoreCase))
             return "vod";
         return "live";
     }

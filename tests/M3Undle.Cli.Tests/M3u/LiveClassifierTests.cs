@@ -35,6 +35,7 @@ public class LiveClassifierTests
         
         // Movies plural
         Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/movies/12345.mp4"));
+        Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/vod/12345.mp4"));
     }
 
     [TestMethod]

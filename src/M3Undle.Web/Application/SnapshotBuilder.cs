@@ -34,6 +34,7 @@ public sealed class SnapshotBuilder(
         string? ProviderChannelKey,
         string DisplayName,
         string? StreamUrl,
+        string ContentType,
         string? GroupTitle,
         string? TvgId,
         string? TvgName,
@@ -224,19 +225,22 @@ public sealed class SnapshotBuilder(
             ch.ProviderChannelKey,
             ch.DisplayName,
             ch.StreamUrl,
+            ch.ContentType,
             ch.GroupTitle,
             ch.TvgId,
             ch.TvgName,
             ch.LogoUrl)).ToList();
 
-        // Load group filter config for this profile
+        // Load group filter config for this profile/provider
         var groupFilters = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .Where(x => x.ProfileId == profileId && x.Decision == "include")
+            .Where(x => x.ProfileId == profileId && x.ProviderGroup.ProviderId == provider.ProviderId)
             .ToListAsync(cancellationToken);
 
-        var includedGroups = groupFilters.ToDictionary(
+        var includedGroups = groupFilters
+            .Where(f => f.Decision == "include")
+            .ToDictionary(
             f => f.ProviderGroup.RawName,
             f => new GroupFilterConfig(
                 f.ProfileGroupFilterId,
@@ -271,7 +275,13 @@ public sealed class SnapshotBuilder(
                         StringComparer.Ordinal));
         }
 
-        var channelIndex = BuildChannelIndex(channels, profileId, includedGroups, channelOverridesByFilterId);
+        var channelIndex = BuildChannelIndex(
+            channels,
+            profileId,
+            includedGroups,
+            channelOverridesByFilterId,
+            provider.IncludeVod,
+            provider.IncludeSeries);
 
         // Write snapshot files
         var snapshotId = Guid.NewGuid().ToString();
@@ -314,23 +324,48 @@ public sealed class SnapshotBuilder(
         IReadOnlyList<ChannelBuildData> channels,
         string profileId,
         IReadOnlyDictionary<string, GroupFilterConfig> includedGroups,
-        IReadOnlyDictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId)
+        IReadOnlyDictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId,
+        bool includeVod,
+        bool includeSeries)
     {
-        // No groups mapped → no channels in output (explicit mapping required)
-        if (includedGroups.Count == 0)
+        // No included live groups and no VOD/series passthrough enabled.
+        if (includedGroups.Count == 0 && !includeVod && !includeSeries)
             return [];
 
-        // Filtered mode: only include channels whose GroupTitle matches an included group.
         var pending = new List<(string OutputGroup, ChannelBuildData Channel, int? ExplicitNumber)>();
 
-        var matched = channels
-            .Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl)
-                     && !string.IsNullOrWhiteSpace(x.GroupTitle)
-                     && includedGroups.ContainsKey(x.GroupTitle!));
-
-        foreach (var channel in matched)
+        foreach (var channel in channels.Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl)))
         {
-            var filter = includedGroups[channel.GroupTitle!];
+            var contentType = channel.ContentType switch
+            {
+                "vod" => "vod",
+                "series" => "series",
+                _ => "live",
+            };
+
+            var groupName = channel.GroupTitle;
+            var hasGroup = !string.IsNullOrWhiteSpace(groupName);
+
+            // VOD/Series bypass group mapping completely.
+            // They are controlled only by provider IncludeVod/IncludeSeries flags.
+            if (contentType == "vod" || contentType == "series")
+            {
+                if ((contentType == "vod" && !includeVod) || (contentType == "series" && !includeSeries))
+                    continue;
+
+                var fallbackGroup = hasGroup
+                    ? groupName!
+                    : contentType == "series" ? "Series"
+                    : contentType == "vod" ? "Movies"
+                    : "Live";
+
+                pending.Add((fallbackGroup, channel, null));
+                continue;
+            }
+
+            // Live channels are opt-in via explicit included groups.
+            if (!hasGroup || !includedGroups.TryGetValue(groupName!, out var filter))
+                continue;
 
             if (filter.ChannelMode == "select")
             {
@@ -563,7 +598,10 @@ public sealed class SnapshotBuilder(
         // Skip syncing channels for excluded groups — they get deactivated below via unseen-key sweep.
         var excludedGroupIds = await db.ProfileGroupFilters
             .AsNoTracking()
-            .Where(x => x.ProfileId == profileId && x.Decision == "exclude")
+            .Include(x => x.ProviderGroup)
+            .Where(x => x.ProfileId == profileId
+                     && x.Decision == "exclude"
+                     && x.ProviderGroup.ContentType == "live")
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 

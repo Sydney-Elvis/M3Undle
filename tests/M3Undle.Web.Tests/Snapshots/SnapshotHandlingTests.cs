@@ -410,6 +410,77 @@ public sealed class SnapshotHandlingTests
         }
     }
 
+    [TestMethod]
+    public async Task SnapshotBuilder_IncludesVodAndSeries_WhenEnabled_EvenIfGroupsPending()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1", active: true);
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleMixedM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var verify1 = fixture.CreateDbContext())
+            {
+                var active1 = await verify1.Snapshots.SingleAsync(x => x.Status == "active");
+                Assert.AreEqual(2, active1.ChannelCountPublished, "First build should publish VOD+series passthrough while live remains unmapped.");
+            }
+
+            await using (var edit = fixture.CreateDbContext())
+            {
+                var newsFilter = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "News");
+                newsFilter.Decision = "include";
+                newsFilter.UpdatedUtc = DateTime.UtcNow;
+
+                var moviesFilter = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Movies");
+                moviesFilter.Decision = "exclude";
+                moviesFilter.UpdatedUtc = DateTime.UtcNow;
+
+                var seriesFilter = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Series");
+                seriesFilter.Decision = "exclude";
+                seriesFilter.UpdatedUtc = DateTime.UtcNow;
+
+                await edit.SaveChangesAsync();
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleMixedM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify2 = fixture.CreateDbContext();
+            var active2 = await verify2.Snapshots
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+            Assert.AreEqual(3, active2.ChannelCountPublished, "Second build should add included live channels while VOD+series remain controlled only by provider Include flags.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Test helpers
     // -------------------------------------------------------------------------
@@ -418,6 +489,15 @@ public sealed class SnapshotHandlingTests
         "#EXTM3U\n" +
         "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US\n" +
         "http://example.com/stream/cnn\n";
+
+    private const string SampleMixedM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 group-title=\"News\",Live News\n" +
+        "http://example.com/live/user/pass/100.ts\n" +
+        "#EXTINF:-1 group-title=\"Movies\",Movie One\n" +
+        "http://example.com/movie/user/pass/200.mkv\n" +
+        "#EXTINF:-1 group-title=\"Series\",Series One\n" +
+        "http://example.com/series/user/pass/300.mkv\n";
 
     private static SnapshotBuilder CreateBuilder(ApplicationDbContext db, HttpStatusCode statusCode, string content, string tempDir)
     {
@@ -523,4 +603,3 @@ public sealed class SnapshotHandlingTests
         public string EnvironmentName { get; set; } = "test";
     }
 }
-

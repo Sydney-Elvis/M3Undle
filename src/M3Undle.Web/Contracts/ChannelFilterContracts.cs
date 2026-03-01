@@ -44,7 +44,11 @@ public sealed class ChannelMappingStatsDto
     public string? ProfileId { get; set; }
     public int GroupsIncluded { get; set; }
     public int GroupsPending { get; set; }
-    public int ChannelsInOutput { get; set; }
+    public int ChannelsInOutput { get; set; } // Live channels in output
+    public int VodItemsInOutput { get; set; }
+    public int SeriesItemsInOutput { get; set; }
+    public bool VodEnabled { get; set; }
+    public bool SeriesEnabled { get; set; }
     public int? ChannelsInProvider { get; set; }
     public int VodGroupsInProvider { get; set; }
     public int SeriesGroupsInProvider { get; set; }

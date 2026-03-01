@@ -1,3 +1,4 @@
+using M3Undle.Core.M3u;
 using M3Undle.Web.Application;
 using M3Undle.Web.Contracts;
 using M3Undle.Web.Data;
@@ -143,7 +144,7 @@ public static class ChannelFilterApiEndpoints
 
         if (request.Decision == "exclude")
             await db.ProviderChannels
-                .Where(x => x.ProviderGroupId == filter.ProviderGroupId)
+                .Where(x => x.ProviderGroupId == filter.ProviderGroupId && x.ContentType == "live")
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Active, false), cancellationToken);
 
         if (request.Decision is not null)
@@ -203,7 +204,7 @@ public static class ChannelFilterApiEndpoints
         {
             var groupIds = request.ProviderGroupIds;
             await db.ProviderChannels
-                .Where(x => x.ProviderGroupId != null && groupIds.Contains(x.ProviderGroupId!))
+                .Where(x => x.ProviderGroupId != null && groupIds.Contains(x.ProviderGroupId!) && x.ContentType == "live")
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Active, false), cancellationToken);
         }
 
@@ -429,11 +430,13 @@ public static class ChannelFilterApiEndpoints
 
         var groupsIncluded = await db.ProfileGroupFilters
             .AsNoTracking()
-            .CountAsync(x => x.ProfileId == profileId && x.Decision == "include", cancellationToken);
+            .Include(x => x.ProviderGroup)
+            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "include", cancellationToken);
 
         var groupsPending = await db.ProfileGroupFilters
             .AsNoTracking()
-            .CountAsync(x => x.ProfileId == profileId && x.Decision == "pending", cancellationToken);
+            .Include(x => x.ProviderGroup)
+            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "pending", cancellationToken);
 
         var activeSnapshot = await db.Snapshots
             .AsNoTracking()
@@ -455,12 +458,50 @@ public static class ChannelFilterApiEndpoints
             .AsNoTracking()
             .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", cancellationToken);
 
+        var liveInOutput = 0;
+        var vodInOutput = 0;
+        var seriesInOutput = 0;
+
+        if (activeSnapshot is not null &&
+            !string.IsNullOrWhiteSpace(activeSnapshot.ChannelIndexPath) &&
+            File.Exists(activeSnapshot.ChannelIndexPath))
+        {
+            try
+            {
+                var json = await File.ReadAllTextAsync(activeSnapshot.ChannelIndexPath, cancellationToken);
+                var entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
+                foreach (var entry in entries)
+                {
+                    switch (LiveClassifier.ClassifyContent(entry.StreamUrl))
+                    {
+                        case "vod":
+                            vodInOutput++;
+                            break;
+                        case "series":
+                            seriesInOutput++;
+                            break;
+                        default:
+                            liveInOutput++;
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or JsonException)
+            {
+                // Keep counts at 0 if snapshot index cannot be read.
+            }
+        }
+
         return TypedResults.Ok(new ChannelMappingStatsDto
         {
             ProfileId = profileId,
             GroupsIncluded = groupsIncluded,
             GroupsPending = groupsPending,
-            ChannelsInOutput = activeSnapshot?.ChannelCountPublished ?? 0,
+            ChannelsInOutput = liveInOutput,
+            VodItemsInOutput = vodInOutput,
+            SeriesItemsInOutput = seriesInOutput,
+            VodEnabled = provider.IncludeVod,
+            SeriesEnabled = provider.IncludeSeries,
             ChannelsInProvider = lastFetchRun?.ChannelCountSeen,
             VodGroupsInProvider = vodGroups,
             SeriesGroupsInProvider = seriesGroups,
