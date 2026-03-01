@@ -438,9 +438,11 @@ public sealed class SnapshotBuilder(
         int? tvgChno,
         string profileId)
     {
+        // Include stream URL + display/group context to avoid collapsing distinct items
+        // that share tvg-id/URL across multiple provider groups.
         var stableKey = !string.IsNullOrWhiteSpace(channel.ProviderChannelKey)
-            ? channel.ProviderChannelKey!
-            : $"{channel.DisplayName}\u001f{channel.StreamUrl}";
+            ? $"{channel.ProviderChannelKey}\u001f{channel.StreamUrl}\u001f{groupTitle}\u001f{channel.DisplayName}"
+            : $"{channel.DisplayName}\u001f{channel.StreamUrl}\u001f{groupTitle}";
 
         return new ChannelIndexEntry(
             StreamKey: DeriveStreamKey(stableKey, profileId),
@@ -586,12 +588,21 @@ public sealed class SnapshotBuilder(
         DateTime now,
         CancellationToken cancellationToken)
     {
-        static string DeriveChannelKey(ParsedProviderChannel ch)
+        static string BuildStableIdentity(ParsedProviderChannel ch)
         {
-            var stableKey = !string.IsNullOrWhiteSpace(ch.ProviderChannelKey)
-                ? ch.ProviderChannelKey!
-                : $"{ch.DisplayName}\u001f{ch.StreamUrl}";
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(stableKey));
+            // Include stream URL + display/group context to avoid collapsing distinct items
+            // that share tvg-id/URL across multiple provider groups.
+            return !string.IsNullOrWhiteSpace(ch.ProviderChannelKey)
+                ? $"{ch.ProviderChannelKey}\u001f{ch.StreamUrl}\u001f{ch.GroupTitle}\u001f{ch.DisplayName}"
+                : $"{ch.DisplayName}\u001f{ch.StreamUrl}\u001f{ch.GroupTitle}";
+        }
+
+        static string DeriveChannelKey(string stableIdentity, int occurrence)
+        {
+            // Preserve exact duplicate lines from provider feeds by adding an occurrence suffix.
+            // Most channels are occurrence=1 and keep a stable key derived from identity fields.
+            var keyedIdentity = occurrence > 1 ? $"{stableIdentity}\u001fdup:{occurrence}" : stableIdentity;
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(keyedIdentity));
             return Convert.ToBase64String(hash).Replace('+', '-').Replace('/', '_').TrimEnd('=')[..16];
         }
 
@@ -614,6 +625,7 @@ public sealed class SnapshotBuilder(
             .ToDictionary(x => x.ProviderChannelKey!, StringComparer.Ordinal);
 
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+        var occurrenceByStableIdentity = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var ch in channels)
         {
@@ -625,7 +637,11 @@ public sealed class SnapshotBuilder(
             // Lazy: skip channels from excluded groups entirely.
             if (groupId is not null && excludedGroupIds.Contains(groupId)) continue;
 
-            var key = DeriveChannelKey(ch);
+            var stableIdentity = BuildStableIdentity(ch);
+            var occurrence = occurrenceByStableIdentity.GetValueOrDefault(stableIdentity) + 1;
+            occurrenceByStableIdentity[stableIdentity] = occurrence;
+
+            var key = DeriveChannelKey(stableIdentity, occurrence);
             if (!seenKeys.Add(key)) continue;
 
             var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);

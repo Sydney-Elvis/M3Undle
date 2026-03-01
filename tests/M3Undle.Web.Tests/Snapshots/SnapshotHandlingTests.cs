@@ -481,6 +481,154 @@ public sealed class SnapshotHandlingTests
         }
     }
 
+    [TestMethod]
+    public async Task SnapshotBuilder_DoesNotCollapseDistinctVodItems_WithSameTvgId()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1", active: true);
+            provider.IncludeVod = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db, HttpStatusCode.OK, SampleDuplicateVodTvgIdM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots.SingleAsync(x => x.Status == "active");
+            Assert.AreEqual(2, active.ChannelCountPublished, "Distinct VOD items with same tvg-id should both be published.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_PreservesExactDuplicateLiveRows()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            // First run discovers groups/channels and creates pending filters.
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleDuplicateLiveRowsM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            // Include the group for live output.
+            await using (var edit = fixture.CreateDbContext())
+            {
+                var filter = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "USA FOX");
+                filter.Decision = "include";
+                filter.UpdatedUtc = DateTime.UtcNow;
+                await edit.SaveChangesAsync();
+            }
+
+            // Second run should keep both exact-duplicate rows.
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleDuplicateLiveRowsM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+            Assert.AreEqual(2, active.ChannelCountPublished, "Exact duplicate live rows should be preserved to match provider output.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_PreservesSameChannelAcrossDifferentGroups()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleSameLiveChannelDifferentGroupsM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var edit = fixture.CreateDbContext())
+            {
+                var filters = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .Where(x => x.ProfileId == "profile-1"
+                             && (x.ProviderGroup.RawName == "USA FOX" || x.ProviderGroup.RawName == "USA ABC"))
+                    .ToListAsync();
+                foreach (var filter in filters)
+                {
+                    filter.Decision = "include";
+                    filter.UpdatedUtc = DateTime.UtcNow;
+                }
+
+                await edit.SaveChangesAsync();
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleSameLiveChannelDifferentGroupsM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+
+            Assert.AreEqual(2, active.ChannelCountPublished, "Same channel identity in different groups should be preserved in both groups.");
+
+            var channelIndexJson = await File.ReadAllTextAsync(active.ChannelIndexPath);
+            var entries = System.Text.Json.JsonSerializer.Deserialize<List<ChannelIndexEntry>>(channelIndexJson,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            Assert.HasCount(2, entries);
+            Assert.AreEqual(1, entries.Count(x => x.GroupTitle == "USA FOX"));
+            Assert.AreEqual(1, entries.Count(x => x.GroupTitle == "USA ABC"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Test helpers
     // -------------------------------------------------------------------------
@@ -498,6 +646,27 @@ public sealed class SnapshotHandlingTests
         "http://example.com/movie/user/pass/200.mkv\n" +
         "#EXTINF:-1 group-title=\"Series\",Series One\n" +
         "http://example.com/series/user/pass/300.mkv\n";
+
+    private const string SampleDuplicateVodTvgIdM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"movie.same\" group-title=\"Movies\",Movie One\n" +
+        "http://example.com/movie/user/pass/200.mkv\n" +
+        "#EXTINF:-1 tvg-id=\"movie.same\" group-title=\"Movies\",Movie Two\n" +
+        "http://example.com/movie/user/pass/201.mkv\n";
+
+    private const string SampleDuplicateLiveRowsM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"fox.ny\" group-title=\"USA FOX\",NY - NEW YORK\n" +
+        "http://example.com/live/user/pass/900.ts\n" +
+        "#EXTINF:-1 tvg-id=\"fox.ny\" group-title=\"USA FOX\",NY - NEW YORK\n" +
+        "http://example.com/live/user/pass/900.ts\n";
+
+    private const string SampleSameLiveChannelDifferentGroupsM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"ny.shared\" group-title=\"USA FOX\",NY - NEW YORK\n" +
+        "http://example.com/live/user/pass/901.ts\n" +
+        "#EXTINF:-1 tvg-id=\"ny.shared\" group-title=\"USA ABC\",NY - NEW YORK\n" +
+        "http://example.com/live/user/pass/901.ts\n";
 
     private static SnapshotBuilder CreateBuilder(ApplicationDbContext db, HttpStatusCode statusCode, string content, string tempDir)
     {
