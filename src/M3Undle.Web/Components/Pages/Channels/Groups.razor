@@ -106,6 +106,32 @@ else
                     @_globalChannelSearchResults.Count group@(_globalChannelSearchResults.Count != 1 ? "s" : "") matched
                 </MudChip>
             }
+            @if (!_isLoading && FilteredItems.Count > 0)
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space:nowrap;">@FilteredItems.Count shown:</MudText>
+                <MudTooltip Text="Include all visible groups" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Outlined.CheckCircle"
+                                   Size="Size.Small"
+                                   Color="Color.Success"
+                                   OnClick="@(() => BulkSetDecisionForVisibleAsync("include"))"
+                                   Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
+                </MudTooltip>
+                <MudTooltip Text="Set all visible groups to pending" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Outlined.RadioButtonUnchecked"
+                                   Size="Size.Small"
+                                   Color="Color.Default"
+                                   OnClick="@(() => BulkSetDecisionForVisibleAsync("pending"))"
+                                   Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
+                </MudTooltip>
+                <MudTooltip Text="Exclude all visible groups" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Outlined.Block"
+                                   Size="Size.Small"
+                                   Color="Color.Error"
+                                   OnClick="@(() => BulkSetDecisionForVisibleAsync("exclude"))"
+                                   Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
+                </MudTooltip>
+            }
         </MudStack>
     </MudPaper>
 
@@ -746,6 +772,7 @@ else
 
     private string? _editingFilterId;
     private string _editNameText = string.Empty;
+    private bool _isBulkBusy;
 
     private void ToggleDecisionFilterState(string state)
     {
@@ -1189,6 +1216,55 @@ else
         finally
         {
             _busyFilters.Remove(filterId);
+            StateHasChanged();
+        }
+    }
+
+    private async Task BulkSetDecisionForVisibleAsync(string decision)
+    {
+        if (_profileId is null) return;
+
+        var groupIds = FilteredItems.SelectMany(item => item switch
+        {
+            GroupFilterDto f => (IEnumerable<string>)[f.ProviderGroupId],
+            VirtualParent p  => p.Members.Select(m => m.ProviderGroupId),
+            _                => [],
+        }).Distinct().ToList();
+
+        if (groupIds.Count == 0) return;
+
+        _isBulkBusy = true;
+        StateHasChanged();
+
+        try
+        {
+            var req = new BulkGroupDecisionRequest { Decision = decision, ProviderGroupIds = groupIds };
+            var response = await Http.PostAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/bulk-decide", req);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Bulk update failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            var groupIdSet = new HashSet<string>(groupIds, StringComparer.Ordinal);
+            foreach (var f in _allFilters.Where(f => groupIdSet.Contains(f.ProviderGroupId)))
+            {
+                f.Decision = decision;
+                _sessionChangedFilterIds.Add(f.ProfileGroupFilterId);
+            }
+
+            RebuildDisplayOrder();
+            Snackbar.Add($"{groupIds.Count} group(s) set to {decision}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isBulkBusy = false;
             StateHasChanged();
         }
     }

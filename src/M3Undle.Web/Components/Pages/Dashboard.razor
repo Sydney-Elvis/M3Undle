@@ -77,8 +77,7 @@
                                     @(_isCancelling ? "Cancelling…" : "Cancel")
                                 </MudButton>
                             </MudStack>
-                            @{ var lastRun = _status?.Lineup?.LastRefresh; }
-                            @if (LastRunDurationText is not null && lastRun is not null)
+                            @if (LastRunDurationText is not null && _status?.Lineup?.LastRefresh is { } lastRun)
                             {
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                                     Last run: ~@LastRunDurationText
