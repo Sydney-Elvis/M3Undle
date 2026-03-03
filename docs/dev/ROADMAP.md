@@ -77,12 +77,12 @@ plugins load against these contracts. Do not build filtering as concrete classes
 - Endpoint security: secret token embedded in URL path
   (not headers — Media Players cannot set custom headers)
 - Token generation and rotation UI
-- Any remaining core items before Beta
+- Any remaining foundational items before Beta
 
 ---
 
 ## Beta — Feature Finalization
-**Goal:** All core functionality implemented, stable, and documented.
+**Goal:** All foundational functionality implemented, stable, and documented.
 No major feature additions after Beta entry.
 
 - New channels inbox (review and approve newly discovered channels before publishing)

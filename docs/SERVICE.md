@@ -26,7 +26,7 @@ At a high level, the service:
 
 ---
 
-## Core Concepts (User-Facing)
+## Key Concepts (User-Facing)
 
 ### Provider
 An upstream source you configure (URL + credentials). Providers can be large and noisy.
@@ -128,7 +128,7 @@ A future release will introduce lineup shaping controls:
 ## Relationship to the CLI
 
 The CLI is a file-oriented tool for filtering large playlists.
-The service builds on the same core ideas but adds:
+The service builds on the same foundational ideas but adds:
 
 - DB-backed configuration
 - snapshot publishing
@@ -139,8 +139,8 @@ See: `CLI.md`
 
 ---
 
-## Editions Note
+## Project Direction
 
-M3Undle follows an open-core model.
 The current focus is delivering a stable, fully usable self-hosted lineup manager.
-Advanced features may be introduced in future releases.
+
+Advanced features may be introduced in future releases as the project matures.

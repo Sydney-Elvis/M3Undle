@@ -136,17 +136,17 @@ See: `docs/design/HTTP_COMPATIBILITY.md`
 
 ---
 
-## Editions
+## Project Direction
 
-M3Undle follows an open-core model.
+The current focus is delivering a stable, fully usable self-hosted lineup manager.
 
-The current focus is delivering a stable, fully usable self-hosted lineup manager. Advanced features may be introduced in future releases.
+Advanced features may be introduced in future releases as the project matures.
 
 ---
 
 ## License
 
-Core: Apache License 2.0
+Project license: Apache License 2.0
 See `LICENSE` for details.
 
 ---
@@ -155,4 +155,4 @@ See `LICENSE` for details.
 
 **CLI:** Stable and usable.
 
-**Service + Web UI:** **Pre-Alpha** — actively building toward the Alpha checkpoint. Core concepts being proven. Not production-ready. Will change significantly.
+**Service + Web UI:** **Pre-Alpha** — actively building toward the Alpha checkpoint. Foundational concepts being proven. Not production-ready. Will change significantly.
