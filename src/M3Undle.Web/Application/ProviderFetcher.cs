@@ -45,11 +45,11 @@ public sealed class ProviderFetcher(
         }
         else
         {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
+
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
-
                 using var client = httpClientFactory.CreateClient();
                 ApplyHeadersFromJson(client, provider.HeadersJson);
                 if (!string.IsNullOrWhiteSpace(provider.UserAgent))
@@ -62,6 +62,8 @@ public sealed class ProviderFetcher(
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
+                if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    throw new ProviderFetchException($"Playlist fetch timed out after {provider.TimeoutSeconds}s.", ex);
                 throw new ProviderFetchException($"Playlist fetch failed: {ex.Message}", ex);
             }
         }
@@ -110,11 +112,11 @@ public sealed class ProviderFetcher(
             }
         }
 
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
+
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
-
             using var client = httpClientFactory.CreateClient();
             ApplyHeadersFromJson(client, provider.HeadersJson);
             if (!string.IsNullOrWhiteSpace(provider.UserAgent))
@@ -128,6 +130,8 @@ public sealed class ProviderFetcher(
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
+            if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                throw new ProviderFetchException($"XMLTV fetch timed out after {provider.TimeoutSeconds}s.", ex);
             // XMLTV failure is non-fatal — caller logs and falls back to empty guide
             throw new ProviderFetchException($"XMLTV fetch failed: {ex.Message}", ex);
         }

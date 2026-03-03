@@ -68,8 +68,8 @@ public sealed class CreateProviderRequest
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
 
-    [Range(1, 300)]
-    public int TimeoutSeconds { get; set; } = 20;
+    [Range(1, 1800)]
+    public int TimeoutSeconds { get; set; } = 120;
 
     public List<string>? AssociateToProfileIds { get; set; }
 }
@@ -89,8 +89,8 @@ public sealed class UpdateProviderRequest
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
 
-    [Range(1, 300)]
-    public int TimeoutSeconds { get; set; } = 20;
+    [Range(1, 1800)]
+    public int TimeoutSeconds { get; set; } = 120;
 
     public List<string>? AssociateToProfileIds { get; set; }
 }

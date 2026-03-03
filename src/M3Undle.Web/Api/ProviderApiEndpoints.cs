@@ -37,6 +37,7 @@ public static class ProviderApiEndpoints
         var snapshots = app.MapGroup("/api/v1/snapshots");
         snapshots.MapPost("/refresh", TriggerRefreshAsync);
         snapshots.MapPost("/build", TriggerBuildOnlyAsync);
+        snapshots.MapPost("/cancel", CancelRefreshAsync);
 
         return app;
     }
@@ -783,6 +784,14 @@ public static class ProviderApiEndpoints
         }
         logger.LogDebug("Snapshot build-only trigger ignored — a refresh is already in progress.");
         return Results.Conflict(new { message = "A refresh is already in progress." });
+    }
+
+    private static IResult CancelRefreshAsync(IRefreshTrigger trigger, ILogger<ProviderApiLog> logger)
+    {
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
+        trigger.CancelRefresh();
+        logger.LogInformation("Snapshot refresh cancellation requested.");
+        return Results.Ok();
     }
 
     // -------------------------------------------------------------------------

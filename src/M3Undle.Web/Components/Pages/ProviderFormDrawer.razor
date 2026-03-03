@@ -25,7 +25,7 @@
                               HelperText="http/https URL, or file:///path/to/guide.xml for a server-side local file" />
                 <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="3" />
                 <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent" />
-                <MudNumericField T="int" Label="Timeout Seconds" @bind-Value="_model.TimeoutSeconds" Min="1" Max="300" />
+                <MudNumericField T="int" Label="Timeout Seconds" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800" />
 
                 <MudSelect T="string" Label="Associated Profile" @bind-Value="_model.ProfileId"
                            ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(None)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
@@ -128,7 +128,7 @@
             _model = new ProviderEditModel
             {
                 Enabled = true,
-                TimeoutSeconds = 20,
+                TimeoutSeconds = 120,
                 ProfileId = AvailableProfiles.FirstOrDefault(x => x.Enabled)?.ProfileId ?? string.Empty,
             };
         }
@@ -320,7 +320,7 @@
         public string? HeadersJson { get; set; }
         public string? UserAgent { get; set; }
         public bool Enabled { get; set; } = true;
-        public int TimeoutSeconds { get; set; } = 20;
+        public int TimeoutSeconds { get; set; } = 120;
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
         public string ProfileId { get; set; } = string.Empty;

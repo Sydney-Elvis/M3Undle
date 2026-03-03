@@ -24,6 +24,7 @@ public static class ChannelFilterApiEndpoints
         profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync);
         profiles.MapPost("/{profileId}/group-filters/bulk-decide", BulkDecideAsync);
         profiles.MapGet("/{profileId}/group-filters/{filterId}/channels", GetGroupChannelsAsync);
+        profiles.MapGet("/{profileId}/channels/search", SearchChannelsAsync);
         profiles.MapGet("/{profileId}/group-filters/{filterId}/channel-selections", GetChannelSelectionsAsync);
         profiles.MapPut("/{profileId}/group-filters/{filterId}/channel-selections", UpdateChannelSelectionsAsync);
         profiles.MapGet("/{profileId}/group-filters/{filterId}/raw-provider-m3u", GetRawProviderM3uAsync); // DEBUG - REMOVE
@@ -212,6 +213,48 @@ public static class ChannelFilterApiEndpoints
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
         return TypedResults.Ok((object)new { updated });
+    }
+
+    // -------------------------------------------------------------------------
+    // Global channel search across all groups for a profile
+    // -------------------------------------------------------------------------
+
+    private static async Task<Results<Ok<List<ChannelSearchGroupResult>>, BadRequest<string>>> SearchChannelsAsync(
+        string profileId,
+        string? q,
+        ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var term = q?.Trim().Replace("*", "").Replace("!", "").ToUpperInvariant() ?? string.Empty;
+        if (term.Length < 2)
+            return TypedResults.BadRequest("Search term must be at least 2 characters.");
+
+        var matches = await db.ProviderChannels
+            .AsNoTracking()
+            .Where(c => c.Active && EF.Functions.Like(c.DisplayName.ToUpper(), $"%{term}%"))
+            .Join(
+                db.ProfileGroupFilters.Where(f => f.ProfileId == profileId),
+                c => c.ProviderGroupId,
+                f => f.ProviderGroupId,
+                (c, f) => new { FilterId = f.ProfileGroupFilterId, c.ProviderChannelId, c.DisplayName })
+            .OrderBy(x => x.DisplayName)
+            .Take(500)
+            .ToListAsync(cancellationToken);
+
+        var grouped = matches
+            .GroupBy(x => x.FilterId)
+            .Select(g => new ChannelSearchGroupResult
+            {
+                FilterId = g.Key,
+                Channels = g.Select(x => new ChannelSearchItemDto
+                {
+                    ProviderChannelId = x.ProviderChannelId,
+                    DisplayName = x.DisplayName,
+                }).ToList(),
+            })
+            .ToList();
+
+        return TypedResults.Ok(grouped);
     }
 
     // -------------------------------------------------------------------------

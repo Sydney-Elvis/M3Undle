@@ -5,6 +5,7 @@
 @using System.Text.RegularExpressions
 @inject HttpClient Http
 @inject AppEventBus EventBus
+@inject IRefreshTrigger RefreshTrigger
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
 @implements IDisposable
@@ -46,6 +47,13 @@
     <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
 }
 
+@if (_isRefreshing)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Filled" Class="mb-4" Icon="@Icons.Material.Filled.Sync">
+        A snapshot is currently being built. Groups are shown for configuration, but output will not be updated until the build completes.
+    </MudAlert>
+}
+
 @if (_profileId is null && !_isLoading)
 {
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
@@ -75,6 +83,28 @@ else
             @if (!string.IsNullOrEmpty(_searchError))
             {
                 <MudText Typo="Typo.caption" Color="Color.Error">@_searchError</MudText>
+            }
+            <MudDivider Vertical="true" FlexItem="true" />
+            <MudTextField T="string"
+                          Value="_globalChannelFilter"
+                          ValueChanged="OnGlobalChannelFilterChanged"
+                          Placeholder="Search channels across all groups…"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(!string.IsNullOrEmpty(_globalChannelFilter) ? Icons.Material.Filled.Clear : Icons.Material.Filled.ManageSearch)"
+                          OnAdornmentClick="@(() => OnGlobalChannelFilterChanged(string.Empty))"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Style="min-width:260px; flex:1; max-width:460px;" />
+            @if (_globalChannelSearchBusy)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+            }
+            @if (_globalChannelSearchResults.Count > 0)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                    @_globalChannelSearchResults.Count group@(_globalChannelSearchResults.Count != 1 ? "s" : "") matched
+                </MudChip>
             }
         </MudStack>
     </MudPaper>
@@ -274,12 +304,13 @@ else
                         }
                         else if (_channelCache.TryGetValue(filterId, out var channels))
                         {
-                            var filterText = _groupChannelFilter.GetValueOrDefault(filterId, string.Empty);
-                            var filtered   = string.IsNullOrWhiteSpace(filterText)
-                                ? channels
-                                : channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
-                            var selections = _channelSelections.GetValueOrDefault(filterId) ?? [];
+                            var globalActive = _globalChannelSearchResults.Count > 0;
+                            var filterText   = globalActive ? string.Empty : _groupChannelFilter.GetValueOrDefault(filterId, string.Empty);
+                            var filtered     = GetFilteredGroupChannels(filterId, channels, globalActive, filterText);
+                            var selections   = _channelSelections.GetValueOrDefault(filterId) ?? [];
 
+                            @if (!globalActive)
+                            {
                             <!-- Filter bar -->
                             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap">
                                 <MudTextField T="string"
@@ -335,6 +366,7 @@ else
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@channels.Count channels</MudText>
                                 }
                             </MudStack>
+                            }
 
                             <!-- Channel list -->
                             @if (channels.Count == 0)
@@ -527,13 +559,12 @@ else
                     @if (isParentExpanded)
                     {
                         var parentFilterKey   = parent.OutputName;
-                        var parentFilterText  = _parentChannelFilter.GetValueOrDefault(parentFilterKey, string.Empty);
+                        var globalActive      = _globalChannelSearchResults.Count > 0;
+                        var parentFilterText  = globalActive ? string.Empty : _parentChannelFilter.GetValueOrDefault(parentFilterKey, string.Empty);
                         var hiddenMembers     = _hiddenParentMembers.GetValueOrDefault(parentFilterKey) ?? new HashSet<string>();
                         var includedMembers   = parent.Members.Where(m => m.Decision == "include").ToList();
                         var allParentChs      = GetAllParentChannels(parent);
-                        var filteredParentChs = GetFilteredParentChannels(allParentChs, parentFilterText)
-                            .Where(e => hiddenMembers.Count == 0 || !hiddenMembers.Contains(e.Filter.ProfileGroupFilterId))
-                            .ToList();
+                        var filteredParentChs = GetFilteredParentChannelsForDisplay(parent, allParentChs, globalActive, parentFilterText, hiddenMembers);
                         var totalSelected     = parent.Members
                             .Where(m => m.Decision == "include")
                             .Sum(m => _channelSelections.GetValueOrDefault(m.ProfileGroupFilterId)?.Count(s => s.Value) ?? 0);
@@ -567,6 +598,8 @@ else
                             </MudStack>
                         }
 
+                        @if (!globalActive)
+                        {
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap">
                             <MudTextField T="string"
                                           Value="@parentFilterText"
@@ -591,6 +624,7 @@ else
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@allParentChs.Count channels</MudText>
                             }
                         </MudStack>
+                        }
 
                         @if (isAnyLoading)
                         {
@@ -703,6 +737,13 @@ else
     private HashSet<string> _decisionFilterStates = ["include", "pending"];
     private List<string> _displayOrderIds = [];
 
+    private string _globalChannelFilter = string.Empty;
+    private bool _globalChannelSearchBusy;
+    private Dictionary<string, List<ChannelSearchItemDto>> _globalChannelSearchResults = [];
+    private CancellationTokenSource? _globalSearchDebounceCts;
+    private HashSet<string> _searchAutoExpandedGroups = [];
+    private HashSet<string> _searchAutoExpandedParents = [];
+
     private string? _editingFilterId;
     private string _editNameText = string.Empty;
 
@@ -774,11 +815,21 @@ else
                     _                => false,
                 };
 
+            Func<object, bool> channelSearchMatch = _globalChannelSearchResults.Count == 0
+                ? _ => true
+                : o => o switch
+                {
+                    GroupFilterDto f => _globalChannelSearchResults.ContainsKey(f.ProfileGroupFilterId),
+                    VirtualParent p  => p.Members.Any(m => _globalChannelSearchResults.ContainsKey(m.ProfileGroupFilterId)),
+                    _                => false,
+                };
+
             return _displayOrderIds
                 .Where(id => allItems.ContainsKey(id))
                 .Select(id => allItems[id])
                 .Where(decisionMatch)
                 .Where(searchMatch)
+                .Where(channelSearchMatch)
                 .ToList();
         }
     }
@@ -846,6 +897,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _isRefreshing = RefreshTrigger.IsRefreshing;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
         await LoadAsync();
@@ -959,12 +1011,18 @@ else
         {
             await foreach (var evt in reader.ReadAllAsync(ct))
             {
-                if (evt.Kind == AppEventKind.RefreshCompleted && !_isLoading)
+                if (evt.Kind == AppEventKind.RefreshStarted)
+                {
+                    await InvokeAsync(() => { _isRefreshing = true; StateHasChanged(); });
+                }
+                else if (evt.Kind == AppEventKind.RefreshCompleted && !_isLoading)
+                {
                     await InvokeAsync(async () =>
                     {
                         _isRefreshing = false;
                         await LoadCoreAsync(showSpinner: false);
                     });
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -976,6 +1034,8 @@ else
         _cts.Dispose();
         _eventSubscription?.Dispose();
         foreach (var cts in _channelSaveCts.Values) { cts.Cancel(); cts.Dispose(); }
+        _globalSearchDebounceCts?.Cancel();
+        _globalSearchDebounceCts?.Dispose();
     }
 
     private Task LoadAsync() => LoadCoreAsync(showSpinner: true);
@@ -1346,6 +1406,148 @@ else
             x.Filter.ProviderGroupRawName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
             x.Filter.ProviderName.Contains(filterText, StringComparison.OrdinalIgnoreCase))
             .ToList();
+    }
+
+    private List<ParentChannelEntry> GetFilteredParentChannelsForDisplay(
+        VirtualParent parent,
+        List<ParentChannelEntry> all,
+        bool globalActive,
+        string filterText,
+        HashSet<string> hiddenMembers)
+    {
+        IEnumerable<ParentChannelEntry> result;
+
+        if (globalActive)
+        {
+            result = all.Where(e =>
+                _globalChannelSearchResults.TryGetValue(e.Filter.ProfileGroupFilterId, out var hits) &&
+                hits.Any(h => h.ProviderChannelId == e.Channel.ProviderChannelId));
+        }
+        else
+        {
+            result = GetFilteredParentChannels(all, filterText);
+        }
+
+        if (hiddenMembers.Count > 0)
+            result = result.Where(e => !hiddenMembers.Contains(e.Filter.ProfileGroupFilterId));
+
+        return result.ToList();
+    }
+
+    private List<ProviderChannelSelectDto> GetFilteredGroupChannels(
+        string filterId,
+        List<ProviderChannelSelectDto> channels,
+        bool globalActive,
+        string filterText)
+    {
+        if (globalActive)
+        {
+            if (!_globalChannelSearchResults.TryGetValue(filterId, out var hits))
+                return [];
+            var hitIds = hits.Select(h => h.ProviderChannelId).ToHashSet();
+            return channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
+        }
+
+        if (string.IsNullOrWhiteSpace(filterText))
+            return channels;
+
+        return channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    // -------------------------------------------------------------------------
+    // Global channel search
+    // -------------------------------------------------------------------------
+
+    private async Task OnGlobalChannelFilterChanged(string value)
+    {
+        _globalChannelFilter = value;
+        _globalSearchDebounceCts?.Cancel();
+
+        if (string.IsNullOrWhiteSpace(value) || value.Trim().Length < 2)
+        {
+            _globalChannelSearchResults.Clear();
+            _globalChannelSearchBusy = false;
+            foreach (var id in _searchAutoExpandedGroups)
+                _expandedGroups.Remove(id);
+            foreach (var name in _searchAutoExpandedParents)
+                _expandedParents.Remove(name);
+            _searchAutoExpandedGroups.Clear();
+            _searchAutoExpandedParents.Clear();
+            StateHasChanged();
+            return;
+        }
+
+        _globalChannelSearchBusy = true;
+        StateHasChanged();
+
+        _globalSearchDebounceCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(400, _globalSearchDebounceCts.Token);
+            await ExecuteGlobalChannelSearchAsync(value.Trim());
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task ExecuteGlobalChannelSearchAsync(string term)
+    {
+        if (_profileId is null) return;
+
+        try
+        {
+            var results = await Http.GetFromJsonAsync<List<ChannelSearchGroupResult>>(
+                $"/api/v1/profiles/{_profileId}/channels/search?q={Uri.EscapeDataString(term)}",
+                _cts.Token);
+
+            results ??= [];
+            _globalChannelSearchResults = results.ToDictionary(r => r.FilterId, r => r.Channels);
+
+            var channelLoadTasks = new List<Task>();
+            var expandedParentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var result in results)
+            {
+                var filter = _allFilters.FirstOrDefault(f => f.ProfileGroupFilterId == result.FilterId);
+                if (filter is null) continue;
+
+                if (filter.OutputName is null)
+                {
+                    if (!_expandedGroups.Contains(result.FilterId))
+                    {
+                        _expandedGroups.Add(result.FilterId);
+                        _searchAutoExpandedGroups.Add(result.FilterId);
+                        if (!_channelCache.ContainsKey(result.FilterId))
+                            channelLoadTasks.Add(LoadChannelsAsync(result.FilterId));
+                    }
+                }
+                else
+                {
+                    if (expandedParentNames.Add(filter.OutputName) && !_expandedParents.Contains(filter.OutputName))
+                    {
+                        _expandedParents.Add(filter.OutputName);
+                        _searchAutoExpandedParents.Add(filter.OutputName);
+                        foreach (var member in _allFilters.Where(f => string.Equals(f.OutputName, filter.OutputName, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            if (!_channelCache.ContainsKey(member.ProfileGroupFilterId))
+                                channelLoadTasks.Add(LoadChannelsAsync(member.ProfileGroupFilterId));
+                        }
+                    }
+                }
+            }
+
+            if (channelLoadTasks.Count > 0)
+                await Task.WhenAll(channelLoadTasks);
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Channel search failed: {ex.Message}", Severity.Error);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _globalChannelSearchBusy = false;
+            StateHasChanged();
+        }
     }
 
     private async Task SelectAllParentChannelsAsync(VirtualParent parent)

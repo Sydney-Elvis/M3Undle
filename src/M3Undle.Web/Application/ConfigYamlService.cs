@@ -161,7 +161,7 @@ public sealed class ConfigYamlProvider
     public string PlaylistUrl { get; set; } = string.Empty;
     public string? XmltvUrl { get; set; }
     public string? UserAgent { get; set; }
-    public int TimeoutSeconds { get; set; } = 20;
+    public int TimeoutSeconds { get; set; } = 120;
     public Dictionary<string, string>? Headers { get; set; }
     public bool Enabled { get; set; } = true;
     public string SourcePath { get; set; } = string.Empty;

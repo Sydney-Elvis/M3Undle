@@ -18,5 +18,11 @@ public interface IRefreshTrigger
     /// in progress (caller should return HTTP 409).
     /// </summary>
     bool TriggerBuildOnly();
+
+    /// <summary>
+    /// Cancel the currently running refresh/build, if any.
+    /// No-op if nothing is running.
+    /// </summary>
+    void CancelRefresh();
 }
 

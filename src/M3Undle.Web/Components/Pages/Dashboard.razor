@@ -65,10 +65,31 @@
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Last Refresh</MudText>
                         @if (_isRefreshing)
                         {
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
                                 <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                                <MudText Typo="Typo.body2">Refreshing…</MudText>
+                                <MudText Typo="Typo.body2">Refreshing… @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
+                                <MudButton Size="Size.Small"
+                                           Variant="Variant.Outlined"
+                                           Color="Color.Error"
+                                           StartIcon="@Icons.Material.Filled.Cancel"
+                                           OnClick="CancelRefreshAsync"
+                                           Disabled="_isCancelling">
+                                    @(_isCancelling ? "Cancelling…" : "Cancel")
+                                </MudButton>
                             </MudStack>
+                            @{ var lastRun = _status?.Lineup?.LastRefresh; }
+                            @if (LastRunDurationText is not null && lastRun is not null)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Last run: ~@LastRunDurationText
+                                    @(lastRun.ChannelCountSeen.HasValue ? $", {lastRun.ChannelCountSeen.Value:N0} channels" : "")
+                                    — please wait.
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Large providers may take several minutes.</MudText>
+                            }
                         }
                         else if (lineup?.LastRefresh is not null)
                         {
@@ -259,6 +280,9 @@
 
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
+    private DateTime? _refreshStartedAt;
+    private PeriodicTimer? _elapsedTimer;
+    private bool _isCancelling;
 
     protected override async Task OnInitializedAsync()
     {
@@ -267,6 +291,11 @@
         _xmltvUrl = $"{baseUri}/xmltv/m3undle.xml";
 
         _isRefreshing = RefreshTrigger.IsRefreshing;
+        if (_isRefreshing)
+        {
+            _refreshStartedAt = DateTime.UtcNow;
+            StartElapsedTimer();
+        }
 
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
@@ -283,11 +312,16 @@
                 if (evt.Kind == AppEventKind.RefreshStarted)
                 {
                     _isRefreshing = true;
+                    _refreshStartedAt = DateTime.UtcNow;
+                    StartElapsedTimer();
                     await InvokeAsync(StateHasChanged);
                 }
                 else if (evt.Kind == AppEventKind.RefreshCompleted)
                 {
                     _isRefreshing = false;
+                    _isCancelling = false;
+                    _refreshStartedAt = null;
+                    StopElapsedTimer();
                     if (!_isLoading)
                         await InvokeAsync(async () => await Task.WhenAll(LoadStatusAsync(), LoadChannelStatsAsync()));
                 }
@@ -346,6 +380,61 @@
         _cts.Cancel();
         _cts.Dispose();
         _eventSubscription?.Dispose();
+        _elapsedTimer?.Dispose();
+    }
+
+    private void StartElapsedTimer()
+    {
+        _elapsedTimer?.Dispose();
+        _elapsedTimer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _ = RunElapsedTimerAsync(_elapsedTimer);
+    }
+
+    private void StopElapsedTimer()
+    {
+        _elapsedTimer?.Dispose();
+        _elapsedTimer = null;
+    }
+
+    private async Task RunElapsedTimerAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private string ElapsedText => _refreshStartedAt.HasValue
+        ? FormatElapsed(DateTime.UtcNow - _refreshStartedAt.Value)
+        : string.Empty;
+
+    private string? LastRunDurationText
+    {
+        get
+        {
+            var last = _status?.Lineup?.LastRefresh;
+            if (last?.Status == "ok" && last.FinishedUtc.HasValue)
+                return FormatElapsed(last.FinishedUtc.Value - last.StartedUtc);
+            return null;
+        }
+    }
+
+    private static string FormatElapsed(TimeSpan ts)
+    {
+        if (ts.TotalSeconds < 60) return $"{(int)ts.TotalSeconds}s";
+        if (ts.TotalMinutes < 60) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+    }
+
+    private async Task CancelRefreshAsync()
+    {
+        if (_isCancelling) return;
+        _isCancelling = true;
+        StateHasChanged();
+        try { await Http.PostAsync("/api/v1/snapshots/cancel", null, _cts.Token); }
+        catch { }
     }
 
     private async Task CopyAsync(string text)

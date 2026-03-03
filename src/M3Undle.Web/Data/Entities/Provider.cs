@@ -10,7 +10,7 @@ public sealed class Provider
     public string? XmltvUrl { get; set; }
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
-    public int TimeoutSeconds { get; set; } = 20;
+    public int TimeoutSeconds { get; set; } = 120;
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 

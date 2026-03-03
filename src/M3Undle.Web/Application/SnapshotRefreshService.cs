@@ -27,6 +27,10 @@ public sealed class SnapshotRefreshService(
     // Channels from the last full refresh — reused by build-only so VOD/series are included without re-fetching
     private IReadOnlyList<ParsedProviderChannel> _cachedChannels = [];
 
+    // Current run CTS — cancelled by CancelRefresh(); null when no run is active
+    private volatile CancellationTokenSource? _currentRunCts;
+    private volatile bool _cancelledByUser;
+
     // -------------------------------------------------------------------------
     // IRefreshTrigger
     // -------------------------------------------------------------------------
@@ -49,6 +53,12 @@ public sealed class SnapshotRefreshService(
 
         _triggerChannel.Writer.TryWrite(RefreshMode.BuildOnly);
         return true;
+    }
+
+    public void CancelRefresh()
+    {
+        _cancelledByUser = true;
+        _currentRunCts?.Cancel();
     }
 
     // -------------------------------------------------------------------------
@@ -142,7 +152,9 @@ public sealed class SnapshotRefreshService(
 
     private async Task RunRefreshAsync(CancellationToken stoppingToken)
     {
+        _cancelledByUser = false;
         using var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        _currentRunCts = runCts;
         runCts.CancelAfter(TimeSpan.FromMinutes(refreshOptions.Value.TimeoutMinutes));
 
         logger.LogInformation("Snapshot refresh started.");
@@ -159,15 +171,23 @@ public sealed class SnapshotRefreshService(
                 _cachedChannels = channels;
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}).", succeeded);
         }
+        catch (OperationCanceledException) when (_cancelledByUser && !stoppingToken.IsCancellationRequested)
+        {
+            errorSummary = "Cancelled by user.";
+            logger.LogInformation("Snapshot refresh cancelled by user.");
+        }
         finally
         {
+            _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary);
         }
     }
 
     private async Task RunBuildOnlyAsync(CancellationToken stoppingToken)
     {
+        _cancelledByUser = false;
         using var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        _currentRunCts = runCts;
         runCts.CancelAfter(TimeSpan.FromMinutes(refreshOptions.Value.TimeoutMinutes));
 
         logger.LogInformation("Snapshot build-only started.");
@@ -181,8 +201,14 @@ public sealed class SnapshotRefreshService(
             (succeeded, errorSummary) = await builder.BuildOnlyAsync(_cachedChannels, runCts.Token);
             logger.LogInformation("Snapshot build-only completed (published={Succeeded}).", succeeded);
         }
+        catch (OperationCanceledException) when (_cancelledByUser && !stoppingToken.IsCancellationRequested)
+        {
+            errorSummary = "Cancelled by user.";
+            logger.LogInformation("Snapshot build-only cancelled by user.");
+        }
         finally
         {
+            _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary);
         }
     }

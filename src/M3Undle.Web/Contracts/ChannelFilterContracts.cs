@@ -129,3 +129,15 @@ public sealed class UpdateChannelSelectionsRequest
     public string ChannelMode { get; set; } = "all";
     public List<ChannelSelectionItem> Channels { get; set; } = [];
 }
+
+public sealed class ChannelSearchItemDto
+{
+    public string ProviderChannelId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+}
+
+public sealed class ChannelSearchGroupResult
+{
+    public string FilterId { get; set; } = string.Empty;
+    public List<ChannelSearchItemDto> Channels { get; set; } = [];
+}
