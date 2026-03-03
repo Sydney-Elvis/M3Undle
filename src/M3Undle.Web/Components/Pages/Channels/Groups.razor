@@ -214,61 +214,67 @@ else
                         <!-- Group name: display or edit mode -->
                         @if (isEditing)
                         {
-                            <MudAutocomplete T="string"
-                                Value="@_editNameText"
-                                ValueChanged="@(v => _editNameText = v ?? string.Empty)"
-                                SearchFunc="SearchOutputNamesAsync"
-                                CoerceValue="true"
-                                Clearable="true"
-                                ResetValueOnEmptyText="true"
-                                Variant="Variant.Outlined"
-                                Margin="Margin.Dense"
-                                Dense="true"
-                                Immediate="true"
-                                Style="min-width:140px; max-width:240px;"
-                                Placeholder="Output name…" />
-                            <MudTooltip Text="Confirm" Arrow="true">
-                                <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
-                                               OnClick="@(() => CommitEditAsync(filter))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Cancel" Arrow="true">
-                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
-                                               OnClick="CancelEdit" />
-                            </MudTooltip>
+                            <div style="display:inline-flex; align-items:center; gap:4px;">
+                                <MudAutocomplete T="string"
+                                    Value="@_editNameText"
+                                    ValueChanged="@(v => _editNameText = v ?? string.Empty)"
+                                    SearchFunc="SearchOutputNamesAsync"
+                                    CoerceValue="true"
+                                    Clearable="true"
+                                    ResetValueOnEmptyText="true"
+                                    Variant="Variant.Outlined"
+                                    Margin="Margin.Dense"
+                                    Dense="true"
+                                    Immediate="true"
+                                    Style="min-width:140px; max-width:240px;"
+                                    Placeholder="Output name…" />
+                                <MudTooltip Text="Confirm" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                                                   OnClick="@(() => CommitEditAsync(filter))" />
+                                </MudTooltip>
+                                <MudTooltip Text="Cancel" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                   OnClick="CancelEdit" />
+                                </MudTooltip>
+                            </div>
+                            <MudSpacer />
                         }
                         else
                         {
-                            <!-- Name + secondary text -->
-                            <MudStack Spacing="0" Style="flex:1; min-width:120px;">
-                                <MudText Typo="Typo.body1" Style="@($"font-weight:{(isIncluded ? "600" : "400")};")">
-                                    @displayName
-                                </MudText>
-                                @if (filter.OutputName is not null)
-                                {
-                                    <MudText Typo="Typo.caption" Color="Color.Tertiary">
-                                        @filter.ProviderGroupRawName · @filter.ProviderName
+                            <!-- Name + edit button grouped tight -->
+                            <div style="display:inline-flex; align-items:center; gap:2px;">
+                                <MudStack Spacing="0" Style="min-width:120px;">
+                                    <MudText Typo="Typo.body1" Style="@($"font-weight:{(isIncluded ? "600" : "400")};")">
+                                        @displayName
                                     </MudText>
-                                }
-                                else
-                                {
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                        @filter.ProviderName
-                                    </MudText>
-                                }
-                            </MudStack>
+                                    @if (filter.OutputName is not null)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Tertiary">
+                                            @filter.ProviderGroupRawName · @filter.ProviderName
+                                        </MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @filter.ProviderName
+                                        </MudText>
+                                    }
+                                </MudStack>
 
-                            <!-- Rename / merge button -->
-                            <MudTooltip Text="@(filter.OutputName is not null ? "Rename or merge into another group" : "Rename or merge into a group")" Arrow="true">
-                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
-                                               Size="Size.Small"
-                                               Color="@(filter.OutputName is not null ? Color.Primary : Color.Default)"
-                                               OnClick="@(() => BeginEdit(filterId, filter.OutputName ?? string.Empty))" />
-                            </MudTooltip>
+                                <!-- Rename / merge button -->
+                                <MudTooltip Text="@(filter.OutputName is not null ? "Rename or merge into another group" : "Rename or merge into a group")" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                   Size="Size.Small"
+                                                   Color="@(filter.OutputName is not null ? Color.Primary : Color.Default)"
+                                                   OnClick="@(() => BeginEdit(filterId, filter.OutputName ?? string.Empty))" />
+                                </MudTooltip>
+                            </div>
 
                             @if (!filter.ProviderGroupActive)
                             {
                                 <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
                             }
+                            <MudSpacer />
                         }
 
                         @if (!isEditing)
