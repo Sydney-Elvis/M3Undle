@@ -1,3 +1,4 @@
+using M3Undle.Core.M3u;
 using Microsoft.Extensions.Options;
 using System.Threading.Channels;
 
@@ -22,6 +23,9 @@ public sealed class SnapshotRefreshService(
     // Bounded channel collapses multiple triggers to at-most-one queued run
     private readonly Channel<RefreshMode> _triggerChannel = Channel.CreateBounded<RefreshMode>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
+
+    // Channels from the last full refresh — reused by build-only so VOD/series are included without re-fetching
+    private IReadOnlyList<ParsedProviderChannel> _cachedChannels = [];
 
     // -------------------------------------------------------------------------
     // IRefreshTrigger
@@ -149,7 +153,10 @@ public sealed class SnapshotRefreshService(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            (succeeded, errorSummary) = await builder.RunAsync(runCts.Token);
+            var (s, e, channels) = await builder.RunAsync(runCts.Token);
+            (succeeded, errorSummary) = (s, e);
+            if (channels.Count > 0)
+                _cachedChannels = channels;
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}).", succeeded);
         }
         finally
@@ -171,7 +178,7 @@ public sealed class SnapshotRefreshService(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            (succeeded, errorSummary) = await builder.BuildOnlyAsync(runCts.Token);
+            (succeeded, errorSummary) = await builder.BuildOnlyAsync(_cachedChannels, runCts.Token);
             logger.LogInformation("Snapshot build-only completed (published={Succeeded}).", succeeded);
         }
         finally

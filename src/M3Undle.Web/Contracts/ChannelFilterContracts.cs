@@ -54,6 +54,33 @@ public sealed class ChannelMappingStatsDto
     public int SeriesGroupsInProvider { get; set; }
 }
 
+public sealed class ContentTypeCountDto
+{
+    public int Total { get; set; }
+    public int Live { get; set; }
+    public int Vod { get; set; }
+    public int Series { get; set; }
+}
+
+public sealed class ParseVerificationDto
+{
+    public string ProviderId { get; set; } = string.Empty;
+    public string ProviderName { get; set; } = string.Empty;
+    public string SourcePath { get; set; } = string.Empty;
+    public string? ProfileId { get; set; }
+    public bool VodEnabled { get; set; }
+    public bool SeriesEnabled { get; set; }
+    public ContentTypeCountDto RawFile { get; set; } = new();
+    public ContentTypeCountDto ProviderDbActive { get; set; } = new();
+    public ContentTypeCountDto SnapshotOutput { get; set; } = new();
+    public bool RawEqualsProviderDbActive { get; set; }
+    public bool RawEqualsSnapshotOutput { get; set; }
+    public int LiveGroupsIncluded { get; set; }
+    public int LiveGroupsPending { get; set; }
+    public int LiveGroupsExcluded { get; set; }
+    public List<string> Notes { get; set; } = [];
+}
+
 public sealed class ActiveProfileDto
 {
     public string ProfileId { get; set; } = string.Empty;

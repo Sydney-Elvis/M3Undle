@@ -29,6 +29,7 @@ public static class ChannelFilterApiEndpoints
         profiles.MapGet("/{profileId}/group-filters/{filterId}/raw-provider-m3u", GetRawProviderM3uAsync); // DEBUG - REMOVE
 
         app.MapGet("/api/v1/channel-stats", GetChannelStatsAsync);
+        app.MapGet("/api/v1/debug/parse-verify", GetParseVerificationAsync); // DEBUG - REMOVE
 
         return app;
     }
@@ -509,8 +510,211 @@ public static class ChannelFilterApiEndpoints
     }
 
     // -------------------------------------------------------------------------
+    // DEBUG - REMOVE: Parse verification (raw file vs DB vs active snapshot output)
+    // -------------------------------------------------------------------------
+
+    private static async Task<Results<Ok<ParseVerificationDto>, NotFound<string>, BadRequest<string>>> GetParseVerificationAsync(
+        string? source,
+        ApplicationDbContext db,
+        PlaylistParser playlistParser,
+        CancellationToken cancellationToken)
+    {
+        var provider = await db.Providers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+
+        if (provider is null)
+            return TypedResults.NotFound("No active+enabled provider found.");
+
+        var sourcePath = ResolveSourcePath(source, provider.PlaylistUrl);
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            return TypedResults.BadRequest(
+                "No source M3U path resolved. Pass ?source=delta.m3u (or onyx.m3u), " +
+                "or set the active provider playlist URL to file://...");
+        }
+
+        if (!File.Exists(sourcePath))
+            return TypedResults.BadRequest($"Source file not found: {sourcePath}");
+
+        string rawContent;
+        try
+        {
+            rawContent = await File.ReadAllTextAsync(sourcePath, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return TypedResults.BadRequest($"Source file read failed: {ex.Message}");
+        }
+
+        List<ParsedProviderChannel> rawChannels;
+        try
+        {
+            var document = playlistParser.Parse(rawContent, cancellationToken);
+            rawChannels = document.Entries
+                .Where(x => !string.IsNullOrWhiteSpace(x.Url))
+                .Select(ProviderFetcher.ParseEntry)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return TypedResults.BadRequest($"Source file parse failed: {ex.Message}");
+        }
+
+        var rawCounts = CountByContentType(rawChannels.Select(x => x.StreamUrl));
+
+        var dbActiveUrls = await db.ProviderChannels
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Active)
+            .Select(x => x.StreamUrl)
+            .ToListAsync(cancellationToken);
+        var dbActiveCounts = CountByContentType(dbActiveUrls);
+
+        var profileLink = await db.ProfileProviders
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var snapshotCounts = ContentTypeCountDtoFrom(default(ContentTypeCount));
+        var liveIncluded = 0;
+        var livePending = 0;
+        var liveExcluded = 0;
+
+        if (profileLink is not null)
+        {
+            var profileId = profileLink.ProfileId;
+
+            liveIncluded = await db.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "include", cancellationToken);
+
+            livePending = await db.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "pending", cancellationToken);
+
+            liveExcluded = await db.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "exclude", cancellationToken);
+
+            var activeSnapshot = await db.Snapshots
+                .AsNoTracking()
+                .Where(x => x.ProfileId == profileId && x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (activeSnapshot is not null &&
+                !string.IsNullOrWhiteSpace(activeSnapshot.ChannelIndexPath) &&
+                File.Exists(activeSnapshot.ChannelIndexPath))
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(activeSnapshot.ChannelIndexPath, cancellationToken);
+                    var entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
+                    snapshotCounts = ContentTypeCountDtoFrom(CountByContentType(entries.Select(x => x.StreamUrl)));
+                }
+                catch (Exception ex) when (ex is IOException or JsonException)
+                {
+                    // Keep zero snapshot counts if channel_index cannot be read.
+                }
+            }
+        }
+
+        var rawCountDto = ContentTypeCountDtoFrom(rawCounts);
+        var dbActiveCountDto = ContentTypeCountDtoFrom(dbActiveCounts);
+
+        var notes = new List<string>();
+        if (!provider.IncludeVod)
+            notes.Add("Provider IncludeVod is off; snapshot output intentionally excludes VOD.");
+        if (!provider.IncludeSeries)
+            notes.Add("Provider IncludeSeries is off; snapshot output intentionally excludes series.");
+        if (livePending > 0 || liveExcluded > 0)
+            notes.Add("Live groups are not fully included; snapshot live count may be lower than raw.");
+        if (profileLink is null)
+            notes.Add("No enabled profile is linked to the active provider; snapshot comparison is unavailable.");
+
+        return TypedResults.Ok(new ParseVerificationDto
+        {
+            ProviderId = provider.ProviderId,
+            ProviderName = provider.Name,
+            SourcePath = sourcePath,
+            ProfileId = profileLink?.ProfileId,
+            VodEnabled = provider.IncludeVod,
+            SeriesEnabled = provider.IncludeSeries,
+            RawFile = rawCountDto,
+            ProviderDbActive = dbActiveCountDto,
+            SnapshotOutput = snapshotCounts,
+            RawEqualsProviderDbActive = CountsEqual(rawCountDto, dbActiveCountDto),
+            RawEqualsSnapshotOutput = CountsEqual(rawCountDto, snapshotCounts),
+            LiveGroupsIncluded = liveIncluded,
+            LiveGroupsPending = livePending,
+            LiveGroupsExcluded = liveExcluded,
+            Notes = notes,
+        });
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private static string? ResolveSourcePath(string? source, string providerPlaylistUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            var trimmed = source.Trim();
+            if (Path.IsPathRooted(trimmed))
+                return trimmed;
+
+            return Path.Combine("/m3u_data", trimmed);
+        }
+
+        if (providerPlaylistUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            return new Uri(providerPlaylistUrl).LocalPath;
+
+        return null;
+    }
+
+    private static ContentTypeCount CountByContentType(IEnumerable<string?> streamUrls)
+    {
+        int live = 0, vod = 0, series = 0;
+
+        foreach (var streamUrl in streamUrls)
+        {
+            switch (LiveClassifier.ClassifyContent(streamUrl))
+            {
+                case "vod":
+                    vod++;
+                    break;
+                case "series":
+                    series++;
+                    break;
+                default:
+                    live++;
+                    break;
+            }
+        }
+
+        return new ContentTypeCount(live + vod + series, live, vod, series);
+    }
+
+    private static ContentTypeCountDto ContentTypeCountDtoFrom(ContentTypeCount counts) => new()
+    {
+        Total = counts.Total,
+        Live = counts.Live,
+        Vod = counts.Vod,
+        Series = counts.Series,
+    };
+
+    private static bool CountsEqual(ContentTypeCountDto left, ContentTypeCountDto right)
+        => left.Total == right.Total
+        && left.Live == right.Live
+        && left.Vod == right.Vod
+        && left.Series == right.Series;
+
+    private readonly record struct ContentTypeCount(int Total, int Live, int Vod, int Series);
 
     private static GroupFilterDto ToDto(ProfileGroupFilter f) => new()
     {

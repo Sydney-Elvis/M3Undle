@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -41,7 +42,7 @@ public sealed class SnapshotBuilder(
         string? LogoUrl);
 
     /// <summary>Full refresh: fetch from provider, sync to DB, then build snapshot.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary)> RunAsync(CancellationToken cancellationToken)
+    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels)> RunAsync(CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
@@ -53,7 +54,7 @@ public sealed class SnapshotBuilder(
         if (provider is null)
         {
             logger.LogInformation("Snapshot refresh skipped — no active+enabled provider found.");
-            return (false, null);
+            return (false, null, []);
         }
 
         // 2. Find associated profile (first enabled, lowest priority number)
@@ -66,7 +67,7 @@ public sealed class SnapshotBuilder(
         if (profileLink is null)
         {
             logger.LogInformation("Snapshot refresh skipped — active provider {ProviderId} is not linked to any enabled profile.", provider.ProviderId);
-            return (false, null);
+            return (false, null, []);
         }
 
         var profileExists = await db.Profiles
@@ -76,7 +77,7 @@ public sealed class SnapshotBuilder(
         if (!profileExists)
         {
             logger.LogInformation("Snapshot refresh skipped — profile {ProfileId} is not enabled.", profileLink.ProfileId);
-            return (false, null);
+            return (false, null, []);
         }
 
         var profileId = profileLink.ProfileId;
@@ -98,41 +99,69 @@ public sealed class SnapshotBuilder(
 
         // 4. Fetch playlist — failure is fatal (preserve last-known-good)
         PlaylistFetchResult playlistResult;
+        var sw = Stopwatch.StartNew();
         try
         {
             playlistResult = await fetcher.FetchPlaylistAsync(provider, cancellationToken);
         }
         catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or OperationCanceledException)
         {
-            logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId}.", provider.ProviderId);
+            logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
             await FailFetchRunAsync(fetchRun, ex.Message);
-            return (false, ex.Message);
+            return (false, ex.Message, []);
         }
 
-        logger.LogInformation("Fetched playlist: {ChannelCount} channels for provider {ProviderId}.",
-            playlistResult.Channels.Count, provider.ProviderId);
+        logger.LogInformation("Playlist fetched in {Elapsed}ms — {ChannelCount} channels for provider {ProviderId}.",
+            sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
+        sw.Restart();
 
-        // 5. Fetch XMLTV — failure is non-fatal
+        // 5 + 5b. XMLTV fetch + DB sync are wrapped together so that run-CT cancellation is
+        // never silently swallowed.  FetchXmltvAsync converts TaskCanceledException → ProviderFetchException;
+        // if the run CT was what fired, ThrowIfCancellationRequested re-surfaces it immediately.
         string xmltvContent;
         long xmltvBytes = 0;
+        var stage = "xmltv";
         try
         {
-            var xmltvResult = await fetcher.FetchXmltvAsync(provider, cancellationToken);
-            xmltvContent = xmltvResult.Xml;
-            xmltvBytes = xmltvResult.Bytes;
-            logger.LogInformation("Fetched XMLTV: {XmltvBytes} bytes for provider {ProviderId}.",
-                xmltvBytes, provider.ProviderId);
-        }
-        catch (ProviderFetchException ex)
-        {
-            logger.LogWarning(ex, "XMLTV fetch failed for provider {ProviderId} — using empty guide.", provider.ProviderId);
-            xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
-        }
+            try
+            {
+                var xmltvResult = await fetcher.FetchXmltvAsync(provider, cancellationToken);
+                xmltvContent = xmltvResult.Xml;
+                xmltvBytes = xmltvResult.Bytes;
+                logger.LogInformation("XMLTV fetched in {Elapsed}ms — {XmltvBytes} bytes for provider {ProviderId}.",
+                    sw.ElapsedMilliseconds, xmltvBytes, provider.ProviderId);
+            }
+            catch (ProviderFetchException ex)
+            {
+                logger.LogWarning(ex, "XMLTV fetch failed for provider {ProviderId} after {Elapsed}ms — using empty guide.", provider.ProviderId, sw.ElapsedMilliseconds);
+                xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+            }
 
-        // 5b. Sync provider groups + channels to DB (ALL content types), then create pending filter rows for new groups.
-        var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
-        await SyncGroupFiltersAsync(profileId, provider.ProviderId, cancellationToken);
-        await SyncProviderChannelsAsync(profileId, provider.ProviderId, fetchRun.FetchRunId, playlistResult.Channels, groupNameToId, now, cancellationToken);
+            // If the run CT fired during XMLTV (silently wrapped above), surface it now before touching the DB.
+            cancellationToken.ThrowIfCancellationRequested();
+            sw.Restart();
+
+            // 5b. Sync provider groups to DB (ALL content types), sync live channels only to DB, then create pending filter rows for new groups.
+            stage = "groups";
+            var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
+            logger.LogInformation("Groups synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            sw.Restart();
+
+            stage = "group-filters";
+            await SyncGroupFiltersAsync(profileId, provider.ProviderId, cancellationToken);
+            logger.LogInformation("Group filters synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            sw.Restart();
+
+            stage = "channels";
+            await SyncProviderChannelsAsync(profileId, provider.ProviderId, fetchRun.FetchRunId, playlistResult.Channels, groupNameToId, now, cancellationToken);
+            logger.LogInformation("Channels synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            sw.Restart();
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogWarning("Snapshot refresh timed out during stage '{Stage}' for provider {ProviderId}.", stage, provider.ProviderId);
+            throw;
+        }
 
         // 11. Mark FetchRun as ok
         fetchRun.FinishedUtc = DateTime.UtcNow;
@@ -142,14 +171,15 @@ public sealed class SnapshotBuilder(
         fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
         await db.SaveChangesAsync(cancellationToken);
 
-        // 6-10. Build snapshot from synced DB data
-        var (succeeded, errorSummary) = await BuildSnapshotFromDbAsync(provider, profileId, xmltvContent, cancellationToken);
+        // 6-10. Build snapshot from synced DB data (live) + in-memory VOD/series
+        var (succeeded, errorSummary) = await BuildSnapshotFromDbAsync(provider, profileId, xmltvContent, playlistResult.Channels, cancellationToken);
 
-        return (succeeded, errorSummary);
+        return (succeeded, errorSummary, playlistResult.Channels);
     }
 
-    /// <summary>Build snapshot from already-synced DB data — no provider re-fetch.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyAsync(CancellationToken cancellationToken)
+    /// <summary>Build snapshot from already-synced DB data — no provider re-fetch.
+    /// Pass the channels from the last full refresh so VOD/series can be included without re-fetching.</summary>
+    public async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyAsync(IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
@@ -198,7 +228,7 @@ public sealed class SnapshotBuilder(
 
         logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, profileLink.ProfileId);
 
-        return await BuildSnapshotFromDbAsync(provider, profileLink.ProfileId, existingXmltvContent, cancellationToken);
+        return await BuildSnapshotFromDbAsync(provider, profileLink.ProfileId, existingXmltvContent, providerChannels, cancellationToken);
     }
 
     // -------------------------------------------------------------------------
@@ -209,16 +239,13 @@ public sealed class SnapshotBuilder(
         Provider provider,
         string profileId,
         string xmltvContent,
+        IReadOnlyList<ParsedProviderChannel> providerChannels,
         CancellationToken cancellationToken)
     {
-        // Load channels from DB (respects provider content type settings)
+        // Load live channels from DB (VOD/series are not persisted — sourced from in-memory providerChannels)
         var dbChannels = await db.ProviderChannels
             .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId
-                     && x.Active
-                     && (x.ContentType == "live"
-                         || (provider.IncludeVod && x.ContentType == "vod")
-                         || (provider.IncludeSeries && x.ContentType == "series")))
+            .Where(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "live")
             .ToListAsync(cancellationToken);
 
         var channels = dbChannels.Select(ch => new ChannelBuildData(
@@ -230,6 +257,20 @@ public sealed class SnapshotBuilder(
             ch.TvgId,
             ch.TvgName,
             ch.LogoUrl)).ToList();
+
+        // Append VOD/series from in-memory provider channels (not persisted to DB)
+        if (provider.IncludeVod || provider.IncludeSeries)
+        {
+            foreach (var ch in providerChannels)
+            {
+                if (string.IsNullOrWhiteSpace(ch.StreamUrl)) continue;
+                var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);
+                if (contentType == "vod" && provider.IncludeVod)
+                    channels.Add(new ChannelBuildData(ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "vod", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
+                else if (contentType == "series" && provider.IncludeSeries)
+                    channels.Add(new ChannelBuildData(ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "series", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
+            }
+        }
 
         // Load group filter config for this profile/provider
         var groupFilters = await db.ProfileGroupFilters
@@ -616,7 +657,13 @@ public sealed class SnapshotBuilder(
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 
+        // Purge any VOD/series rows from previous runs — only live channels are persisted.
+        await db.ProviderChannels
+            .Where(x => x.ProviderId == providerId && (x.ContentType == "vod" || x.ContentType == "series"))
+            .ExecuteDeleteAsync(cancellationToken);
+
         var existingChannels = await db.ProviderChannels
+            .AsNoTracking()
             .Where(x => x.ProviderId == providerId)
             .ToListAsync(cancellationToken);
 
@@ -626,10 +673,18 @@ public sealed class SnapshotBuilder(
 
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         var occurrenceByStableIdentity = new Dictionary<string, int>(StringComparer.Ordinal);
+        var toUpdate = new List<ProviderChannel>();
+        var newCount = 0;
+        var updatedCount = 0;
+        var deactivatedCount = 0;
 
         foreach (var ch in channels)
         {
             if (string.IsNullOrWhiteSpace(ch.DisplayName) || string.IsNullOrWhiteSpace(ch.StreamUrl)) continue;
+
+            // Only live channels are persisted — VOD/series are handled in-memory during snapshot build.
+            var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);
+            if (contentType != "live") continue;
 
             var groupId = ch.GroupTitle is not null && groupNameToId.TryGetValue(ch.GroupTitle, out var gid)
                 ? (string?)gid : null;
@@ -644,8 +699,6 @@ public sealed class SnapshotBuilder(
             var key = DeriveChannelKey(stableIdentity, occurrence);
             if (!seenKeys.Add(key)) continue;
 
-            var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);
-
             if (byKey.TryGetValue(key, out var entity))
             {
                 entity.DisplayName = ch.DisplayName;
@@ -659,6 +712,8 @@ public sealed class SnapshotBuilder(
                 entity.LastSeenUtc = now;
                 entity.Active = true;
                 entity.LastFetchRunId = fetchRunId;
+                toUpdate.Add(entity);
+                updatedCount++;
             }
             else
             {
@@ -680,14 +735,24 @@ public sealed class SnapshotBuilder(
                     Active = true,
                     LastFetchRunId = fetchRunId,
                 });
+                newCount++;
             }
         }
 
         foreach (var entity in existingChannels.Where(x => x.ProviderChannelKey is not null && !seenKeys.Contains(x.ProviderChannelKey!)))
+        {
             entity.Active = false;
+            toUpdate.Add(entity);
+            deactivatedCount++;
+        }
+
+        // Attach all modified untracked entities explicitly — bypasses EF change detection on large sets.
+        if (toUpdate.Count > 0)
+            db.ProviderChannels.UpdateRange(toUpdate);
 
         await db.SaveChangesAsync(cancellationToken);
-        logger.LogInformation("Synced {Count} provider channel(s) for provider {ProviderId}.", seenKeys.Count, providerId);
+        logger.LogInformation("Synced {Count} live channel(s) for provider {ProviderId} ({New} new, {Updated} updated, {Deactivated} deactivated).",
+            seenKeys.Count, providerId, newCount, updatedCount, deactivatedCount);
     }
 
     private static string DeriveStreamKey(string stableKey, string profileId)

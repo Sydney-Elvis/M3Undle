@@ -87,6 +87,16 @@
 						"localPath": "${workspaceFolder}/.config",
 						"containerPath": "/config",
 						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/m3u_data",
+						"containerPath": "/m3u_data",
+						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/data",
+						"containerPath": "/data",
+						"permissions": "rw"
 					}
 				],
 				"customOptions": "--user root --rm",
@@ -106,8 +116,10 @@
 			"type": "docker-run",
 			"label": "docker-run: force-debug",
 			"dependsOn": [
+				"docker-reset: data folder",
 				"docker-build: force-debug"
 			],
+			"dependsOrder": "sequence",
 			"dockerRun": {
 				"containerName": "m3undle-dev",
 				"env": {
@@ -120,6 +132,16 @@
 						"localPath": "${workspaceFolder}/.config",
 						"containerPath": "/config",
 						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/m3u_data",
+						"containerPath": "/m3u_data",
+						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/data",
+						"containerPath": "/data",
+						"permissions": "rw"
 					}
 				],
 				"customOptions": "--user root --rm",
@@ -158,7 +180,7 @@
 			"args": [
 				"rm",
 				"-f",
-				"m3undle-debug"
+				"m3undle-dev"
 			],
 			"problemMatcher": []
 		},
@@ -175,8 +197,27 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "docker-reset: data folder",
+			"type": "process",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-NonInteractive",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"if (Test-Path -LiteralPath \"${workspaceFolder}\\data\") { Remove-Item -LiteralPath \"${workspaceFolder}\\data\" -Recurse -Force -ErrorAction Stop }; New-Item -ItemType Directory -Path \"${workspaceFolder}\\data\" -Force | Out-Null"
+			],
+			"problemMatcher": []
+		},
+		{
 			"type": "docker-build",
 			"label": "docker-build: force-debug",
+			"dependsOn": [
+				"docker-stop: m3undle-debug",
+				"docker-reset: data folder"
+			],
+			"dependsOrder": "sequence",
 			"dockerBuild": {
 				"tag": "m3undle:web-debug",
 				"target": "final",
