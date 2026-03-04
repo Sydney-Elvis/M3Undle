@@ -11,11 +11,6 @@ namespace M3Undle.Web.Api;
 
 public static class ChannelFilterApiEndpoints
 {
-    private static readonly JsonSerializerOptions ChannelIndexJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     public static IEndpointRouteBuilder MapChannelFilterApiEndpoints(this IEndpointRouteBuilder app)
     {
         var profiles = app.MapGroup("/api/v1/profiles");
@@ -298,27 +293,30 @@ public static class ChannelFilterApiEndpoints
 
         var outputName = filter.OutputName ?? filter.ProviderGroup.RawName;
 
-        List<ChannelIndexEntry> entries;
         try
         {
-            // CancellationToken.None: the file is large; don't let a client disconnect abort a
-            // multi-second read and surface an unhandled exception. The result is discarded if
-            // the client has gone, but the read completes so the OS page cache stays warm.
-            var json = await File.ReadAllTextAsync(snapshot.ChannelIndexPath, CancellationToken.None);
-            entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
+            // Stream line-by-line — no full-file allocation.
+            // CancellationToken.None: don't let a client disconnect surface an unhandled exception
+            // mid-stream; the OS page cache stays warm for subsequent requests.
+            var channels = new List<GroupChannelDto>();
+            await foreach (var e in ChannelIndexStore.StreamAllAsync(
+                snapshot.ChannelIndexPath, CancellationToken.None))
+            {
+                if (!string.Equals(e.GroupTitle, outputName, StringComparison.Ordinal)) continue;
+                channels.Add(new GroupChannelDto
+                {
+                    Number = e.TvgChno,
+                    DisplayName = e.DisplayName,
+                    TvgId = e.TvgId,
+                });
+            }
+            channels.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.DisplayName, b.DisplayName));
+            return TypedResults.Ok(new GroupChannelsResponse { IsInOutput = true, Channels = channels });
         }
         catch (Exception ex) when (ex is IOException or JsonException or OperationCanceledException)
         {
             return TypedResults.Ok(new GroupChannelsResponse { IsInOutput = true });
         }
-
-        var channels = entries
-            .Where(e => string.Equals(e.GroupTitle, outputName, StringComparison.Ordinal))
-            .OrderBy(e => e.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .Select(e => new GroupChannelDto { Number = e.TvgChno, DisplayName = e.DisplayName, TvgId = e.TvgId })
-            .ToList();
-
-        return TypedResults.Ok(new GroupChannelsResponse { IsInOutput = true, Channels = channels });
     }
 
     // -------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using M3Undle.Core.M3u;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -21,12 +20,6 @@ public sealed class SnapshotBuilder(
     IOptions<SnapshotOptions> snapshotOptions,
     ILogger<SnapshotBuilder> logger)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = false,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     private sealed record GroupFilterConfig(string ProfileGroupFilterId, string ChannelMode, string OutputName, int? AutoNumStart, int? AutoNumEnd);
     private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber);
 
@@ -329,10 +322,11 @@ public sealed class SnapshotBuilder(
         var snapshotDir = GetSnapshotDir(snapshotId);
         Directory.CreateDirectory(snapshotDir);
 
-        var channelIndexPath = Path.Combine(snapshotDir, "channel_index.json");
+        var channelIndexPath = Path.Combine(snapshotDir, "channel_index.ndjson");
+        var channelIndexIdxPath = Path.Combine(snapshotDir, "channel_index.idx");
         var xmltvPath = Path.Combine(snapshotDir, "guide.xml");
 
-        await File.WriteAllTextAsync(channelIndexPath, JsonSerializer.Serialize(channelIndex, JsonOptions), Encoding.UTF8, cancellationToken);
+        await ChannelIndexStore.WriteAsync(channelIndexPath, channelIndexIdxPath, channelIndex, cancellationToken);
         await File.WriteAllTextAsync(xmltvPath, xmltvContent, Encoding.UTF8, cancellationToken);
 
         int liveCount = 0, vodCount = 0, seriesCount = 0;

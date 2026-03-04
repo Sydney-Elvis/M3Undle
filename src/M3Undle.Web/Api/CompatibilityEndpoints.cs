@@ -15,11 +15,6 @@ public static class CompatibilityEndpoints
         WriteIndented = false,
     };
 
-    // Stream URL cache — avoids reading the full channel_index.json on every relay request.
-    // Populated lazily on first stream request, invalidated when snapshot ID changes.
-    private static string? _streamCacheSnapId;
-    private static Dictionary<string, (string StreamUrl, string DisplayName)>? _streamCache;
-    private static readonly SemaphoreSlim _streamCacheLock = new(1, 1);
 
     public static IEndpointRouteBuilder MapCompatibilityEndpoints(this IEndpointRouteBuilder app)
     {
@@ -59,37 +54,37 @@ public static class CompatibilityEndpoints
                 return;
             }
 
-            List<ChannelIndexEntry> channels;
-            try
-            {
-                var json = await File.ReadAllTextAsync(snapshot.ChannelIndexPath, cancellationToken);
-                channels = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, JsonOptions) ?? [];
-            }
-            catch (Exception ex) when (ex is IOException or JsonException)
-            {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                ctx.Response.Headers.Append("Retry-After", "30");
-                await ctx.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
-                return;
-            }
-
-            var baseUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+            var baseUrl  = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
             var xmltvUrl = $"{baseUrl}/xmltv/m3undle.xml";
 
             ctx.Response.ContentType = "application/x-mpegurl; charset=utf-8";
+            await ctx.Response.WriteAsync(
+                $"#EXTM3U url-tvg=\"{xmltvUrl}\" x-tvg-url=\"{xmltvUrl}\"\n", cancellationToken);
 
-            var sb = new StringBuilder();
-            sb.Append($"#EXTM3U url-tvg=\"{xmltvUrl}\" x-tvg-url=\"{xmltvUrl}\"\n");
-
-            foreach (var channel in channels)
+            try
             {
-                sb.Append(BuildExtInf(channel));
-                sb.Append('\n');
-                sb.Append(BuildProxyStreamUrl(baseUrl, channel));
-                sb.Append('\n');
+                var sb = new StringBuilder(512);
+                await foreach (var ch in ChannelIndexStore.StreamAllAsync(
+                    snapshot.ChannelIndexPath, cancellationToken))
+                {
+                    sb.Clear();
+                    sb.Append(BuildExtInf(ch));
+                    sb.Append('\n');
+                    sb.Append(BuildProxyStreamUrl(baseUrl, ch));
+                    sb.Append('\n');
+                    await ctx.Response.WriteAsync(sb.ToString(), cancellationToken);
+                }
             }
-
-            await ctx.Response.WriteAsync(sb.ToString(), Encoding.UTF8, cancellationToken);
+            catch (Exception ex) when (ex is IOException or JsonException)
+            {
+                if (!ctx.Response.HasStarted)
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    ctx.Response.Headers.Append("Retry-After", "30");
+                    await ctx.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
+                }
+                return;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -253,34 +248,10 @@ public static class CompatibilityEndpoints
     private static async Task<(string StreamUrl, string DisplayName)?> GetStreamEntryAsync(
         string snapshotId, string channelIndexPath, string streamKey, CancellationToken cancellationToken)
     {
-        // Fast path — no lock needed when cache is already warm for this snapshot.
-        if (_streamCacheSnapId == snapshotId && _streamCache is { } warm)
-            return warm.TryGetValue(streamKey, out var fastHit) ? fastHit : null;
-
-        await _streamCacheLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (_streamCacheSnapId == snapshotId && _streamCache is { } cached)
-                return cached.TryGetValue(streamKey, out var cachedHit) ? cachedHit : null;
-
-            // Load and index the channel list. Use CancellationToken.None so the cache is
-            // fully populated even if the triggering request is cancelled mid-load — the
-            // next request will benefit from the already-loaded data.
-            var json = await File.ReadAllTextAsync(channelIndexPath, CancellationToken.None);
-            var list = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, JsonOptions) ?? [];
-            var dict = new Dictionary<string, (string, string)>(list.Count, StringComparer.Ordinal);
-            foreach (var e in list)
-                dict[e.StreamKey] = (e.StreamUrl, e.DisplayName);
-
-            _streamCache = dict;
-            _streamCacheSnapId = snapshotId;
-
-            return dict.TryGetValue(streamKey, out var hit) ? hit : null;
-        }
-        finally
-        {
-            _streamCacheLock.Release();
-        }
+        var idxPath = ChannelIndexStore.GetIdxPath(channelIndexPath);
+        var entry   = await ChannelIndexStore.TryLookupAsync(
+            snapshotId, channelIndexPath, idxPath, streamKey, cancellationToken);
+        return entry is null ? null : (entry.StreamUrl, entry.DisplayName);
     }
 
     // -------------------------------------------------------------------------
