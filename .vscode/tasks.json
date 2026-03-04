@@ -72,7 +72,8 @@
 			"type": "docker-run",
 			"label": "docker-run: m3undle-debug",
 			"dependsOn": [
-				"docker-build: debug"
+				"docker-build: debug",
+				"docker-ensure: dev dirs"
 			],
 			"dockerRun": {
 				"containerName": "m3undle-dev",
@@ -117,6 +118,7 @@
 			"label": "docker-run: force-debug",
 			"dependsOn": [
 				"docker-reset: data folder",
+				"docker-ensure: dev dirs",
 				"docker-build: force-debug"
 			],
 			"dependsOrder": "sequence",
@@ -197,17 +199,44 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "docker-ensure: dev dirs",
+			"type": "process",
+			"command": "sh",
+			"args": [
+				"-c",
+				"mkdir -p \"${workspaceFolder}/.config\" \"${workspaceFolder}/m3u_data\" \"${workspaceFolder}/data\""
+			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"@('.config','m3u_data','data') | ForEach-Object { $d = Join-Path '${workspaceFolder}' $_; if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }; Write-Host \"Ensured: $d\" }"
+				]
+			},
+			"problemMatcher": []
+		},
+		{
 			"label": "docker-reset: data folder",
 			"type": "process",
-			"command": "powershell",
+			"command": "sh",
 			"args": [
-				"-NoProfile",
-				"-NonInteractive",
-				"-ExecutionPolicy",
-				"Bypass",
-				"-Command",
-				"if (Test-Path -LiteralPath \"${workspaceFolder}\\data\") { Remove-Item -LiteralPath \"${workspaceFolder}\\data\" -Recurse -Force -ErrorAction Stop }; New-Item -ItemType Directory -Path \"${workspaceFolder}\\data\" -Force | Out-Null"
+				"-c",
+				"${workspaceFolder}/.vscode/reset-data-folder.sh \"${workspaceFolder}\""
 			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-File",
+					"${workspaceFolder}\\.vscode\\reset-data-folder.ps1",
+					"${workspaceFolder}"
+				]
+			},
 			"problemMatcher": []
 		},
 		{
