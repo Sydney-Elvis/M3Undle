@@ -470,7 +470,9 @@ else
                 var anyIncluded  = parent.Members.Any(m => m.Decision == "include");
                 var totalChannels = parent.Members.Sum(m => m.ChannelCount ?? 0);
                 var selectedChannels = parent.Members.Sum(m =>
-                    _channelSelections.GetValueOrDefault(m.ProfileGroupFilterId)?.Count(s => s.Value) ?? 0);
+                    _channelSelections.TryGetValue(m.ProfileGroupFilterId, out var mSel)
+                        ? mSel.Count(s => s.Value)
+                        : (m.ChannelMode == "all" ? (m.ChannelCount ?? 0) : 0));
                 var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
@@ -1326,7 +1328,7 @@ else
         var denominator = loadedCount ?? filter.ChannelCount ?? 0;
         var selected    = _channelSelections.TryGetValue(filterId, out var selDict)
             ? selDict.Count(s => s.Value)
-            : 0;
+            : (filter.ChannelMode == "all" ? denominator : 0);
         if (denominator <= 0)
             return "0/0 ch";
 

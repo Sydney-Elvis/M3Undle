@@ -335,6 +335,17 @@ public sealed class SnapshotBuilder(
         await File.WriteAllTextAsync(channelIndexPath, JsonSerializer.Serialize(channelIndex, JsonOptions), Encoding.UTF8, cancellationToken);
         await File.WriteAllTextAsync(xmltvPath, xmltvContent, Encoding.UTF8, cancellationToken);
 
+        int liveCount = 0, vodCount = 0, seriesCount = 0;
+        foreach (var e in channelIndex)
+        {
+            switch (LiveClassifier.ClassifyContent(e.StreamUrl))
+            {
+                case "vod": vodCount++; break;
+                case "series": seriesCount++; break;
+                default: liveCount++; break;
+            }
+        }
+
         var snapshot = new Snapshot
         {
             SnapshotId = snapshotId,
@@ -346,6 +357,9 @@ public sealed class SnapshotBuilder(
             ChannelIndexPath = channelIndexPath,
             StatusJsonPath = string.Empty,
             ChannelCountPublished = channelIndex.Count,
+            LiveChannelCount = liveCount,
+            VodChannelCount = vodCount,
+            SeriesChannelCount = seriesCount,
         };
         db.Snapshots.Add(snapshot);
         await db.SaveChangesAsync(cancellationToken);

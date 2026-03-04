@@ -15,6 +15,12 @@ public static class CompatibilityEndpoints
         WriteIndented = false,
     };
 
+    // Stream URL cache — avoids reading the full channel_index.json on every relay request.
+    // Populated lazily on first stream request, invalidated when snapshot ID changes.
+    private static string? _streamCacheSnapId;
+    private static Dictionary<string, (string StreamUrl, string DisplayName)>? _streamCache;
+    private static readonly SemaphoreSlim _streamCacheLock = new(1, 1);
+
     public static IEndpointRouteBuilder MapCompatibilityEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/m3u/m3undle.m3u", ServeM3uAsync).AllowAnonymous();
@@ -144,9 +150,12 @@ public static class CompatibilityEndpoints
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
         using var streamScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Stream" });
 
+        // CancellationToken.None: these quick DB reads must not be cancelled by EF Core's
+        // internal SQLite busy timeout, which throws TaskCanceledException without setting
+        // the HTTP request token — causing the exception to escape the guarded catch below.
         var snapshot = await db.Snapshots
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Status == "active", cancellationToken);
+            .FirstOrDefaultAsync(x => x.Status == "active", CancellationToken.None);
 
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.ChannelIndexPath))
         {
@@ -156,11 +165,22 @@ public static class CompatibilityEndpoints
             return;
         }
 
-        List<ChannelIndexEntry> channels;
+        (string StreamUrl, string DisplayName) entry;
         try
         {
-            var json = await File.ReadAllTextAsync(snapshot.ChannelIndexPath, cancellationToken);
-            channels = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, JsonOptions) ?? [];
+            var hit = await GetStreamEntryAsync(snapshot.SnapshotId, snapshot.ChannelIndexPath, streamKey, cancellationToken);
+            if (hit is null)
+            {
+                logger.LogWarning("Stream tune-in failed: unknown key. key={StreamKey} client={Client}",
+                    streamKey, ctx.Connection.RemoteIpAddress);
+                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+            entry = hit.Value;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
         }
         catch
         {
@@ -168,22 +188,13 @@ public static class CompatibilityEndpoints
             return;
         }
 
-        var entry = channels.FirstOrDefault(x => x.StreamKey == streamKey);
-        if (entry is null)
-        {
-            logger.LogWarning("Stream tune-in failed: unknown key. key={StreamKey} client={Client}",
-                streamKey, ctx.Connection.RemoteIpAddress);
-            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-
         logger.LogInformation("Stream tune-in: channel={Channel} key={StreamKey} client={Client}",
             entry.DisplayName, streamKey, ctx.Connection.RemoteIpAddress);
 
-        // Get active provider for custom headers/UserAgent
+        // CancellationToken.None — same reason as the snapshot query above.
         var provider = await db.Providers
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, CancellationToken.None);
 
         try
         {
@@ -194,16 +205,12 @@ public static class CompatibilityEndpoints
             {
                 ProviderFetcher.ApplyHeadersFromJson(client, provider.HeadersJson);
                 if (!string.IsNullOrWhiteSpace(provider.UserAgent))
-                {
                     client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
-                }
             }
 
             // Forward Range header if present (enables VOD/catchup seeking)
             if (ctx.Request.Headers.TryGetValue("Range", out var rangeValue))
-            {
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Range", rangeValue.ToArray());
-            }
 
             using var upstreamResponse = await client.GetAsync(
                 entry.StreamUrl,
@@ -217,14 +224,10 @@ public static class CompatibilityEndpoints
             ctx.Response.StatusCode = (int)upstreamResponse.StatusCode;
 
             if (upstreamResponse.Content.Headers.ContentType is not null)
-            {
                 ctx.Response.ContentType = upstreamResponse.Content.Headers.ContentType.ToString();
-            }
 
             if (upstreamResponse.Content.Headers.ContentLength.HasValue)
-            {
                 ctx.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
-            }
 
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
             await upstreamStream.CopyToAsync(ctx.Response.Body, cancellationToken);
@@ -243,9 +246,40 @@ public static class CompatibilityEndpoints
             logger.LogError(ex, "Stream upstream request failed: channel={Channel} key={StreamKey}",
                 entry.DisplayName, streamKey);
             if (!ctx.Response.HasStarted)
-            {
                 ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
-            }
+        }
+    }
+
+    private static async Task<(string StreamUrl, string DisplayName)?> GetStreamEntryAsync(
+        string snapshotId, string channelIndexPath, string streamKey, CancellationToken cancellationToken)
+    {
+        // Fast path — no lock needed when cache is already warm for this snapshot.
+        if (_streamCacheSnapId == snapshotId && _streamCache is { } warm)
+            return warm.TryGetValue(streamKey, out var fastHit) ? fastHit : null;
+
+        await _streamCacheLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_streamCacheSnapId == snapshotId && _streamCache is { } cached)
+                return cached.TryGetValue(streamKey, out var cachedHit) ? cachedHit : null;
+
+            // Load and index the channel list. Use CancellationToken.None so the cache is
+            // fully populated even if the triggering request is cancelled mid-load — the
+            // next request will benefit from the already-loaded data.
+            var json = await File.ReadAllTextAsync(channelIndexPath, CancellationToken.None);
+            var list = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, JsonOptions) ?? [];
+            var dict = new Dictionary<string, (string, string)>(list.Count, StringComparer.Ordinal);
+            foreach (var e in list)
+                dict[e.StreamKey] = (e.StreamUrl, e.DisplayName);
+
+            _streamCache = dict;
+            _streamCacheSnapId = snapshotId;
+
+            return dict.TryGetValue(streamKey, out var hit) ? hit : null;
+        }
+        finally
+        {
+            _streamCacheLock.Release();
         }
     }
 

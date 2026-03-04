@@ -298,8 +298,19 @@ public static class ChannelFilterApiEndpoints
 
         var outputName = filter.OutputName ?? filter.ProviderGroup.RawName;
 
-        var json = await File.ReadAllTextAsync(snapshot.ChannelIndexPath, cancellationToken);
-        var entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
+        List<ChannelIndexEntry> entries;
+        try
+        {
+            // CancellationToken.None: the file is large; don't let a client disconnect abort a
+            // multi-second read and surface an unhandled exception. The result is discarded if
+            // the client has gone, but the read completes so the OS page cache stays warm.
+            var json = await File.ReadAllTextAsync(snapshot.ChannelIndexPath, CancellationToken.None);
+            entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or OperationCanceledException)
+        {
+            return TypedResults.Ok(new GroupChannelsResponse { IsInOutput = true });
+        }
 
         var channels = entries
             .Where(e => string.Equals(e.GroupTitle, outputName, StringComparison.Ordinal))
@@ -349,7 +360,7 @@ public static class ChannelFilterApiEndpoints
                 DisplayName = ch.DisplayName,
                 TvgId = ch.TvgId,
                 Active = ch.Active,
-                IsSelected = sel is not null,
+                IsSelected = filter.ChannelMode == "all" || sel is not null,
                 OutputGroupName = sel?.OutputGroupName,
                 ChannelNumber = sel?.ChannelNumber,
             };
@@ -502,39 +513,9 @@ public static class ChannelFilterApiEndpoints
             .AsNoTracking()
             .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", cancellationToken);
 
-        var liveInOutput = 0;
-        var vodInOutput = 0;
-        var seriesInOutput = 0;
-
-        if (activeSnapshot is not null &&
-            !string.IsNullOrWhiteSpace(activeSnapshot.ChannelIndexPath) &&
-            File.Exists(activeSnapshot.ChannelIndexPath))
-        {
-            try
-            {
-                var json = await File.ReadAllTextAsync(activeSnapshot.ChannelIndexPath, cancellationToken);
-                var entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
-                foreach (var entry in entries)
-                {
-                    switch (LiveClassifier.ClassifyContent(entry.StreamUrl))
-                    {
-                        case "vod":
-                            vodInOutput++;
-                            break;
-                        case "series":
-                            seriesInOutput++;
-                            break;
-                        default:
-                            liveInOutput++;
-                            break;
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is IOException or JsonException)
-            {
-                // Keep counts at 0 if snapshot index cannot be read.
-            }
-        }
+        var liveInOutput = activeSnapshot?.LiveChannelCount ?? 0;
+        var vodInOutput = activeSnapshot?.VodChannelCount ?? 0;
+        var seriesInOutput = activeSnapshot?.SeriesChannelCount ?? 0;
 
         return TypedResults.Ok(new ChannelMappingStatsDto
         {
@@ -649,20 +630,13 @@ public static class ChannelFilterApiEndpoints
                 .OrderByDescending(x => x.CreatedUtc)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            if (activeSnapshot is not null &&
-                !string.IsNullOrWhiteSpace(activeSnapshot.ChannelIndexPath) &&
-                File.Exists(activeSnapshot.ChannelIndexPath))
+            if (activeSnapshot is not null)
             {
-                try
-                {
-                    var json = await File.ReadAllTextAsync(activeSnapshot.ChannelIndexPath, cancellationToken);
-                    var entries = JsonSerializer.Deserialize<List<ChannelIndexEntry>>(json, ChannelIndexJsonOptions) ?? [];
-                    snapshotCounts = ContentTypeCountDtoFrom(CountByContentType(entries.Select(x => x.StreamUrl)));
-                }
-                catch (Exception ex) when (ex is IOException or JsonException)
-                {
-                    // Keep zero snapshot counts if channel_index cannot be read.
-                }
+                snapshotCounts = ContentTypeCountDtoFrom(new ContentTypeCount(
+                    activeSnapshot.LiveChannelCount + activeSnapshot.VodChannelCount + activeSnapshot.SeriesChannelCount,
+                    activeSnapshot.LiveChannelCount,
+                    activeSnapshot.VodChannelCount,
+                    activeSnapshot.SeriesChannelCount));
             }
         }
 

@@ -11,6 +11,9 @@ public sealed class Snapshot
     public string ChannelIndexPath { get; set; } = string.Empty;
     public string StatusJsonPath { get; set; } = string.Empty;
     public int ChannelCountPublished { get; set; }
+    public int LiveChannelCount { get; set; }
+    public int VodChannelCount { get; set; }
+    public int SeriesChannelCount { get; set; }
     public string? ErrorSummary { get; set; }
 
     public Profile Profile { get; set; } = null!;

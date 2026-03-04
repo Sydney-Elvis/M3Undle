@@ -884,6 +884,10 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("error_summary");
 
+                    b.Property<int>("LiveChannelCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("live_channel_count");
+
                     b.Property<string>("PlaylistPath")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -894,6 +898,10 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("profile_id");
 
+                    b.Property<int>("SeriesChannelCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("series_channel_count");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -903,6 +911,10 @@ namespace M3Undle.Web.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("status_json_path");
+
+                    b.Property<int>("VodChannelCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("vod_channel_count");
 
                     b.Property<string>("XmltvPath")
                         .IsRequired()
