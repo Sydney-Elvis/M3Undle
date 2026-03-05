@@ -106,7 +106,13 @@ else
                     @_globalChannelSearchResults.Count group@(_globalChannelSearchResults.Count != 1 ? "s" : "") matched
                 </MudChip>
             }
-            @if (!_isLoading && FilteredItems.Count > 0)
+            @if (_isBulkBusy)
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.caption" Color="Color.Primary" Style="white-space:nowrap;">Updating groups…</MudText>
+            }
+            else if (!_isLoading && FilteredItems.Count > 0)
             {
                 <MudDivider Vertical="true" FlexItem="true" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space:nowrap;">@FilteredItems.Count shown:</MudText>
@@ -145,7 +151,7 @@ else
         var chIncluded = included.Sum(f =>
             _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
                 ? sel.Count(s => s.Value)
-                : (f.ChannelCount ?? 0));
+                : 0);
         var chPending = pending.Sum(f => f.ChannelCount ?? 0);
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
@@ -469,10 +475,10 @@ else
                 var allExcluded  = parent.Members.All(m => m.Decision == "exclude");
                 var anyIncluded  = parent.Members.Any(m => m.Decision == "include");
                 var totalChannels = parent.Members.Sum(m => m.ChannelCount ?? 0);
-                var selectedChannels = parent.Members.Sum(m =>
-                    _channelSelections.TryGetValue(m.ProfileGroupFilterId, out var mSel)
-                        ? mSel.Count(s => s.Value)
-                        : (m.ChannelMode == "all" ? (m.ChannelCount ?? 0) : 0));
+                var allMembersLoaded = parent.Members.All(m => _channelSelections.ContainsKey(m.ProfileGroupFilterId));
+                var selectedChannels = allMembersLoaded
+                    ? parent.Members.Sum(m => _channelSelections.TryGetValue(m.ProfileGroupFilterId, out var mSel) ? mSel.Count(s => s.Value) : 0)
+                    : -1;
                 var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
@@ -527,9 +533,9 @@ else
                                          Style="width:72px;"
                                          Immediate="true" />
 
-                        <!-- Channel count (selected/total) -->
+                        <!-- Channel count (selected/total or total only when not loaded) -->
                         <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right;">
-                            @($"{selectedChannels:N0}/{totalChannels:N0} ch")
+                            @(selectedChannels < 0 ? $"0/{totalChannels:N0} ch" : $"{selectedChannels:N0}/{totalChannels:N0} ch")
                         </MudText>
 
                         <!-- Expand channels button -->
@@ -1208,6 +1214,18 @@ else
             if (decision == "include" && req.AutoNumStart is not null)
                 filter.AutoNumStart = req.AutoNumStart;
 
+            if (decision == "include" && filter.ChannelMode == "all")
+            {
+                filter.ChannelMode = "select";
+                // Clear any stale "all-selected" cache so the UI reflects 0 selected immediately.
+                if (_channelCache.TryGetValue(filterId, out var cachedChs))
+                    _channelSelections[filterId] = cachedChs.ToDictionary(c => c.ProviderChannelId, _ => false);
+                else
+                    _channelSelections.Remove(filterId);
+                _channelNumbers[filterId] = [];
+                RebuildNumberIndex();
+            }
+
             // Load channels for newly-included members of an expanded parent
             if (decision == "include" && filter.OutputName is not null && _expandedParents.Contains(filter.OutputName))
             {
@@ -1260,6 +1278,8 @@ else
             foreach (var f in _allFilters.Where(f => groupIdSet.Contains(f.ProviderGroupId)))
             {
                 f.Decision = decision;
+                if (decision == "include" && f.ChannelMode == "all")
+                    f.ChannelMode = "select";
                 _sessionChangedFilterIds.Add(f.ProfileGroupFilterId);
             }
 
@@ -1309,6 +1329,10 @@ else
             UpdateDisplayOrderForRename(f, oldOutputName, newValue);
             f.OutputName = newValue;
         });
+
+        // Re-run channel search so newly created/modified VirtualParents auto-expand.
+        if (!string.IsNullOrWhiteSpace(_globalChannelFilter) && _globalChannelFilter.Trim().Length >= 2)
+            await ExecuteGlobalChannelSearchAsync(_globalChannelFilter.Trim());
     }
 
     private async Task UnmergeAsync(GroupFilterDto filter)
@@ -1324,14 +1348,17 @@ else
 
     private string GetChannelCountText(GroupFilterDto filter, string filterId)
     {
-        var loadedCount = _channelCache.TryGetValue(filterId, out var cachedChs) ? (int?)cachedChs.Count : null;
-        var denominator = loadedCount ?? filter.ChannelCount ?? 0;
-        var selected    = _channelSelections.TryGetValue(filterId, out var selDict)
-            ? selDict.Count(s => s.Value)
-            : (filter.ChannelMode == "all" ? denominator : 0);
-        if (denominator <= 0)
-            return "0/0 ch";
+        var denominator = _channelCache.TryGetValue(filterId, out var cachedChs)
+            ? cachedChs.Count
+            : (filter.ChannelCount ?? 0);
 
+        if (denominator <= 0)
+            return "0 ch";
+
+        if (!_channelSelections.TryGetValue(filterId, out var selDict))
+            return $"0/{denominator:N0} ch";
+
+        var selected = selDict.Count(s => s.Value);
         return $"{selected:N0}/{denominator:N0} ch";
     }
 
