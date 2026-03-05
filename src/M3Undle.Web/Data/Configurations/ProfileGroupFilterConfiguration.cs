@@ -14,11 +14,12 @@ public sealed class ProfileGroupFilterConfiguration : IEntityTypeConfiguration<P
         builder.Property(x => x.ProfileGroupFilterId).HasColumnName("profile_group_filter_id");
         builder.Property(x => x.ProfileId).HasColumnName("profile_id").IsRequired();
         builder.Property(x => x.ProviderGroupId).HasColumnName("provider_group_id").IsRequired();
-        builder.Property(x => x.Decision).HasColumnName("decision").IsRequired().HasDefaultValue("pending");
+        builder.Property(x => x.Decision).HasColumnName("decision").IsRequired().HasDefaultValue("hold");
         builder.Property(x => x.ChannelMode).HasColumnName("channel_mode").IsRequired().HasDefaultValue("all");
         builder.Property(x => x.OutputName).HasColumnName("output_name");
         builder.Property(x => x.AutoNumStart).HasColumnName("auto_num_start");
         builder.Property(x => x.AutoNumEnd).HasColumnName("auto_num_end");
+        builder.Property(x => x.IsNew).HasColumnName("is_new").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.TrackNewChannels).HasColumnName("track_new_channels").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.SortOverride).HasColumnName("sort_override");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();

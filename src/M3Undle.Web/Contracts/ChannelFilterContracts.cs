@@ -11,7 +11,8 @@ public sealed class GroupFilterDto
     public DateTime ProviderGroupLastSeen { get; set; }
     public int? ChannelCount { get; set; }
     public string ProviderName { get; set; } = string.Empty;
-    public string Decision { get; set; } = "pending";
+    public string Decision { get; set; } = "hold";
+    public bool IsNew { get; set; }
     public string ChannelMode { get; set; } = "all";
     public string? OutputName { get; set; }
     public int? AutoNumStart { get; set; }
@@ -23,6 +24,7 @@ public sealed class GroupFilterDto
 public sealed class UpdateGroupFilterRequest
 {
     public string? Decision { get; set; }
+    public bool ClearIsNew { get; set; }
     public string? OutputName { get; set; }
     public bool ClearOutputName { get; set; }
     public int? AutoNumStart { get; set; }
@@ -43,7 +45,8 @@ public sealed class ChannelMappingStatsDto
 {
     public string? ProfileId { get; set; }
     public int GroupsIncluded { get; set; }
-    public int GroupsPending { get; set; }
+    public int GroupsHold { get; set; }
+    public int GroupsNew { get; set; }
     public int ChannelsInOutput { get; set; } // Live channels in output
     public int VodItemsInOutput { get; set; }
     public int SeriesItemsInOutput { get; set; }

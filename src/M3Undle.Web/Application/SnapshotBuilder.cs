@@ -134,7 +134,7 @@ public sealed class SnapshotBuilder(
             cancellationToken.ThrowIfCancellationRequested();
             sw.Restart();
 
-            // 5b. Sync provider groups to DB (ALL content types), sync live channels only to DB, then create pending filter rows for new groups.
+            // 5b. Sync provider groups to DB (ALL content types), sync live channels only to DB, then create hold+new filter rows for new groups.
             stage = "groups";
             var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
             logger.LogInformation("Groups synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
@@ -613,7 +613,8 @@ public sealed class SnapshotBuilder(
                 ProfileGroupFilterId = Guid.NewGuid().ToString(),
                 ProfileId = profileId,
                 ProviderGroupId = id,
-                Decision = "pending",
+                Decision = "hold",
+                IsNew = true,
                 TrackNewChannels = false,
                 CreatedUtc = now,
                 UpdatedUtc = now,
@@ -624,7 +625,7 @@ public sealed class SnapshotBuilder(
         {
             db.ProfileGroupFilters.AddRange(newFilters);
             await db.SaveChangesAsync(cancellationToken);
-            logger.LogInformation("Created {Count} new pending group filter(s) for profile {ProfileId}.", newFilters.Count, profileId);
+            logger.LogInformation("Created {Count} new group filter(s) (hold+new) for profile {ProfileId}.", newFilters.Count, profileId);
         }
     }
 

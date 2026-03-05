@@ -5,7 +5,8 @@ public sealed class ProfileGroupFilter
     public string ProfileGroupFilterId { get; set; } = string.Empty;
     public string ProfileId { get; set; } = string.Empty;
     public string ProviderGroupId { get; set; } = string.Empty;
-    public string Decision { get; set; } = "pending"; // 'include' | 'exclude' | 'pending'
+    public string Decision { get; set; } = "hold"; // 'include' | 'exclude' | 'hold'
+    public bool IsNew { get; set; } = true;
     public string ChannelMode { get; set; } = "all"; // 'all' | 'select'
     public string? OutputName { get; set; }
     public int? AutoNumStart { get; set; }

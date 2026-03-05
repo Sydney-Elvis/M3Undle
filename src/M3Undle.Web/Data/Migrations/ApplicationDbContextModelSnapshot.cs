@@ -518,8 +518,14 @@ namespace M3Undle.Web.Data.Migrations
                         .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT")
-                        .HasDefaultValue("pending")
+                        .HasDefaultValue("hold")
                         .HasColumnName("decision");
+
+                    b.Property<bool>("IsNew")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_new");
 
                     b.Property<string>("OutputName")
                         .HasColumnType("TEXT")

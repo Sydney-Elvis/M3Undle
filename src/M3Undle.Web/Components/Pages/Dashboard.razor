@@ -224,7 +224,7 @@
                 </MudButton>
             </MudStack>
 
-            @if (_channelStats is null || (_channelStats.GroupsIncluded == 0 && _channelStats.GroupsPending == 0))
+            @if (_channelStats is null || (_channelStats.GroupsIncluded == 0 && _channelStats.GroupsHold == 0))
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
                     No channels mapped yet — <MudLink Href="channels/groups">configure Channel Groups</MudLink> to start serving content.
@@ -245,11 +245,18 @@
                     <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Tv">
                         Series: @(_channelStats.SeriesEnabled ? _channelStats.SeriesItemsInOutput.ToString("N0") : "Off")
                     </MudChip>
-                    @if (_channelStats.GroupsPending > 0)
+                    @if (_channelStats.GroupsNew > 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
+                            @_channelStats.GroupsNew new group@(_channelStats.GroupsNew == 1 ? "" : "s") since last sync —
+                            <MudLink Href="channels/groups">review now</MudLink>
+                        </MudAlert>
+                    }
+                    else if (_channelStats.GroupsHold > 0)
                     {
                         <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
-                            @_channelStats.GroupsPending group@(_channelStats.GroupsPending == 1 ? "" : "s") pending review —
-                            <MudLink Href="channels/groups">review now</MudLink>
+                            @_channelStats.GroupsHold group@(_channelStats.GroupsHold == 1 ? "" : "s") on hold —
+                            <MudLink Href="channels/groups">map now</MudLink>
                         </MudAlert>
                     }
                 </MudStack>

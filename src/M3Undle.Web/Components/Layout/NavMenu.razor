@@ -101,7 +101,7 @@
         try
         {
             var stats = await Http.GetFromJsonAsync<ChannelMappingStatsDto>("/api/v1/channel-stats", _cts.Token);
-            _pendingGroupCount = stats?.GroupsPending ?? 0;
+            _pendingGroupCount = stats?.GroupsNew ?? 0;
             StateHasChanged();
         }
         catch { }

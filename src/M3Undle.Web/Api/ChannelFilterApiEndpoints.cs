@@ -18,6 +18,7 @@ public static class ChannelFilterApiEndpoints
         profiles.MapGet("/{profileId}/group-filters", ListGroupFiltersAsync);
         profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync);
         profiles.MapPost("/{profileId}/group-filters/bulk-decide", BulkDecideAsync);
+        profiles.MapPost("/{profileId}/group-filters/dismiss-new", DismissNewGroupsAsync);
         profiles.MapGet("/{profileId}/group-filters/{filterId}/channels", GetGroupChannelsAsync);
         profiles.MapGet("/{profileId}/channels/search", SearchChannelsAsync);
         profiles.MapGet("/{profileId}/group-filters/{filterId}/channel-selections", GetChannelSelectionsAsync);
@@ -84,7 +85,8 @@ public static class ChannelFilterApiEndpoints
             .ToListAsync(cancellationToken);
 
         var dtos = filters
-            .OrderBy(f => f.Decision == "pending" ? 0 : f.Decision == "include" ? 1 : 2)
+            .OrderBy(f => f.Decision == "hold" ? 0 : f.Decision == "include" ? 1 : 2)
+            .ThenByDescending(f => f.IsNew)
             .ThenBy(f => f.ProviderGroup.RawName, StringComparer.OrdinalIgnoreCase)
             .Select(f => ToDto(f))
             .ToList();
@@ -110,10 +112,14 @@ public static class ChannelFilterApiEndpoints
         if (request.Decision is not null)
         {
             filter.Decision = request.Decision;
+            filter.IsNew = false; // any explicit decision clears the new flag
             // Transition to "include" always uses per-channel selection — never auto-include everything.
             if (request.Decision == "include" && filter.ChannelMode == "all")
                 filter.ChannelMode = "select";
         }
+
+        if (request.ClearIsNew)
+            filter.IsNew = false;
 
         if (request.ClearOutputName)
             filter.OutputName = null;
@@ -155,6 +161,18 @@ public static class ChannelFilterApiEndpoints
         return TypedResults.Ok(ToDto(filter));
     }
 
+    private static async Task<Ok<object>> DismissNewGroupsAsync(
+        string profileId,
+        ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var updated = await db.ProfileGroupFilters
+            .Where(x => x.ProfileId == profileId && x.IsNew)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.IsNew, false), cancellationToken);
+
+        return TypedResults.Ok((object)new { updated });
+    }
+
     private static async Task<Results<Ok<object>, BadRequest<string>>> BulkDecideAsync(
         string profileId,
         BulkGroupDecisionRequest request,
@@ -162,8 +180,8 @@ public static class ChannelFilterApiEndpoints
         AppEventBus eventBus,
         CancellationToken cancellationToken)
     {
-        if (request.Decision is not ("include" or "exclude" or "pending"))
-            return TypedResults.BadRequest("Decision must be 'include', 'exclude', or 'pending'.");
+        if (request.Decision is not ("include" or "exclude" or "hold"))
+            return TypedResults.BadRequest("Decision must be 'include', 'exclude', or 'hold'.");
 
         if (request.ProviderGroupIds.Count == 0)
             return TypedResults.Ok((object)new { updated = 0 });
@@ -182,6 +200,7 @@ public static class ChannelFilterApiEndpoints
             if (existingByGroupId.TryGetValue(groupId, out var filter))
             {
                 filter.Decision = request.Decision;
+                filter.IsNew = false; // bulk decision clears new flag
                 filter.UpdatedUtc = now;
                 if (request.Decision == "include" && filter.ChannelMode == "all")
                     filter.ChannelMode = "select";
@@ -194,6 +213,7 @@ public static class ChannelFilterApiEndpoints
                     ProfileId = profileId,
                     ProviderGroupId = groupId,
                     Decision = request.Decision,
+                    IsNew = false,
                     ChannelMode = "select",
                     TrackNewChannels = false,
                     CreatedUtc = now,
@@ -496,10 +516,15 @@ public static class ChannelFilterApiEndpoints
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "include", cancellationToken);
 
-        var groupsPending = await db.ProfileGroupFilters
+        var groupsHold = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "pending", cancellationToken);
+            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold", cancellationToken);
+
+        var groupsNew = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Include(x => x.ProviderGroup)
+            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.IsNew, cancellationToken);
 
         var activeSnapshot = await db.Snapshots
             .AsNoTracking()
@@ -529,7 +554,8 @@ public static class ChannelFilterApiEndpoints
         {
             ProfileId = profileId,
             GroupsIncluded = groupsIncluded,
-            GroupsPending = groupsPending,
+            GroupsHold = groupsHold,
+            GroupsNew = groupsNew,
             ChannelsInOutput = liveInOutput,
             VodItemsInOutput = vodInOutput,
             SeriesItemsInOutput = seriesInOutput,
@@ -625,7 +651,7 @@ public static class ChannelFilterApiEndpoints
             livePending = await db.ProfileGroupFilters
                 .AsNoTracking()
                 .Include(x => x.ProviderGroup)
-                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "pending", cancellationToken);
+                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold", cancellationToken);
 
             liveExcluded = await db.ProfileGroupFilters
                 .AsNoTracking()
@@ -657,7 +683,7 @@ public static class ChannelFilterApiEndpoints
         if (!provider.IncludeSeries)
             notes.Add("Provider IncludeSeries is off; snapshot output intentionally excludes series.");
         if (livePending > 0 || liveExcluded > 0)
-            notes.Add("Live groups are not fully included; snapshot live count may be lower than raw.");
+            notes.Add("Live groups are not fully included (some on hold or excluded); snapshot live count may be lower than raw.");
         if (profileLink is null)
             notes.Add("No enabled profile is linked to the active provider; snapshot comparison is unavailable.");
 
@@ -753,6 +779,7 @@ public static class ChannelFilterApiEndpoints
         ChannelCount = f.ProviderGroup.ChannelCount,
         ProviderName = f.ProviderGroup.Provider.Name,
         Decision = f.Decision,
+        IsNew = f.IsNew,
         ChannelMode = f.ChannelMode,
         OutputName = f.OutputName,
         AutoNumStart = f.AutoNumStart,

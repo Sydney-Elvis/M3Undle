@@ -123,11 +123,11 @@ else
                                    OnClick="@(() => BulkSetDecisionForVisibleAsync("include"))"
                                    Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
                 </MudTooltip>
-                <MudTooltip Text="Set all visible groups to pending" Arrow="true">
+                <MudTooltip Text="Set all visible groups to hold" Arrow="true">
                     <MudIconButton Icon="@Icons.Material.Outlined.RadioButtonUnchecked"
                                    Size="Size.Small"
                                    Color="Color.Default"
-                                   OnClick="@(() => BulkSetDecisionForVisibleAsync("pending"))"
+                                   OnClick="@(() => BulkSetDecisionForVisibleAsync("hold"))"
                                    Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
                 </MudTooltip>
                 <MudTooltip Text="Exclude all visible groups" Arrow="true">
@@ -146,27 +146,40 @@ else
     {
         var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
         var included = liveFilters.Where(f => f.Decision == "include").ToList();
-        var pending  = liveFilters.Where(f => f.Decision == "pending").ToList();
+        var onHold   = liveFilters.Where(f => f.Decision == "hold").ToList();
         var excluded = liveFilters.Where(f => f.Decision == "exclude").ToList();
+        var newCount = liveFilters.Count(f => f.IsNew);
         var chIncluded = included.Sum(f =>
             _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
                 ? sel.Count(s => s.Value)
                 : 0);
-        var chPending = pending.Sum(f => f.ChannelCount ?? 0);
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
             <MudChip T="string" Size="Size.Small" Color="Color.Success"
                      Variant="@(_decisionFilterStates.Contains("include") ? Variant.Filled : Variant.Outlined)"
                      OnClick="@((chip) => ToggleDecisionFilterState("include"))">@included.Count included</MudChip>
             <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                     Variant="@(_decisionFilterStates.Contains("pending") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("pending"))">@pending.Count pending</MudChip>
+                     Variant="@(_decisionFilterStates.Contains("hold") ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@((chip) => ToggleDecisionFilterState("hold"))">@onHold.Count on hold</MudChip>
             <MudChip T="string" Size="Size.Small" Color="Color.Default"
                      Variant="@(_decisionFilterStates.Contains("exclude") ? Variant.Filled : Variant.Outlined)"
                      OnClick="@((chip) => ToggleDecisionFilterState("exclude"))">@excluded.Count excluded</MudChip>
+            @if (newCount > 0)
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                         Variant="@(_decisionFilterStates.Contains("new") ? Variant.Filled : Variant.Outlined)"
+                         OnClick="@((chip) => ToggleDecisionFilterState("new"))">@newCount new</MudChip>
+                <MudTooltip Text="Dismiss all new flags" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.DoneAll"
+                                   Size="Size.Small"
+                                   Color="Color.Info"
+                                   OnClick="DismissAllNewAsync"
+                                   Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
+                </MudTooltip>
+            }
             <MudDivider Vertical="true" FlexItem="true" />
             <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">@chIncluded.ToString("N0") ch included</MudChip>
-            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">@chPending.ToString("N0") ch pending</MudChip>
         </MudStack>
     }
 
@@ -192,6 +205,7 @@ else
                 var filterId   = filter.ProfileGroupFilterId;
                 var isIncluded = filter.Decision == "include";
                 var isExcluded = filter.Decision == "exclude";
+                var isOnHold   = filter.Decision == "hold";
                 var isExpanded = _expandedGroups.Contains(filterId);
                 var chLoading  = _loadingChannels.Contains(filterId);
                 var isEditing  = _editingFilterId == filterId;
@@ -202,20 +216,28 @@ else
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
                         <!-- Include / Exclude toggle buttons -->
-                        <MudTooltip Text="@(isIncluded ? "Back to pending" : "Include group")" Arrow="true">
+                        <MudTooltip Text="@(isIncluded ? "Back to hold" : "Include group")" Arrow="true">
                             <MudIconButton Icon="@(isIncluded ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.CheckCircle)"
                                            Size="Size.Small"
                                            Color="@(isIncluded ? Color.Success : Color.Default)"
                                            OnClick="@(() => ToggleDecisionAsync(filter, "include"))"
                                            Disabled="_busyFilters.Contains(filterId)" />
                         </MudTooltip>
-                        <MudTooltip Text="@(isExcluded ? "Back to pending" : "Exclude group")" Arrow="true">
+                        <MudTooltip Text="@(isExcluded ? "Back to hold" : "Exclude group")" Arrow="true">
                             <MudIconButton Icon="@(isExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
                                            Color="@(isExcluded ? Color.Error : Color.Default)"
                                            OnClick="@(() => ToggleDecisionAsync(filter, "exclude"))"
                                            Disabled="_busyFilters.Contains(filterId)" />
                         </MudTooltip>
+                        @if (filter.IsNew)
+                        {
+                            <MudTooltip Text="New since last sync — click to dismiss" Arrow="true">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
+                                         Style="cursor:pointer;"
+                                         OnClick="@(() => DismissNewAsync(filter))">new</MudChip>
+                            </MudTooltip>
+                        }
 
                         <!-- Group name: display or edit mode -->
                         @if (isEditing)
@@ -306,14 +328,14 @@ else
                             </MudText>
                         </MudTooltip>
 
-                        <!-- Track toggle -->
-                        <MudTooltip Text="Track new channels" Arrow="true">
+                        <!-- Track toggle: available for included and held groups (not excluded) -->
+                        <MudTooltip Text="@(isExcluded ? "Include or hold group to enable tracking" : "Track new channels in this group")" Arrow="true">
                             <MudSwitch T="bool"
                                        Value="@filter.TrackNewChannels"
                                        ValueChanged="@(v => OnTrackNewChannelsChanged(filter, v))"
                                        Size="Size.Small"
                                        Color="Color.Primary"
-                                       Disabled="!isIncluded" />
+                                       Disabled="@isExcluded" />
                         </MudTooltip>
                         }
 
@@ -487,14 +509,14 @@ else
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
                         <!-- Include / Exclude buttons (bulk) -->
-                        <MudTooltip Text="@(allIncluded ? "Back to pending" : "Include all member groups")" Arrow="true">
+                        <MudTooltip Text="@(allIncluded ? "Back to hold" : "Include all member groups")" Arrow="true">
                             <MudIconButton Icon="@(allIncluded ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.CheckCircle)"
                                            Size="Size.Small"
                                            Color="@(allIncluded ? Color.Success : anyIncluded ? Color.Success : Color.Default)"
                                            OnClick="@(() => ToggleParentDecisionAsync(parent, "include"))"
                                            Disabled="@isBusy" />
                         </MudTooltip>
-                        <MudTooltip Text="@(allExcluded ? "Back to pending" : "Exclude all member groups")" Arrow="true">
+                        <MudTooltip Text="@(allExcluded ? "Back to hold" : "Exclude all member groups")" Arrow="true">
                             <MudIconButton Icon="@(allExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
                                            Color="@(allExcluded ? Color.Error : Color.Default)"
@@ -774,7 +796,7 @@ else
     private string _searchTerm = string.Empty;
     private string? _searchError;
     private Func<string, bool>? _searchPredicate;
-    private HashSet<string> _decisionFilterStates = ["include", "pending"];
+    private HashSet<string> _decisionFilterStates = ["include", "hold", "new"];
     private List<string> _displayOrderIds = [];
 
     private string _globalChannelFilter = string.Empty;
@@ -819,18 +841,22 @@ else
             foreach (var (k, v) in standaloneDict) allItems[k] = v;
             foreach (var (k, v) in parentDict)     allItems[k] = v;
 
-            Func<object, bool> decisionMatch = _decisionFilterStates.Count == 0 || _decisionFilterStates.Count >= 3
+            // "new" is a sub-filter of "hold" — a group matches if its decision is in the states,
+            // OR if "new" is selected and the group has IsNew=true.
+            var showNew = _decisionFilterStates.Contains("new");
+            var decisionStatesWithoutNew = _decisionFilterStates.Where(s => s != "new").ToHashSet();
+            Func<object, bool> decisionMatch = _decisionFilterStates.Count == 0 || _decisionFilterStates.IsSupersetOf(["include", "hold", "exclude"])
                 ? _ => true
                 : o => o switch
                 {
-                    GroupFilterDto f => _decisionFilterStates.Contains(f.Decision),
-                    VirtualParent p  => p.Members.Any(m => _decisionFilterStates.Contains(m.Decision)),
+                    GroupFilterDto f => decisionStatesWithoutNew.Contains(f.Decision) || (showNew && f.IsNew),
+                    VirtualParent p  => p.Members.Any(m => decisionStatesWithoutNew.Contains(m.Decision) || (showNew && m.IsNew)),
                     _ => false,
                 };
 
             // Recently-acted-on items stay visible, but only if their current decision is in the active filter set.
             // This lets a just-excluded item disappear immediately when exclude is not being shown.
-            if (_decisionFilterStates.Count > 0 && _decisionFilterStates.Count < 3 && _sessionChangedFilterIds.Count > 0)
+            if (_decisionFilterStates.Count > 0 && !_decisionFilterStates.IsSupersetOf(["include", "hold", "exclude"]) && _sessionChangedFilterIds.Count > 0)
             {
                 var baseMatch = decisionMatch;
                 decisionMatch = o =>
@@ -839,9 +865,9 @@ else
                     return o switch
                     {
                         GroupFilterDto f => _sessionChangedFilterIds.Contains(f.ProfileGroupFilterId)
-                                            && _decisionFilterStates.Contains(f.Decision),
+                                            && (decisionStatesWithoutNew.Contains(f.Decision) || (showNew && f.IsNew)),
                         VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
-                                                                && _decisionFilterStates.Contains(m.Decision)),
+                                                                && (decisionStatesWithoutNew.Contains(m.Decision) || (showNew && m.IsNew))),
                         _ => false,
                     };
                 };
@@ -882,7 +908,8 @@ else
 
         foreach (var f in _allFilters
             .Where(f => f.ProviderGroupContentType == "live")
-            .OrderBy(f => f.Decision == "include" ? 0 : f.Decision == "pending" ? 1 : 2)
+            .OrderBy(f => f.Decision == "include" ? 0 : f.Decision == "hold" ? 1 : 2)
+            .ThenByDescending(f => f.IsNew)
             .ThenBy(f => f.OutputName ?? f.ProviderGroupRawName, StringComparer.OrdinalIgnoreCase))
         {
             var key = f.OutputName is not null ? $"parent:{f.OutputName}" : f.ProfileGroupFilterId;
@@ -1180,7 +1207,7 @@ else
 
     private async Task ToggleDecisionAsync(GroupFilterDto filter, string decision)
     {
-        var newDecision = filter.Decision == decision ? "pending" : decision;
+        var newDecision = filter.Decision == decision ? "hold" : decision;
         await SetDecisionAsync(filter, newDecision);
     }
 
@@ -1209,6 +1236,7 @@ else
             }
 
             filter.Decision = decision;
+            filter.IsNew = false; // server clears this on any explicit decision
             _sessionChangedFilterIds.Add(filterId);
 
             if (decision == "include" && req.AutoNumStart is not null)
@@ -1278,6 +1306,7 @@ else
             foreach (var f in _allFilters.Where(f => groupIdSet.Contains(f.ProviderGroupId)))
             {
                 f.Decision = decision;
+                f.IsNew = false;
                 if (decision == "include" && f.ChannelMode == "all")
                     f.ChannelMode = "select";
                 _sessionChangedFilterIds.Add(f.ProfileGroupFilterId);
@@ -1285,6 +1314,49 @@ else
 
             RebuildDisplayOrder();
             Snackbar.Add($"{groupIds.Count} group(s) set to {decision}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isBulkBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // IsNew dismissal
+    // -------------------------------------------------------------------------
+
+    private async Task DismissNewAsync(GroupFilterDto filter)
+    {
+        if (_profileId is null || !filter.IsNew) return;
+        var req = new UpdateGroupFilterRequest { ClearIsNew = true };
+        await PatchFilterAsync(filter, req, f => { f.IsNew = false; });
+    }
+
+    private async Task DismissAllNewAsync()
+    {
+        if (_profileId is null) return;
+
+        _isBulkBusy = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsync($"/api/v1/profiles/{_profileId}/group-filters/dismiss-new", null);
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Dismiss failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            foreach (var f in _allFilters)
+                f.IsNew = false;
+
+            StateHasChanged();
         }
         catch (Exception ex)
         {
@@ -1481,7 +1553,7 @@ else
         var allMatch = decision == "include"
             ? parent.Members.All(m => m.Decision == "include")
             : parent.Members.All(m => m.Decision == "exclude");
-        var newDecision = allMatch ? "pending" : decision;
+        var newDecision = allMatch ? "hold" : decision;
         await Task.WhenAll(parent.Members.Select(m => SetDecisionAsync(m, newDecision)));
     }
 

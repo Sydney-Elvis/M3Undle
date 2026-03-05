@@ -72,12 +72,15 @@
 			"type": "docker-run",
 			"label": "docker-run: m3undle-debug",
 			"dependsOn": [
+				"docker-stop: m3undle-debug",
 				"docker-build: debug",
 				"docker-ensure: dev dirs"
 			],
+			"dependsOrder": "sequence",
 			"dockerRun": {
 				"containerName": "m3undle-dev",
 				"image": "m3undle:web-debug",
+				"remove": false,
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"ASPNETCORE_URLS": "http://+:8080",
@@ -100,7 +103,7 @@
 						"permissions": "rw"
 					}
 				],
-				"customOptions": "--user root --rm",
+				"customOptions": "--user root",
 				"ports": [
 					{
 						"hostPort": 8080,
@@ -124,6 +127,8 @@
 			"dependsOrder": "sequence",
 			"dockerRun": {
 				"containerName": "m3undle-dev",
+				"image": "m3undle:web-debug",
+				"remove": false,
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"ASPNETCORE_URLS": "http://+:8080",
@@ -146,7 +151,7 @@
 						"permissions": "rw"
 					}
 				],
-				"customOptions": "--user root --rm",
+				"customOptions": "--user root",
 				"ports": [
 					{
 						"hostPort": 8080,
@@ -178,12 +183,21 @@
 		{
 			"label": "docker-stop: m3undle-debug",
 			"type": "process",
-			"command": "docker",
+			"command": "sh",
 			"args": [
-				"rm",
-				"-f",
-				"m3undle-dev"
+				"-c",
+				"docker container inspect m3undle-dev >/dev/null 2>&1 && docker rm -f m3undle-dev >/dev/null 2>&1 || true"
 			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"$null = docker container inspect m3undle-dev 2>$null; if ($LASTEXITCODE -eq 0) { docker rm -f m3undle-dev | Out-Null }; exit 0"
+				]
+			},
 			"problemMatcher": []
 		},
 		{
@@ -224,7 +238,7 @@
 			"command": "sh",
 			"args": [
 				"-c",
-				"${workspaceFolder}/.vscode/reset-data-folder.sh \"${workspaceFolder}\""
+				"mkdir -p \"${workspaceFolder}/data\"; find \"${workspaceFolder}/data\" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true; echo \"Reset data directory: ${workspaceFolder}/data\""
 			],
 			"windows": {
 				"command": "powershell",
@@ -232,9 +246,8 @@
 					"-NoProfile",
 					"-ExecutionPolicy",
 					"Bypass",
-					"-File",
-					"${workspaceFolder}\\.vscode\\reset-data-folder.ps1",
-					"${workspaceFolder}"
+					"-Command",
+					"$dataDir = Join-Path '${workspaceFolder}' 'data'; if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }; Get-ChildItem -LiteralPath $dataDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Write-Host \"Reset data directory: $dataDir\"; exit 0"
 				]
 			},
 			"problemMatcher": []

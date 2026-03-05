@@ -59,10 +59,16 @@
         @if (_channelStats is not null)
         {
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Style="font-size:0.70rem;">
-                @if (_channelStats.GroupsPending > 0)
+                @if (_channelStats.GroupsNew > 0)
+                {
+                    <MudLink Href="channels/groups" Style="font-size:0.70rem;" Color="Color.Info">
+                        @_channelStats.GroupsNew new
+                    </MudLink>
+                }
+                else if (_channelStats.GroupsHold > 0)
                 {
                     <MudLink Href="channels/groups" Style="font-size:0.70rem;" Color="Color.Warning">
-                        @_channelStats.GroupsPending pending
+                        @_channelStats.GroupsHold on hold
                     </MudLink>
                 }
                 @if (_channelStats.ChannelsInOutput > 0)

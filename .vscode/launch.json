@@ -26,6 +26,7 @@
       "type": "docker",
       "request": "launch",
       "preLaunchTask": "docker-run: m3undle-debug",
+      "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {
         "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
@@ -41,6 +42,7 @@
       "type": "docker",
       "request": "launch",
       "preLaunchTask": "docker-run: force-debug",
+      "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {
         "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
