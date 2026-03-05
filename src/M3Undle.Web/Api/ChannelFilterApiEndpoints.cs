@@ -108,7 +108,12 @@ public static class ChannelFilterApiEndpoints
             return TypedResults.NotFound();
 
         if (request.Decision is not null)
+        {
             filter.Decision = request.Decision;
+            // Transition to "include" always uses per-channel selection — never auto-include everything.
+            if (request.Decision == "include" && filter.ChannelMode == "all")
+                filter.ChannelMode = "select";
+        }
 
         if (request.ClearOutputName)
             filter.OutputName = null;
@@ -178,6 +183,8 @@ public static class ChannelFilterApiEndpoints
             {
                 filter.Decision = request.Decision;
                 filter.UpdatedUtc = now;
+                if (request.Decision == "include" && filter.ChannelMode == "all")
+                    filter.ChannelMode = "select";
             }
             else
             {
@@ -187,6 +194,7 @@ public static class ChannelFilterApiEndpoints
                     ProfileId = profileId,
                     ProviderGroupId = groupId,
                     Decision = request.Decision,
+                    ChannelMode = "select",
                     TrackNewChannels = false,
                     CreatedUtc = now,
                     UpdatedUtc = now,
@@ -349,6 +357,8 @@ public static class ChannelFilterApiEndpoints
 
         var selectionByChannelId = existingSelections.ToDictionary(x => x.ProviderChannelId, StringComparer.Ordinal);
 
+        var isAllMode = filter.ChannelMode == "all" && filter.Decision == "include";
+
         var dtos = allChannels.Select(ch =>
         {
             selectionByChannelId.TryGetValue(ch.ProviderChannelId, out var sel);
@@ -358,7 +368,7 @@ public static class ChannelFilterApiEndpoints
                 DisplayName = ch.DisplayName,
                 TvgId = ch.TvgId,
                 Active = ch.Active,
-                IsSelected = filter.ChannelMode == "all" || sel is not null,
+                IsSelected = isAllMode || sel is not null,
                 OutputGroupName = sel?.OutputGroupName,
                 ChannelNumber = sel?.ChannelNumber,
             };
