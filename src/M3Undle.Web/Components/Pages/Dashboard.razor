@@ -164,16 +164,16 @@
             <MudText Typo="Typo.h6" Class="mb-3">Output URLs</MudText>
             <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
                 <MudChip T="string" Color="@(_channelStats?.ChannelsInOutput > 0 ? Color.Success : Color.Warning)"
-                         Icon="@Icons.Material.Filled.Tv">
-                    @(_channelStats?.ChannelsInOutput ?? 0) live channels being served
+                         Icon="@Icons.Material.Filled.LiveTv">
+                    Live: @(_channelStats?.ChannelsInOutput ?? 0)
                 </MudChip>
                 @if (_channelStats is not null)
                 {
                     <MudChip T="string" Color="@(_channelStats.VodEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Movie">
-                        Movies @(_channelStats.VodEnabled ? "On" : "Off"): @_channelStats.VodItemsInOutput.ToString("N0")
+                        Movies: @(_channelStats.VodEnabled ? _channelStats.VodItemsInOutput.ToString("N0") : "Off")
                     </MudChip>
-                    <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.LiveTv">
-                        Series @(_channelStats.SeriesEnabled ? "On" : "Off"): @_channelStats.SeriesItemsInOutput.ToString("N0")
+                    <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Tv">
+                        Series: @(_channelStats.SeriesEnabled ? _channelStats.SeriesItemsInOutput.ToString("N0") : "Off")
                     </MudChip>
                 }
             </MudStack>
@@ -236,14 +236,14 @@
                     <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle">
                         @_channelStats.GroupsIncluded group@(_channelStats.GroupsIncluded == 1 ? "" : "s") included
                     </MudChip>
-                    <MudChip T="string" Color="Color.Primary" Icon="@Icons.Material.Filled.Tv">
-                        @_channelStats.ChannelsInOutput.ToString("N0") live channels in output
+                    <MudChip T="string" Color="@(_channelStats.ChannelsInOutput > 0 ? Color.Primary : Color.Warning)" Icon="@Icons.Material.Filled.LiveTv">
+                        Live: @_channelStats.ChannelsInOutput.ToString("N0")
                     </MudChip>
                     <MudChip T="string" Color="@(_channelStats.VodEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Movie">
-                        Movies @(_channelStats.VodEnabled ? "On" : "Off"): @_channelStats.VodItemsInOutput.ToString("N0")
+                        Movies: @(_channelStats.VodEnabled ? _channelStats.VodItemsInOutput.ToString("N0") : "Off")
                     </MudChip>
-                    <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.LiveTv">
-                        Series @(_channelStats.SeriesEnabled ? "On" : "Off"): @_channelStats.SeriesItemsInOutput.ToString("N0")
+                    <MudChip T="string" Color="@(_channelStats.SeriesEnabled ? Color.Info : Color.Default)" Icon="@Icons.Material.Filled.Tv">
+                        Series: @(_channelStats.SeriesEnabled ? _channelStats.SeriesItemsInOutput.ToString("N0") : "Off")
                     </MudChip>
                     @if (_channelStats.GroupsPending > 0)
                     {
