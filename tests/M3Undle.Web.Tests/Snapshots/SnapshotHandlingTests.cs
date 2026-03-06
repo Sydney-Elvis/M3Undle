@@ -616,9 +616,13 @@ public sealed class SnapshotHandlingTests
 
             Assert.AreEqual(2, active.ChannelCountPublished, "Same channel identity in different groups should be preserved in both groups.");
 
-            var channelIndexJson = await File.ReadAllTextAsync(active.ChannelIndexPath);
-            var entries = System.Text.Json.JsonSerializer.Deserialize<List<ChannelIndexEntry>>(channelIndexJson,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            // channel_index.ndjson is NDJSON — one JSON object per line, not a JSON array
+            var lines = await File.ReadAllLinesAsync(active.ChannelIndexPath);
+            var opts = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var entries = lines
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Select(l => System.Text.Json.JsonSerializer.Deserialize<ChannelIndexEntry>(l, opts)!)
+                .ToList();
             Assert.HasCount(2, entries);
             Assert.AreEqual(1, entries.Count(x => x.GroupTitle == "USA FOX"));
             Assert.AreEqual(1, entries.Count(x => x.GroupTitle == "USA ABC"));
@@ -677,7 +681,7 @@ public sealed class SnapshotHandlingTests
             factory,
             new PlaylistParser(),
             envSvc,
-            new SecretEncryptionService(),
+            new SecretEncryptionService(envSvc),
             NullLogger<ProviderFetcher>.Instance);
         var env = new FakeWebHostEnvironment(tempDir);
         return new SnapshotBuilder(db, fetcher, env, Options.Create(new SnapshotOptions()), NullLogger<SnapshotBuilder>.Instance);

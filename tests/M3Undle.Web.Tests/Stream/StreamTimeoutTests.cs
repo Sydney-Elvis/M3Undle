@@ -147,7 +147,7 @@ public sealed class StreamTimeoutTests
             factory,
             new PlaylistParser(),
             envSvc,
-            new SecretEncryptionService(),
+            new SecretEncryptionService(envSvc),
             NullLogger<ProviderFetcher>.Instance);
     }
 

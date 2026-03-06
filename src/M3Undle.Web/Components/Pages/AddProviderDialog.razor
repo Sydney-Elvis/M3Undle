@@ -52,12 +52,7 @@
                     @if (_fileBrowseRootMissing)
                     {
                         <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
-                            <MudText Typo="Typo.body2"><strong>M3UNDLE_CONFIG_DIR is not set.</strong></MudText>
-                            <MudText Typo="Typo.body2" Class="mt-1">
-                                The file browser requires a server directory to browse. Set the
-                                <code>M3UNDLE_CONFIG_DIR</code> environment variable to a directory on the server
-                                (e.g. <code>/data/config</code>) and restart M3Undle.
-                            </MudText>
+                            <MudText Typo="Typo.body2">@(_fileBrowseError ?? "File browser unavailable.")</MudText>
                         </MudAlert>
                     }
                     <MudForm @ref="_fileForm">
@@ -310,6 +305,7 @@
     private string? _error;
     private bool _encryptionAvailable;
     private bool _fileBrowseRootMissing;
+    private string? _fileBrowseError;
     private bool _showImportTab;
 
     // URL tab
@@ -362,7 +358,10 @@
         }
         catch { _encryptionAvailable = false; }
 
-        _fileBrowseRootMissing = !(await browseTask).IsSuccessStatusCode;
+        var browseResponse = await browseTask;
+        _fileBrowseRootMissing = !browseResponse.IsSuccessStatusCode;
+        if (_fileBrowseRootMissing)
+            _fileBrowseError = await browseResponse.Content.ReadAsStringAsync();
 
         try
         {

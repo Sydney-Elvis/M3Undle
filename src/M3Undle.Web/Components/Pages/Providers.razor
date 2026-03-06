@@ -92,7 +92,7 @@
                 </MudTd>
                 <MudTd>
                     <MudStack Row="true" Spacing="1">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => BeginEdit(context)" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" />
                         <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@_isRefreshing" />
                         <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@_isRefreshing">Preview</MudButton>
@@ -155,23 +155,15 @@
     </MudPaper>
 }
 
-<ProviderFormDrawer @bind-Open="_addDrawerOpen"
-                    EditingProvider="_editingProvider"
-                    Profiles="_profiles"
-                    Providers="_providers"
-                    OnSaved="OnProviderSaved" />
-@* AddProviderDialog is opened imperatively via DialogService *@
+@* Add and Edit dialogs are opened imperatively via DialogService *@
 
 @code {
     private readonly List<ProviderDto> _providers = [];
     private readonly List<ProfileListItemDto> _profiles = [];
-    private readonly List<ConfigYamlProviderDto> _configProviders = []; // kept for import dialog badge (Phase 2 cleanup)
 
     private bool _isLoading;
     private bool _isRefreshing;
     private bool _isPreviewLoading;
-    private bool _addDrawerOpen;
-    private ProviderDto? _editingProvider;
     private int _previewSampleSize = 10;
     private string? _previewGroupFilter;
     private ProviderPreviewDto? _preview;
@@ -187,7 +179,7 @@
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
 
-        await Task.WhenAll(LoadAsync(), LoadConfigProvidersAsync());
+        await LoadAsync();
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -223,12 +215,6 @@
         _eventSubscription?.Dispose();
     }
 
-    private void OpenAddDrawer()
-    {
-        _editingProvider = null;
-        _addDrawerOpen = true;
-    }
-
     private Task OpenAddDialogAsync()
     {
         var parameters = new DialogParameters<AddProviderDialog>
@@ -241,34 +227,20 @@
         return DialogService.ShowAsync<AddProviderDialog>("Add Provider", parameters, options);
     }
 
-    private void BeginEdit(ProviderDto provider)
+    private Task OpenEditDialogAsync(ProviderDto provider)
     {
-        _editingProvider = provider;
-        _addDrawerOpen = true;
+        var parameters = new DialogParameters<EditProviderDialog>
+        {
+            { x => x.Provider, provider },
+            { x => x.Profiles, _profiles },
+            { x => x.Providers, _providers },
+            { x => x.OnSaved, EventCallback.Factory.Create(this, OnProviderSaved) },
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
+        return DialogService.ShowAsync<EditProviderDialog>("Edit Provider", parameters, options);
     }
 
     private async Task OnProviderSaved() => await LoadAsync();
-
-    private async Task OnProviderImported(string importedProviderId)
-    {
-        await LoadAsync();
-
-        if (!_providers.Any(p => p.IsActive))
-        {
-            var imported = _providers.FirstOrDefault(p => p.ProviderId == importedProviderId);
-            if (imported is not null)
-            {
-                var confirmed = await DialogService.ShowMessageBox(
-                    "Set Active Provider",
-                    $"No provider is active. Set \"{imported.Name}\" as the active provider now?",
-                    yesText: "Set Active",
-                    cancelText: "Skip");
-
-                if (confirmed == true)
-                    await SetActiveAsync(imported);
-            }
-        }
-    }
 
     private async Task LoadAsync()
     {
@@ -374,28 +346,6 @@
         {
             _error = $"Failed to set provider active: {ex.Message}";
         }
-    }
-
-    private async Task LoadConfigProvidersAsync()
-    {
-        try
-        {
-            var result = await Http.GetFromJsonAsync<List<ConfigYamlProviderDto>>("/api/v1/providers/config/available");
-            _configProviders.Clear();
-            _configProviders.AddRange(result ?? []);
-            StateHasChanged();
-        }
-        catch { }
-    }
-
-    private Task OpenImportDialogAsync()
-    {
-        var parameters = new DialogParameters<ProviderImportDrawer>
-        {
-            { x => x.OnImported, EventCallback.Factory.Create<string>(this, OnProviderImported) }
-        };
-        var options = new DialogOptions { MaxWidth = MaxWidth.Large, FullWidth = true, CloseButton = true, CloseOnEscapeKey = true };
-        return DialogService.ShowAsync<ProviderImportDrawer>("Import from config.yaml", parameters, options);
     }
 
     private async Task RefreshPreviewAsync(string providerId)

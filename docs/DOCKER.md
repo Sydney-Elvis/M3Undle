@@ -29,9 +29,15 @@ services:
       - "8080:8080"
     environment:
       TZ: America/New_York
+      # Required if you use Xtream Codes providers (encrypted password storage).
+      # Generate with: openssl rand -base64 32
+      M3UNDLE_ENCRYPTION_KEY: "your-base64-32-byte-key"
+      # Optional — enables the file browser when adding providers from local .m3u files.
+      M3UNDLE_M3U_DIR: /m3u
     volumes:
       - ./config:/config
       - ./data:/data
+      - ./m3u:/m3u        # optional — only needed if using M3UNDLE_M3U_DIR
     restart: unless-stopped
 ```
 
@@ -55,15 +61,17 @@ Then open `http://<host>:8080`.
 ### docker run
 
 ```bash
-mkdir -p m3undle/config m3undle/data && cd m3undle
+mkdir -p m3undle/config m3undle/data m3undle/m3u && cd m3undle
 
 docker run -d \
   --name m3undle \
   --user "$(id -u):$(id -g)" \
   -p 8080:8080 \
   -e TZ=America/New_York \
+  -e M3UNDLE_ENCRYPTION_KEY="your-base64-32-byte-key" \
   -v ./config:/config \
   -v ./data:/data \
+  -v ./m3u:/m3u \
   --restart unless-stopped \
   ghcr.io/sydney-elvis/m3undle:alpha
 ```
@@ -72,12 +80,13 @@ docker run -d \
 
 ## Volumes
 
-| Mount | Purpose |
-|---|---|
-| `/config` | `config.yaml` and `.env` credential file — files you edit |
-| `/data` | SQLite database, snapshots, log files — runtime state |
+| Mount | Required | Purpose |
+|---|---|---|
+| `/config` | Yes | `config.yaml` and `.env` credential file — files you edit |
+| `/data` | Yes | SQLite database, snapshots, log files — runtime state |
+| `/m3u` (or any path) | No | Local `.m3u` files browsable via the file browser. Set `M3UNDLE_M3U_DIR` to the container path. |
 
-Both are required for data to persist across container restarts.
+Both `/config` and `/data` are required for data to persist across container restarts.
 
 **Why bind mounts?** Bind mounts put files in a known place on the host. You can edit `config.yaml` with any editor, inspect logs, or wipe the data directory without going through Docker commands.
 
@@ -119,9 +128,23 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 
 ## Environment Variables
 
+### Required / Recommended
+
 | Variable | Default | Description |
 |---|---|---|
 | `TZ` | host timezone | Timezone for log timestamps (e.g. `America/New_York`, `Europe/London`, `UTC`) |
+| `M3UNDLE_ENCRYPTION_KEY` | *(none)* | **Required for Xtream Codes providers.** Base64-encoded 32-byte AES key used to encrypt passwords at rest. Generate with `openssl rand -base64 32`. Keep this secret — treat it like a master password. |
+
+### Optional — Provider Features
+
+| Variable | Default | Description |
+|---|---|---|
+| `M3UNDLE_M3U_DIR` | *(none)* | Directory the file browser exposes when adding a provider from a local `.m3u` file. Mount a host directory here (e.g. `/m3u`) and set this variable to enable it. |
+
+### App Settings
+
+| Variable | Default | Description |
+|---|---|---|
 | `ASPNETCORE_HTTP_PORTS` | `8080` | Port the app listens on inside the container |
 | `M3Undle__Refresh__IntervalHours` | `4` | How often the background refresh runs |
 | `M3Undle__Refresh__TimeoutMinutes` | `5` | Provider fetch timeout |
@@ -136,6 +159,61 @@ The following are set by the image and do not need to be overridden:
 | `M3Undle__Logging__LogDirectory` | `/data/logs` |
 | `M3Undle__Snapshot__Directory` | `/data/snapshots` |
 | `M3UNDLE_CONFIG_DIR` | `/config` |
+
+---
+
+## Provider Types
+
+M3Undle supports three provider types, added through the web UI:
+
+### URL / File — No extra setup
+
+Paste any `http://` or `https://` playlist URL. To keep credentials out of the database, put them in `/config/.env` and reference them with `%VAR_NAME%` placeholders in the URL:
+
+```env
+# /config/.env
+MY_PASSWORD=supersecret
+```
+
+```
+http://my.server:8080/get.php?username=alice&password=%MY_PASSWORD%
+```
+
+For local files, mount the directory and set `M3UNDLE_M3U_DIR` (see above) to use the built-in file browser.
+
+### Xtream Codes — Requires `M3UNDLE_ENCRYPTION_KEY`
+
+Xtream Codes providers store the password encrypted in the database using AES-256-GCM. The encryption key must be available at runtime via `M3UNDLE_ENCRYPTION_KEY`.
+
+**Generate a key:**
+
+```bash
+openssl rand -base64 32
+```
+
+Set it as a container environment variable — **not** in the `/config/.env` file:
+
+```yaml
+# compose.yaml
+environment:
+  M3UNDLE_ENCRYPTION_KEY: "paste-your-generated-key-here"
+```
+
+> [!WARNING]
+> If you lose the encryption key, stored Xtream passwords cannot be decrypted. You will need to re-enter passwords for all Xtream providers. Back up your key.
+
+### Import from config.yaml
+
+If you have a `config.yaml` in `/config`, M3Undle can import providers from it directly via the Add Provider dialog. This is useful for migrating from a config-file workflow.
+
+---
+
+## Credential Security Notes
+
+- **Xtream passwords** are encrypted (AES-256-GCM) and stored in the database. The plaintext password is never persisted.
+- **URL credentials via `.env`** (`%VAR_NAME%` substitution) are stored in plaintext in `/config/.env`. Restrict file permissions on the host accordingly.
+- **The encryption key** (`M3UNDLE_ENCRYPTION_KEY`) should be set as an environment variable, not stored in `/config/.env`. Anyone with read access to the `.env` file would gain access to the key.
+- The `/config/.env` file is for provider URL substitution only — things like `%PROVIDER_PASS%` in playlist URLs.
 
 ---
 

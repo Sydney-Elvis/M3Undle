@@ -15,9 +15,9 @@ public sealed class SecretEncryptionService
 {
     private readonly byte[]? _key;
 
-    public SecretEncryptionService()
+    public SecretEncryptionService(EnvironmentVariableService envVarService)
     {
-        var raw = Environment.GetEnvironmentVariable("M3UNDLE_ENCRYPTION_KEY");
+        var raw = envVarService.GetValue("M3UNDLE_ENCRYPTION_KEY");
         if (string.IsNullOrWhiteSpace(raw))
             return;
 

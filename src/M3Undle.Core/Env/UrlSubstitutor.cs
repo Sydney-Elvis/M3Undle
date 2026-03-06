@@ -5,31 +5,34 @@ public static class UrlSubstitutor
     public static string? SubstituteCredentials(string? value, IReadOnlyDictionary<string, string> env, out List<string> replaced)
     {
         replaced = new List<string>();
-        if (string.IsNullOrEmpty(value) || env.Count == 0)
-        {
+        if (string.IsNullOrEmpty(value) || !value.Contains('%'))
             return value;
-        }
+
+        var matches = System.Text.RegularExpressions.Regex.Matches(value, @"%(\w+)%");
+        if (matches.Count == 0)
+            return value;
 
         string result = value;
-        foreach (var kvp in env)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (System.Text.RegularExpressions.Match match in matches)
         {
-            var before = result;
-            
-            // Replace %KEY% with value (case-insensitive key matching)
-            var pattern = $"%{kvp.Key}%";
-            result = result.Replace(pattern, kvp.Value, StringComparison.OrdinalIgnoreCase);
-            
-            // Track if replaced
-            if (!string.Equals(before, result, StringComparison.Ordinal))
-            {
-                replaced.Add(kvp.Key.ToUpperInvariant());
-            }
+            var varName = match.Groups[1].Value;
+            if (!seen.Add(varName))
+                continue;
+
+            // OS env first (Docker/system vars take priority), then .env file fallback
+            var resolved = Environment.GetEnvironmentVariable(varName)
+                ?? (env.TryGetValue(varName, out var fileVal) ? fileVal : null);
+
+            if (resolved is null)
+                continue;
+
+            result = result.Replace($"%{varName}%", resolved, StringComparison.OrdinalIgnoreCase);
+            replaced.Add(varName.ToUpperInvariant());
         }
 
-        // Normalize URL to fix common issues like double slashes
-        result = NormalizeUrl(result);
-
-        return result;
+        return NormalizeUrl(result);
     }
 
     /// <summary>

@@ -33,10 +33,11 @@ public sealed class EnvironmentVariableService
         foreach (System.Text.RegularExpressions.Match match in matches)
         {
             var varName = match.Groups[1].Value;
-            if (!_variables.TryGetValue(varName, out var value))
+            var value = GetValue(varName);
+            if (value is null)
             {
                 throw new InvalidOperationException(
-                    $"Environment variable '{varName}' referenced in URL but not defined in .env");
+                    $"Environment variable '{varName}' referenced in URL but not defined");
             }
 
             result = result.Replace($"%{varName}%", value);
@@ -79,7 +80,7 @@ public sealed class EnvironmentVariableService
     public (bool IsValid, IReadOnlyList<string> Missing) ValidateVariables(string? input)
     {
         var missing = GetReferencedVariables(input)
-            .Where(v => !_variables.ContainsKey(v))
+            .Where(v => GetValue(v) is null)
             .ToList();
 
         return (missing.Count == 0, missing.AsReadOnly());
@@ -90,6 +91,17 @@ public sealed class EnvironmentVariableService
     /// Only returns variable names, not values (for security).
     /// </summary>
     public IEnumerable<string> GetDefinedVariableNames() => _variables.Keys;
+
+    /// <summary>
+    /// Gets a config value — OS process environment takes priority, then .env file.
+    /// Use this instead of Environment.GetEnvironmentVariable so that values in the
+    /// .env file work without requiring them to be set at the OS/container level.
+    /// </summary>
+    public string? GetValue(string name) =>
+        Environment.GetEnvironmentVariable(name) ?? GetEnvFileValue(name);
+
+    internal string? GetEnvFileValue(string name) =>
+        _variables.TryGetValue(name, out var value) ? value : null;
 
     private FrozenDictionary<string, string> LoadEnvFile()
     {

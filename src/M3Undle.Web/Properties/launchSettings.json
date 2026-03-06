@@ -7,7 +7,10 @@
         "launchBrowser": true,
         "applicationUrl": "http://localhost:5283",
         "environmentVariables": {
-          "ASPNETCORE_ENVIRONMENT": "Development"
+          "ASPNETCORE_ENVIRONMENT": "Development",
+          "M3UNDLE_CONFIG_DIR": "D:\\github\\IPTV\\M3Undle\\.config",
+          "M3UNDLE_M3U_DIR": "D:\\github\\IPTV\\M3Undle\\m3u_data",
+          "M3UNDLE_ENCRYPTION_KEY": "7QxRGMBlZuir2xI3TyXCNMuD0bL1v1bUleVUonGlUSU="
         }
       },
       "https": {
@@ -16,7 +19,10 @@
         "launchBrowser": true,
         "applicationUrl": "https://localhost:7223;http://localhost:5283",
         "environmentVariables": {
-          "ASPNETCORE_ENVIRONMENT": "Development"
+          "ASPNETCORE_ENVIRONMENT": "Development",
+          "M3UNDLE_CONFIG_DIR": "D:\\github\\IPTV\\M3Undle\\.config",
+          "M3UNDLE_M3U_DIR": "D:\\github\\IPTV\\M3Undle\\m3u_data",
+          "M3UNDLE_ENCRYPTION_KEY": "7QxRGMBlZuir2xI3TyXCNMuD0bL1v1bUleVUonGlUSU="
         }
       }
     }

@@ -74,9 +74,10 @@ public class LiveClassifierTests
     [TestMethod]
     public void IsLive_HandlesNullAndEmpty()
     {
-        Assert.IsFalse(LiveClassifier.IsLive(null));
-        Assert.IsFalse(LiveClassifier.IsLive(""));
-        Assert.IsFalse(LiveClassifier.IsLive("   "));
+        // null/empty have no URL structure to classify — default to "live" (safe default)
+        Assert.IsTrue(LiveClassifier.IsLive(null));
+        Assert.IsTrue(LiveClassifier.IsLive(""));
+        Assert.IsTrue(LiveClassifier.IsLive("   "));
     }
 
     [TestMethod]

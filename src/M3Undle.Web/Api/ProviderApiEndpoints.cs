@@ -1257,10 +1257,11 @@ public static class ProviderApiEndpoints
 
     private static Results<Ok<FileBrowseDto>, BadRequest<string>> BrowseFilesystemAsync(
         string? path,
-        IWebHostEnvironment env)
+        EnvironmentVariableService envVarService)
     {
-        var configDir = Environment.GetEnvironmentVariable("M3UNDLE_CONFIG_DIR");
-        var rootDir = string.IsNullOrWhiteSpace(configDir) ? env.ContentRootPath : configDir;
+        var rootDir = envVarService.GetValue("M3UNDLE_M3U_DIR");
+        if (string.IsNullOrWhiteSpace(rootDir))
+            return TypedResults.BadRequest("M3UNDLE_M3U_DIR is not set. Set this environment variable to the directory containing your .m3u files and restart M3Undle.");
 
         // Resolve the target path — default to root if none given
         var targetPath = string.IsNullOrWhiteSpace(path)
