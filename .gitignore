@@ -98,8 +98,7 @@ src/M3Undle.Web/Data/snapshots/
 # Local compose bind-mount directories (created by docker compose up)
 /data/
 /config/
-data/
-m3u_data/
+/m3u_data/
 
 .DS_Store
 .ai_docs/
