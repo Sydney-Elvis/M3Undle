@@ -64,7 +64,8 @@
 				"tag": "m3undle:web-debug",
 				"target": "final",
 				"dockerfile": "${workspaceFolder}/Dockerfile",
-				"context": "${workspaceFolder}"
+				"context": "${workspaceFolder}",
+				"customOptions": "--no-cache"
 			},
 			"netCore": {
 				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
