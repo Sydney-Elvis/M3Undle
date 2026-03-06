@@ -76,6 +76,7 @@
 			"label": "docker-run: existing-image",
 			"dependsOn": [
 				"docker-stop: m3undle-debug",
+				"build-web",
 				"docker-ensure: dev dirs"
 			],
 			"dependsOrder": "sequence",

@@ -1062,7 +1062,9 @@ else
 
     private int GetNextNumberForGroup(GroupFilterDto filter, Dictionary<string, int?> numbers, HashSet<int> used)
     {
-        var baseStart  = filter.AutoNumStart ?? _defaultStartNum;
+        var baseStart = filter.OutputName is not null && _parentStartNum.TryGetValue(filter.OutputName, out var parentStart)
+            ? parentStart
+            : (filter.AutoNumStart ?? _defaultStartNum);
         var currentMax = numbers.Values
             .Where(v => v.HasValue)
             .Select(v => v!.Value)
