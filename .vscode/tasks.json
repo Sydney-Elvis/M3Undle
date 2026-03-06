@@ -58,6 +58,8 @@
 		{
 			"type": "docker-build",
 			"label": "docker-build: debug",
+			"dependsOn": ["build-web"],
+			"dependsOrder": "sequence",
 			"dockerBuild": {
 				"tag": "m3undle:web-debug",
 				"target": "final",
@@ -257,7 +259,8 @@
 			"label": "docker-build: force-debug",
 			"dependsOn": [
 				"docker-stop: m3undle-debug",
-				"docker-reset: data folder"
+				"docker-reset: data folder",
+				"build-web"
 			],
 			"dependsOrder": "sequence",
 			"dockerBuild": {
