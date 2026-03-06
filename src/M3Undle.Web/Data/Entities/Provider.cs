@@ -20,6 +20,12 @@ public sealed class Provider
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
 
+    // Xtream Codes API provider fields
+    public string? XtreamBaseUrl { get; set; }
+    public string? XtreamUsername { get; set; }
+    public string? XtreamEncryptedPassword { get; set; }
+    public bool XtreamIncludeXmltv { get; set; }
+
     public ICollection<ProfileProvider> ProfileProviders { get; set; } = new List<ProfileProvider>();
     public ICollection<FetchRun> FetchRuns { get; set; } = new List<FetchRun>();
     public ICollection<ProviderGroup> ProviderGroups { get; set; } = new List<ProviderGroup>();

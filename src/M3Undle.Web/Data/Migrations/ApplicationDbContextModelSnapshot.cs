@@ -669,6 +669,24 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("xmltv_url");
 
+                    b.Property<string>("XtreamBaseUrl")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("xtream_base_url");
+
+                    b.Property<string>("XtreamEncryptedPassword")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("xtream_encrypted_password");
+
+                    b.Property<bool>("XtreamIncludeXmltv")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("xtream_include_xmltv");
+
+                    b.Property<string>("XtreamUsername")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("xtream_username");
+
                     b.HasKey("ProviderId");
 
                     b.HasIndex("Enabled")
