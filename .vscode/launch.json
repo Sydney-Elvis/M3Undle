@@ -25,7 +25,7 @@
       "name": "Containers: Debug Web GUI (Docker, existing image)",
       "type": "docker",
       "request": "launch",
-      "preLaunchTask": "docker-run: m3undle-debug",
+      "preLaunchTask": "docker-run: existing-image",
       "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {

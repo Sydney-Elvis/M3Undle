@@ -57,7 +57,7 @@
 		},
 		{
 			"type": "docker-build",
-			"label": "docker-build: debug",
+			"label": "docker-build: existing-image",
 			"dependsOn": ["build-web"],
 			"dependsOrder": "sequence",
 			"dockerBuild": {
@@ -73,10 +73,9 @@
 		},
 		{
 			"type": "docker-run",
-			"label": "docker-run: m3undle-debug",
+			"label": "docker-run: existing-image",
 			"dependsOn": [
 				"docker-stop: m3undle-debug",
-				"docker-build: debug",
 				"docker-ensure: dev dirs"
 			],
 			"dependsOrder": "sequence",
@@ -106,7 +105,7 @@
 						"permissions": "rw"
 					}
 				],
-				"customOptions": "--user root",
+				"customOptions": "--user root --label m3undle.run_mode=existing",
 				"ports": [
 					{
 						"hostPort": 8080,
@@ -154,7 +153,7 @@
 						"permissions": "rw"
 					}
 				],
-				"customOptions": "--user root",
+				"customOptions": "--user root --label m3undle.run_mode=force",
 				"ports": [
 					{
 						"hostPort": 8080,
@@ -171,7 +170,7 @@
 			"type": "docker-run",
 			"label": "docker-run: release",
 			"dependsOn": [
-				"docker-build: debug"
+				"docker-build: existing-image"
 			],
 			"dockerRun": {
 				"customOptions": "--user root --rm",
