@@ -673,7 +673,12 @@ public sealed class SnapshotHandlingTests
         var handler = new FakeHttpMessageHandler(statusCode, content);
         var factory = new FakeHttpClientFactory(handler);
         var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
-        var fetcher = new ProviderFetcher(factory, new PlaylistParser(), envSvc, NullLogger<ProviderFetcher>.Instance);
+        var fetcher = new ProviderFetcher(
+            factory,
+            new PlaylistParser(),
+            envSvc,
+            new SecretEncryptionService(),
+            NullLogger<ProviderFetcher>.Instance);
         var env = new FakeWebHostEnvironment(tempDir);
         return new SnapshotBuilder(db, fetcher, env, Options.Create(new SnapshotOptions()), NullLogger<SnapshotBuilder>.Instance);
     }

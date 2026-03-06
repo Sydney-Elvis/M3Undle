@@ -41,7 +41,8 @@
 			"options": {
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
-					"M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config"
+					"M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config",
+					"M3UNDLE_DATA_DIR": "${workspaceFolder}/data"
 				}
 			},
 			"isBackground": true,

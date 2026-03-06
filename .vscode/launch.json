@@ -13,7 +13,8 @@
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "ASPNETCORE_URLS": "http://localhost:5283",
-        "M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config"
+        "M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config",
+        "M3UNDLE_DATA_DIR": "${workspaceFolder}/data"
       },
       "serverReadyAction": {
         "action": "openExternally",

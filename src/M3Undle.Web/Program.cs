@@ -20,6 +20,10 @@ using System.Data.Common;
 Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"));
 
 var builder = WebApplication.CreateBuilder(args);
+var runtimePaths = RuntimePaths.Resolve(builder.Configuration, builder.Environment);
+
+if (Path.GetDirectoryName(runtimePaths.DatabasePath) is { Length: > 0 } dbDir)
+    Directory.CreateDirectory(dbDir);
 
 // Register logging infrastructure before AddSerilog so the broadcast sink can be injected
 builder.Services.AddSingleton<InMemoryLogStore>();
@@ -31,12 +35,7 @@ builder.Services.AddSerilog((services, lc) =>
       .ReadFrom.Services(services);
 
     var loggingCfg = builder.Configuration.GetSection("M3Undle:Logging");
-    var logDir = loggingCfg["LogDirectory"] ?? "Data/logs";
-    if (!Path.IsPathRooted(logDir))
-        logDir = Path.Combine(builder.Environment.ContentRootPath, logDir);
-    Directory.CreateDirectory(logDir);
-
-    var filePath = Path.Combine(logDir, "app-.log");
+    var filePath = Path.Combine(runtimePaths.LogDirectory, "app-.log");
     var sizeLimit = loggingCfg.GetValue<long?>("FileSizeLimitBytes") ?? 10_485_760L;
     var retainCount = loggingCfg.GetValue<int?>("RetainedFileCount") ?? 31;
     var rollOnSize = loggingCfg.GetValue<bool?>("RollOnFileSizeLimit") ?? true;
@@ -75,10 +74,9 @@ builder.Services.AddAuthentication(options =>
     })
     .AddIdentityCookies();
 
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 var sqliteInterceptor = new SqliteConnectionInterceptor();
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlite(connectionString).AddInterceptors(sqliteInterceptor));
+    options.UseSqlite(runtimePaths.DatabaseConnectionString).AddInterceptors(sqliteInterceptor));
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
@@ -102,6 +100,14 @@ builder.Services.AddHttpClient("stream-relay", client =>
 
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
+builder.Services.PostConfigure<SnapshotOptions>(options =>
+{
+    options.Directory = RuntimePaths.ResolveDirectory(
+        configuredPath: options.Directory,
+        dataDirectory: runtimePaths.DataDirectory,
+        defaultRelativePath: "snapshots");
+});
+builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddScoped<SnapshotBuilder>();
