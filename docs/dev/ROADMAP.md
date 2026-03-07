@@ -10,16 +10,14 @@ Core complete:
 - Stream proxy relay — `/stream/<streamKey>` (relay only, clients never see provider URLs)
 - Stable stream keys derived from channel properties (not DB IDs)
 - On-demand refresh trigger + background scheduled refresh (fixed interval)
+- Local file support for M3U/XMLTV sources
+- Serilog integration + log viewer UI
+- Version info in UI + Docker smoke coverage
 
-Remaining before A1 is closed:
-- Local file support for M3U/XMLTV sources (import without hosting a URL)
-- Serilog integration + logging level cleanup (structured, not developer noise)
-- Log viewer page (tail of recent log entries in UI)
-- Version info in UI
-- Docker smoke tests (curl /health, /m3u, /stream)
+Status: Alpha 1 baseline is complete. Active development is in Alpha 2.
 
-Not in Alpha 1: configurable refresh schedule, filtering, output group rules,
-multiple EPG sources, buffering, HDHR emulation, plugin architecture.
+Not in Alpha 1: configurable refresh schedule, advanced mapping transforms,
+multiple EPG sources, buffering, HDHR emulation.
 
 ---
 
@@ -51,9 +49,9 @@ guide categories (Jellyfin, Plex, Emby, player apps).
 - Configurable refresh schedule (interval or scheduled times) via Settings UI
 - Filtered channel count (n / total) and mapped channel count on Dashboard
 
-**Extension architecture gate:** A2 must define `IChannelFilter`, `IGroupFilter`,
-`IChannelTransform` interfaces — internal implementations only in Core. External
-plugins load against these contracts. Do not build filtering as concrete classes.
+Current implementation note: group include/exclude, channel selection, output group
+renaming/merging, and initial channel numbering are already in place. Remaining A2
+work is focused on richer transforms, EPG mapping/merge, auth, and scheduling.
 
 ---
 
@@ -69,11 +67,9 @@ plugins load against these contracts. Do not build filtering as concrete classes
 
 ---
 
-## Alpha 4 — Plugin Architecture & Security
-**Goal:** Plugin loading infrastructure, extension contracts, and endpoint security.
+## Alpha 4 — Security & Stabilization
+**Goal:** Complete endpoint protection and stabilization work needed before Beta closeout.
 
-- Plugin loader (external assembly discovery, plugin manifest format)
-- Extension contracts: `ISettingsContributor`, `IEndpointModule`, `IUiTheme`
 - Endpoint security: secret token embedded in URL path
   (not headers — Media Players cannot set custom headers)
 - Token generation and rotation UI
