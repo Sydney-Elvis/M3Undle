@@ -85,7 +85,7 @@ public static class ChannelFilterApiEndpoints
             .ToListAsync(cancellationToken);
 
         var dtos = filters
-            .OrderBy(f => f.Decision == "hold" ? 0 : f.Decision == "include" ? 1 : 2)
+            .OrderBy(f => f.Decision == "hold" ? 0 : 1)
             .ThenByDescending(f => f.IsNew)
             .ThenBy(f => f.ProviderGroup.RawName, StringComparer.OrdinalIgnoreCase)
             .Select(f => ToDto(f))
@@ -112,10 +112,7 @@ public static class ChannelFilterApiEndpoints
         if (request.Decision is not null)
         {
             filter.Decision = request.Decision;
-            filter.IsNew = false; // any explicit decision clears the new flag
-            // Transition to "include" always uses per-channel selection — never auto-include everything.
-            if (request.Decision == "include" && filter.ChannelMode == "all")
-                filter.ChannelMode = "select";
+            filter.IsNew = false;
         }
 
         if (request.ClearIsNew)
@@ -180,8 +177,8 @@ public static class ChannelFilterApiEndpoints
         AppEventBus eventBus,
         CancellationToken cancellationToken)
     {
-        if (request.Decision is not ("include" or "exclude" or "hold"))
-            return TypedResults.BadRequest("Decision must be 'include', 'exclude', or 'hold'.");
+        if (request.Decision is not ("exclude" or "hold"))
+            return TypedResults.BadRequest("Decision must be 'exclude' or 'hold'.");
 
         if (request.ProviderGroupIds.Count == 0)
             return TypedResults.Ok((object)new { updated = 0 });
@@ -200,10 +197,8 @@ public static class ChannelFilterApiEndpoints
             if (existingByGroupId.TryGetValue(groupId, out var filter))
             {
                 filter.Decision = request.Decision;
-                filter.IsNew = false; // bulk decision clears new flag
+                filter.IsNew = false;
                 filter.UpdatedUtc = now;
-                if (request.Decision == "include" && filter.ChannelMode == "all")
-                    filter.ChannelMode = "select";
             }
             else
             {
@@ -298,7 +293,7 @@ public static class ChannelFilterApiEndpoints
         if (filter is null)
             return TypedResults.NotFound();
 
-        if (filter.Decision != "include")
+        if (filter.Decision == "exclude")
         {
             var providerChannels = await db.ProviderChannels
                 .AsNoTracking()
@@ -377,8 +372,6 @@ public static class ChannelFilterApiEndpoints
 
         var selectionByChannelId = existingSelections.ToDictionary(x => x.ProviderChannelId, StringComparer.Ordinal);
 
-        var isAllMode = filter.ChannelMode == "all" && filter.Decision == "include";
-
         var dtos = allChannels.Select(ch =>
         {
             selectionByChannelId.TryGetValue(ch.ProviderChannelId, out var sel);
@@ -388,7 +381,7 @@ public static class ChannelFilterApiEndpoints
                 DisplayName = ch.DisplayName,
                 TvgId = ch.TvgId,
                 Active = ch.Active,
-                IsSelected = isAllMode || sel is not null,
+                IsSelected = sel is not null,
                 OutputGroupName = sel?.OutputGroupName,
                 ChannelNumber = sel?.ChannelNumber,
             };
@@ -514,12 +507,12 @@ public static class ChannelFilterApiEndpoints
         var groupsIncluded = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "include", cancellationToken);
+            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision != "exclude" && x.ChannelFilters.Any(), cancellationToken);
 
         var groupsHold = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold", cancellationToken);
+            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold" && !x.ChannelFilters.Any(), cancellationToken);
 
         var groupsNew = await db.ProfileGroupFilters
             .AsNoTracking()
@@ -646,12 +639,12 @@ public static class ChannelFilterApiEndpoints
             liveIncluded = await db.ProfileGroupFilters
                 .AsNoTracking()
                 .Include(x => x.ProviderGroup)
-                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "include", cancellationToken);
+                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision != "exclude" && x.ChannelFilters.Any(), cancellationToken);
 
             livePending = await db.ProfileGroupFilters
                 .AsNoTracking()
                 .Include(x => x.ProviderGroup)
-                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold", cancellationToken);
+                .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold" && !x.ChannelFilters.Any(), cancellationToken);
 
             liveExcluded = await db.ProfileGroupFilters
                 .AsNoTracking()

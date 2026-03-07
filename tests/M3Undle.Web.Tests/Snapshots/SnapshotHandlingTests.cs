@@ -445,7 +445,7 @@ public sealed class SnapshotHandlingTests
                 var newsFilter = await edit.ProfileGroupFilters
                     .Include(x => x.ProviderGroup)
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "News");
-                newsFilter.Decision = "include";
+                newsFilter.Decision = "hold";
                 newsFilter.UpdatedUtc = DateTime.UtcNow;
 
                 var moviesFilter = await edit.ProfileGroupFilters
@@ -459,6 +459,20 @@ public sealed class SnapshotHandlingTests
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Series");
                 seriesFilter.Decision = "exclude";
                 seriesFilter.UpdatedUtc = DateTime.UtcNow;
+
+                var newsChannels = await edit.ProviderChannels
+                    .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == "News" && x.ContentType == "live")
+                    .ToListAsync();
+                foreach (var ch in newsChannels)
+                {
+                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                    {
+                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                        ProfileGroupFilterId = newsFilter.ProfileGroupFilterId,
+                        ProviderChannelId = ch.ProviderChannelId,
+                        CreatedUtc = DateTime.UtcNow,
+                    });
+                }
 
                 await edit.SaveChangesAsync();
             }
@@ -536,14 +550,29 @@ public sealed class SnapshotHandlingTests
                 await CreateBuilder(db1, HttpStatusCode.OK, SampleDuplicateLiveRowsM3u, tempDir).RunAsync(CancellationToken.None);
             }
 
-            // Include the group for live output.
+            // Activate the group and select all its channels for live output.
             await using (var edit = fixture.CreateDbContext())
             {
                 var filter = await edit.ProfileGroupFilters
                     .Include(x => x.ProviderGroup)
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "USA FOX");
-                filter.Decision = "include";
+                filter.Decision = "hold";
                 filter.UpdatedUtc = DateTime.UtcNow;
+
+                var foxChannels = await edit.ProviderChannels
+                    .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == "USA FOX" && x.ContentType == "live")
+                    .ToListAsync();
+                foreach (var ch in foxChannels)
+                {
+                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                    {
+                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                        ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                        ProviderChannelId = ch.ProviderChannelId,
+                        CreatedUtc = DateTime.UtcNow,
+                    });
+                }
+
                 await edit.SaveChangesAsync();
             }
 
@@ -596,8 +625,23 @@ public sealed class SnapshotHandlingTests
                     .ToListAsync();
                 foreach (var filter in filters)
                 {
-                    filter.Decision = "include";
+                    filter.Decision = "hold";
                     filter.UpdatedUtc = DateTime.UtcNow;
+
+                    var groupName = filter.ProviderGroup.RawName;
+                    var groupChannels = await edit.ProviderChannels
+                        .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == groupName && x.ContentType == "live")
+                        .ToListAsync();
+                    foreach (var ch in groupChannels)
+                    {
+                        edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                        {
+                            ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                            ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                            ProviderChannelId = ch.ProviderChannelId,
+                            CreatedUtc = DateTime.UtcNow,
+                        });
+                    }
                 }
 
                 await edit.SaveChangesAsync();

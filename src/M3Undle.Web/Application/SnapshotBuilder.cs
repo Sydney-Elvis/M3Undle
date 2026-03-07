@@ -20,7 +20,7 @@ public sealed class SnapshotBuilder(
     IOptions<SnapshotOptions> snapshotOptions,
     ILogger<SnapshotBuilder> logger)
 {
-    private sealed record GroupFilterConfig(string ProfileGroupFilterId, string ChannelMode, string OutputName, int? AutoNumStart, int? AutoNumEnd);
+    private sealed record GroupFilterConfig(string ProfileGroupFilterId, string OutputName, int? AutoNumStart, int? AutoNumEnd);
     private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber);
 
     // In-memory channel data used by BuildChannelIndex — sourced from DB provider_channels
@@ -273,20 +273,18 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var includedGroups = groupFilters
-            .Where(f => f.Decision == "include")
+            .Where(f => f.Decision != "exclude")
             .ToDictionary(
             f => f.ProviderGroup.RawName,
             f => new GroupFilterConfig(
                 f.ProfileGroupFilterId,
-                f.ChannelMode,
                 f.OutputName ?? f.ProviderGroup.RawName,
                 f.AutoNumStart,
                 f.AutoNumEnd),
             StringComparer.Ordinal);
 
-        // Load per-channel selections for groups in "select" mode
+        // Load per-channel selections — always "select" mode now
         var selectModeFilterIds = includedGroups.Values
-            .Where(g => g.ChannelMode == "select")
             .Select(g => g.ProfileGroupFilterId)
             .ToList();
 
@@ -303,10 +301,12 @@ public sealed class SnapshotBuilder(
                 .GroupBy(x => x.ProfileGroupFilterId)
                 .ToDictionary(
                     g => g.Key,
-                    g => g.ToDictionary(
-                        x => x.ProviderChannel.StreamUrl,
-                        x => new ChannelOverride(x.OutputGroupName, x.ChannelNumber),
-                        StringComparer.Ordinal));
+                    g => g
+                        .GroupBy(x => x.ProviderChannel.StreamUrl, StringComparer.Ordinal)
+                        .ToDictionary(
+                            sg => sg.Key,
+                            sg => sg.Select(x => new ChannelOverride(x.OutputGroupName, x.ChannelNumber)).First(),
+                            StringComparer.Ordinal));
         }
 
         var channelIndex = BuildChannelIndex(
@@ -416,22 +416,15 @@ public sealed class SnapshotBuilder(
             if (!hasGroup || !includedGroups.TryGetValue(groupName!, out var filter))
                 continue;
 
-            if (filter.ChannelMode == "select")
-            {
-                if (!channelOverridesByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var overrides))
-                    continue;
-                if (!overrides.TryGetValue(channel.StreamUrl ?? string.Empty, out var ov))
-                    continue;
+            if (!channelOverridesByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var overrides))
+                continue;
+            if (!overrides.TryGetValue(channel.StreamUrl ?? string.Empty, out var ov))
+                continue;
 
-                var effectiveGroup = string.IsNullOrWhiteSpace(ov.OutputGroupName)
-                    ? filter.OutputName
-                    : ov.OutputGroupName;
-                pending.Add((effectiveGroup, channel, ov.ChannelNumber));
-            }
-            else
-            {
-                pending.Add((filter.OutputName, channel, null));
-            }
+            var effectiveGroup = string.IsNullOrWhiteSpace(ov.OutputGroupName)
+                ? filter.OutputName
+                : ov.OutputGroupName;
+            pending.Add((effectiveGroup, channel, ov.ChannelNumber));
         }
 
         var result = new List<ChannelIndexEntry>();

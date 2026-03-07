@@ -219,15 +219,15 @@
         <MudPaper Class="pa-4" Elevation="1">
             <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
                 <MudText Typo="Typo.h6">Channel Mapping</MudText>
-                <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="channels/groups">
-                    Configure Groups
+                <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="channels/mapping">
+                    Configure Mapping
                 </MudButton>
             </MudStack>
 
             @if (_channelStats is null || (_channelStats.GroupsIncluded == 0 && _channelStats.GroupsHold == 0))
             {
                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
-                    No channels mapped yet — <MudLink Href="channels/groups">configure Channel Groups</MudLink> to start serving content.
+                    No channels mapped yet — <MudLink Href="channels/mapping">configure Channel Mapping</MudLink> to start serving content.
                 </MudAlert>
             }
             else
@@ -249,14 +249,14 @@
                     {
                         <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
                             @_channelStats.GroupsNew new group@(_channelStats.GroupsNew == 1 ? "" : "s") since last sync —
-                            <MudLink Href="channels/groups">review now</MudLink>
+                            <MudLink Href="channels/mapping">review now</MudLink>
                         </MudAlert>
                     }
                     else if (_channelStats.GroupsHold > 0)
                     {
                         <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
                             @_channelStats.GroupsHold group@(_channelStats.GroupsHold == 1 ? "" : "s") on hold —
-                            <MudLink Href="channels/groups">map now</MudLink>
+                            <MudLink Href="channels/mapping">map now</MudLink>
                         </MudAlert>
                     }
                 </MudStack>

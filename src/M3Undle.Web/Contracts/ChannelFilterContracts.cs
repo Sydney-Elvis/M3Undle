@@ -13,7 +13,7 @@ public sealed class GroupFilterDto
     public string ProviderName { get; set; } = string.Empty;
     public string Decision { get; set; } = "hold";
     public bool IsNew { get; set; }
-    public string ChannelMode { get; set; } = "all";
+    public string ChannelMode { get; set; } = "select";
     public string? OutputName { get; set; }
     public int? AutoNumStart { get; set; }
     public int? AutoNumEnd { get; set; }
@@ -116,7 +116,7 @@ public sealed class ProviderChannelSelectDto
 
 public sealed class ChannelSelectionsDto
 {
-    public string ChannelMode { get; set; } = "all";
+    public string ChannelMode { get; set; } = "select";
     public List<ProviderChannelSelectDto> Channels { get; set; } = [];
 }
 
@@ -129,7 +129,7 @@ public sealed class ChannelSelectionItem
 
 public sealed class UpdateChannelSelectionsRequest
 {
-    public string ChannelMode { get; set; } = "all";
+    public string ChannelMode { get; set; } = "select";
     public List<ChannelSelectionItem> Channels { get; set; } = [];
 }
 

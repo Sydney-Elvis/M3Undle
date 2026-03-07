@@ -10,9 +10,9 @@
 <MudNavMenu>
     <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home" OnClick="HandleNavClick">Overview</MudNavLink>
     <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns" OnClick="HandleNavClick">Providers</MudNavLink>
-    <MudNavLink Href="channels/groups" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">
+    <MudNavLink Href="channels/mapping" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-            <span>Groups</span>
+            <span>Mapping</span>
             @if (_pendingGroupCount > 0)
             {
                 <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ms-1">@_pendingGroupCount</MudChip>
