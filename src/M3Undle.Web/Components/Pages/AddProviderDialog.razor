@@ -36,7 +36,6 @@
                             <MudTextField Label="Headers JSON (optional)" @bind-Value="_urlModel.HeadersJson" Lines="2"
                                           HelperText='e.g. {"X-Custom-Header":"value"}' />
                             <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_urlModel.TimeoutSeconds" Min="1" Max="1800" />
-                            @RenderProfileSection(_urlModel)
                             @RenderContentToggles(_urlModel)
                             <MudSwitch @bind-Value="_urlModel.Enabled" Color="Color.Success" Label="Enabled" />
                         </MudStack>
@@ -120,7 +119,6 @@
                             <MudTextField Label="XMLTV URL (optional)" @bind-Value="_fileModel.XmltvUrl"
                                           HelperText="http/https URL or leave empty" />
                             <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_fileModel.TimeoutSeconds" Min="1" Max="1800" />
-                            @RenderProfileSection(_fileModel)
                             @RenderContentToggles(_fileModel)
                             <MudSwitch @bind-Value="_fileModel.Enabled" Color="Color.Success" Label="Enabled" />
                         </MudStack>
@@ -169,7 +167,6 @@
                                        Disabled="!_encryptionAvailable" />
                             <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_xtreamModel.TimeoutSeconds" Min="1" Max="1800"
                                              Disabled="!_encryptionAvailable" />
-                            @RenderProfileSection(_xtreamModel)
                             @RenderContentToggles(_xtreamModel)
                             <MudSwitch @bind-Value="_xtreamModel.Enabled" Color="Color.Success" Label="Enabled"
                                        Disabled="!_encryptionAvailable" />
@@ -257,6 +254,11 @@
                                                              Disabled="@(_importingName == context.Name)" />
                                                 <MudCheckBox T="bool" @bind-Value="opts.IncludeSeries" Size="Size.Small" Label="Series"
                                                              Disabled="@(_importingName == context.Name)" />
+                                                @if (!_importedProviders.Any(p => p.IsActive))
+                                                {
+                                                    <MudCheckBox T="bool" @bind-Value="opts.SetAsActive" Size="Size.Small" Label="Set active"
+                                                                 Disabled="@(_importingName == context.Name)" />
+                                                }
                                             }
                                             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                                                        Disabled="@(IsAlreadyImported(context.Name) || context.MissingEnvVars.Count > 0 || _importingName == context.Name)"
@@ -605,7 +607,13 @@
                 new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries });
             if (!r.IsSuccessStatusCode) { _importError = await ReadErrorAsync(r); return; }
             var dto = await r.Content.ReadFromJsonAsync<ProviderDto>();
-            if (dto is not null) _importedProviders.Add(dto);
+            if (dto is not null)
+            {
+                _importedProviders.Add(dto);
+                if (opts.SetAsActive)
+                    await Http.PatchAsJsonAsync($"/api/v1/providers/{dto.ProviderId}/active",
+                        new SetProviderActiveRequest { IsActive = true });
+            }
             await OnSaved.InvokeAsync();
             MudDialog.Close(DialogResult.Ok(true));
         }
@@ -663,8 +671,8 @@
         public string? UserAgent { get; set; }
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
-        public bool IncludeVod { get; set; }
-        public bool IncludeSeries { get; set; }
+        public bool IncludeVod { get; set; } = true;
+        public bool IncludeSeries { get; set; } = true;
         public string ProfileId { get; set; } = string.Empty;
     }
 
@@ -677,8 +685,8 @@
         public bool XtreamIncludeXmltv { get; set; }
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
-        public bool IncludeVod { get; set; }
-        public bool IncludeSeries { get; set; }
+        public bool IncludeVod { get; set; } = true;
+        public bool IncludeSeries { get; set; } = true;
         public string ProfileId { get; set; } = string.Empty;
     }
 
@@ -692,7 +700,8 @@
 
     private sealed class ImportOptions
     {
-        public bool IncludeVod { get; set; }
-        public bool IncludeSeries { get; set; }
+        public bool IncludeVod { get; set; } = true;
+        public bool IncludeSeries { get; set; } = true;
+        public bool SetAsActive { get; set; }
     }
 }
