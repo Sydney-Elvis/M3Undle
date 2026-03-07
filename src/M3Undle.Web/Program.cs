@@ -164,6 +164,7 @@ app.MapRazorComponents<App>()
 app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
 app.MapChannelFilterApiEndpoints();
+app.MapChannelListApiEndpoints();
 app.MapCompatibilityEndpoints();
 app.MapHealthChecks("/health");
 

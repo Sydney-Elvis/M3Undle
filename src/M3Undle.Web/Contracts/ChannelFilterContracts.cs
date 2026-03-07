@@ -144,3 +144,21 @@ public sealed class ChannelSearchGroupResult
     public string FilterId { get; set; } = string.Empty;
     public List<ChannelSearchItemDto> Channels { get; set; } = [];
 }
+
+public sealed class ChannelListItemDto
+{
+    public int? ChannelNumber { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+    public string? LogoUrl { get; set; }
+    public string? GroupTitle { get; set; }
+    public string? TvgId { get; set; }
+    public string StreamKey { get; set; } = string.Empty;
+}
+
+public sealed class ChannelListResponse
+{
+    public int Total { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public List<ChannelListItemDto> Items { get; set; } = [];
+}
