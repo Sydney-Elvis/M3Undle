@@ -81,6 +81,7 @@ public static class ChannelFilterApiEndpoints
         var filters = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup).ThenInclude(g => g.Provider)
+            .Include(x => x.ChannelFilters)
             .Where(x => x.ProfileId == profileId)
             .ToListAsync(cancellationToken);
 
@@ -770,6 +771,7 @@ public static class ChannelFilterApiEndpoints
         ProviderGroupLastSeen = f.ProviderGroup.LastSeenUtc,
         ProviderGroupContentType = f.ProviderGroup.ContentType,
         ChannelCount = f.ProviderGroup.ChannelCount,
+        SelectedChannelCount = f.ChannelFilters.Count,
         ProviderName = f.ProviderGroup.Provider.Name,
         Decision = f.Decision,
         IsNew = f.IsNew,

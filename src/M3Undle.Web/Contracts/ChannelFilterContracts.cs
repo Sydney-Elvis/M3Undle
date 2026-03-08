@@ -10,6 +10,7 @@ public sealed class GroupFilterDto
     public DateTime ProviderGroupFirstSeen { get; set; }
     public DateTime ProviderGroupLastSeen { get; set; }
     public int? ChannelCount { get; set; }
+    public int SelectedChannelCount { get; set; }
     public string ProviderName { get; set; } = string.Empty;
     public string Decision { get; set; } = "hold";
     public bool IsNew { get; set; }

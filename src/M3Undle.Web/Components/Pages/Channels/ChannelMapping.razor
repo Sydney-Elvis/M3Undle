@@ -144,9 +144,10 @@ else
         var chSelected = active.Sum(f =>
             _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
                 ? sel.Count(s => s.Value)
-                : 0);
+                : f.SelectedChannelCount);
         var withSelections = active.Count(f =>
-            _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value));
+            (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
+            (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0));
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
             <MudChip T="string" Size="Size.Small" Color="Color.Success"
@@ -776,7 +777,7 @@ else
     private string _searchTerm = string.Empty;
     private string? _searchError;
     private Func<string, bool>? _searchPredicate;
-    private HashSet<string> _decisionFilterStates = ["hold", "new"];
+    private HashSet<string> _decisionFilterStates = ["hold", "new", "selected"];
     private List<string> _displayOrderIds = [];
 
     private string _globalChannelFilter = string.Empty;
@@ -831,7 +832,9 @@ else
                 showAll ||
                 (showHold     && f.Decision == "hold") ||
                 (showExclude  && f.Decision == "exclude") ||
-                (showSelected && _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var fSel) && fSel.Any(s => s.Value)) ||
+                (showSelected && (
+                    (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var fSel) && fSel.Any(s => s.Value)) ||
+                    (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0))) ||
                 (showNew      && f.IsNew);
 
             Func<object, bool> decisionMatch = o => o switch
