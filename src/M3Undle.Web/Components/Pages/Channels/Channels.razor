@@ -2,6 +2,7 @@
 @using M3Undle.Web.Contracts
 @inject HttpClient Http
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 
 <PageTitle>M3Undle — Channels</PageTitle>
 
@@ -16,6 +17,13 @@
             {
                 <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
                     @_total.Value.ToString("N0") channels
+                </MudChip>
+            }
+            @if (_pendingRebuild)
+            {
+                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined"
+                         Icon="@Icons.Material.Filled.Build">
+                    Rebuild needed
                 </MudChip>
             }
             <MudIconButton Icon="@Icons.Material.Filled.Refresh"
@@ -43,6 +51,21 @@ else
                  RowsPerPage="50"
                  Elevation="2">
         <ToolBarContent>
+            <!-- Group filter dropdown -->
+            <MudSelect T="string"
+                       Value="_groupFilter"
+                       ValueChanged="OnGroupFilterChanged"
+                       Placeholder="All groups"
+                       Clearable="true"
+                       Margin="Margin.Dense"
+                       Variant="Variant.Outlined"
+                       Style="min-width:220px; max-width:300px;"
+                       AnchorOrigin="Origin.BottomLeft">
+                @foreach (var g in _availableGroups)
+                {
+                    <MudSelectItem Value="@g">@g</MudSelectItem>
+                }
+            </MudSelect>
             <MudSpacer />
             <MudTextField Value="_search"
                           ValueChanged="@((string v) => OnSearchChanged(v))"
@@ -55,12 +78,12 @@ else
                           Immediate="true"
                           DebounceInterval="400"
                           OnDebounceIntervalElapsed="ReloadGridAsync"
-                          Style="max-width:380px;" />
+                          Style="max-width:340px;" />
         </ToolBarContent>
         <Columns>
             <TemplateColumn Title="Ch. #"
-                            HeaderStyle="width:65px; text-align:right;"
-                            CellStyle="text-align:right; padding-right:16px;"
+                            HeaderStyle="width:75px; text-align:right;"
+                            CellStyle="text-align:right; padding-right:8px;"
                             Sortable="false">
                 <CellTemplate>
                     @if (context.Item.ChannelNumber is { } n)
@@ -122,6 +145,26 @@ else
                     }
                 </CellTemplate>
             </TemplateColumn>
+
+            <TemplateColumn Title=""
+                            HeaderStyle="width:90px;"
+                            CellStyle="padding:2px 4px; text-align:right;"
+                            Sortable="false">
+                <CellTemplate>
+                    <MudTooltip Text="Edit channel" Placement="Placement.Left">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       Color="Color.Default"
+                                       OnClick="@(() => OpenEditDialogAsync(context.Item))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Remove from output" Placement="Placement.Left">
+                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       OnClick="@(() => ConfirmRemoveAsync(context.Item))" />
+                    </MudTooltip>
+                </CellTemplate>
+            </TemplateColumn>
         </Columns>
 
         <PagerContent>
@@ -131,7 +174,7 @@ else
         <NoRecordsContent>
             <MudStack AlignItems="AlignItems.Center" Class="pa-6" Spacing="2">
                 <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="Size.Large" Color="Color.Secondary" />
-                <MudText Color="Color.Secondary">No channels match your search.</MudText>
+                <MudText Color="Color.Secondary">No channels match your filters.</MudText>
             </MudStack>
         </NoRecordsContent>
 
@@ -143,17 +186,102 @@ else
     </MudDataGrid>
 }
 
+<!-- Edit Channel Dialog -->
+<MudDialog @bind-Visible="_editDialogOpen" Options="_dialogOptions">
+    <TitleContent>
+        <MudText Typo="Typo.h6">Edit Channel</MudText>
+    </TitleContent>
+    <DialogContent>
+        @if (_editChannel is not null)
+        {
+            <MudStack Spacing="3">
+                <MudText Typo="Typo.body1"><strong>@_editChannel.DisplayName</strong></MudText>
+
+                <MudNumericField T="int?"
+                                 @bind-Value="_editChannelNumber"
+                                 Label="Channel Number"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 HideSpinButtons="true"
+                                 Clearable="true"
+                                 HelperText="Leave empty to use auto-numbering" />
+
+                <MudSelect T="string"
+                           @bind-Value="_editGroupName"
+                           Label="Group"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable="true"
+                           HelperText="Override the output group (leave empty for default)">
+                    @foreach (var g in _availableGroups)
+                    {
+                        <MudSelectItem Value="@g">@g</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseEditDialog" Variant="Variant.Text">Cancel</MudButton>
+        <MudButton OnClick="SaveEditAsync"
+                   Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="_isSaving">
+            @(_isSaving ? "Saving…" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
 @code {
     private MudDataGrid<ChannelListItemDto>? _grid;
     private string _search = string.Empty;
+    private string _groupFilter = string.Empty;
     private bool _noSnapshot;
     private int? _total;
-    private string? _pendingSearch;
+    private bool _pendingRebuild;
+    private List<string> _availableGroups = [];
+
+    // Edit dialog state
+    private bool _editDialogOpen;
+    private ChannelListItemDto? _editChannel;
+    private int? _editChannelNumber;
+    private string? _editGroupName;
+    private bool _isSaving;
+
+    private readonly DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+        CloseOnEscapeKey = true,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAvailableGroupsAsync();
+    }
+
+    private async Task LoadAvailableGroupsAsync()
+    {
+        try
+        {
+            var groups = await Http.GetFromJsonAsync<List<string>>("/api/v1/channels/groups");
+            _availableGroups = groups ?? [];
+        }
+        catch
+        {
+            _availableGroups = [];
+        }
+    }
 
     private void OnSearchChanged(string value)
     {
         _search = value;
-        _pendingSearch = value;
+    }
+
+    private async Task OnGroupFilterChanged(string value)
+    {
+        _groupFilter = value ?? string.Empty;
+        await ReloadGridAsync();
     }
 
     private async Task ReloadGridAsync()
@@ -165,7 +293,6 @@ else
     private async Task ClearSearchAsync()
     {
         _search = string.Empty;
-        _pendingSearch = string.Empty;
         if (_grid is not null)
             await _grid.ReloadServerData();
     }
@@ -173,7 +300,9 @@ else
     private async Task<GridData<ChannelListItemDto>> LoadChannelsAsync(GridState<ChannelListItemDto> state)
     {
         var page = state.Page + 1; // GridState is 0-based
-        var url = $"/api/v1/channels?page={page}&pageSize={state.PageSize}&search={Uri.EscapeDataString(_search)}";
+        var url = $"/api/v1/channels?page={page}&pageSize={state.PageSize}" +
+                  $"&search={Uri.EscapeDataString(_search)}" +
+                  $"&group={Uri.EscapeDataString(_groupFilter)}";
 
         try
         {
@@ -206,5 +335,109 @@ else
         }
 
         return new GridData<ChannelListItemDto> { Items = [], TotalItems = 0 };
+    }
+
+    // -------------------------------------------------------------------------
+    // Edit dialog
+    // -------------------------------------------------------------------------
+
+    private void OpenEditDialogAsync(ChannelListItemDto channel)
+    {
+        _editChannel = channel;
+        _editChannelNumber = channel.ChannelNumber;
+        _editGroupName = channel.GroupTitle;
+        _editDialogOpen = true;
+    }
+
+    private void CloseEditDialog()
+    {
+        _editDialogOpen = false;
+        _editChannel = null;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_editChannel is null) return;
+
+        _isSaving = true;
+        try
+        {
+            var request = new UpdateOutputChannelRequest
+            {
+                ChannelNumber = _editChannelNumber,
+                ClearChannelNumber = _editChannelNumber is null,
+                OutputGroupName = _editGroupName,
+                ClearOutputGroupName = string.IsNullOrWhiteSpace(_editGroupName),
+            };
+
+            var response = await Http.PatchAsJsonAsync(
+                $"/api/v1/channels/{Uri.EscapeDataString(_editChannel.ProviderChannelId)}",
+                request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add("Channel updated. Rebuild output to apply changes.", Severity.Success);
+                _pendingRebuild = true;
+                CloseEditDialog();
+                await ReloadGridAsync();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Snackbar.Add("Channel not found — it may have been removed already.", Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add("Failed to update channel.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Remove channel
+    // -------------------------------------------------------------------------
+
+    private async Task ConfirmRemoveAsync(ChannelListItemDto channel)
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            "Remove Channel",
+            $"Remove \"{channel.DisplayName}\" from the output? This will take effect after the next Build Output.",
+            yesText: "Remove",
+            cancelText: "Cancel");
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var response = await Http.DeleteAsync(
+                $"/api/v1/channels/{Uri.EscapeDataString(channel.ProviderChannelId)}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"\"{channel.DisplayName}\" removed. Rebuild output to apply.", Severity.Success);
+                _pendingRebuild = true;
+                await ReloadGridAsync();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Snackbar.Add("Channel not found — it may have been removed already.", Severity.Warning);
+                await ReloadGridAsync();
+            }
+            else
+            {
+                Snackbar.Add("Failed to remove channel.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
     }
 }

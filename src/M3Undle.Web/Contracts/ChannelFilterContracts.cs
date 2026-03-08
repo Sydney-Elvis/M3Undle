@@ -154,6 +154,15 @@ public sealed class ChannelListItemDto
     public string? GroupTitle { get; set; }
     public string? TvgId { get; set; }
     public string StreamKey { get; set; } = string.Empty;
+    public string ProviderChannelId { get; set; } = string.Empty;
+}
+
+public sealed class UpdateOutputChannelRequest
+{
+    public int? ChannelNumber { get; set; }
+    public bool ClearChannelNumber { get; set; }
+    public string? OutputGroupName { get; set; }
+    public bool ClearOutputGroupName { get; set; }
 }
 
 public sealed class ChannelListResponse
