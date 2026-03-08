@@ -252,13 +252,6 @@
                             <MudLink Href="channels/mapping">review now</MudLink>
                         </MudAlert>
                     }
-                    else if (_channelStats.GroupsHold > 0)
-                    {
-                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Style="flex:1;">
-                            @_channelStats.GroupsHold group@(_channelStats.GroupsHold == 1 ? "" : "s") on hold —
-                            <MudLink Href="channels/mapping">map now</MudLink>
-                        </MudAlert>
-                    }
                 </MudStack>
                 @if (_channelStats.VodGroupsInProvider > 0 || _channelStats.SeriesGroupsInProvider > 0)
                 {
@@ -483,4 +476,3 @@
         int? ChannelCountSeen,
         string? ErrorSummary);
 }
-

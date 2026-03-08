@@ -138,24 +138,30 @@ else
     @if (!_isLoading && _profileId is not null)
     {
         var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
-        var active   = liveFilters.Where(f => f.Decision != "exclude").ToList();
+        var mapped = liveFilters.Where(f =>
+            f.Decision == "hold" &&
+            ((_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
+             (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
+            .ToList();
+        var unmapped = liveFilters.Where(f =>
+            f.Decision == "hold" &&
+            !((_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
+              (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
+            .ToList();
         var excluded = liveFilters.Where(f => f.Decision == "exclude").ToList();
         var newCount = liveFilters.Count(f => f.IsNew);
-        var chSelected = active.Sum(f =>
+        var chSelected = mapped.Sum(f =>
             _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
                 ? sel.Count(s => s.Value)
                 : f.SelectedChannelCount);
-        var withSelections = active.Count(f =>
-            (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
-            (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0));
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
             <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                     Variant="@(_decisionFilterStates.Contains("selected") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("selected"))">@withSelections groups · @chSelected.ToString("N0") ch</MudChip>
+                     Variant="@(_decisionFilterStates.Contains("used") ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@((chip) => ToggleDecisionFilterState("used"))">@mapped.Count groups · @chSelected.ToString("N0") ch used</MudChip>
             <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                     Variant="@(_decisionFilterStates.Contains("hold") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("hold"))">@active.Count active</MudChip>
+                     Variant="@(_decisionFilterStates.Contains("unmapped") ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@((chip) => ToggleDecisionFilterState("unmapped"))">@unmapped.Count unmapped</MudChip>
             <MudChip T="string" Size="Size.Small" Color="Color.Default"
                      Variant="@(_decisionFilterStates.Contains("exclude") ? Variant.Filled : Variant.Outlined)"
                      OnClick="@((chip) => ToggleDecisionFilterState("exclude"))">@excluded.Count excluded</MudChip>
@@ -305,7 +311,7 @@ else
                         </MudTooltip>
 
                         <!-- Exclude toggle button -->
-                        <MudTooltip Text="@(isExcluded ? "Back to active" : "Exclude group")" Arrow="true">
+                        <MudTooltip Text="@(isExcluded ? "Set group to unmapped" : "Exclude group")" Arrow="true">
                             <MudIconButton Icon="@(isExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
                                            Color="@(isExcluded ? Color.Error : Color.Default)"
@@ -394,7 +400,7 @@ else
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">@channels.Count channels</MudText>
                                 }
                                 <MudDivider Vertical="true" FlexItem="true" />
-                                <MudTooltip Text="@(isExcluded ? "Include or hold group to enable tracking" : "Track new channels in this group")" Arrow="true">
+                                <MudTooltip Text="@(isExcluded ? "Unexclude group to enable tracking" : "Track new channels in this group")" Arrow="true">
                                     <MudSwitch T="bool"
                                                Value="@filter.TrackNewChannels"
                                                ValueChanged="@(v => OnTrackNewChannelsChanged(filter, v))"
@@ -532,7 +538,7 @@ else
                         </MudText>
 
                         <!-- Exclude button (bulk) -->
-                        <MudTooltip Text="@(allExcluded ? "Back to active" : "Exclude all member groups")" Arrow="true">
+                        <MudTooltip Text="@(allExcluded ? "Set groups to unmapped" : "Exclude all member groups")" Arrow="true">
                             <MudIconButton Icon="@(allExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
                                            Color="@(allExcluded ? Color.Error : Color.Default)"
@@ -777,7 +783,7 @@ else
     private string _searchTerm = string.Empty;
     private string? _searchError;
     private Func<string, bool>? _searchPredicate;
-    private HashSet<string> _decisionFilterStates = ["hold", "new", "selected"];
+    private HashSet<string> _decisionFilterStates = ["used", "unmapped", "new"];
     private List<string> _displayOrderIds = [];
 
     private string _globalChannelFilter = string.Empty;
@@ -822,19 +828,21 @@ else
             foreach (var (k, v) in standaloneDict) allItems[k] = v;
             foreach (var (k, v) in parentDict)     allItems[k] = v;
 
-            var showHold     = _decisionFilterStates.Contains("hold");
+            var showUsed     = _decisionFilterStates.Contains("used");
+            var showUnmapped = _decisionFilterStates.Contains("unmapped");
             var showExclude  = _decisionFilterStates.Contains("exclude");
-            var showSelected = _decisionFilterStates.Contains("selected");
             var showNew      = _decisionFilterStates.Contains("new");
-            var showAll      = _decisionFilterStates.Count == 0 || (showHold && showExclude && showSelected);
+            var showAll      = _decisionFilterStates.Count == 0 || (showUsed && showUnmapped && showExclude);
+
+            bool IsUsed(GroupFilterDto f) =>
+                (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var fSel) && fSel.Any(s => s.Value)) ||
+                (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0);
 
             bool FilterMatchesGroup(GroupFilterDto f) =>
                 showAll ||
-                (showHold     && f.Decision == "hold") ||
+                (showUsed     && f.Decision == "hold" && IsUsed(f)) ||
+                (showUnmapped && f.Decision == "hold" && !IsUsed(f)) ||
                 (showExclude  && f.Decision == "exclude") ||
-                (showSelected && (
-                    (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var fSel) && fSel.Any(s => s.Value)) ||
-                    (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0))) ||
                 (showNew      && f.IsNew);
 
             Func<object, bool> decisionMatch = o => o switch
@@ -854,9 +862,15 @@ else
                     return o switch
                     {
                         GroupFilterDto f => _sessionChangedFilterIds.Contains(f.ProfileGroupFilterId)
-                                            && ((showHold && f.Decision == "hold") || (showExclude && f.Decision == "exclude") || (showNew && f.IsNew)),
+                                            && ((showUsed && f.Decision == "hold" && IsUsed(f))
+                                                || (showUnmapped && f.Decision == "hold" && !IsUsed(f))
+                                                || (showExclude && f.Decision == "exclude")
+                                                || (showNew && f.IsNew)),
                         VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
-                                                                && ((showHold && m.Decision == "hold") || (showExclude && m.Decision == "exclude") || (showNew && m.IsNew))),
+                                                                && ((showUsed && m.Decision == "hold" && IsUsed(m))
+                                                                    || (showUnmapped && m.Decision == "hold" && !IsUsed(m))
+                                                                    || (showExclude && m.Decision == "exclude")
+                                                                    || (showNew && m.IsNew))),
                         _ => false,
                     };
                 };
