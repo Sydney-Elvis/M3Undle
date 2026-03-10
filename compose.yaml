@@ -8,12 +8,15 @@ services:
     user: "${PUID}:${PGID}"
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       TZ: UTC
+      M3UNDLE_M3U_DIR: /m3u_data
     volumes:
-      - ./config:/config
       - ./data:/data
+      - ./m3u_data:/m3u_data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]

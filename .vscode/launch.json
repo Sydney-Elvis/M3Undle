@@ -13,7 +13,8 @@
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "ASPNETCORE_URLS": "http://localhost:5283",
-        "M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config"
+        "M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config",
+        "M3UNDLE_DATA_DIR": "${workspaceFolder}/data"
       },
       "serverReadyAction": {
         "action": "openExternally",
@@ -25,7 +26,8 @@
       "name": "Containers: Debug Web GUI (Docker, existing image)",
       "type": "docker",
       "request": "launch",
-      "preLaunchTask": "docker-run: m3undle-debug",
+      "preLaunchTask": "docker-run: existing-image",
+      "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {
         "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
@@ -41,6 +43,7 @@
       "type": "docker",
       "request": "launch",
       "preLaunchTask": "docker-run: force-debug",
+      "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {
         "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"

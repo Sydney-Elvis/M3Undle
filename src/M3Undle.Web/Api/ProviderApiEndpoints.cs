@@ -33,9 +33,17 @@ public static class ProviderApiEndpoints
         providers.MapPost("/config/import", ImportConfigProviderAsync);
         providers.MapPost("/config/probe", ProbeConfigProviderAsync);
         providers.MapGet("/{providerId}/health", GetProviderHealthAsync);
+        providers.MapPatch("/{providerId}/xtream-password", UpdateXtreamPasswordAsync);
+        providers.MapGet("/encryption-status", (SecretEncryptionService enc) =>
+            TypedResults.Ok(new { available = enc.IsAvailable }));
+
+        var fs = app.MapGroup("/api/v1/fs");
+        fs.MapGet("/browse", BrowseFilesystemAsync);
 
         var snapshots = app.MapGroup("/api/v1/snapshots");
         snapshots.MapPost("/refresh", TriggerRefreshAsync);
+        snapshots.MapPost("/build", TriggerBuildOnlyAsync);
+        snapshots.MapPost("/cancel", CancelRefreshAsync);
 
         return app;
     }
@@ -139,10 +147,14 @@ public static class ProviderApiEndpoints
         CreateProviderRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        SecretEncryptionService encryption,
         ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
     {
-        var validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, null, cancellationToken);
+        var isXtream = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var validationErrors = isXtream
+            ? await ValidateXtreamProviderRequestAsync(db, request.Name, request.XtreamBaseUrl!, request.XtreamUsername, request.XtreamPassword, encryption, request.AssociateToProfileIds, null, cancellationToken)
+            : await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, null, cancellationToken);
         if (validationErrors.Count > 0)
         {
             return TypedResults.ValidationProblem(validationErrors);
@@ -154,11 +166,17 @@ public static class ProviderApiEndpoints
             ProviderId = Guid.NewGuid().ToString(),
             Name = request.Name.Trim(),
             Enabled = request.Enabled,
-            PlaylistUrl = request.PlaylistUrl.Trim(),
-            XmltvUrl = string.IsNullOrWhiteSpace(request.XmltvUrl) ? null : request.XmltvUrl.Trim(),
-            HeadersJson = string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson,
-            UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim(),
+            PlaylistUrl = isXtream ? string.Empty : request.PlaylistUrl!.Trim(),
+            XmltvUrl = isXtream ? null : (string.IsNullOrWhiteSpace(request.XmltvUrl) ? null : request.XmltvUrl.Trim()),
+            HeadersJson = isXtream ? null : (string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson),
+            UserAgent = isXtream ? null : (string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim()),
             TimeoutSeconds = request.TimeoutSeconds,
+            IncludeVod = request.IncludeVod,
+            IncludeSeries = request.IncludeSeries,
+            XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
+            XtreamUsername = isXtream ? request.XtreamUsername?.Trim() : null,
+            XtreamEncryptedPassword = isXtream ? encryption.Encrypt(request.XtreamPassword!) : null,
+            XtreamIncludeXmltv = isXtream && request.XtreamIncludeXmltv,
             CreatedUtc = now,
             UpdatedUtc = now,
         };
@@ -220,20 +238,54 @@ public static class ProviderApiEndpoints
             return TypedResults.NotFound();
         }
 
-        var validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+        var isXtream = provider.XtreamBaseUrl is not null;
+        Dictionary<string, string[]> validationErrors;
+        if (isXtream)
+        {
+            validationErrors = new Dictionary<string, string[]>();
+            if (string.IsNullOrWhiteSpace(request.Name))
+                validationErrors["name"] = ["name is required."];
+            if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl) && !IsValidHttpUrl(request.XtreamBaseUrl))
+                validationErrors["xtreamBaseUrl"] = ["xtreamBaseUrl must be an http/https URL."];
+            if (!string.IsNullOrWhiteSpace(request.Name))
+            {
+                var dup = await db.Providers.AsNoTracking()
+                    .AnyAsync(x => x.Name == request.Name.Trim() && x.ProviderId != providerId, cancellationToken);
+                if (dup) validationErrors["name"] = ["name must be unique."];
+            }
+        }
+        else
+        {
+            validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+        }
+
         if (validationErrors.Count > 0)
         {
             return TypedResults.ValidationProblem(validationErrors);
         }
 
         provider.Name = request.Name.Trim();
-        provider.PlaylistUrl = request.PlaylistUrl.Trim();
-        provider.XmltvUrl = string.IsNullOrWhiteSpace(request.XmltvUrl) ? null : request.XmltvUrl.Trim();
-        provider.HeadersJson = string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson;
-        provider.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
         provider.Enabled = request.Enabled;
         provider.TimeoutSeconds = request.TimeoutSeconds;
+        provider.IncludeVod = request.IncludeVod;
+        provider.IncludeSeries = request.IncludeSeries;
         provider.UpdatedUtc = DateTime.UtcNow;
+
+        if (isXtream)
+        {
+            if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl))
+                provider.XtreamBaseUrl = request.XtreamBaseUrl.TrimEnd('/');
+            if (!string.IsNullOrWhiteSpace(request.XtreamUsername))
+                provider.XtreamUsername = request.XtreamUsername.Trim();
+            provider.XtreamIncludeXmltv = request.XtreamIncludeXmltv;
+        }
+        else
+        {
+            provider.PlaylistUrl = request.PlaylistUrl!.Trim();
+            provider.XmltvUrl = string.IsNullOrWhiteSpace(request.XmltvUrl) ? null : request.XmltvUrl.Trim();
+            provider.HeadersJson = string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson;
+            provider.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
+        }
 
         var existingLinks = await db.ProfileProviders.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
         db.ProfileProviders.RemoveRange(existingLinks);
@@ -560,6 +612,8 @@ public static class ProviderApiEndpoints
             TimeoutSeconds = configProvider.TimeoutSeconds,
             Enabled = configProvider.Enabled,
             IsActive = false,
+            IncludeVod = request.IncludeVod,
+            IncludeSeries = request.IncludeSeries,
             ConfigSourcePath = configProvider.SourcePath,
             NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
             CreatedUtc = now,
@@ -763,6 +817,27 @@ public static class ProviderApiEndpoints
         }
         logger.LogDebug("Snapshot refresh trigger ignored — refresh already in progress.");
         return Results.Conflict(new { message = "A refresh is already in progress." });
+    }
+
+    private static IResult TriggerBuildOnlyAsync(IRefreshTrigger trigger, ILogger<ProviderApiLog> logger)
+    {
+        var triggered = trigger.TriggerBuildOnly();
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
+        if (triggered)
+        {
+            logger.LogInformation("Snapshot build-only triggered manually.");
+            return Results.Accepted();
+        }
+        logger.LogDebug("Snapshot build-only trigger ignored — a refresh is already in progress.");
+        return Results.Conflict(new { message = "A refresh is already in progress." });
+    }
+
+    private static IResult CancelRefreshAsync(IRefreshTrigger trigger, ILogger<ProviderApiLog> logger)
+    {
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
+        trigger.CancelRefresh();
+        logger.LogInformation("Snapshot refresh cancellation requested.");
+        return Results.Ok();
     }
 
     // -------------------------------------------------------------------------
@@ -1038,7 +1113,12 @@ public static class ProviderApiEndpoints
                     Enabled = provider.Enabled,
                     IsActive = provider.IsActive,
                     TimeoutSeconds = provider.TimeoutSeconds,
+                    IncludeVod = provider.IncludeVod,
+                    IncludeSeries = provider.IncludeSeries,
                     AssociatedProfileIds = associatedProfileIds,
+                    XtreamBaseUrl = provider.XtreamBaseUrl,
+                    XtreamUsername = provider.XtreamUsername,
+                    XtreamIncludeXmltv = provider.XtreamIncludeXmltv,
                     LastRefresh = latestRefresh is null
                         ? null
                         : new ProviderLastRefreshDto
@@ -1058,7 +1138,7 @@ public static class ProviderApiEndpoints
     private static async Task<Dictionary<string, string[]>> ValidateProviderRequestAsync(
         ApplicationDbContext db,
         string name,
-        string playlistUrl,
+        string? playlistUrl,
         string? xmltvUrl,
         string? headersJson,
         int timeoutSeconds,
@@ -1132,6 +1212,156 @@ public static class ProviderApiEndpoints
             {
                 errors["associateToProfileIds"] = ["One or more profile ids do not exist."];
             }
+        }
+
+        return errors;
+    }
+
+    private static async Task<Results<NoContent, NotFound, ValidationProblem>> UpdateXtreamPasswordAsync(
+        string providerId,
+        UpdateXtreamPasswordRequest request,
+        ApplicationDbContext db,
+        SecretEncryptionService encryption,
+        ILogger<ProviderApiLog> logger,
+        CancellationToken cancellationToken)
+    {
+        var provider = await db.Providers.SingleOrDefaultAsync(x => x.ProviderId == providerId, cancellationToken);
+        if (provider is null)
+            return TypedResults.NotFound();
+
+        if (string.IsNullOrWhiteSpace(request.Password))
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["password"] = ["Password is required."]
+            });
+        }
+
+        if (!encryption.IsAvailable)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["encryption"] = ["M3UNDLE_ENCRYPTION_KEY is not configured. Set this environment variable to a Base64-encoded 32-byte value before storing passwords."]
+            });
+        }
+
+        provider.XtreamEncryptedPassword = encryption.Encrypt(request.Password);
+        provider.UpdatedUtc = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
+        logger.LogInformation("Xtream password updated for provider {ProviderId}.", providerId);
+
+        return TypedResults.NoContent();
+    }
+
+    private static Results<Ok<FileBrowseDto>, BadRequest<string>> BrowseFilesystemAsync(
+        string? path,
+        EnvironmentVariableService envVarService)
+    {
+        var rootDir = envVarService.GetValue("M3UNDLE_M3U_DIR");
+        if (string.IsNullOrWhiteSpace(rootDir))
+            return TypedResults.BadRequest("M3UNDLE_M3U_DIR is not set. Set this environment variable to the directory containing your .m3u files and restart M3Undle.");
+
+        // Resolve the target path — default to root if none given
+        var targetPath = string.IsNullOrWhiteSpace(path)
+            ? rootDir
+            : Path.GetFullPath(path);
+
+        // Prevent path traversal outside root
+        var normalizedRoot = Path.GetFullPath(rootDir);
+        if (!targetPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return TypedResults.BadRequest($"Path is outside the allowed directory ({normalizedRoot}).");
+        }
+
+        if (!Directory.Exists(targetPath))
+        {
+            return TypedResults.BadRequest($"Directory not found: {targetPath}");
+        }
+
+        string? parentPath = null;
+        if (!string.Equals(targetPath, normalizedRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            var parent = Directory.GetParent(targetPath)?.FullName;
+            if (parent is not null && parent.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                parentPath = parent;
+        }
+
+        var entries = new List<FileBrowseEntryDto>();
+
+        try
+        {
+            foreach (var dir in Directory.GetDirectories(targetPath).OrderBy(x => x))
+            {
+                entries.Add(new FileBrowseEntryDto
+                {
+                    Name = Path.GetFileName(dir),
+                    Path = dir,
+                    IsDirectory = true,
+                });
+            }
+
+            foreach (var file in Directory.GetFiles(targetPath).OrderBy(x => x))
+            {
+                var ext = Path.GetExtension(file).ToLowerInvariant();
+                if (ext is ".m3u" or ".m3u8" or ".txt")
+                {
+                    entries.Add(new FileBrowseEntryDto
+                    {
+                        Name = Path.GetFileName(file),
+                        Path = file,
+                        IsDirectory = false,
+                    });
+                }
+            }
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return TypedResults.BadRequest($"Access denied: {ex.Message}");
+        }
+
+        return TypedResults.Ok(new FileBrowseDto
+        {
+            CurrentPath = targetPath,
+            ParentPath = parentPath,
+            Entries = entries,
+        });
+    }
+
+    private static async Task<Dictionary<string, string[]>> ValidateXtreamProviderRequestAsync(
+        ApplicationDbContext db,
+        string name,
+        string xtreamBaseUrl,
+        string? xtreamUsername,
+        string? xtreamPassword,
+        SecretEncryptionService encryption,
+        List<string>? associateToProfileIds,
+        string? providerId,
+        CancellationToken cancellationToken)
+    {
+        var errors = new Dictionary<string, string[]>();
+
+        if (string.IsNullOrWhiteSpace(name))
+            errors["name"] = ["name is required."];
+
+        if (string.IsNullOrWhiteSpace(xtreamBaseUrl) || !IsValidHttpUrl(xtreamBaseUrl))
+            errors["xtreamBaseUrl"] = ["xtreamBaseUrl must be an http/https URL."];
+
+        if (string.IsNullOrWhiteSpace(xtreamUsername))
+            errors["xtreamUsername"] = ["xtreamUsername is required."];
+
+        if (string.IsNullOrWhiteSpace(xtreamPassword))
+            errors["xtreamPassword"] = ["xtreamPassword is required."];
+
+        if (!encryption.IsAvailable)
+            errors["encryption"] = ["M3UNDLE_ENCRYPTION_KEY is not configured. Set this environment variable to a Base64-encoded 32-byte value before storing passwords."];
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var dup = await db.Providers.AsNoTracking()
+                .AnyAsync(x => x.Name == name.Trim() && x.ProviderId != providerId, cancellationToken);
+            if (dup) errors["name"] = ["name must be unique."];
         }
 
         return errors;

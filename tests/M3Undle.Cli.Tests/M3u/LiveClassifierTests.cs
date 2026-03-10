@@ -35,6 +35,7 @@ public class LiveClassifierTests
         
         // Movies plural
         Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/movies/12345.mp4"));
+        Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/vod/12345.mp4"));
     }
 
     [TestMethod]
@@ -73,9 +74,10 @@ public class LiveClassifierTests
     [TestMethod]
     public void IsLive_HandlesNullAndEmpty()
     {
-        Assert.IsFalse(LiveClassifier.IsLive(null));
-        Assert.IsFalse(LiveClassifier.IsLive(""));
-        Assert.IsFalse(LiveClassifier.IsLive("   "));
+        // null/empty have no URL structure to classify — default to "live" (safe default)
+        Assert.IsTrue(LiveClassifier.IsLive(null));
+        Assert.IsTrue(LiveClassifier.IsLive(""));
+        Assert.IsTrue(LiveClassifier.IsLive("   "));
     }
 
     [TestMethod]
@@ -129,10 +131,25 @@ public class LiveClassifierTests
     }
 
     [TestMethod]
+    public void IsLive_UsesExtensionHeuristics_WhenNoExplicitTypeSegment()
+    {
+        Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/u/p/12345.mp4"));
+        Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/u/p/12345.mkv"));
+        Assert.IsTrue(LiveClassifier.IsLive("http://provider.com/u/p/12345.ts"));
+        Assert.IsTrue(LiveClassifier.IsLive("http://provider.com/u/p/12345.m3u8"));
+    }
+
+    [TestMethod]
+    public void IsLive_DetectsExplicitLiveMarkers()
+    {
+        Assert.IsTrue(LiveClassifier.IsLive("http://provider.com/live/u/p/12345"));
+        Assert.IsTrue(LiveClassifier.IsLive("http://provider.com/play?id=123&type=live"));
+    }
+
+    [TestMethod]
     public void IsLive_HandlesUrlEncodedParameters()
     {
         Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/stream?type=vod&name=%20test"));
         Assert.IsFalse(LiveClassifier.IsLive("http://provider.com/stream?kind=movie&id=%2F123"));
     }
 }
-

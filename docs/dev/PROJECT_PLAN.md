@@ -21,7 +21,7 @@ See [DEV_CHECKLIST.md](DEV_CHECKLIST.md) for detailed task tracking.
 | Alpha 1   | Functional pass-through — provider config, snapshot serving, stream relay |
 | Alpha 2   | Filtering & mapping — group/channel rules, channel rename/reorder |
 | Alpha 3   | Buffering & DVR integration — FFmpeg/VLC, HDHR emulation |
-| Alpha 4   | Pro plugin hooks & endpoint security |
+| Alpha 4   | Endpoint security & stabilization |
 | Beta      | Feature finalization, testing, documentation |
 
 ## Design Documents

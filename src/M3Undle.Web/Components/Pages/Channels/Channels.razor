@@ -1,0 +1,443 @@
+@page "/channels"
+@using M3Undle.Web.Contracts
+@inject HttpClient Http
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>M3Undle — Channels</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Channels</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Live channels in the active output snapshot.</MudText>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            @if (_total.HasValue)
+            {
+                <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
+                    @_total.Value.ToString("N0") channels
+                </MudChip>
+            }
+            @if (_pendingRebuild)
+            {
+                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined"
+                         Icon="@Icons.Material.Filled.Build">
+                    Rebuild needed
+                </MudChip>
+            }
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                           Size="Size.Small"
+                           OnClick="@(() => _grid!.ReloadServerData())"
+                           Disabled="@(_grid is null)" />
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@if (_noSnapshot)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No active snapshot found. <MudLink Href="channels/mapping">Build your output</MudLink> first.
+    </MudAlert>
+}
+else
+{
+    <MudDataGrid @ref="_grid"
+                 T="ChannelListItemDto"
+                 ServerData="LoadChannelsAsync"
+                 Dense="true"
+                 Hover="true"
+                 Filterable="false"
+                 RowsPerPage="50"
+                 Elevation="2">
+        <ToolBarContent>
+            <!-- Group filter dropdown -->
+            <MudSelect T="string"
+                       Value="_groupFilter"
+                       ValueChanged="OnGroupFilterChanged"
+                       Placeholder="All groups"
+                       Clearable="true"
+                       Margin="Margin.Dense"
+                       Variant="Variant.Outlined"
+                       Style="min-width:220px; max-width:300px;"
+                       AnchorOrigin="Origin.BottomLeft">
+                @foreach (var g in _availableGroups)
+                {
+                    <MudSelectItem Value="@g">@g</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSpacer />
+            <MudTextField Value="_search"
+                          ValueChanged="@((string v) => OnSearchChanged(v))"
+                          Placeholder="Search name, group, or EPG ID…"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(!string.IsNullOrEmpty(_search) ? Icons.Material.Filled.Clear : Icons.Material.Filled.Search)"
+                          OnAdornmentClick="ClearSearchAsync"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          DebounceInterval="400"
+                          OnDebounceIntervalElapsed="ReloadGridAsync"
+                          Style="max-width:340px;" />
+        </ToolBarContent>
+        <Columns>
+            <TemplateColumn Title="Ch. #"
+                            HeaderStyle="width:75px; text-align:right;"
+                            CellStyle="text-align:right; padding-right:8px;"
+                            Sortable="false">
+                <CellTemplate>
+                    @if (context.Item.ChannelNumber is { } n)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@n</MudText>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+
+            <TemplateColumn Title="Logo"
+                            HeaderStyle="width:60px;"
+                            CellStyle="padding:4px 8px;"
+                            Sortable="false">
+                <CellTemplate>
+                    @if (!string.IsNullOrEmpty(context.Item.LogoUrl))
+                    {
+                        <img src="@context.Item.LogoUrl"
+                             style="height:28px; max-width:48px; object-fit:contain; vertical-align:middle; display:block;"
+                             loading="lazy"
+                             onerror="this.style.visibility='hidden'" />
+                    }
+                    else
+                    {
+                        <MudIcon Icon="@Icons.Material.Outlined.Tv" Size="Size.Small" Color="Color.Tertiary" Style="opacity:0.35;" />
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+
+            <TemplateColumn Title="Channel Name" Sortable="false">
+                <CellTemplate>
+                    <MudText Typo="Typo.body2">@context.Item.DisplayName</MudText>
+                </CellTemplate>
+            </TemplateColumn>
+
+            <TemplateColumn Title="Group" Sortable="false">
+                <CellTemplate>
+                    @if (!string.IsNullOrEmpty(context.Item.GroupTitle))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Item.GroupTitle</MudText>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+
+            <TemplateColumn Title="EPG ID"
+                            HeaderStyle="width:200px;"
+                            Sortable="false">
+                <CellTemplate>
+                    @if (!string.IsNullOrEmpty(context.Item.TvgId))
+                    {
+                        <MudTooltip Text="@context.Item.TvgId" Placement="Placement.Left" Arrow="true">
+                            <MudText Typo="Typo.caption" Color="Color.Success" Style="cursor:default;">
+                                @(context.Item.TvgId.Length > 24 ? context.Item.TvgId[..24] + "…" : context.Item.TvgId)
+                            </MudText>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="opacity:0.25;">—</MudText>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+
+            <TemplateColumn Title=""
+                            HeaderStyle="width:90px;"
+                            CellStyle="padding:2px 4px; text-align:right;"
+                            Sortable="false">
+                <CellTemplate>
+                    <MudTooltip Text="Edit channel" Placement="Placement.Left">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small"
+                                       Color="Color.Default"
+                                       OnClick="@(() => OpenEditDialogAsync(context.Item))" />
+                    </MudTooltip>
+                    <MudTooltip Text="Remove from output" Placement="Placement.Left">
+                        <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       OnClick="@(() => ConfirmRemoveAsync(context.Item))" />
+                    </MudTooltip>
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+
+        <PagerContent>
+            <MudDataGridPager T="ChannelListItemDto" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+
+        <NoRecordsContent>
+            <MudStack AlignItems="AlignItems.Center" Class="pa-6" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="Size.Large" Color="Color.Secondary" />
+                <MudText Color="Color.Secondary">No channels match your filters.</MudText>
+            </MudStack>
+        </NoRecordsContent>
+
+        <LoadingContent>
+            <MudStack AlignItems="AlignItems.Center" Class="pa-6">
+                <MudProgressCircular Indeterminate="true" />
+            </MudStack>
+        </LoadingContent>
+    </MudDataGrid>
+}
+
+<!-- Edit Channel Dialog -->
+<MudDialog @bind-Visible="_editDialogOpen" Options="_dialogOptions">
+    <TitleContent>
+        <MudText Typo="Typo.h6">Edit Channel</MudText>
+    </TitleContent>
+    <DialogContent>
+        @if (_editChannel is not null)
+        {
+            <MudStack Spacing="3">
+                <MudText Typo="Typo.body1"><strong>@_editChannel.DisplayName</strong></MudText>
+
+                <MudNumericField T="int?"
+                                 @bind-Value="_editChannelNumber"
+                                 Label="Channel Number"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 HideSpinButtons="true"
+                                 Clearable="true"
+                                 HelperText="Leave empty to use auto-numbering" />
+
+                <MudSelect T="string"
+                           @bind-Value="_editGroupName"
+                           Label="Group"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable="true"
+                           HelperText="Override the output group (leave empty for default)">
+                    @foreach (var g in _availableGroups)
+                    {
+                        <MudSelectItem Value="@g">@g</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseEditDialog" Variant="Variant.Text">Cancel</MudButton>
+        <MudButton OnClick="SaveEditAsync"
+                   Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="_isSaving">
+            @(_isSaving ? "Saving…" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private MudDataGrid<ChannelListItemDto>? _grid;
+    private string _search = string.Empty;
+    private string _groupFilter = string.Empty;
+    private bool _noSnapshot;
+    private int? _total;
+    private bool _pendingRebuild;
+    private List<string> _availableGroups = [];
+
+    // Edit dialog state
+    private bool _editDialogOpen;
+    private ChannelListItemDto? _editChannel;
+    private int? _editChannelNumber;
+    private string? _editGroupName;
+    private bool _isSaving;
+
+    private readonly DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+        CloseOnEscapeKey = true,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAvailableGroupsAsync();
+    }
+
+    private async Task LoadAvailableGroupsAsync()
+    {
+        try
+        {
+            var groups = await Http.GetFromJsonAsync<List<string>>("/api/v1/channels/groups");
+            _availableGroups = groups ?? [];
+        }
+        catch
+        {
+            _availableGroups = [];
+        }
+    }
+
+    private void OnSearchChanged(string value)
+    {
+        _search = value;
+    }
+
+    private async Task OnGroupFilterChanged(string value)
+    {
+        _groupFilter = value ?? string.Empty;
+        await ReloadGridAsync();
+    }
+
+    private async Task ReloadGridAsync()
+    {
+        if (_grid is not null)
+            await _grid.ReloadServerData();
+    }
+
+    private async Task ClearSearchAsync()
+    {
+        _search = string.Empty;
+        if (_grid is not null)
+            await _grid.ReloadServerData();
+    }
+
+    private async Task<GridData<ChannelListItemDto>> LoadChannelsAsync(GridState<ChannelListItemDto> state)
+    {
+        var page = state.Page + 1; // GridState is 0-based
+        var url = $"/api/v1/channels?page={page}&pageSize={state.PageSize}" +
+                  $"&search={Uri.EscapeDataString(_search)}" +
+                  $"&group={Uri.EscapeDataString(_groupFilter)}";
+
+        try
+        {
+            var response = await Http.GetAsync(url);
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                await InvokeAsync(() => { _noSnapshot = true; StateHasChanged(); });
+                return new GridData<ChannelListItemDto> { Items = [], TotalItems = 0 };
+            }
+
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<ChannelListResponse>();
+
+            if (result is not null)
+            {
+                await InvokeAsync(() =>
+                {
+                    _noSnapshot = false;
+                    _total = result.Total;
+                    StateHasChanged();
+                });
+                return new GridData<ChannelListItemDto> { Items = result.Items, TotalItems = result.Total };
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load channels: {ex.Message}", Severity.Error);
+        }
+
+        return new GridData<ChannelListItemDto> { Items = [], TotalItems = 0 };
+    }
+
+    // -------------------------------------------------------------------------
+    // Edit dialog
+    // -------------------------------------------------------------------------
+
+    private void OpenEditDialogAsync(ChannelListItemDto channel)
+    {
+        _editChannel = channel;
+        _editChannelNumber = channel.ChannelNumber;
+        _editGroupName = channel.GroupTitle;
+        _editDialogOpen = true;
+    }
+
+    private void CloseEditDialog()
+    {
+        _editDialogOpen = false;
+        _editChannel = null;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_editChannel is null) return;
+
+        _isSaving = true;
+        try
+        {
+            var request = new UpdateOutputChannelRequest
+            {
+                ChannelNumber = _editChannelNumber,
+                ClearChannelNumber = _editChannelNumber is null,
+                OutputGroupName = _editGroupName,
+                ClearOutputGroupName = string.IsNullOrWhiteSpace(_editGroupName),
+            };
+
+            var response = await Http.PatchAsJsonAsync(
+                $"/api/v1/channels/{Uri.EscapeDataString(_editChannel.ProviderChannelId)}",
+                request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add("Channel updated. Rebuild output to apply changes.", Severity.Success);
+                _pendingRebuild = true;
+                CloseEditDialog();
+                await ReloadGridAsync();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Snackbar.Add("Channel not found — it may have been removed already.", Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add("Failed to update channel.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Remove channel
+    // -------------------------------------------------------------------------
+
+    private async Task ConfirmRemoveAsync(ChannelListItemDto channel)
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            "Remove Channel",
+            $"Remove \"{channel.DisplayName}\" from the output? This will take effect after the next Build Output.",
+            yesText: "Remove",
+            cancelText: "Cancel");
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var response = await Http.DeleteAsync(
+                $"/api/v1/channels/{Uri.EscapeDataString(channel.ProviderChannelId)}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"\"{channel.DisplayName}\" removed. Rebuild output to apply.", Severity.Success);
+                _pendingRebuild = true;
+                await ReloadGridAsync();
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Snackbar.Add("Channel not found — it may have been removed already.", Severity.Warning);
+                await ReloadGridAsync();
+            }
+            else
+            {
+                Snackbar.Add("Failed to remove channel.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+}

@@ -49,8 +49,7 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
       ]
     }
     ```
-  - `lineups` is always a list. Core always has exactly one entry (`"m3undle"`).
-    Pro extends this with additional named lineups.
+  - `lineups` is always a list. Current core behavior has exactly one entry (`"m3undle"`).
   - Top-level `status` summarises across all lineups (`"ok"` if any lineup is ok).
 
 ### Playlist (M3U)

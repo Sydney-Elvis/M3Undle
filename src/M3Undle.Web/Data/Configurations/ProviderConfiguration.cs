@@ -24,6 +24,12 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
         builder.Property(x => x.ConfigSourcePath).HasColumnName("config_source_path");
         builder.Property(x => x.NeedsEnvVarSubstitution).HasColumnName("needs_env_var_substitution").IsRequired();
+        builder.Property(x => x.IncludeVod).HasColumnName("include_vod").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.IncludeSeries).HasColumnName("include_series").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.XtreamBaseUrl).HasColumnName("xtream_base_url");
+        builder.Property(x => x.XtreamUsername).HasColumnName("xtream_username");
+        builder.Property(x => x.XtreamEncryptedPassword).HasColumnName("xtream_encrypted_password");
+        builder.Property(x => x.XtreamIncludeXmltv).HasColumnName("xtream_include_xmltv").IsRequired().HasDefaultValue(false);
 
         builder.HasIndex(x => x.Name).IsUnique();
         builder.HasIndex(x => x.Enabled).HasDatabaseName("idx_providers_enabled");

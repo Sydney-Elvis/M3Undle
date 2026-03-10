@@ -16,5 +16,6 @@ public sealed class Profile
     public ICollection<EpgChannelMap> EpgChannelMaps { get; set; } = new List<EpgChannelMap>();
     public ICollection<Snapshot> Snapshots { get; set; } = new List<Snapshot>();
     public ICollection<StreamKey> StreamKeys { get; set; } = new List<StreamKey>();
+    public ICollection<ProfileGroupFilter> ProfileGroupFilters { get; set; } = new List<ProfileGroupFilter>();
 }
 

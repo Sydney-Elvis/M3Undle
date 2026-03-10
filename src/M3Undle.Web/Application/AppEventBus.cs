@@ -2,7 +2,7 @@ using System.Threading.Channels;
 
 namespace M3Undle.Web.Application;
 
-public enum AppEventKind { RefreshStarted, RefreshCompleted, ProviderChanged, ProviderActivated }
+public enum AppEventKind { RefreshStarted, RefreshCompleted, ProviderChanged, ProviderActivated, GroupFiltersChanged }
 
 public sealed record AppEvent(AppEventKind Kind, bool Succeeded = false, string? ErrorSummary = null);
 

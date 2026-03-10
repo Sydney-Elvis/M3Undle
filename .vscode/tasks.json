@@ -41,7 +41,8 @@
 			"options": {
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
-					"M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config"
+					"M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config",
+					"M3UNDLE_DATA_DIR": "${workspaceFolder}/data"
 				}
 			},
 			"isBackground": true,
@@ -57,12 +58,15 @@
 		},
 		{
 			"type": "docker-build",
-			"label": "docker-build: debug",
+			"label": "docker-build: existing-image",
+			"dependsOn": ["build-web"],
+			"dependsOrder": "sequence",
 			"dockerBuild": {
 				"tag": "m3undle:web-debug",
 				"target": "final",
 				"dockerfile": "${workspaceFolder}/Dockerfile",
-				"context": "${workspaceFolder}"
+				"context": "${workspaceFolder}",
+				"customOptions": "--no-cache"
 			},
 			"netCore": {
 				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
@@ -70,13 +74,17 @@
 		},
 		{
 			"type": "docker-run",
-			"label": "docker-run: m3undle-debug",
+			"label": "docker-run: existing-image",
 			"dependsOn": [
-				"docker-build: debug"
+				"docker-stop: m3undle-debug",
+				"build-web",
+				"docker-ensure: dev dirs"
 			],
+			"dependsOrder": "sequence",
 			"dockerRun": {
 				"containerName": "m3undle-dev",
 				"image": "m3undle:web-debug",
+				"remove": false,
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"ASPNETCORE_URLS": "http://+:8080",
@@ -87,9 +95,19 @@
 						"localPath": "${workspaceFolder}/.config",
 						"containerPath": "/config",
 						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/m3u_data",
+						"containerPath": "/m3u_data",
+						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/data",
+						"containerPath": "/data",
+						"permissions": "rw"
 					}
 				],
-				"customOptions": "--user root --rm",
+				"customOptions": "--user root --label m3undle.run_mode=existing",
 				"ports": [
 					{
 						"hostPort": 8080,
@@ -106,10 +124,15 @@
 			"type": "docker-run",
 			"label": "docker-run: force-debug",
 			"dependsOn": [
+				"docker-reset: data folder",
+				"docker-ensure: dev dirs",
 				"docker-build: force-debug"
 			],
+			"dependsOrder": "sequence",
 			"dockerRun": {
 				"containerName": "m3undle-dev",
+				"image": "m3undle:web-debug",
+				"remove": false,
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"ASPNETCORE_URLS": "http://+:8080",
@@ -120,9 +143,19 @@
 						"localPath": "${workspaceFolder}/.config",
 						"containerPath": "/config",
 						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/m3u_data",
+						"containerPath": "/m3u_data",
+						"permissions": "ro"
+					},
+					{
+						"localPath": "${workspaceFolder}/data",
+						"containerPath": "/data",
+						"permissions": "rw"
 					}
 				],
-				"customOptions": "--user root --rm",
+				"customOptions": "--user root --label m3undle.run_mode=force",
 				"ports": [
 					{
 						"hostPort": 8080,
@@ -139,7 +172,7 @@
 			"type": "docker-run",
 			"label": "docker-run: release",
 			"dependsOn": [
-				"docker-build: debug"
+				"docker-build: existing-image"
 			],
 			"dockerRun": {
 				"customOptions": "--user root --rm",
@@ -154,12 +187,21 @@
 		{
 			"label": "docker-stop: m3undle-debug",
 			"type": "process",
-			"command": "docker",
+			"command": "sh",
 			"args": [
-				"rm",
-				"-f",
-				"m3undle-debug"
+				"-c",
+				"docker container inspect m3undle-dev >/dev/null 2>&1 && docker rm -f m3undle-dev >/dev/null 2>&1 || true"
 			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"$null = docker container inspect m3undle-dev 2>$null; if ($LASTEXITCODE -eq 0) { docker rm -f m3undle-dev | Out-Null }; exit 0"
+				]
+			},
 			"problemMatcher": []
 		},
 		{
@@ -175,8 +217,54 @@
 			"problemMatcher": []
 		},
 		{
+			"label": "docker-ensure: dev dirs",
+			"type": "process",
+			"command": "sh",
+			"args": [
+				"-c",
+				"mkdir -p \"${workspaceFolder}/.config\" \"${workspaceFolder}/m3u_data\" \"${workspaceFolder}/data\""
+			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"@('.config','m3u_data','data') | ForEach-Object { $d = Join-Path '${workspaceFolder}' $_; if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }; Write-Host \"Ensured: $d\" }"
+				]
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "docker-reset: data folder",
+			"type": "process",
+			"command": "sh",
+			"args": [
+				"-c",
+				"mkdir -p \"${workspaceFolder}/data\"; find \"${workspaceFolder}/data\" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true; echo \"Reset data directory: ${workspaceFolder}/data\""
+			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"$dataDir = Join-Path '${workspaceFolder}' 'data'; if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Force -Path $dataDir | Out-Null }; Get-ChildItem -LiteralPath $dataDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Write-Host \"Reset data directory: $dataDir\"; exit 0"
+				]
+			},
+			"problemMatcher": []
+		},
+		{
 			"type": "docker-build",
 			"label": "docker-build: force-debug",
+			"dependsOn": [
+				"docker-stop: m3undle-debug",
+				"docker-reset: data folder",
+				"build-web"
+			],
+			"dependsOrder": "sequence",
 			"dockerBuild": {
 				"tag": "m3undle:web-debug",
 				"target": "final",

@@ -10,13 +10,21 @@ public sealed class Provider
     public string? XmltvUrl { get; set; }
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
-    public int TimeoutSeconds { get; set; } = 20;
+    public int TimeoutSeconds { get; set; } = 120;
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 
     // Config source tracking
     public string? ConfigSourcePath { get; set; }  // Path to config.yaml if imported from there
     public bool NeedsEnvVarSubstitution { get; set; }  // True if URL contains %VAR% placeholders
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
+
+    // Xtream Codes API provider fields
+    public string? XtreamBaseUrl { get; set; }
+    public string? XtreamUsername { get; set; }
+    public string? XtreamEncryptedPassword { get; set; }
+    public bool XtreamIncludeXmltv { get; set; }
 
     public ICollection<ProfileProvider> ProfileProviders { get; set; } = new List<ProfileProvider>();
     public ICollection<FetchRun> FetchRuns { get; set; } = new List<FetchRun>();

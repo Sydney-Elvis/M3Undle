@@ -94,58 +94,44 @@ See [ROADMAP.md](ROADMAP.md) for milestone goals and scope definitions.
 
 ## Alpha 2 — Filtering, Mapping & Output Shaping
 
-**Extension architecture gate:** Define `IChannelFilter`, `IGroupFilter`, `IChannelTransform`
-interfaces at the start of A2. These are the contracts Pro loads external implementations
-against in A4. Do not build filtering as concrete classes without these interfaces first.
+Status: Complete.
 
 ### Filtering
-- [ ] Group inclusion/exclusion rules (which provider groups publish to output)
-- [ ] Channel filtering: keyword match
-- [ ] Channel filtering: regex match
-- [ ] Channel filtering: group-based
-- [ ] Filter preview (show what would be excluded before committing)
+- [x] Group inclusion/exclusion rules (which provider groups publish to output)
+- [x] Channel filtering: keyword match
+- [x] Channel filtering: regex/glob match
+- [x] Channel filtering: group-based
+- [x] Filter preview (live preview in Channel Mapping UI)
 
 ### Mapping & Channel Transform
-- [ ] Channel rename (display name override at output)
-- [ ] Channel reorder (explicit position in output)
-- [ ] Custom tvg-id override (point a channel at a specific EPG entry)
-- [ ] Channel number assignment (initial — full numbering rules in Beta)
+- [x] Channel number assignment (initial — full numbering rules in Beta)
+- [x] Group rename at output layer
 
 ### Output Group Rules
-Output group rules control `group-title` in the M3U EXTINF tags — this is what
-determines how channels are organized in Jellyfin, Plex, Emby, and player apps.
-- [ ] Create custom output groups (independent of provider group names)
-- [ ] Assign channels from any provider group(s) to a custom output group
-- [ ] Rename provider groups at the output layer (no custom group needed)
-- [ ] Output group ordering
-- [ ] Preview: show resulting output group structure before publishing
-
-### Multiple EPG Sources
-The provider's own XMLTV is often incomplete or absent. Users need to supplement or
-replace it with better data.
-- [ ] Add additional XMLTV/EPG source URLs per provider (or local files)
-- [ ] XMLTV merge: combine multiple sources into a single guide feed
-- [ ] De-duplicate EPG entries by channel id across sources
-- [ ] Source priority: if a channel appears in multiple EPG sources, prefer source N
-- [ ] tvg-id cross-source mapping: map a channel to EPG data from a different source
+- [x] Create custom output groups (independent of provider group names)
+- [x] Assign channels from any provider group(s) to a custom output group
+- [x] Rename provider groups at the output layer (no custom group needed)
 
 ### Dashboard
-- [ ] Filtered channel count display (filtered n / total n)
-- [ ] Mapped channel count display
+- [x] Channel count in output (live, VOD, series + group breakdown)
 
-### Authentication
+---
+
+## Alpha 3 — Security
+
+### GUI Authentication
 - [ ] GUI login (username/password)
 - [ ] Authentication toggle in Settings (enable/disable login requirement)
 - [ ] Session management
 
-### Refresh Scheduling
-Fixed-interval background refresh is sufficient for A1. A2 adds user control.
-- [ ] Configurable refresh interval via Settings UI (e.g. every 4h, 12h, 24h)
-- [ ] Manual schedule times (e.g. run at 03:00 daily)
+### Endpoint Security
+- [ ] Output endpoint protection: secret token embedded in URL path
+  (not header-based — Media Players cannot set custom headers)
+- [ ] Token generation and rotation UI
 
 ---
 
-## Alpha 3 — Buffering & DVR Integration
+## Alpha 4 — Buffering, DVR Integration & EPG
 
 ### Buffering
 - [ ] FFmpeg buffering (configurable binary path + options)
@@ -153,7 +139,7 @@ Fixed-interval background refresh is sufficient for A1. A2 adds user control.
 - [ ] Buffer size setting
 - [ ] Client connection timeout setting
 
-### DVR Integration
+### DVR Integration (HDHomeRun Emulation)
 - [ ] Number of tuners setting
 - [ ] HDHomeRun device emulation (allows Plex, Emby, Jellyfin to auto-discover as a network tuner):
   - [ ] GET /discover.json
@@ -161,34 +147,29 @@ Fixed-interval background refresh is sufficient for A1. A2 adds user control.
   - [ ] GET /lineup_status.json
 - [ ] Connection limiting
 
+### EPG Sources
+- [ ] Add additional XMLTV/EPG source URLs per provider (or local files)
+- [ ] XMLTV merge: combine multiple sources into a single guide feed
+- [ ] De-duplicate EPG entries by channel id across sources
+- [ ] Source priority: if a channel appears in multiple EPG sources, prefer source N
+- [ ] tvg-id cross-source mapping: map a channel to EPG data from a different source
+
 ---
 
-## Alpha 4 — Pro Hooks & Security
+## Alpha 5 — Remaining Features
 
-### Plugin Architecture
-- [ ] Plugin loader (external assembly discovery, plugin manifest format)
-- [ ] Extension contracts:
-  - [ ] `ISettingsContributor` (add settings sections from plugin)
-  - [ ] `IEndpointModule` (register additional endpoints from plugin)
-  - [ ] `IUiTheme` (CSS/branding injection)
-- [ ] Internal A2 filtering implementations confirmed against plugin contract surface
-
-### Security
-- [ ] Output endpoint protection: secret token embedded in URL path
-  (not header-based — Media Players cannot set custom headers)
-- [ ] Token generation and rotation UI
-
-### Remaining Items
-- [ ] Carry forward any unfinished A1-A3 items
+- [ ] Channel reorder (explicit sort position in output)
+- [ ] Custom tvg-id override per channel
+- [ ] Configurable refresh schedule via Settings UI (interval or scheduled times)
+- [ ] New channels inbox (review and approve newly discovered channels before publishing)
+- [ ] Dynamic groups (auto add/drop for rotating sports or event feeds)
+- [ ] Provider switch assistance (diff view + optional manual channel mapping hints)
+- [ ] Full channel numbering rules (start ranges, pinned numbers, overflow — see NUMBERING_RULES.md)
 
 ---
 
 ## Beta — Feature Finalization
 
-- [ ] New channels inbox (review and approve newly discovered channels before publishing)
-- [ ] Dynamic groups (auto add/drop for rotating sports or event feeds)
-- [ ] Provider switch assistance (diff view + optional manual channel mapping hints)
-- [ ] Full channel numbering rules (start ranges, pinned numbers, overflow — see NUMBERING_RULES.md)
 - [ ] Security review
 - [ ] Performance validation (large providers, 89k+ channels)
 - [ ] Documentation complete and accurate

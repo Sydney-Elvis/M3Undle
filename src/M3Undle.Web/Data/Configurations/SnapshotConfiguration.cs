@@ -20,6 +20,9 @@ public sealed class SnapshotConfiguration : IEntityTypeConfiguration<Snapshot>
         builder.Property(x => x.ChannelIndexPath).HasColumnName("channel_index_path").IsRequired();
         builder.Property(x => x.StatusJsonPath).HasColumnName("status_json_path").IsRequired();
         builder.Property(x => x.ChannelCountPublished).HasColumnName("channel_count_published").IsRequired();
+        builder.Property(x => x.LiveChannelCount).HasColumnName("live_channel_count").IsRequired();
+        builder.Property(x => x.VodChannelCount).HasColumnName("vod_channel_count").IsRequired();
+        builder.Property(x => x.SeriesChannelCount).HasColumnName("series_channel_count").IsRequired();
         builder.Property(x => x.ErrorSummary).HasColumnName("error_summary");
 
         builder.HasIndex(x => new { x.ProfileId, x.Status, x.CreatedUtc })

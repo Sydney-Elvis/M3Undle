@@ -6,6 +6,26 @@ M3Undle helps you take control of massive provider playlists and publish clean, 
 
 Designed for self-hosted systems like NextPVR, Jellyfin, or any client that consumes M3U + XMLTV.
 
+> [!IMPORTANT]
+> **Feature Status**
+> 
+> **Included today**
+> - CLI tooling (provider fetch, group discovery, M3U/XMLTV filtering)
+> - Secure `.env` credential handling
+> - Database-backed provider configuration
+> - Provider switching with snapshot lifecycle
+> - Group preview (read-only catalog browsing)
+> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`
+> - Stream relay proxy (relay-only, no buffering)
+> - Web UI for provider management (Pre-Alpha)
+> 
+> **Forthcoming**
+> - Group-based inclusion rules
+> - Channel numbering controls
+> - Advanced channel filtering workflows
+> - HDHomeRun emulation
+> - Additional Service/Web UI hardening toward Alpha
+
 ---
 
 ## Why M3Undle Exists

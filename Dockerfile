@@ -31,7 +31,8 @@ ENV ASPNETCORE_URLS=http://+:8080 \
     ConnectionStrings__DefaultConnection="DataSource=/data/m3undle.db;Cache=Shared" \
     M3Undle__Logging__LogDirectory=/data/logs \
     M3Undle__Snapshot__Directory=/data/snapshots \
-    M3UNDLE_CONFIG_DIR=/config
+    M3UNDLE_CONFIG_DIR=/config \
+    M3UNDLE_M3U_DIR=/m3u_data
 
 VOLUME ["/data", "/config"]
 EXPOSE 8080

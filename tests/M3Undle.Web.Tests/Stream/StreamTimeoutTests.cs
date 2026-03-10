@@ -143,7 +143,12 @@ public sealed class StreamTimeoutTests
     {
         var factory = new FakeHttpClientFactory(handler);
         var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
-        return new ProviderFetcher(factory, new PlaylistParser(), envSvc, NullLogger<ProviderFetcher>.Instance);
+        return new ProviderFetcher(
+            factory,
+            new PlaylistParser(),
+            envSvc,
+            new SecretEncryptionService(envSvc),
+            NullLogger<ProviderFetcher>.Instance);
     }
 
     private static Provider SimpleProvider() => new()

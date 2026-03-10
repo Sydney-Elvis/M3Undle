@@ -18,11 +18,13 @@ public sealed class ProviderChannel
     public DateTime FirstSeenUtc { get; set; }
     public DateTime LastSeenUtc { get; set; }
     public bool Active { get; set; }
+    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'
     public string LastFetchRunId { get; set; } = string.Empty;
 
     public Provider Provider { get; set; } = null!;
     public ProviderGroup? ProviderGroup { get; set; }
     public FetchRun LastFetchRun { get; set; } = null!;
     public ICollection<ChannelSource> ChannelSources { get; set; } = new List<ChannelSource>();
+    public ICollection<ProfileGroupChannelFilter> ChannelFilters { get; set; } = new List<ProfileGroupChannelFilter>();
 }
 

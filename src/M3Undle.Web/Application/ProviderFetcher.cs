@@ -12,6 +12,7 @@ public sealed class ProviderFetcher(
     IHttpClientFactory httpClientFactory,
     PlaylistParser playlistParser,
     EnvironmentVariableService envVarService,
+    SecretEncryptionService secretEncryption,
     ILogger<ProviderFetcher> logger)
 {
     private static readonly Regex MetadataAttributeRegex =
@@ -29,11 +30,12 @@ public sealed class ProviderFetcher(
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
         logger.LogDebug("Fetching playlist for provider {ProviderId}.", provider.ProviderId);
 
+        var effectivePlaylistUrl = ResolvePlaylistUrl(provider);
         string content;
 
-        if (provider.PlaylistUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        if (effectivePlaylistUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
         {
-            var localPath = new Uri(provider.PlaylistUrl).LocalPath;
+            var localPath = new Uri(effectivePlaylistUrl).LocalPath;
             try
             {
                 content = await File.ReadAllTextAsync(localPath, cancellationToken);
@@ -45,23 +47,28 @@ public sealed class ProviderFetcher(
         }
         else
         {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
+
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
-
                 using var client = httpClientFactory.CreateClient();
-                ApplyHeadersFromJson(client, provider.HeadersJson);
-                if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+                if (provider.XtreamBaseUrl is null)
                 {
-                    client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
+                    ApplyHeadersFromJson(client, provider.HeadersJson);
+                    if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+                        client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
                 }
 
-                var playlistUrl = SubstituteProviderUrl(provider.PlaylistUrl);
-                content = await client.GetStringAsync(playlistUrl, timeoutCts.Token);
+                var resolvedUrl = provider.XtreamBaseUrl is null
+                    ? SubstituteProviderUrl(effectivePlaylistUrl)
+                    : effectivePlaylistUrl;
+                content = await client.GetStringAsync(resolvedUrl, timeoutCts.Token);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
+                if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    throw new ProviderFetchException($"Playlist fetch timed out after {provider.TimeoutSeconds}s.", ex);
                 throw new ProviderFetchException($"Playlist fetch failed: {ex.Message}", ex);
             }
         }
@@ -89,16 +96,17 @@ public sealed class ProviderFetcher(
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
-        if (string.IsNullOrWhiteSpace(provider.XmltvUrl))
+        var effectiveXmltvUrl = ResolveXmltvUrl(provider);
+        if (string.IsNullOrWhiteSpace(effectiveXmltvUrl))
         {
             return new XmltvFetchResult(Xml: EmptyXmltvDocument, Bytes: 0);
         }
 
         logger.LogDebug("Fetching XMLTV for provider {ProviderId}.", provider.ProviderId);
 
-        if (provider.XmltvUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        if (effectiveXmltvUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
         {
-            var localPath = new Uri(provider.XmltvUrl).LocalPath;
+            var localPath = new Uri(effectiveXmltvUrl).LocalPath;
             try
             {
                 var xml = await File.ReadAllTextAsync(localPath, cancellationToken);
@@ -110,25 +118,29 @@ public sealed class ProviderFetcher(
             }
         }
 
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
+
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
-
             using var client = httpClientFactory.CreateClient();
-            ApplyHeadersFromJson(client, provider.HeadersJson);
-            if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+            if (provider.XtreamBaseUrl is null)
             {
-                client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
+                ApplyHeadersFromJson(client, provider.HeadersJson);
+                if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
             }
 
-            var xmltvUrl = SubstituteProviderUrl(provider.XmltvUrl);
-            var xml = await client.GetStringAsync(xmltvUrl, timeoutCts.Token);
+            var resolvedUrl = provider.XtreamBaseUrl is null
+                ? SubstituteProviderUrl(effectiveXmltvUrl)
+                : effectiveXmltvUrl;
+            var xml = await client.GetStringAsync(resolvedUrl, timeoutCts.Token);
             return new XmltvFetchResult(Xml: xml, Bytes: System.Text.Encoding.UTF8.GetByteCount(xml));
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            // XMLTV failure is non-fatal — caller logs and falls back to empty guide
+            if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                throw new ProviderFetchException($"XMLTV fetch timed out after {provider.TimeoutSeconds}s.", ex);
             throw new ProviderFetchException($"XMLTV fetch failed: {ex.Message}", ex);
         }
     }
@@ -215,6 +227,55 @@ public sealed class ProviderFetcher(
             client.DefaultRequestHeaders.Remove(property.Name);
             client.DefaultRequestHeaders.TryAddWithoutValidation(property.Name, value);
         }
+    }
+
+    private string ResolvePlaylistUrl(Provider provider)
+    {
+        if (provider.XtreamBaseUrl is null)
+            return provider.PlaylistUrl;
+
+        if (string.IsNullOrWhiteSpace(provider.XtreamEncryptedPassword))
+            throw new ProviderFetchException("Xtream Codes provider has no stored password. Update the password in provider settings.");
+
+        string password;
+        try
+        {
+            password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ProviderFetchException($"Failed to decrypt Xtream password: {ex.Message}", ex);
+        }
+
+        var username = Uri.EscapeDataString(provider.XtreamUsername ?? string.Empty);
+        var escapedPassword = Uri.EscapeDataString(password);
+        return $"{provider.XtreamBaseUrl}/get.php?username={username}&password={escapedPassword}&type=m3u_plus&output=ts";
+    }
+
+    private string? ResolveXmltvUrl(Provider provider)
+    {
+        if (provider.XtreamBaseUrl is null)
+            return provider.XmltvUrl;
+
+        if (!provider.XtreamIncludeXmltv)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(provider.XtreamEncryptedPassword))
+            return null;
+
+        string password;
+        try
+        {
+            password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        var username = Uri.EscapeDataString(provider.XtreamUsername ?? string.Empty);
+        var escapedPassword = Uri.EscapeDataString(password);
+        return $"{provider.XtreamBaseUrl}/xmltv.php?username={username}&password={escapedPassword}";
     }
 
     private string SubstituteProviderUrl(string url)

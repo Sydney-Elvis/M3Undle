@@ -39,9 +39,16 @@ public sealed class ProviderDto
     public bool Enabled { get; set; }
     public bool IsActive { get; set; }
     public int TimeoutSeconds { get; set; }
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
     public List<string> AssociatedProfileIds { get; set; } = [];
     public ProviderLastRefreshDto? LastRefresh { get; set; }
     public List<ProviderLatestSnapshotDto> LatestSnapshots { get; set; } = [];
+    // Xtream Codes fields — password is write-only, never returned
+    public string? XtreamBaseUrl { get; set; }
+    public string? XtreamUsername { get; set; }
+    public bool XtreamIncludeXmltv { get; set; }
+    public bool IsXtreamProvider => XtreamBaseUrl is not null;
 }
 
 public sealed class ProviderStatusDto
@@ -56,18 +63,26 @@ public sealed class CreateProviderRequest
     [Required]
     public string Name { get; set; } = string.Empty;
 
-    [Required]
-    public string PlaylistUrl { get; set; } = string.Empty;
+    // Used for URL and File providers. Omit when creating an Xtream provider.
+    public string? PlaylistUrl { get; set; }
 
     public string? XmltvUrl { get; set; }
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public bool Enabled { get; set; } = true;
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 
-    [Range(1, 300)]
-    public int TimeoutSeconds { get; set; } = 20;
+    [Range(1, 1800)]
+    public int TimeoutSeconds { get; set; } = 120;
 
     public List<string>? AssociateToProfileIds { get; set; }
+
+    // Xtream Codes provider fields — all three required together
+    public string? XtreamBaseUrl { get; set; }
+    public string? XtreamUsername { get; set; }
+    public string? XtreamPassword { get; set; }
+    public bool XtreamIncludeXmltv { get; set; }
 }
 
 public sealed class UpdateProviderRequest
@@ -75,18 +90,45 @@ public sealed class UpdateProviderRequest
     [Required]
     public string Name { get; set; } = string.Empty;
 
-    [Required]
-    public string PlaylistUrl { get; set; } = string.Empty;
+    // Used for URL and File providers. Null for Xtream providers.
+    public string? PlaylistUrl { get; set; }
 
     public string? XmltvUrl { get; set; }
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public bool Enabled { get; set; }
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 
-    [Range(1, 300)]
-    public int TimeoutSeconds { get; set; } = 20;
+    [Range(1, 1800)]
+    public int TimeoutSeconds { get; set; } = 120;
 
     public List<string>? AssociateToProfileIds { get; set; }
+
+    // Xtream Codes provider fields
+    public string? XtreamBaseUrl { get; set; }
+    public string? XtreamUsername { get; set; }
+    public bool XtreamIncludeXmltv { get; set; }
+}
+
+public sealed class UpdateXtreamPasswordRequest
+{
+    [Required]
+    public string Password { get; set; } = string.Empty;
+}
+
+public sealed class FileBrowseEntryDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
+    public bool IsDirectory { get; set; }
+}
+
+public sealed class FileBrowseDto
+{
+    public string CurrentPath { get; set; } = string.Empty;
+    public string? ParentPath { get; set; }
+    public List<FileBrowseEntryDto> Entries { get; set; } = [];
 }
 
 public sealed class SetProviderEnabledRequest
@@ -170,6 +212,8 @@ public sealed class ImportConfigProviderRequest
 {
     [Required]
     public string Name { get; set; } = string.Empty;
+    public bool IncludeVod { get; set; }
+    public bool IncludeSeries { get; set; }
 }
 
 public sealed class CreateProfileRequest

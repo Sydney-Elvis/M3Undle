@@ -1,0 +1,2165 @@
+@page "/channels/mapping"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@using System
+@using System.Text.RegularExpressions
+@inject HttpClient Http
+@inject AppEventBus EventBus
+@inject IRefreshTrigger RefreshTrigger
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>M3Undle — Channel Mapping</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Channel Mapping</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Select channels from provider groups to add to your M3U output.</MudText>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudNumericField T="int"
+                             @bind-Value="_defaultStartNum"
+                             Label="Start at #"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Dense"
+                             HideSpinButtons="true"
+                             Style="width:100px;"
+                             DebounceInterval="600"
+                             Immediate="true"
+                             OnDebounceIntervalElapsed="SaveDefaultStartNumAsync" />
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+            <MudButton StartIcon="@Icons.Material.Filled.Publish"
+                       Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Size="Size.Small"
+                       OnClick="BuildSnapshotAsync"
+                       Disabled="@(_isRefreshing || _profileId is null)">
+                @(_isRefreshing ? "Building…" : "Build Output")
+            </MudButton>
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+}
+
+@if (_isRefreshing)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Filled" Class="mb-4" Icon="@Icons.Material.Filled.Sync">
+        A snapshot is currently being built. Groups are shown for configuration, but output will not be updated until the build completes.
+    </MudAlert>
+}
+
+@if (_profileId is null && !_isLoading)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No active profile found. Set a provider active on the <MudLink Href="providers">Providers</MudLink> page first.
+    </MudAlert>
+}
+else
+{
+    <!-- Search toolbar -->
+    <MudPaper Elevation="2" Class="mb-2 pa-2" Style="position:sticky; top:var(--mud-appbar-height, 64px); z-index:100; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:4px;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudTextField T="string"
+                          Value="_searchTerm"
+                          ValueChanged="OnSearchTermChanged"
+                          Placeholder="Filter groups…  e.g.  CA   CA*   *CA*   ^LOCAL   !*USA*"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(!string.IsNullOrEmpty(_searchTerm) ? Icons.Material.Filled.Clear : Icons.Material.Filled.Search)"
+                          OnAdornmentClick="ClearSearch"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Style="min-width:300px; flex:1; max-width:520px;" />
+            <MudTooltip Placement="Placement.Right" Arrow="true"
+                        Text="CA=whole word | CA*=starts | *CA=ends | *CA*=contains | ^CA=str start | [CB]A=char class | !CA=negate | space=OR terms">
+                <MudIconButton Icon="@Icons.Material.Filled.HelpOutline" Size="Size.Small" Color="Color.Secondary" />
+            </MudTooltip>
+            @if (!string.IsNullOrEmpty(_searchError))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Error">@_searchError</MudText>
+            }
+            <MudDivider Vertical="true" FlexItem="true" />
+            <MudTextField T="string"
+                          Value="_globalChannelFilter"
+                          ValueChanged="OnGlobalChannelFilterChanged"
+                          Placeholder="Search channels across all groups…"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(!string.IsNullOrEmpty(_globalChannelFilter) ? Icons.Material.Filled.Clear : Icons.Material.Filled.ManageSearch)"
+                          OnAdornmentClick="@(() => OnGlobalChannelFilterChanged(string.Empty))"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Style="min-width:260px; flex:1; max-width:460px;" />
+            @if (_globalChannelSearchBusy)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+            }
+            @if (_globalChannelSearchResults.Count > 0)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                    @_globalChannelSearchResults.Count group@(_globalChannelSearchResults.Count != 1 ? "s" : "") matched
+                </MudChip>
+            }
+            @if (_isBulkBusy)
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                <MudText Typo="Typo.caption" Color="Color.Primary" Style="white-space:nowrap;">Updating…</MudText>
+            }
+            else if (!_isLoading && FilteredItems.Count > 0)
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space:nowrap;">@FilteredItems.Count groups:</MudText>
+                <MudTooltip Text="Select all channels in visible groups" Arrow="true" Placement="Placement.Bottom">
+                    <MudLink Typo="Typo.caption" OnClick="SelectAllVisibleChannelsAsync" Style="cursor:pointer;">All</MudLink>
+                </MudTooltip>
+                <MudTooltip Text="Deselect all channels in visible groups" Arrow="true" Placement="Placement.Bottom">
+                    <MudLink Typo="Typo.caption" OnClick="DeselectAllVisibleChannelsAsync" Style="cursor:pointer;">None</MudLink>
+                </MudTooltip>
+                @if (_globalChannelSearchResults.Count == 0)
+                {
+                    <MudTooltip Text="Exclude all visible groups from output" Arrow="true" Placement="Placement.Bottom">
+                        <MudLink Typo="Typo.caption" Color="Color.Error"
+                                 OnClick="@(() => BulkSetDecisionForVisibleAsync("exclude"))"
+                                 Style="cursor:pointer;">Exclude</MudLink>
+                    </MudTooltip>
+                }
+            }
+        </MudStack>
+    </MudPaper>
+
+    <!-- Summary chips -->
+    @if (!_isLoading && _profileId is not null)
+    {
+        var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
+        var mapped = liveFilters.Where(f =>
+            f.Decision == "hold" &&
+            ((_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
+             (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
+            .ToList();
+        var unmapped = liveFilters.Where(f =>
+            f.Decision == "hold" &&
+            !((_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
+              (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
+            .ToList();
+        var excluded = liveFilters.Where(f => f.Decision == "exclude").ToList();
+        var newCount = liveFilters.Count(f => f.IsNew);
+        var chSelected = mapped.Sum(f =>
+            _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
+                ? sel.Count(s => s.Value)
+                : f.SelectedChannelCount);
+
+        <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+            <MudChip T="string" Size="Size.Small" Color="Color.Success"
+                     Variant="@(_decisionFilterStates.Contains("used") ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@((chip) => ToggleDecisionFilterState("used"))">@mapped.Count groups · @chSelected.ToString("N0") ch used</MudChip>
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                     Variant="@(_decisionFilterStates.Contains("unmapped") ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@((chip) => ToggleDecisionFilterState("unmapped"))">@unmapped.Count unmapped</MudChip>
+            <MudChip T="string" Size="Size.Small" Color="Color.Default"
+                     Variant="@(_decisionFilterStates.Contains("exclude") ? Variant.Filled : Variant.Outlined)"
+                     OnClick="@((chip) => ToggleDecisionFilterState("exclude"))">@excluded.Count excluded</MudChip>
+            @if (newCount > 0)
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                         Variant="@(_decisionFilterStates.Contains("new") ? Variant.Filled : Variant.Outlined)"
+                         OnClick="@((chip) => ToggleDecisionFilterState("new"))">@newCount new</MudChip>
+                <MudTooltip Text="Dismiss all new flags" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.DoneAll"
+                                   Size="Size.Small"
+                                   Color="Color.Info"
+                                   OnClick="DismissAllNewAsync"
+                                   Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
+                </MudTooltip>
+            }
+        </MudStack>
+    }
+
+    @if (_isLoading)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (_allFilters.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups found. Trigger a provider refresh to populate.</MudAlert>
+    }
+    else if (FilteredItems.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No groups match your filter.</MudAlert>
+    }
+    else
+    {
+        @foreach (var item in FilteredItems)
+        {
+            @if (item is GroupFilterDto filter)
+            {
+                <!-- Standalone group row -->
+                var filterId   = filter.ProfileGroupFilterId;
+                var isExcluded = filter.Decision == "exclude";
+                var isOnHold   = filter.Decision == "hold";
+                var isExpanded = _expandedGroups.Contains(filterId);
+                var chLoading  = _loadingChannels.Contains(filterId);
+                var isEditing  = _editingFilterId == filterId;
+                var rowStyle   = isExcluded ? "opacity:0.55;" : string.Empty;
+                var displayName = filter.OutputName ?? filter.ProviderGroupRawName;
+
+                <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@rowStyle">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+
+                        <!-- Group name: display or edit mode -->
+                        @if (isEditing)
+                        {
+                            <div style="display:inline-flex; align-items:center; gap:4px;">
+                                <MudAutocomplete T="string"
+                                    Value="@_editNameText"
+                                    ValueChanged="@(v => _editNameText = v ?? string.Empty)"
+                                    SearchFunc="SearchOutputNamesAsync"
+                                    CoerceValue="true"
+                                    Clearable="true"
+                                    ResetValueOnEmptyText="true"
+                                    Variant="Variant.Outlined"
+                                    Margin="Margin.Dense"
+                                    Dense="true"
+                                    Immediate="true"
+                                    Style="min-width:140px; max-width:240px;"
+                                    Placeholder="Output name…" />
+                                <MudTooltip Text="Confirm" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                                                   OnClick="@(() => CommitEditAsync(filter))" />
+                                </MudTooltip>
+                                <MudTooltip Text="Cancel" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                   OnClick="CancelEdit" />
+                                </MudTooltip>
+                            </div>
+                            <MudSpacer />
+                        }
+                        else
+                        {
+                            <!-- Name + edit button grouped tight -->
+                            <div style="display:inline-flex; align-items:center; gap:2px;">
+                                <MudStack Spacing="0" Style="min-width:120px; cursor:pointer;" @onclick="@(() => ToggleExpandAsync(filter))">
+                                    <MudText Typo="Typo.body1" Style="@($"font-weight:{(!isExcluded ? "600" : "400")};")">
+                                        @displayName
+                                    </MudText>
+                                    @if (filter.OutputName is not null)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Tertiary">
+                                            @filter.ProviderGroupRawName · @filter.ProviderName
+                                        </MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @filter.ProviderName
+                                        </MudText>
+                                    }
+                                </MudStack>
+
+                                <!-- Rename / merge button -->
+                                <MudTooltip Text="@(filter.OutputName is not null ? "Rename or merge into another group" : "Rename or merge into a group")" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                   Size="Size.Small"
+                                                   Color="@(filter.OutputName is not null ? Color.Primary : Color.Default)"
+                                                   OnClick="@(() => BeginEdit(filterId, filter.OutputName ?? string.Empty))" />
+                                </MudTooltip>
+                            </div>
+
+                            @if (!filter.ProviderGroupActive)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
+                            }
+                            @if (filter.IsNew)
+                            {
+                                <MudTooltip Text="New since last sync — click to dismiss" Arrow="true">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
+                                             Style="cursor:pointer;"
+                                             OnClick="@(() => DismissNewAsync(filter))">new</MudChip>
+                                </MudTooltip>
+                            }
+                            <MudSpacer />
+                        }
+
+                        @if (!isEditing)
+                        {
+                        <!-- Start # -->
+                        <MudNumericField T="int?"
+                                         Value="@filter.AutoNumStart"
+                                         ValueChanged="@(v => OnAutoNumStartChanged(filter, v))"
+                                         Label="Start #"
+                                         Placeholder="—"
+                                         Margin="Margin.Dense"
+                                         Variant="Variant.Outlined"
+                                         Disabled="@isExcluded"
+                                         HideSpinButtons="true"
+                                         Style="width:72px;"
+                                         DebounceInterval="800"
+                                         Immediate="true" />
+
+                        <!-- Channel count (always n/n), to the right of Start # -->
+                        <MudTooltip Text="@($"First seen: {filter.ProviderGroupFirstSeen:yyyy-MM-dd}")" Arrow="true" Placement="Placement.Top">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right; cursor:default;">
+                                @GetChannelCountText(filter, filterId)
+                            </MudText>
+                        </MudTooltip>
+
+                        <!-- Exclude toggle button -->
+                        <MudTooltip Text="@(isExcluded ? "Set group to unmapped" : "Exclude group")" Arrow="true">
+                            <MudIconButton Icon="@(isExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
+                                           Size="Size.Small"
+                                           Color="@(isExcluded ? Color.Error : Color.Default)"
+                                           OnClick="@(() => ToggleDecisionAsync(filter, "exclude"))"
+                                           Disabled="_busyFilters.Contains(filterId)" />
+                        </MudTooltip>
+                        }
+
+                        <!-- Expand button -->
+                        <MudIconButton Icon="@(isExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                       Size="Size.Small"
+                                       OnClick="@(() => ToggleExpandAsync(filter))" />
+
+                    </MudStack>
+
+                    <!-- Inline channel panel -->
+                    @if (isExpanded)
+                    {
+                        <MudDivider Class="mt-2 mb-2" />
+
+                        @if (chLoading)
+                        {
+                            <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mt-1" />
+                        }
+                        else if (_channelCache.TryGetValue(filterId, out var channels))
+                        {
+                            var globalActive = _globalChannelSearchResults.Count > 0;
+                            var filterText   = globalActive ? string.Empty : _groupChannelFilter.GetValueOrDefault(filterId, string.Empty);
+                            var filtered     = GetFilteredGroupChannels(filterId, channels, globalActive, filterText);
+                            var selections   = _channelSelections.GetValueOrDefault(filterId) ?? [];
+
+                            @if (!globalActive)
+                            {
+                            <!-- Filter bar -->
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap">
+                                <MudTextField T="string"
+                                              Value="@filterText"
+                                              ValueChanged="@(v => { _groupChannelFilter[filterId] = v; StateHasChanged(); })"
+                                              Placeholder="Filter channels…"
+                                              Adornment="Adornment.End"
+                                              AdornmentIcon="@(string.IsNullOrEmpty(filterText) ? Icons.Material.Filled.FilterList : Icons.Material.Filled.Clear)"
+                                              OnAdornmentClick="@(() => { _groupChannelFilter[filterId] = string.Empty; StateHasChanged(); })"
+                                              Margin="Margin.Dense"
+                                              Variant="Variant.Outlined"
+                                              Immediate="true"
+                                              Style="min-width:180px;" />
+
+                                @if (_savedChannelFilters.Count > 0)
+                                {
+                                    <MudSelect T="string"
+                                               Value="@filterText"
+                                               ValueChanged="@(v => { _groupChannelFilter[filterId] = v; StateHasChanged(); })"
+                                               Placeholder="Saved presets"
+                                               Margin="Margin.Dense"
+                                               Variant="Variant.Outlined"
+                                               Dense="true"
+                                               Style="min-width:140px;">
+                                        @foreach (var preset in _savedChannelFilters)
+                                        {
+                                            <MudSelectItem T="string" Value="@preset">@preset</MudSelectItem>
+                                        }
+                                    </MudSelect>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(filterText) && !_savedChannelFilters.Contains(filterText, StringComparer.OrdinalIgnoreCase))
+                                {
+                                    <MudTooltip Text="Save this filter as a preset" Arrow="true">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Save"
+                                                       Size="Size.Small"
+                                                       Color="Color.Primary"
+                                                       OnClick="@(() => SaveChannelFilterPresetAsync(filterText))" />
+                                    </MudTooltip>
+                                }
+
+                                @if (!isExcluded)
+                                {
+                                    <MudDivider Vertical="true" FlexItem="true" />
+                                    <MudLink Typo="Typo.caption" OnClick="@(() => SelectAllChannelsAsync(filter))" Style="cursor:pointer;">All</MudLink>
+                                    <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllChannelsAsync(filterId))" Style="cursor:pointer;">None</MudLink>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @selections.Count(s => s.Value) of @channels.Count selected
+                                    </MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">@channels.Count channels</MudText>
+                                }
+                                <MudDivider Vertical="true" FlexItem="true" />
+                                <MudTooltip Text="@(isExcluded ? "Unexclude group to enable tracking" : "Track new channels in this group")" Arrow="true">
+                                    <MudSwitch T="bool"
+                                               Value="@filter.TrackNewChannels"
+                                               ValueChanged="@(v => OnTrackNewChannelsChanged(filter, v))"
+                                               Size="Size.Small"
+                                               Color="Color.Primary"
+                                               Disabled="@isExcluded"
+                                               Label="Track new" />
+                                </MudTooltip>
+                            </MudStack>
+                            }
+                            @if (globalActive && !isExcluded)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap">
+                                    <MudLink Typo="Typo.caption" OnClick="@(() => SelectAllChannelsAsync(filter))" Style="cursor:pointer;">All</MudLink>
+                                    <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllChannelsAsync(filterId))" Style="cursor:pointer;">None</MudLink>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @selections.Count(s => s.Value) of @channels.Count selected
+                                    </MudText>
+                                </MudStack>
+                            }
+
+                            <!-- Channel list -->
+                            @if (channels.Count == 0)
+                            {
+                                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                                    No channel data yet — trigger a refresh to populate.
+                                </MudAlert>
+                            }
+                            else
+                            {
+                                <div style="max-height:400px; overflow-y:auto;">
+                                    @foreach (var ch in filtered)
+                                    {
+                                        var isSelected  = selections.GetValueOrDefault(ch.ProviderChannelId);
+                                        var numEntry    = _channelNumbers.GetValueOrDefault(filterId)?.GetValueOrDefault(ch.ProviderChannelId);
+                                        var conflictMsg = isSelected && numEntry.HasValue &&
+                                            _numberIndex.TryGetValue(numEntry.Value, out var usedBy) &&
+                                            (usedBy.FilterId != filterId || usedBy.ChannelId != ch.ProviderChannelId)
+                                                ? $"#{numEntry.Value} already used by {usedBy.Description}" : null;
+
+                                        <div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--mud-palette-divider); padding:2px 0;">
+                                            @if (!isExcluded)
+                                            {
+                                                <MudCheckBox T="bool"
+                                                             Value="@isSelected"
+                                                             ValueChanged="@(v => OnChannelChecked(filter, ch.ProviderChannelId, v))"
+                                                             Size="Size.Small"
+                                                             Dense="true" />
+                                            }
+                                            <MudText Typo="Typo.body2" Style="flex:1;">@ch.DisplayName</MudText>
+                                            @if (!ch.Active)
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">gone</MudChip>
+                                            }
+                                            @if (!isExcluded && isSelected)
+                                            {
+                                                <MudNumericField T="int?"
+                                                                 Value="@numEntry"
+                                                                 ValueChanged="@(v => OnChannelNumberChanged(filterId, ch.ProviderChannelId, v))"
+                                                                 Placeholder="—"
+                                                                 Margin="Margin.Dense"
+                                                                 Variant="Variant.Outlined"
+                                                                 HideSpinButtons="true"
+                                                                 Style="@($"width:72px;{(conflictMsg is not null ? " border-color:var(--mud-palette-error);" : "")}")"
+                                                                 DebounceInterval="800"
+                                                                 Immediate="true" />
+                                                @if (conflictMsg is not null)
+                                                {
+                                                    <MudTooltip Text="@conflictMsg" Arrow="true" Placement="Placement.Left">
+                                                        <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" />
+                                                    </MudTooltip>
+                                                }
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        }
+                    }
+                </MudPaper>
+            }
+            else if (item is VirtualParent parent)
+            {
+                <!-- Virtual parent row -->
+                var isParentExpanded = _expandedParents.Contains(parent.OutputName);
+                var isEditorShown    = _showParentEditor.Contains(parent.OutputName);
+                var allExcluded  = parent.Members.All(m => m.Decision == "exclude");
+                var anyActive    = parent.Members.Any(m => m.Decision != "exclude");
+                var totalChannels = parent.Members.Sum(m => m.ChannelCount ?? 0);
+                var allMembersLoaded = parent.Members.All(m => _channelSelections.ContainsKey(m.ProfileGroupFilterId));
+                var selectedChannels = allMembersLoaded
+                    ? parent.Members.Sum(m => _channelSelections.TryGetValue(m.ProfileGroupFilterId, out var mSel) ? mSel.Count(s => s.Value) : 0)
+                    : -1;
+                var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
+                var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
+                var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
+
+                <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+
+                        <!-- Name + member summary -->
+                        <MudStack Spacing="0" Style="flex:1; min-width:120px; cursor:pointer;" @onclick="@(() => ToggleParentExpandAsync(parent))">
+                            <MudText Typo="Typo.body1" Style="@($"font-weight:{(anyActive ? "600" : "400")};")">
+                                @parent.OutputName
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @parent.Members.Count group@(parent.Members.Count != 1 ? "s" : "") · @providerNames
+                            </MudText>
+                        </MudStack>
+
+                        <!-- Manage member groups button -->
+                        <MudTooltip Text="Manage member groups" Arrow="true">
+                            <MudIconButton Icon="@Icons.Material.Filled.AccountTree"
+                                           Size="Size.Small"
+                                           Color="@(isEditorShown ? Color.Primary : Color.Default)"
+                                           OnClick="@(() => ToggleParentEditor(parent.OutputName))" />
+                        </MudTooltip>
+
+                        <!-- Start # -->
+                        <MudNumericField T="int?"
+                                         Value="@((int?)GetParentStartNum(parent.OutputName))"
+                                         ValueChanged="@(v => OnParentStartNumChanged(parent.OutputName, v))"
+                                         Label="Start #"
+                                         Placeholder="—"
+                                         Margin="Margin.Dense"
+                                         Variant="Variant.Outlined"
+                                         Disabled="@allExcluded"
+                                         HideSpinButtons="true"
+                                         Style="width:72px;"
+                                         Immediate="true" />
+
+                        <!-- Channel count (selected/total or total only when not loaded) -->
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right;">
+                            @(selectedChannels < 0 ? $"0/{totalChannels:N0} ch" : $"{selectedChannels:N0}/{totalChannels:N0} ch")
+                        </MudText>
+
+                        <!-- Exclude button (bulk) -->
+                        <MudTooltip Text="@(allExcluded ? "Set groups to unmapped" : "Exclude all member groups")" Arrow="true">
+                            <MudIconButton Icon="@(allExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
+                                           Size="Size.Small"
+                                           Color="@(allExcluded ? Color.Error : Color.Default)"
+                                           OnClick="@(() => ToggleParentDecisionAsync(parent, "exclude"))"
+                                           Disabled="@isBusy" />
+                        </MudTooltip>
+
+                        <!-- Expand channels button -->
+                        <MudIconButton Icon="@(isParentExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                       Size="Size.Small"
+                                       OnClick="@(() => ToggleParentExpandAsync(parent))" />
+                    </MudStack>
+
+                    <!-- Member management panel -->
+                    @if (isEditorShown)
+                    {
+                        <MudDivider Class="mt-2 mb-2" />
+                        <MudText Typo="Typo.overline" Color="Color.Secondary">Member Groups</MudText>
+                        <MudStack Wrap="Wrap.Wrap" Row="true" Spacing="1" Class="mt-1">
+                            @foreach (var member in parent.Members)
+                            {
+                                var mfid     = member.ProfileGroupFilterId;
+                                var mEditing = _editingFilterId == mfid;
+
+                                <MudPaper Elevation="0" Class="pa-1"
+                                          Style="border:1px solid var(--mud-palette-divider); border-radius:4px; display:inline-flex; align-items:center; gap:2px;">
+                                    @if (mEditing)
+                                    {
+                                        <MudAutocomplete T="string"
+                                            Value="@_editNameText"
+                                            ValueChanged="@(v => _editNameText = v ?? string.Empty)"
+                                            SearchFunc="SearchOutputNamesAsync"
+                                            CoerceValue="true"
+                                            Clearable="true"
+                                            ResetValueOnEmptyText="true"
+                                            Variant="Variant.Outlined"
+                                            Margin="Margin.Dense"
+                                            Dense="true"
+                                            Immediate="true"
+                                            Style="min-width:120px; max-width:200px;"
+                                            Placeholder="Output name…" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                                                       OnClick="@(() => CommitEditAsync(member))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                       OnClick="CancelEdit" />
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.body2" Class="px-1">@member.ProviderGroupRawName</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">(@member.ProviderName)</MudText>
+                                        <MudTooltip Text="Move to different group" Arrow="true">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                           OnClick="@(() => BeginEdit(mfid, member.OutputName ?? string.Empty))" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="Remove from this group" Arrow="true">
+                                            <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small" Color="Color.Warning"
+                                                           OnClick="@(() => UnmergeAsync(member))" />
+                                        </MudTooltip>
+                                    }
+                                </MudPaper>
+                            }
+                        </MudStack>
+                        @if (parent.Members.Count > 1)
+                        {
+                            <MudDivider Class="mt-2 mb-1" />
+                            <MudText Typo="Typo.overline" Color="Color.Secondary">Show in channel list</MudText>
+                            <MudStack Row="true" Spacing="2" Class="mt-1" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+                                @foreach (var pm in parent.Members)
+                                {
+                                    var pmId    = pm.ProfileGroupFilterId;
+                                    var pmVis   = !(_hiddenParentMembers.TryGetValue(parent.OutputName, out var hm) && hm.Contains(pmId));
+                                    var pmCount = _channelCache.TryGetValue(pmId, out var pmChs) ? pmChs.Count : (pm.ChannelCount ?? 0);
+                                    <MudCheckBox T="bool"
+                                                 Value="@pmVis"
+                                                 ValueChanged="@(v => SetParentMemberVisible(parent.OutputName, pmId, v))"
+                                                 Size="Size.Small"
+                                                 Dense="true"
+                                                 Label="@($"{pm.ProviderGroupRawName} ({pmCount})")" />
+                                }
+                            </MudStack>
+                        }
+                    }
+
+                    <!-- Unified channel list -->
+                    @if (isParentExpanded)
+                    {
+                        var parentFilterKey   = parent.OutputName;
+                        var globalActive      = _globalChannelSearchResults.Count > 0;
+                        var parentFilterText  = globalActive ? string.Empty : _parentChannelFilter.GetValueOrDefault(parentFilterKey, string.Empty);
+                        var hiddenMembers     = _hiddenParentMembers.GetValueOrDefault(parentFilterKey) ?? new HashSet<string>();
+                        var allParentChs      = GetAllParentChannels(parent);
+                        var filteredParentChs = GetFilteredParentChannelsForDisplay(parent, allParentChs, globalActive, parentFilterText, hiddenMembers);
+                        var totalSelected     = parent.Members
+                            .Where(m => m.Decision != "exclude")
+                            .Sum(m => _channelSelections.GetValueOrDefault(m.ProfileGroupFilterId)?.Count(s => s.Value) ?? 0);
+                        var selectableCount   = allParentChs.Count(e => e.Filter.Decision != "exclude");
+                        var isAnyLoading = parent.Members.Any(m => _loadingChannels.Contains(m.ProfileGroupFilterId));
+
+                        <MudDivider Class="mt-2 mb-2" />
+
+                        @if (!globalActive)
+                        {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap">
+                            <MudTextField T="string"
+                                          Value="@parentFilterText"
+                                          ValueChanged="@(v => { _parentChannelFilter[parentFilterKey] = v; StateHasChanged(); })"
+                                          Placeholder="Filter channels…"
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@(string.IsNullOrEmpty(parentFilterText) ? Icons.Material.Filled.FilterList : Icons.Material.Filled.Clear)"
+                                          OnAdornmentClick="@(() => { _parentChannelFilter[parentFilterKey] = string.Empty; StateHasChanged(); })"
+                                          Margin="Margin.Dense"
+                                          Variant="Variant.Outlined"
+                                          Immediate="true"
+                                          Style="min-width:180px;" />
+                            @if (anyActive)
+                            {
+                                <MudDivider Vertical="true" FlexItem="true" />
+                                <MudLink Typo="Typo.caption" OnClick="@(() => SelectVisibleParentChannelsAsync(parent, filteredParentChs))" Style="cursor:pointer;">All</MudLink>
+                                <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllParentChannelsAsync(parent))" Style="cursor:pointer;">None</MudLink>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@totalSelected of @selectableCount selected</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@allParentChs.Count channels</MudText>
+                            }
+                        </MudStack>
+                        }
+                        @if (globalActive && anyActive)
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap">
+                                <MudLink Typo="Typo.caption" OnClick="@(() => SelectVisibleParentChannelsAsync(parent, filteredParentChs))" Style="cursor:pointer;">All</MudLink>
+                                <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllParentChannelsAsync(parent))" Style="cursor:pointer;">None</MudLink>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@totalSelected of @selectableCount selected</MudText>
+                            </MudStack>
+                        }
+
+                        @if (isAnyLoading)
+                        {
+                            <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="mt-1" />
+                        }
+                        else if (allParentChs.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                                No channel data yet - trigger a refresh to populate.
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <div style="max-height:500px; overflow-y:auto;">
+                                @foreach (var entry in filteredParentChs)
+                                {
+                                    var memberFilter = entry.Filter;
+                                    var ch           = entry.Channel;
+                                    var mfid         = memberFilter.ProfileGroupFilterId;
+                                    var isSelected   = _channelSelections.GetValueOrDefault(mfid)?.GetValueOrDefault(ch.ProviderChannelId) ?? false;
+                                    var canSelect    = memberFilter.Decision != "exclude";
+                                    var numEntry     = _channelNumbers.GetValueOrDefault(mfid)?.GetValueOrDefault(ch.ProviderChannelId);
+                                    var conflictMsg  = canSelect && isSelected && numEntry.HasValue &&
+                                        _numberIndex.TryGetValue(numEntry.Value, out var usedByP) &&
+                                        (usedByP.FilterId != mfid || usedByP.ChannelId != ch.ProviderChannelId)
+                                            ? $"#{numEntry.Value} already used by {usedByP.Description}" : null;
+
+                                    <div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--mud-palette-divider); padding:2px 0;">
+                                        @if (canSelect)
+                                        {
+                                            <MudCheckBox T="bool"
+                                                         Value="@isSelected"
+                                                         ValueChanged="@(v => OnChannelChecked(memberFilter, ch.ProviderChannelId, v))"
+                                                         Size="Size.Small"
+                                                         Dense="true" />
+                                        }
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary"
+                                                 Style="min-width:80px; max-width:160px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0;"
+                                                 title="@($"{memberFilter.ProviderGroupRawName} ({memberFilter.ProviderName})")">
+                                            @memberFilter.ProviderGroupRawName (@memberFilter.ProviderName)
+                                        </MudText>
+                                        <MudText Typo="Typo.body2" Style="flex:1;">@ch.DisplayName</MudText>
+                                        @if (!ch.Active)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">gone</MudChip>
+                                        }
+                                        @if (canSelect && isSelected)
+                                        {
+                                            <MudNumericField T="int?"
+                                                             Value="@numEntry"
+                                                             ValueChanged="@(v => OnChannelNumberChanged(mfid, ch.ProviderChannelId, v))"
+                                                             Placeholder="—"
+                                                             Margin="Margin.Dense"
+                                                             Variant="Variant.Outlined"
+                                                             HideSpinButtons="true"
+                                                             Style="@($"width:72px;{(conflictMsg is not null ? " border-color:var(--mud-palette-error);" : "")}")"
+                                                             DebounceInterval="800"
+                                                             Immediate="true" />
+                                            @if (conflictMsg is not null)
+                                            {
+                                                <MudTooltip Text="@conflictMsg" Arrow="true" Placement="Placement.Left">
+                                                    <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" />
+                                                </MudTooltip>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                </MudPaper>
+            }
+        }
+    }
+}
+
+@code {
+    private string? _profileId;
+    private List<GroupFilterDto> _allFilters = [];
+    private bool _isLoading;
+    private bool _isRefreshing;
+    private string? _error;
+
+    private HashSet<string> _busyFilters = [];
+    private HashSet<string> _sessionChangedFilterIds = [];
+    private HashSet<string> _expandedGroups = [];
+    private HashSet<string> _expandedParents = [];
+    private Dictionary<string, List<ProviderChannelSelectDto>> _channelCache = [];
+    private Dictionary<string, Dictionary<string, bool>> _channelSelections = [];
+    private Dictionary<string, Dictionary<string, int?>> _channelNumbers = [];
+    private HashSet<string> _loadingChannels = [];
+    private HashSet<string> _showParentEditor = [];
+    private Dictionary<string, string> _groupChannelFilter = [];
+    private Dictionary<string, string> _parentChannelFilter = [];
+    private Dictionary<string, HashSet<string>> _hiddenParentMembers = [];
+    private Dictionary<string, int> _parentStartNum = [];
+    private Dictionary<string, CancellationTokenSource> _channelSaveCts = [];
+
+    private record NumberEntry(string FilterId, string ChannelId, string Description);
+    private Dictionary<int, NumberEntry> _numberIndex = [];
+
+    private int _defaultStartNum = 100;
+    private string? _startNumProfileId;
+    private List<string> _savedChannelFilters = [];
+    private bool _jsReady;
+
+    private string _searchTerm = string.Empty;
+    private string? _searchError;
+    private Func<string, bool>? _searchPredicate;
+    private HashSet<string> _decisionFilterStates = ["used", "unmapped", "new"];
+    private List<string> _displayOrderIds = [];
+
+    private string _globalChannelFilter = string.Empty;
+    private bool _globalChannelSearchBusy;
+    private Dictionary<string, List<ChannelSearchItemDto>> _globalChannelSearchResults = [];
+    private CancellationTokenSource? _globalSearchDebounceCts;
+    private HashSet<string> _searchAutoExpandedGroups = [];
+    private HashSet<string> _searchAutoExpandedParents = [];
+
+    private string? _editingFilterId;
+    private string _editNameText = string.Empty;
+    private bool _isBulkBusy;
+
+    private void ToggleDecisionFilterState(string state)
+    {
+        if (!_decisionFilterStates.Remove(state))
+            _decisionFilterStates.Add(state);
+    }
+
+    private sealed record VirtualParent(string OutputName, List<GroupFilterDto> Members);
+    private sealed record ParentChannelEntry(GroupFilterDto Filter, ProviderChannelSelectDto Channel);
+
+    private List<object> FilteredItems
+    {
+        get
+        {
+            var allLive = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
+
+            var standaloneDict = allLive
+                .Where(f => f.OutputName is null)
+                .ToDictionary(f => f.ProfileGroupFilterId, f => (object)f);
+
+            var parentDict = allLive
+                .Where(f => f.OutputName is not null)
+                .GroupBy(f => f.OutputName!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => $"parent:{g.Key}",
+                    g => (object)new VirtualParent(g.Key, g.ToList()),
+                    StringComparer.OrdinalIgnoreCase);
+
+            var allItems = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in standaloneDict) allItems[k] = v;
+            foreach (var (k, v) in parentDict)     allItems[k] = v;
+
+            var showUsed     = _decisionFilterStates.Contains("used");
+            var showUnmapped = _decisionFilterStates.Contains("unmapped");
+            var showExclude  = _decisionFilterStates.Contains("exclude");
+            var showNew      = _decisionFilterStates.Contains("new");
+            var showAll      = _decisionFilterStates.Count == 0 || (showUsed && showUnmapped && showExclude);
+
+            bool IsUsed(GroupFilterDto f) =>
+                (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var fSel) && fSel.Any(s => s.Value)) ||
+                (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0);
+
+            bool FilterMatchesGroup(GroupFilterDto f) =>
+                showAll ||
+                (showUsed     && f.Decision == "hold" && IsUsed(f)) ||
+                (showUnmapped && f.Decision == "hold" && !IsUsed(f)) ||
+                (showExclude  && f.Decision == "exclude") ||
+                (showNew      && f.IsNew);
+
+            Func<object, bool> decisionMatch = o => o switch
+            {
+                GroupFilterDto f => FilterMatchesGroup(f),
+                VirtualParent p  => p.Members.Any(FilterMatchesGroup),
+                _ => false,
+            };
+
+            // Recently-acted-on items stay visible if their current decision matches the filter.
+            if (!showAll && _sessionChangedFilterIds.Count > 0)
+            {
+                var baseMatch = decisionMatch;
+                decisionMatch = o =>
+                {
+                    if (baseMatch(o)) return true;
+                    return o switch
+                    {
+                        GroupFilterDto f => _sessionChangedFilterIds.Contains(f.ProfileGroupFilterId)
+                                            && ((showUsed && f.Decision == "hold" && IsUsed(f))
+                                                || (showUnmapped && f.Decision == "hold" && !IsUsed(f))
+                                                || (showExclude && f.Decision == "exclude")
+                                                || (showNew && f.IsNew)),
+                        VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
+                                                                && ((showUsed && m.Decision == "hold" && IsUsed(m))
+                                                                    || (showUnmapped && m.Decision == "hold" && !IsUsed(m))
+                                                                    || (showExclude && m.Decision == "exclude")
+                                                                    || (showNew && m.IsNew))),
+                        _ => false,
+                    };
+                };
+            }
+
+            Func<object, bool> searchMatch = _searchPredicate is null
+                ? _ => true
+                : o => o switch
+                {
+                    GroupFilterDto f => _searchPredicate(f.ProviderGroupRawName),
+                    VirtualParent p  => _searchPredicate(p.OutputName),
+                    _                => false,
+                };
+
+            Func<object, bool> channelSearchMatch = _globalChannelSearchResults.Count == 0
+                ? _ => true
+                : o => o switch
+                {
+                    GroupFilterDto f => _globalChannelSearchResults.ContainsKey(f.ProfileGroupFilterId),
+                    VirtualParent p  => p.Members.Any(m => _globalChannelSearchResults.ContainsKey(m.ProfileGroupFilterId)),
+                    _                => false,
+                };
+
+            return _displayOrderIds
+                .Where(id => allItems.ContainsKey(id))
+                .Select(id => allItems[id])
+                .Where(decisionMatch)
+                .Where(searchMatch)
+                .Where(channelSearchMatch)
+                .ToList();
+        }
+    }
+
+    private void RebuildDisplayOrder()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _displayOrderIds = [];
+
+        foreach (var f in _allFilters
+            .Where(f => f.ProviderGroupContentType == "live")
+            .OrderBy(f => f.Decision == "hold" ? 0 : 1)
+            .ThenByDescending(f => f.IsNew)
+            .ThenBy(f => f.OutputName ?? f.ProviderGroupRawName, StringComparer.OrdinalIgnoreCase))
+        {
+            var key = f.OutputName is not null ? $"parent:{f.OutputName}" : f.ProfileGroupFilterId;
+            if (seen.Add(key))
+                _displayOrderIds.Add(key);
+        }
+    }
+
+    // Updates _displayOrderIds in-place when a rename or unmerge happens, so the item
+    // stays at roughly the same scroll position instead of jumping to a sorted position.
+    private void UpdateDisplayOrderForRename(GroupFilterDto filter, string? oldOutputName, string? newOutputName)
+    {
+        var oldKey = oldOutputName is not null ? $"parent:{oldOutputName}" : filter.ProfileGroupFilterId;
+        var newKey = newOutputName is not null ? $"parent:{newOutputName}" : filter.ProfileGroupFilterId;
+
+        if (string.Equals(oldKey, newKey, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var idx = _displayOrderIds.FindIndex(id => string.Equals(id, oldKey, StringComparison.OrdinalIgnoreCase));
+
+        // Does the old parent key still have other members after this rename?
+        var oldKeyStillNeeded = oldOutputName is not null &&
+            _allFilters.Any(f => f.ProfileGroupFilterId != filter.ProfileGroupFilterId &&
+                                 string.Equals(f.OutputName, oldOutputName, StringComparison.OrdinalIgnoreCase));
+
+        // Does the target key already have a position in the list?
+        var newKeyAlreadyExists = _displayOrderIds.Any(id => string.Equals(id, newKey, StringComparison.OrdinalIgnoreCase));
+
+        if (newKeyAlreadyExists)
+        {
+            // Merging into an existing parent — just remove the old slot if it's no longer needed
+            if (!oldKeyStillNeeded && idx >= 0)
+                _displayOrderIds.RemoveAt(idx);
+        }
+        else
+        {
+            if (idx >= 0)
+            {
+                if (oldKeyStillNeeded)
+                    _displayOrderIds.Insert(idx + 1, newKey); // sibling stays beside the old parent
+                else
+                    _displayOrderIds[idx] = newKey;           // rename in place
+            }
+            else
+            {
+                _displayOrderIds.Add(newKey);
+            }
+        }
+    }
+
+    private readonly CancellationTokenSource _cts = new();
+    private IDisposable? _eventSubscription;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isRefreshing = RefreshTrigger.IsRefreshing;
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _jsReady) return;
+        _jsReady = true;
+
+        try
+        {
+            var startKey = _profileId is not null ? $"m3undle:default-start-num:{_profileId}" : "m3undle:default-start-num";
+            var startStr = await JS.InvokeAsync<string?>("localStorage.getItem", startKey);
+            if (int.TryParse(startStr, out var n) && n > 0)
+                _defaultStartNum = n;
+            _startNumProfileId = _profileId;
+
+            var presetsJson = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:channel-filter-presets");
+            if (!string.IsNullOrWhiteSpace(presetsJson))
+                _savedChannelFilters = System.Text.Json.JsonSerializer.Deserialize<List<string>>(presetsJson) ?? [];
+        }
+        catch { }
+
+        StateHasChanged();
+    }
+
+    private async Task SaveDefaultStartNumAsync()
+    {
+        if (_profileId is null) return;
+        try { await JS.InvokeVoidAsync("localStorage.setItem", $"m3undle:default-start-num:{_profileId}", _defaultStartNum.ToString()); }
+        catch { }
+    }
+
+    private void RebuildNumberIndex()
+    {
+        _numberIndex = [];
+        foreach (var (fid, numDict) in _channelNumbers)
+        {
+            var group    = _allFilters.FirstOrDefault(f => f.ProfileGroupFilterId == fid);
+            var channels = _channelCache.GetValueOrDefault(fid) ?? [];
+            foreach (var (cid, num) in numDict)
+            {
+                if (num.HasValue)
+                {
+                    var ch = channels.FirstOrDefault(c => c.ProviderChannelId == cid);
+                    _numberIndex.TryAdd(num.Value,
+                        new NumberEntry(fid, cid, $"{group?.ProviderGroupRawName ?? "?"}: {ch?.DisplayName ?? "?"}"));
+                }
+            }
+        }
+    }
+
+    private HashSet<int> GetAssignedNumbers((string FilterId, string ChannelId)? except = null, IEnumerable<string>? exceptFilterIds = null)
+    {
+        var used = new HashSet<int>();
+        var skipFilters = exceptFilterIds is null ? null : new HashSet<string>(exceptFilterIds);
+
+        foreach (var (fid, numDict) in _channelNumbers)
+        {
+            if (skipFilters is not null && skipFilters.Contains(fid))
+                continue;
+
+            foreach (var (cid, num) in numDict)
+            {
+                if (!num.HasValue) continue;
+                if (except.HasValue && except.Value.FilterId == fid && except.Value.ChannelId == cid)
+                    continue;
+                used.Add(num.Value);
+            }
+        }
+
+        return used;
+    }
+
+    private static int NextUnused(int start, HashSet<int> used)
+    {
+        var n = start;
+        while (used.Contains(n)) n++;
+        used.Add(n);
+        return n;
+    }
+
+    private int GetGlobalNextAvailableNumber()
+    {
+        var used = GetAssignedNumbers();
+
+        if (used.Count == 0)
+            return _defaultStartNum;
+
+        var baseline = Math.Max(_defaultStartNum, used.Max() + 1);
+        return NextUnused(baseline, used);
+    }
+
+    private int GetNextNumberForGroup(GroupFilterDto filter, Dictionary<string, int?> numbers, HashSet<int> used)
+    {
+        var baseStart = filter.OutputName is not null && _parentStartNum.TryGetValue(filter.OutputName, out var parentStart)
+            ? parentStart
+            : (filter.AutoNumStart ?? _defaultStartNum);
+        var currentMax = numbers.Values
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .DefaultIfEmpty(baseStart - 1)
+            .Max();
+
+        var candidate = currentMax + 1;
+        return NextUnused(candidate, used);
+    }
+
+    private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.RefreshStarted)
+                {
+                    await InvokeAsync(() => { _isRefreshing = true; StateHasChanged(); });
+                }
+                else if (evt.Kind == AppEventKind.RefreshCompleted && !_isLoading)
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        _isRefreshing = false;
+                        await LoadCoreAsync(showSpinner: false);
+                    });
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
+        foreach (var cts in _channelSaveCts.Values) { cts.Cancel(); cts.Dispose(); }
+        _globalSearchDebounceCts?.Cancel();
+        _globalSearchDebounceCts?.Dispose();
+    }
+
+    private Task LoadAsync() => LoadCoreAsync(showSpinner: true);
+
+    private async Task LoadCoreAsync(bool showSpinner)
+    {
+        if (showSpinner)
+        {
+            _isLoading = true;
+            _error = null;
+            StateHasChanged();
+        }
+
+        try
+        {
+            var profile = await Http.GetFromJsonAsync<ActiveProfileDto>("/api/v1/profiles/active", _cts.Token);
+            if (profile is null)
+            {
+                _profileId = null;
+                return;
+            }
+
+            var newProfileId = profile.ProfileId;
+            if (_startNumProfileId is not null && _startNumProfileId != newProfileId)
+            {
+                _defaultStartNum = 100;
+                if (_jsReady)
+                {
+                    try
+                    {
+                        var startStr = await JS.InvokeAsync<string?>("localStorage.getItem", $"m3undle:default-start-num:{newProfileId}");
+                        if (int.TryParse(startStr, out var n) && n > 0)
+                            _defaultStartNum = n;
+                    }
+                    catch { }
+                }
+                _startNumProfileId = newProfileId;
+            }
+
+            _profileId = newProfileId;
+
+            _allFilters = await Http.GetFromJsonAsync<List<GroupFilterDto>>(
+                $"/api/v1/profiles/{_profileId}/group-filters", _cts.Token) ?? [];
+
+            _sessionChangedFilterIds.Clear();
+            RebuildDisplayOrder();
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _profileId = null;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (showSpinner)
+                _error = $"Failed to load group filters: {ex.Message}";
+        }
+        finally
+        {
+            if (showSpinner)
+                _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task BuildSnapshotAsync()
+    {
+        if (_isRefreshing) return;
+        _isRefreshing = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsync("/api/v1/snapshots/build", null);
+            if (!response.IsSuccessStatusCode)
+            {
+                var msg = response.StatusCode == System.Net.HttpStatusCode.Conflict
+                    ? "A build is already in progress."
+                    : $"Failed to trigger build: {response.ReasonPhrase}";
+                Snackbar.Add(msg, Severity.Warning);
+                _isRefreshing = false;
+            }
+            else
+            {
+                Snackbar.Add("Building output — page will refresh when done.", Severity.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+            _isRefreshing = false;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Decision
+    // -------------------------------------------------------------------------
+
+    private async Task ToggleDecisionAsync(GroupFilterDto filter, string decision)
+    {
+        var newDecision = filter.Decision == decision ? "hold" : decision;
+        await SetDecisionAsync(filter, newDecision);
+    }
+
+    private async Task SetDecisionAsync(GroupFilterDto filter, string decision)
+    {
+        if (_profileId is null) return;
+
+        var filterId = filter.ProfileGroupFilterId;
+        _busyFilters.Add(filterId);
+        StateHasChanged();
+
+        try
+        {
+            var req = new UpdateGroupFilterRequest { Decision = decision };
+            var response = await Http.PatchAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filterId}", req);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Failed to update group: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            filter.Decision = decision;
+            filter.IsNew = false;
+            _sessionChangedFilterIds.Add(filterId);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busyFilters.Remove(filterId);
+            StateHasChanged();
+        }
+    }
+
+    private async Task BulkSetDecisionForVisibleAsync(string decision)
+    {
+        if (_profileId is null) return;
+
+        var groupIds = FilteredItems.SelectMany(item => item switch
+        {
+            GroupFilterDto f => (IEnumerable<string>)[f.ProviderGroupId],
+            VirtualParent p  => p.Members.Select(m => m.ProviderGroupId),
+            _                => [],
+        }).Distinct().ToList();
+
+        if (groupIds.Count == 0) return;
+
+        _isBulkBusy = true;
+        StateHasChanged();
+
+        try
+        {
+            var req = new BulkGroupDecisionRequest { Decision = decision, ProviderGroupIds = groupIds };
+            var response = await Http.PostAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/bulk-decide", req);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Bulk update failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            var groupIdSet = new HashSet<string>(groupIds, StringComparer.Ordinal);
+            foreach (var f in _allFilters.Where(f => groupIdSet.Contains(f.ProviderGroupId)))
+            {
+                f.Decision = decision;
+                f.IsNew = false;
+                _sessionChangedFilterIds.Add(f.ProfileGroupFilterId);
+            }
+
+            RebuildDisplayOrder();
+            Snackbar.Add($"{groupIds.Count} group(s) set to {decision}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isBulkBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectAllVisibleChannelsAsync()
+    {
+        if (_profileId is null) return;
+
+        _isBulkBusy = true;
+        StateHasChanged();
+
+        try
+        {
+            var allFilterIds = FilteredItems.SelectMany(item => item switch
+            {
+                GroupFilterDto f when f.Decision != "exclude" => (IEnumerable<string>)[f.ProfileGroupFilterId],
+                VirtualParent p => p.Members.Where(m => m.Decision != "exclude").Select(m => m.ProfileGroupFilterId),
+                _ => [],
+            }).Distinct().ToList();
+
+            var used = GetAssignedNumbers(exceptFilterIds: allFilterIds);
+            var next = NextUnused(_defaultStartNum, used);
+
+            foreach (var filterId in allFilterIds)
+            {
+                if (!_channelCache.ContainsKey(filterId))
+                    await LoadChannelsAsync(filterId);
+
+                if (!_channelCache.TryGetValue(filterId, out var channels)) continue;
+
+                var freshSelections = new Dictionary<string, bool>();
+                var freshNumbers    = new Dictionary<string, int?>();
+                foreach (var ch in channels)
+                {
+                    freshSelections[ch.ProviderChannelId] = true;
+                    freshNumbers[ch.ProviderChannelId]    = next = NextUnused(next, used);
+                    next++;
+                }
+                _channelSelections[filterId] = freshSelections;
+                _channelNumbers[filterId]    = freshNumbers;
+            }
+
+            RebuildNumberIndex();
+            StateHasChanged();
+
+            foreach (var filterId in allFilterIds)
+                await ScheduleSaveChannelSelectionsAsync(filterId);
+        }
+        finally
+        {
+            _isBulkBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeselectAllVisibleChannelsAsync()
+    {
+        var filterIds = FilteredItems.SelectMany(item => item switch
+        {
+            GroupFilterDto f when f.Decision != "exclude" => (IEnumerable<string>)[f.ProfileGroupFilterId],
+            VirtualParent p => p.Members.Where(m => m.Decision != "exclude").Select(m => m.ProfileGroupFilterId),
+            _ => [],
+        }).Where(id => _channelSelections.ContainsKey(id)).Distinct().ToList();
+
+        foreach (var filterId in filterIds)
+        {
+            if (_channelCache.TryGetValue(filterId, out var channels))
+            {
+                _channelSelections[filterId] = channels.ToDictionary(c => c.ProviderChannelId, _ => false);
+                _channelNumbers[filterId] = [];
+            }
+        }
+
+        RebuildNumberIndex();
+        StateHasChanged();
+
+        foreach (var filterId in filterIds)
+            await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    // -------------------------------------------------------------------------
+    // IsNew dismissal
+    // -------------------------------------------------------------------------
+
+    private async Task DismissNewAsync(GroupFilterDto filter)
+    {
+        if (_profileId is null || !filter.IsNew) return;
+        var req = new UpdateGroupFilterRequest { ClearIsNew = true };
+        await PatchFilterAsync(filter, req, f => { f.IsNew = false; });
+    }
+
+    private async Task DismissAllNewAsync()
+    {
+        if (_profileId is null) return;
+
+        _isBulkBusy = true;
+        StateHasChanged();
+
+        try
+        {
+            var response = await Http.PostAsync($"/api/v1/profiles/{_profileId}/group-filters/dismiss-new", null);
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Dismiss failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+
+            foreach (var f in _allFilters)
+                f.IsNew = false;
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isBulkBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Inline rename / merge / unmerge
+    // -------------------------------------------------------------------------
+
+    private void BeginEdit(string filterId, string currentName)
+    {
+        _editingFilterId = filterId;
+        _editNameText    = currentName;
+        StateHasChanged();
+    }
+
+    private void CancelEdit()
+    {
+        _editingFilterId = null;
+        StateHasChanged();
+    }
+
+    private async Task CommitEditAsync(GroupFilterDto filter)
+    {
+        _editingFilterId = null;
+        var trimmed  = _editNameText.Trim();
+        var newValue = string.IsNullOrEmpty(trimmed) ? null : trimmed;
+
+        if (newValue == filter.OutputName) { StateHasChanged(); return; }
+
+        var oldOutputName = filter.OutputName;
+        var req = new UpdateGroupFilterRequest { OutputName = newValue, ClearOutputName = newValue is null };
+        await PatchFilterAsync(filter, req, f =>
+        {
+            UpdateDisplayOrderForRename(f, oldOutputName, newValue);
+            f.OutputName = newValue;
+        });
+
+        // Re-run channel search so newly created/modified VirtualParents auto-expand.
+        if (!string.IsNullOrWhiteSpace(_globalChannelFilter) && _globalChannelFilter.Trim().Length >= 2)
+            await ExecuteGlobalChannelSearchAsync(_globalChannelFilter.Trim());
+    }
+
+    private async Task UnmergeAsync(GroupFilterDto filter)
+    {
+        var oldOutputName = filter.OutputName;
+        var req = new UpdateGroupFilterRequest { ClearOutputName = true };
+        await PatchFilterAsync(filter, req, f =>
+        {
+            UpdateDisplayOrderForRename(f, oldOutputName, null);
+            f.OutputName = null;
+        });
+    }
+
+    private string GetChannelCountText(GroupFilterDto filter, string filterId)
+    {
+        var denominator = _channelCache.TryGetValue(filterId, out var cachedChs)
+            ? cachedChs.Count
+            : (filter.ChannelCount ?? 0);
+
+        if (denominator <= 0)
+            return "0 ch";
+
+        if (!_channelSelections.TryGetValue(filterId, out var selDict))
+            return $"0/{denominator:N0} ch";
+
+        var selected = selDict.Count(s => s.Value);
+        return $"{selected:N0}/{denominator:N0} ch";
+    }
+
+    private Task<IEnumerable<string>> SearchOutputNamesAsync(string searchText, CancellationToken _)
+    {
+        var names = _allFilters
+            .Where(f => f.OutputName is not null)
+            .Select(f => f.OutputName!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(n => string.IsNullOrEmpty(searchText) || n.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .AsEnumerable();
+        return Task.FromResult(names);
+    }
+
+    // -------------------------------------------------------------------------
+    // Field edits (autonums, track)
+    // -------------------------------------------------------------------------
+
+    private async Task OnAutoNumStartChanged(GroupFilterDto filter, int? value)
+    {
+        if (_profileId is null || value == filter.AutoNumStart) return;
+        var req = value is null
+            ? new UpdateGroupFilterRequest { ClearAutoNum = true }
+            : new UpdateGroupFilterRequest { AutoNumStart = value };
+        await PatchFilterAsync(filter, req, f => { f.AutoNumStart = value; });
+    }
+
+    private async Task OnTrackNewChannelsChanged(GroupFilterDto filter, bool value)
+    {
+        if (_profileId is null || value == filter.TrackNewChannels) return;
+        var req = new UpdateGroupFilterRequest { TrackNewChannels = value };
+        await PatchFilterAsync(filter, req, f => { f.TrackNewChannels = value; });
+    }
+
+    private async Task PatchFilterAsync(GroupFilterDto filter, UpdateGroupFilterRequest req, Action<GroupFilterDto> mutate)
+    {
+        if (_profileId is null) return;
+        try
+        {
+            var response = await Http.PatchAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}", req);
+            if (!response.IsSuccessStatusCode)
+            {
+                Snackbar.Add($"Save failed: {response.ReasonPhrase}", Severity.Error);
+                return;
+            }
+            mutate(filter);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Channel expand / channel list
+    // -------------------------------------------------------------------------
+
+    private async Task ToggleExpandAsync(GroupFilterDto filter)
+    {
+        var filterId = filter.ProfileGroupFilterId;
+        if (_expandedGroups.Contains(filterId))
+        {
+            _expandedGroups.Remove(filterId);
+            StateHasChanged();
+            return;
+        }
+
+        _expandedGroups.Add(filterId);
+
+        if (!_channelCache.ContainsKey(filterId))
+            await LoadChannelsAsync(filterId);
+        else
+            StateHasChanged();
+    }
+
+    private async Task ToggleParentExpandAsync(VirtualParent parent)
+    {
+        if (_expandedParents.Contains(parent.OutputName))
+        {
+            _expandedParents.Remove(parent.OutputName);
+            StateHasChanged();
+            return;
+        }
+
+        _expandedParents.Add(parent.OutputName);
+        StateHasChanged();
+
+        var toLoad = parent.Members
+            .Where(m => !_channelCache.ContainsKey(m.ProfileGroupFilterId))
+            .Select(m => LoadChannelsAsync(m.ProfileGroupFilterId))
+            .ToList();
+
+        await Task.WhenAll(toLoad);
+    }
+
+    private void ToggleParentEditor(string outputName)
+    {
+        if (!_showParentEditor.Add(outputName))
+            _showParentEditor.Remove(outputName);
+        StateHasChanged();
+    }
+
+    private void SetParentMemberVisible(string parentKey, string filterId, bool visible)
+    {
+        if (!_hiddenParentMembers.TryGetValue(parentKey, out var hidden))
+        {
+            hidden = new HashSet<string>();
+            _hiddenParentMembers[parentKey] = hidden;
+        }
+        if (visible) hidden.Remove(filterId);
+        else hidden.Add(filterId);
+        StateHasChanged();
+    }
+
+    private async Task ToggleParentDecisionAsync(VirtualParent parent, string decision)
+    {
+        var allMatch = parent.Members.All(m => m.Decision == decision);
+        var newDecision = allMatch ? "hold" : decision;
+        await Task.WhenAll(parent.Members.Select(m => SetDecisionAsync(m, newDecision)));
+    }
+
+    private int GetParentStartNum(string outputName) =>
+        _parentStartNum.GetValueOrDefault(outputName, _defaultStartNum);
+
+    private void OnParentStartNumChanged(string outputName, int? value)
+    {
+        if (value.HasValue)
+            _parentStartNum[outputName] = value.Value;
+        else
+            _parentStartNum.Remove(outputName);
+        StateHasChanged();
+    }
+
+    private List<ParentChannelEntry> GetAllParentChannels(VirtualParent parent)
+    {
+        var result = new List<ParentChannelEntry>();
+        foreach (var m in parent.Members)
+        {
+            if (_channelCache.TryGetValue(m.ProfileGroupFilterId, out var chs))
+                foreach (var ch in chs)
+                    result.Add(new ParentChannelEntry(m, ch));
+        }
+        return result;
+    }
+
+    private static List<ParentChannelEntry> GetFilteredParentChannels(List<ParentChannelEntry> all, string filterText)
+    {
+        if (string.IsNullOrWhiteSpace(filterText)) return all;
+        return all.Where(x =>
+            x.Channel.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+            x.Filter.ProviderGroupRawName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+            x.Filter.ProviderName.Contains(filterText, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private List<ParentChannelEntry> GetFilteredParentChannelsForDisplay(
+        VirtualParent parent,
+        List<ParentChannelEntry> all,
+        bool globalActive,
+        string filterText,
+        HashSet<string> hiddenMembers)
+    {
+        IEnumerable<ParentChannelEntry> result;
+
+        if (globalActive)
+        {
+            result = all.Where(e =>
+                _globalChannelSearchResults.TryGetValue(e.Filter.ProfileGroupFilterId, out var hits) &&
+                hits.Any(h => h.ProviderChannelId == e.Channel.ProviderChannelId));
+        }
+        else
+        {
+            result = GetFilteredParentChannels(all, filterText);
+        }
+
+        if (hiddenMembers.Count > 0)
+            result = result.Where(e => !hiddenMembers.Contains(e.Filter.ProfileGroupFilterId));
+
+        return result.ToList();
+    }
+
+    private List<ProviderChannelSelectDto> GetFilteredGroupChannels(
+        string filterId,
+        List<ProviderChannelSelectDto> channels,
+        bool globalActive,
+        string filterText)
+    {
+        if (globalActive)
+        {
+            if (!_globalChannelSearchResults.TryGetValue(filterId, out var hits))
+                return [];
+            var hitIds = hits.Select(h => h.ProviderChannelId).ToHashSet();
+            return channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
+        }
+
+        if (string.IsNullOrWhiteSpace(filterText))
+            return channels;
+
+        return channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    // -------------------------------------------------------------------------
+    // Global channel search
+    // -------------------------------------------------------------------------
+
+    private async Task OnGlobalChannelFilterChanged(string value)
+    {
+        _globalChannelFilter = value;
+        _globalSearchDebounceCts?.Cancel();
+
+        if (string.IsNullOrWhiteSpace(value) || value.Trim().Length < 2)
+        {
+            _globalChannelSearchResults.Clear();
+            _globalChannelSearchBusy = false;
+            foreach (var id in _searchAutoExpandedGroups)
+                _expandedGroups.Remove(id);
+            foreach (var name in _searchAutoExpandedParents)
+                _expandedParents.Remove(name);
+            _searchAutoExpandedGroups.Clear();
+            _searchAutoExpandedParents.Clear();
+            StateHasChanged();
+            return;
+        }
+
+        _globalChannelSearchBusy = true;
+        StateHasChanged();
+
+        _globalSearchDebounceCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(400, _globalSearchDebounceCts.Token);
+            await ExecuteGlobalChannelSearchAsync(value.Trim());
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task ExecuteGlobalChannelSearchAsync(string term)
+    {
+        if (_profileId is null) return;
+
+        try
+        {
+            var results = await Http.GetFromJsonAsync<List<ChannelSearchGroupResult>>(
+                $"/api/v1/profiles/{_profileId}/channels/search?q={Uri.EscapeDataString(term)}",
+                _cts.Token);
+
+            results ??= [];
+            _globalChannelSearchResults = results.ToDictionary(r => r.FilterId, r => r.Channels);
+
+            var channelLoadTasks = new List<Task>();
+            var expandedParentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var result in results)
+            {
+                var filter = _allFilters.FirstOrDefault(f => f.ProfileGroupFilterId == result.FilterId);
+                if (filter is null) continue;
+
+                if (filter.OutputName is null)
+                {
+                    if (!_expandedGroups.Contains(result.FilterId))
+                    {
+                        _expandedGroups.Add(result.FilterId);
+                        _searchAutoExpandedGroups.Add(result.FilterId);
+                        if (!_channelCache.ContainsKey(result.FilterId))
+                            channelLoadTasks.Add(LoadChannelsAsync(result.FilterId));
+                    }
+                }
+                else
+                {
+                    if (expandedParentNames.Add(filter.OutputName) && !_expandedParents.Contains(filter.OutputName))
+                    {
+                        _expandedParents.Add(filter.OutputName);
+                        _searchAutoExpandedParents.Add(filter.OutputName);
+                        foreach (var member in _allFilters.Where(f => string.Equals(f.OutputName, filter.OutputName, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            if (!_channelCache.ContainsKey(member.ProfileGroupFilterId))
+                                channelLoadTasks.Add(LoadChannelsAsync(member.ProfileGroupFilterId));
+                        }
+                    }
+                }
+            }
+
+            if (channelLoadTasks.Count > 0)
+                await Task.WhenAll(channelLoadTasks);
+        }
+        catch (HttpRequestException ex)
+        {
+            Snackbar.Add($"Channel search failed: {ex.Message}", Severity.Error);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _globalChannelSearchBusy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectVisibleParentChannelsAsync(VirtualParent parent, IEnumerable<ParentChannelEntry> visible)
+    {
+        var visibleEntries = visible.Where(e => e.Filter.Decision != "exclude").ToList();
+        if (visibleEntries.Count == 0) return;
+
+        var visibleFilterIds = visibleEntries.Select(e => e.Filter.ProfileGroupFilterId).Distinct().ToList();
+        var used = GetAssignedNumbers(exceptFilterIds: visibleFilterIds);
+        var next = NextUnused(GetParentStartNum(parent.OutputName), used);
+
+        foreach (var grp in visibleEntries.GroupBy(e => e.Filter.ProfileGroupFilterId))
+        {
+            var filterId   = grp.Key;
+            var selections = _channelSelections.TryGetValue(filterId, out var s) ? new Dictionary<string, bool>(s) : [];
+            var numbers    = _channelNumbers.TryGetValue(filterId, out var n) ? new Dictionary<string, int?>(n) : [];
+
+            foreach (var entry in grp)
+            {
+                selections[entry.Channel.ProviderChannelId] = true;
+                numbers[entry.Channel.ProviderChannelId]    = next = NextUnused(next, used);
+                next++;
+            }
+
+            _channelSelections[filterId] = selections;
+            _channelNumbers[filterId]    = numbers;
+        }
+
+        RebuildNumberIndex();
+        StateHasChanged();
+
+        foreach (var filterId in visibleFilterIds)
+            await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    private async Task SelectAllParentChannelsAsync(VirtualParent parent)
+    {
+        var includedMembers = parent.Members.Where(m => m.Decision != "exclude").ToList();
+        if (includedMembers.Count == 0) return;
+
+        var filterIds = includedMembers.Select(m => m.ProfileGroupFilterId).ToList();
+        var used      = GetAssignedNumbers(exceptFilterIds: filterIds);
+        int next      = NextUnused(GetParentStartNum(parent.OutputName), used);
+
+        foreach (var member in includedMembers)
+        {
+            var filterId = member.ProfileGroupFilterId;
+            if (!_channelCache.ContainsKey(filterId))
+                await LoadChannelsAsync(filterId);
+
+            if (!_channelCache.TryGetValue(filterId, out var channels)) continue;
+
+            var freshSelections = new Dictionary<string, bool>();
+            var freshNumbers    = new Dictionary<string, int?>();
+            foreach (var ch in channels)
+            {
+                freshSelections[ch.ProviderChannelId] = true;
+                freshNumbers[ch.ProviderChannelId]    = next = NextUnused(next, used);
+                next++; // advance baseline
+            }
+            _channelSelections[filterId] = freshSelections;
+            _channelNumbers[filterId]    = freshNumbers;
+        }
+
+        RebuildNumberIndex();
+        StateHasChanged();
+
+        foreach (var member in includedMembers)
+            await ScheduleSaveChannelSelectionsAsync(member.ProfileGroupFilterId);
+    }
+
+    private async Task DeselectAllParentChannelsAsync(VirtualParent parent)
+    {
+        var includedMembers = parent.Members.Where(m => m.Decision != "exclude").ToList();
+
+        foreach (var member in includedMembers)
+        {
+            var filterId = member.ProfileGroupFilterId;
+            if (_channelCache.TryGetValue(filterId, out var channels))
+            {
+                _channelSelections[filterId] = channels.ToDictionary(c => c.ProviderChannelId, _ => false);
+                _channelNumbers[filterId]    = [];
+            }
+        }
+
+        RebuildNumberIndex();
+        StateHasChanged();
+
+        foreach (var member in includedMembers)
+            await ScheduleSaveChannelSelectionsAsync(member.ProfileGroupFilterId);
+    }
+
+    private async Task LoadChannelsAsync(string filterId)
+    {
+        _loadingChannels.Add(filterId);
+        StateHasChanged();
+
+        try
+        {
+            var sel = await Http.GetFromJsonAsync<ChannelSelectionsDto>(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filterId}/channel-selections",
+                _cts.Token);
+
+            if (sel is not null)
+            {
+                _channelCache[filterId] = sel.Channels;
+
+                _channelSelections[filterId] = sel.Channels.ToDictionary(
+                    c => c.ProviderChannelId,
+                    c => c.IsSelected);
+
+                _channelNumbers[filterId] = sel.Channels
+                    .Where(c => c.ChannelNumber.HasValue)
+                    .ToDictionary(c => c.ProviderChannelId, c => c.ChannelNumber);
+
+                RebuildNumberIndex();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load channels: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loadingChannels.Remove(filterId);
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectAllChannelsAsync(GroupFilterDto filter)
+    {
+        var filterId = filter.ProfileGroupFilterId;
+        if (!_channelCache.ContainsKey(filterId))
+            await LoadChannelsAsync(filterId);
+
+        if (!_channelCache.TryGetValue(filterId, out var channels)) return;
+
+        var freshSelections = new Dictionary<string, bool>();
+        var freshNumbers    = new Dictionary<string, int?>();
+        var used            = GetAssignedNumbers(exceptFilterIds: new[] { filterId });
+        int nextCandidate   = filter.AutoNumStart ?? _defaultStartNum;
+
+        foreach (var ch in channels)
+        {
+            freshSelections[ch.ProviderChannelId] = true;
+            var num = NextUnused(nextCandidate, used);
+            freshNumbers[ch.ProviderChannelId] = num;
+            nextCandidate = num + 1;
+        }
+
+        _channelSelections[filterId] = freshSelections;
+        _channelNumbers[filterId]    = freshNumbers;
+
+        RebuildNumberIndex();
+        StateHasChanged();
+        await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    private async Task DeselectAllChannelsAsync(string filterId)
+    {
+        if (!_channelCache.TryGetValue(filterId, out var channels)) return;
+
+        _channelSelections[filterId] = channels.ToDictionary(c => c.ProviderChannelId, _ => false);
+        _channelNumbers[filterId]    = [];
+
+        RebuildNumberIndex();
+        StateHasChanged();
+        await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    private async Task OnChannelChecked(GroupFilterDto filter, string channelId, bool isChecked)
+    {
+        var filterId   = filter.ProfileGroupFilterId;
+        var selections = _channelSelections.GetValueOrDefault(filterId) ?? [];
+        var numbers    = _channelNumbers.GetValueOrDefault(filterId) ?? [];
+
+        selections[channelId] = isChecked;
+
+        if (isChecked && (!numbers.ContainsKey(channelId) || numbers[channelId] is null))
+        {
+            var used = GetAssignedNumbers(except: (filterId, channelId), exceptFilterIds: new[] { filterId });
+            var next = GetNextNumberForGroup(filter, numbers, used);
+            numbers[channelId] = next;
+        }
+        else if (!isChecked)
+        {
+            numbers.Remove(channelId);
+        }
+
+        _channelSelections[filterId] = selections;
+        _channelNumbers[filterId]    = numbers;
+
+        RebuildNumberIndex();
+        StateHasChanged();
+        await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    private async Task OnChannelNumberChanged(string filterId, string channelId, int? value)
+    {
+        var numbers = _channelNumbers.GetValueOrDefault(filterId) ?? [];
+        if (value.HasValue)
+        {
+            var used = GetAssignedNumbers(except: (filterId, channelId));
+            var unique = used.Contains(value.Value)
+                ? NextUnused(value.Value, used)
+                : value.Value;
+            numbers[channelId] = unique;
+        }
+        else
+        {
+            numbers.Remove(channelId);
+        }
+        _channelNumbers[filterId] = numbers;
+
+        RebuildNumberIndex();
+        StateHasChanged();
+        await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    private async Task ScheduleSaveChannelSelectionsAsync(string filterId)
+    {
+        if (_channelSaveCts.TryGetValue(filterId, out var existing))
+        {
+            existing.Cancel();
+            existing.Dispose();
+        }
+
+        var cts = new CancellationTokenSource();
+        _channelSaveCts[filterId] = cts;
+
+        try
+        {
+            await Task.Delay(800, cts.Token);
+            await SaveChannelSelectionsNowAsync(filterId);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task SaveChannelSelectionsNowAsync(string filterId)
+    {
+        if (_profileId is null || !_channelCache.TryGetValue(filterId, out var channels)) return;
+
+        var selections = _channelSelections.GetValueOrDefault(filterId) ?? [];
+        var numbers    = _channelNumbers.GetValueOrDefault(filterId) ?? [];
+
+        var items = channels
+            .Where(c => selections.GetValueOrDefault(c.ProviderChannelId))
+            .Select(c => new ChannelSelectionItem
+            {
+                ProviderChannelId = c.ProviderChannelId,
+                ChannelNumber     = numbers.GetValueOrDefault(c.ProviderChannelId),
+            })
+            .ToList();
+
+        try
+        {
+            var response = await Http.PutAsJsonAsync(
+                $"/api/v1/profiles/{_profileId}/group-filters/{filterId}/channel-selections",
+                new UpdateChannelSelectionsRequest { ChannelMode = "select", Channels = items });
+
+            if (!response.IsSuccessStatusCode)
+                Snackbar.Add($"Channel save failed: {response.ReasonPhrase}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error saving channels: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Channel filter presets (localStorage)
+    // -------------------------------------------------------------------------
+
+    private async Task SaveChannelFilterPresetAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        if (_savedChannelFilters.Contains(text, StringComparer.OrdinalIgnoreCase)) return;
+
+        _savedChannelFilters.Add(text.Trim());
+
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(_savedChannelFilters);
+            await JS.InvokeVoidAsync("localStorage.setItem", "m3undle:channel-filter-presets", json);
+        }
+        catch { }
+
+        StateHasChanged();
+    }
+
+    // -------------------------------------------------------------------------
+    // Search
+    // -------------------------------------------------------------------------
+
+    private void OnSearchTermChanged(string value)
+    {
+        _searchTerm  = value;
+        _searchError = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _searchPredicate = null;
+            return;
+        }
+
+        try
+        {
+            _searchPredicate = BuildSearchPredicate(value);
+        }
+        catch (Exception ex)
+        {
+            _searchError     = $"Invalid pattern: {ex.Message}";
+            _searchPredicate = null;
+        }
+    }
+
+    private void ClearSearch() => OnSearchTermChanged(string.Empty);
+
+    private static Func<string, bool> BuildSearchPredicate(string searchTerm)
+    {
+        var terms      = searchTerm.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var posRegexes = terms.Where(t => !t.StartsWith('!')).Select(CompileTerm).ToList();
+        var negRegexes = terms.Where(t => t.StartsWith('!')).Select(t => CompileTerm(t[1..])).ToList();
+
+        return name =>
+        {
+            if (negRegexes.Any(r => r.IsMatch(name))) return false;
+            if (posRegexes.Count == 0) return true;
+            return posRegexes.Any(r => r.IsMatch(name));
+        };
+    }
+
+    private static Regex CompileTerm(string raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+            return new Regex(".*", RegexOptions.IgnoreCase);
+
+        bool hasGlob = raw.Contains('*') || raw.StartsWith('^') || raw.Contains('[');
+
+        if (!hasGlob)
+            return new Regex($@"\b{Regex.Escape(raw)}\b", RegexOptions.IgnoreCase);
+
+        bool hasLeadingStar  = raw.StartsWith('*');
+        bool hasTrailingStar = raw.EndsWith('*');
+        string pattern       = GlobToRegex(raw);
+
+        if (!raw.StartsWith('^') && !hasLeadingStar)
+            pattern = "^" + pattern;
+
+        if (!hasTrailingStar && !raw.StartsWith('^') && !raw.EndsWith('$'))
+            pattern += "$";
+
+        return new Regex(pattern, RegexOptions.IgnoreCase);
+    }
+
+    private static string GlobToRegex(string pattern)
+    {
+        var sb = new System.Text.StringBuilder();
+        int i = 0;
+        while (i < pattern.Length)
+        {
+            char c = pattern[i];
+            switch (c)
+            {
+                case '*': sb.Append(".*"); break;
+                case '?': sb.Append('.'); break;
+                case '^': sb.Append('^'); break;
+                case '[':
+                    sb.Append('[');
+                    i++;
+                    while (i < pattern.Length && pattern[i] != ']')
+                        sb.Append(pattern[i++]);
+                    sb.Append(']');
+                    break;
+                default: sb.Append(Regex.Escape(c.ToString())); break;
+            }
+            i++;
+        }
+        return sb.ToString();
+    }
+}

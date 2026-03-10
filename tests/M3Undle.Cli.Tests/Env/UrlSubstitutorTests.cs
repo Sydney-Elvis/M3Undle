@@ -40,7 +40,7 @@ public class UrlSubstitutorTests
     [TestMethod]
     public void SubstituteCredentials_CaseInsensitive_ReplacesPlaceholders()
     {
-        var env = new Dictionary<string, string>
+        var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["user"] = "testuser",
             ["pass"] = "testpass"
@@ -135,9 +135,9 @@ public class UrlSubstitutorTests
     {
         var env = new Dictionary<string, string>
         {
-            ["PATH"] = "/some/path"
+            ["M3U_PATH"] = "/some/path"
         };
-        var filePath = "%PATH%//file.txt";
+        var filePath = "%M3U_PATH%//file.txt";
 
         var result = UrlSubstitutor.SubstituteCredentials(filePath, env, out var replaced);
 
