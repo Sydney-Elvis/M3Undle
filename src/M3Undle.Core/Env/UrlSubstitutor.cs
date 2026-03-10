@@ -21,9 +21,9 @@ public static class UrlSubstitutor
             if (!seen.Add(varName))
                 continue;
 
-            // OS env first (Docker/system vars take priority), then .env file fallback
-            var resolved = Environment.GetEnvironmentVariable(varName)
-                ?? (env.TryGetValue(varName, out var fileVal) ? fileVal : null);
+            // .env file values take priority; OS env is a fallback
+            var resolved = (env.TryGetValue(varName, out var fileVal) ? fileVal : null)
+                ?? Environment.GetEnvironmentVariable(varName);
 
             if (resolved is null)
                 continue;
