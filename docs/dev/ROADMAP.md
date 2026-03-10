@@ -14,79 +14,87 @@ Core complete:
 - Serilog integration + log viewer UI
 - Version info in UI + Docker smoke coverage
 
-Status: Alpha 1 baseline is complete. Active development is in Alpha 2.
-
-Not in Alpha 1: configurable refresh schedule, advanced mapping transforms,
-multiple EPG sources, buffering, HDHR emulation.
+Status: Complete.
 
 ---
 
 ## Alpha 2 — Filtering, Mapping & Output Shaping
-**Goal:** Users can shape their lineup — filter, rename, reorder, and restructure
+**Goal:** Users can shape their lineup — filter, rename, and restructure
 output groups independently of the provider's group structure.
 
-### Filtering & Mapping
-- Group inclusion/exclusion rules
-- Channel filtering (keyword, regex, group-based)
-- Channel rename, reorder, custom tvg-id override
-- Channel number assignment (initial)
+Status: Complete.
 
-### Output Group Rules
-Controls `group-title` in the M3U output — determines how channels appear in DVR
-guide categories (Jellyfin, Plex, Emby, player apps).
+- Group inclusion/exclusion rules
+- Channel filtering (keyword, regex/glob, group-based)
+- Channel number assignment (initial)
 - Create custom output groups (independent of provider group names)
 - Assign channels from any provider group(s) to a custom output group
 - Rename provider groups at the output layer
-- Output group ordering and preview
+- Channel count in output (live, VOD, series breakdown) on Dashboard
 
-### Multiple EPG Sources
+---
+
+## Alpha 3 — Security
+**Goal:** GUI authentication and endpoint protection before DVR integration exposes the service more broadly.
+
+### GUI Authentication
+- GUI login (username/password)
+- Authentication toggle in Settings (enable/disable login requirement)
+- Session management
+
+### Endpoint Security
+- Output endpoint protection: secret token embedded in URL path
+  (not headers — Media Players cannot set custom headers)
+- Token generation and rotation UI
+
+---
+
+## Alpha 4 — Buffering, DVR Integration & EPG
+**Goal:** Stream buffering, DVR auto-discovery, and supplemental EPG sources.
+
+### Buffering
+- FFmpeg buffering support
+- VLC buffering support
+- Buffer size setting
+- Client connection timeout setting
+
+### DVR Integration (HDHomeRun Emulation)
+- Number of tuners setting
+- HDHomeRun device emulation — allows Plex, Emby, Jellyfin to auto-discover M3Undle as a network tuner:
+  - GET /discover.json
+  - GET /lineup.json
+  - GET /lineup_status.json
+- Connection limiting
+
+### EPG Sources
 - Add additional XMLTV/EPG source URLs or local files per provider
 - Merge multiple XMLTV sources into a single guide feed
+- De-duplicate EPG entries by channel id across sources
 - Source priority rules (prefer source N when a channel appears in multiple)
 - tvg-id cross-source mapping (map a channel to EPG data from a different source)
 
-### Scheduling & Dashboard
-- Configurable refresh schedule (interval or scheduled times) via Settings UI
-- Filtered channel count (n / total) and mapped channel count on Dashboard
-
-Current implementation note: group include/exclude, channel selection, output group
-renaming/merging, and initial channel numbering are already in place. Remaining A2
-work is focused on richer transforms, EPG mapping/merge, auth, and scheduling.
-
 ---
 
-## Alpha 3 — Buffering & DVR Integration
-**Goal:** Stream buffering and DVR auto-discovery.
+## Alpha 5 — Remaining Features
+**Goal:** Polish and deferred features before Beta stabilization.
 
-- FFmpeg buffering support
-- VLC buffering support
-- Number of tuners setting
-- HDHomeRun device emulation (`/discover.json`, `/lineup.json`, `/lineup_status.json`)
-  — allows Plex, Emby, Jellyfin to auto-discover M3Undle as a network tuner
-- Connection limiting
-
----
-
-## Alpha 4 — Security & Stabilization
-**Goal:** Complete endpoint protection and stabilization work needed before Beta closeout.
-
-- Endpoint security: secret token embedded in URL path
-  (not headers — Media Players cannot set custom headers)
-- Token generation and rotation UI
-- Any remaining core items before Beta
-
----
-
-## Beta — Feature Finalization
-**Goal:** All core functionality implemented, stable, and documented.
-No major feature additions after Beta entry.
-
+- Channel reorder (explicit sort position in output)
+- Custom tvg-id override per channel
+- Configurable refresh schedule via Settings UI (interval or scheduled times)
 - New channels inbox (review and approve newly discovered channels before publishing)
 - Dynamic groups (auto add/drop for rotating sports or event feeds)
 - Provider switch assistance (diff view + optional manual channel mapping hints)
 - Full channel numbering rules (start ranges, pinned numbers, overflow)
+
+---
+
+## Beta — Stabilization & Release Prep
+**Goal:** No new features. All core functionality is complete by end of Alpha 5.
+Beta is cleanup, hardening, and documentation only.
+
 - Security review
 - Performance validation (large providers, 89k+ channels)
+- Bug fixes and polish
 - Documentation complete
 
 ---
@@ -95,4 +103,3 @@ No major feature additions after Beta entry.
 - Change history / audit log
 - Multi-provider output blending
 - Additional diagnostic tooling
-
