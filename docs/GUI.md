@@ -121,8 +121,8 @@ The GUI manages lineups.
 
 ---
 
-## Editions
+## Project Direction
 
-M3Undle follows an open-core model.
+The current focus is delivering a stable, fully usable self-hosted lineup manager.
 
-The current focus is delivering a stable, fully usable self-hosted lineup manager. Advanced features may be introduced in future releases.
+Advanced features may be introduced in future releases as the project matures.

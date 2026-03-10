@@ -66,17 +66,23 @@ Status: Complete.
   - GET /lineup_status.json
 - Connection limiting
 
-### EPG Sources
-- Add additional XMLTV/EPG source URLs or local files per provider
-- Merge multiple XMLTV sources into a single guide feed
-- De-duplicate EPG entries by channel id across sources
-- Source priority rules (prefer source N when a channel appears in multiple)
-- tvg-id cross-source mapping (map a channel to EPG data from a different source)
+---
+
+## Alpha 4 — Plugin Architecture & Security
+**Goal:** Plugin loading infrastructure, extension contracts, and endpoint security.
+
+- Plugin loader (external assembly discovery, plugin manifest format)
+- Extension contracts: `ISettingsContributor`, `IEndpointModule`, `IUiTheme`
+- Endpoint security: secret token embedded in URL path
+  (not headers — Media Players cannot set custom headers)
+- Token generation and rotation UI
+- Any remaining foundational items before Beta
 
 ---
 
-## Alpha 5 — Remaining Features
-**Goal:** Polish and deferred features before Beta stabilization.
+## Beta — Feature Finalization
+**Goal:** All foundational functionality implemented, stable, and documented.
+No major feature additions after Beta entry.
 
 - Channel reorder (explicit sort position in output)
 - Custom tvg-id override per channel
