@@ -1,6 +1,6 @@
 @page "/settings"
-@inject ISiteSettingsService SiteSettings
 @using M3Undle.Web.Application
+@inject ISiteSettingsService SiteSettings
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -13,18 +13,23 @@
                 <MudText Typo="Typo.h6">Security</MudText>
                 <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Alpha 3</MudChip>
             </MudStack>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-                Control whether users must log in to access this application.
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Authentication is controlled by the <code>M3UNDLE_AUTH_ENABLED</code> environment variable.
             </MudText>
 
-            <MudSwitch T="bool" Value="_authEnabled" Color="Color.Primary"
-                       Label="@(_authEnabled ? "Authentication enabled" : "Authentication disabled")"
-                       Disabled="true" />
-
-            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mt-3" Dense="true">
-                GUI authentication is not yet implemented and will be available in Alpha 3.
-                Anyone with network access can currently view and control this application.
-            </MudAlert>
+            @if (_authEnabled)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                    Authentication is <strong>enabled</strong>. The UI and management APIs require login. Compatibility endpoints remain anonymous.
+                </MudAlert>
+                <MudButton Variant="Variant.Text" Color="Color.Primary" Href="Account/Manage/ChangePassword">Change Password</MudButton>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                    Authentication is <strong>disabled</strong>. The UI is open on your network. Set <code>M3UNDLE_AUTH_ENABLED=true</code> to require login.
+                </MudAlert>
+            }
         </MudPaper>
     </MudItem>
 </MudGrid>
@@ -37,4 +42,3 @@
         _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
     }
 }
-

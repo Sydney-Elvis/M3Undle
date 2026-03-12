@@ -1,6 +1,5 @@
 @using M3Undle.Web.Contracts.Providers
-@using System.Text.Json
-@inject HttpClient Http
+@inject M3Undle.Web.Application.ProviderPageService ProviderPageService
 
 <MudDialog Style="min-width:620px">
     <DialogContent>
@@ -190,9 +189,7 @@
         {
             try
             {
-                var r = await Http.GetAsync("/api/v1/providers/encryption-status");
-                var body = await r.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-                _encryptionAvailable = body.GetProperty("available").GetBoolean();
+                _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync();
             }
             catch { _encryptionAvailable = false; }
         }
@@ -225,10 +222,9 @@
         _error = null;
         try
         {
-            var response = await Http.PostAsJsonAsync("/api/v1/profiles",
-                new CreateProfileRequest { Name = _newProfileName.Trim() });
-            if (!response.IsSuccessStatusCode) { _error = await ReadErrorAsync(response); return; }
-            var created = await response.Content.ReadFromJsonAsync<ProfileListItemDto>();
+            var result = await ProviderPageService.CreateProfileAsync(_newProfileName.Trim(), CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(result.Error)) { _error = result.Error; return; }
+            var created = result.Profile;
             if (created is not null) { _localProfiles.Add(created); _model.ProfileId = created.ProfileId; }
             _showCreateProfile = false;
             _newProfileName = string.Empty;
@@ -280,8 +276,8 @@
                 };
             }
 
-            var response = await Http.PutAsJsonAsync($"/api/v1/providers/{Provider.ProviderId}", request);
-            if (!response.IsSuccessStatusCode) { _error = await ReadErrorAsync(response); return; }
+            var error = await ProviderPageService.UpdateProviderAsync(Provider.ProviderId, request, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(error)) { _error = error; return; }
 
             await OnSaved.InvokeAsync();
             MudDialog.Close(DialogResult.Ok(true));
@@ -297,10 +293,8 @@
         _isChangingPassword = true;
         try
         {
-            var response = await Http.PatchAsJsonAsync(
-                $"/api/v1/providers/{Provider.ProviderId}/xtream-password",
-                new UpdateXtreamPasswordRequest { Password = _newPassword });
-            if (!response.IsSuccessStatusCode) { _passwordError = await ReadErrorAsync(response); return; }
+            var error = await ProviderPageService.UpdateXtreamPasswordAsync(Provider.ProviderId, _newPassword, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(error)) { _passwordError = error; return; }
             _passwordSuccess = "Password updated successfully.";
             _newPassword = string.Empty;
         }
@@ -309,35 +303,6 @@
     }
 
     private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
-
-    private static async Task<string> ReadErrorAsync(HttpResponseMessage response)
-    {
-        var body = await response.Content.ReadAsStringAsync();
-        if (string.IsNullOrWhiteSpace(body))
-            return $"Request failed: {(int)response.StatusCode} {response.ReasonPhrase}";
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Object)
-                {
-                    var msgs = new List<string>();
-                    foreach (var err in errors.EnumerateObject())
-                        foreach (var msg in err.Value.EnumerateArray())
-                        { var t = msg.GetString(); if (!string.IsNullOrWhiteSpace(t)) msgs.Add(t); }
-                    if (msgs.Count > 0) return string.Join("; ", msgs);
-                }
-                if (doc.RootElement.TryGetProperty("title", out var title))
-                {
-                    var detail = doc.RootElement.TryGetProperty("detail", out var dp) ? dp.GetString() : null;
-                    return string.IsNullOrWhiteSpace(detail) ? title.GetString() ?? "Request failed" : $"{title.GetString()}: {detail}";
-                }
-            }
-        }
-        catch (JsonException) { }
-        return body;
-    }
 
     private sealed class EditModel
     {

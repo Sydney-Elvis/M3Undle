@@ -3,7 +3,8 @@
 ## Purpose
 A single unified process (`M3Undle.Web`) provides:
 - Web UI (configuration + status) — Blazor Server
-- REST API for UI communication (`/api/v1/*`)
+- Internal application services used directly by Blazor components (no loopback HTTP required)
+- REST API (`/api/v1/*`) for management/integration clients and external tooling
 - HTTP compatibility endpoints for Media Players:
   - M3U — `/m3u/m3undle.m3u` (output name locked in Core)
   - XMLTV — `/xmltv/m3undle.xml`

@@ -1,8 +1,7 @@
 @page "/providers"
-@using System.Text.Json
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts.Providers
-@inject HttpClient Http
+@inject ProviderPageService ProviderPageService
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject IDialogService DialogService
@@ -249,14 +248,13 @@
 
         try
         {
-            var profiles = await Http.GetFromJsonAsync<List<ProfileListItemDto>>("/api/v1/profiles");
-            var providers = await Http.GetFromJsonAsync<List<ProviderDto>>("/api/v1/providers");
+            var data = await ProviderPageService.GetPageDataAsync(_cts.Token);
 
             _profiles.Clear();
-            _profiles.AddRange(profiles ?? []);
+            _profiles.AddRange(data.Profiles);
 
             _providers.Clear();
-            _providers.AddRange(providers ?? []);
+            _providers.AddRange(data.Providers);
         }
         catch (Exception ex)
         {
@@ -283,11 +281,10 @@
 
         try
         {
-            var response = await Http.DeleteAsync($"/api/v1/providers/{provider.ProviderId}");
-
-            if (!response.IsSuccessStatusCode)
+            var error = await ProviderPageService.DeleteProviderAsync(provider.ProviderId, _cts.Token);
+            if (!string.IsNullOrWhiteSpace(error))
             {
-                _error = await ReadErrorAsync(response);
+                _error = error;
                 return;
             }
 
@@ -308,12 +305,10 @@
 
         try
         {
-            var response = await Http.PatchAsync($"/api/v1/providers/{provider.ProviderId}/enabled",
-                JsonContent.Create(new SetProviderEnabledRequest { Enabled = !provider.Enabled }));
-
-            if (!response.IsSuccessStatusCode)
+            var error = await ProviderPageService.SetProviderEnabledAsync(provider.ProviderId, !provider.Enabled, _cts.Token);
+            if (!string.IsNullOrWhiteSpace(error))
             {
-                _error = await ReadErrorAsync(response);
+                _error = error;
                 return;
             }
 
@@ -331,12 +326,10 @@
 
         try
         {
-            var response = await Http.PatchAsync($"/api/v1/providers/{provider.ProviderId}/active",
-                JsonContent.Create(new SetProviderActiveRequest { IsActive = true }));
-
-            if (!response.IsSuccessStatusCode)
+            var error = await ProviderPageService.SetProviderActiveAsync(provider.ProviderId, true, _cts.Token);
+            if (!string.IsNullOrWhiteSpace(error))
             {
-                _error = await ReadErrorAsync(response);
+                _error = error;
                 return;
             }
 
@@ -361,15 +354,15 @@
                 GroupContains = _previewGroupFilter,
             };
 
-            using var response = await Http.PostAsJsonAsync($"/api/v1/providers/{providerId}/refresh-preview", payload);
-            if (!response.IsSuccessStatusCode)
+            var result = await ProviderPageService.RefreshPreviewAsync(providerId, payload, _cts.Token);
+            if (!string.IsNullOrWhiteSpace(result.Error))
             {
-                _error = await ReadErrorAsync(response);
+                _error = result.Error;
                 _preview = null;
                 return;
             }
 
-            _preview = await response.Content.ReadFromJsonAsync<ProviderPreviewDto>();
+            _preview = result.Preview;
             await LoadAsync();
         }
         catch (Exception ex)
@@ -396,40 +389,5 @@
         return string.Join(" | ", snapshots.Select(x => $"{x.ProfileId}:{x.Status}:{x.CreatedUtc:u}"));
     }
 
-    private static async Task<string> ReadErrorAsync(HttpResponseMessage response)
-    {
-        var body = await response.Content.ReadAsStringAsync();
-        if (string.IsNullOrWhiteSpace(body))
-            return $"Request failed: {(int)response.StatusCode} {response.ReasonPhrase}";
-
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                if (doc.RootElement.TryGetProperty("title", out var title))
-                {
-                    var detail = doc.RootElement.TryGetProperty("detail", out var detailProp)
-                        ? detailProp.GetString()
-                        : null;
-                    return string.IsNullOrWhiteSpace(detail)
-                        ? title.GetString() ?? "Request failed"
-                        : $"{title.GetString()}: {detail}";
-                }
-
-                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Object)
-                {
-                    foreach (var error in errors.EnumerateObject())
-                    {
-                        var first = error.Value.EnumerateArray().FirstOrDefault().GetString();
-                        if (!string.IsNullOrWhiteSpace(first)) return first;
-                    }
-                }
-            }
-        }
-        catch (JsonException) { }
-
-        return body;
-    }
 }
 

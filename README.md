@@ -115,6 +115,39 @@ See: `docs/SERVICE.md`
 
 ---
 
+## UI Authentication
+
+The web UI supports a simple local authentication model:
+
+- One access level only: authenticated or not authenticated
+- No roles or user tiers
+- Compatibility endpoints remain anonymous for LAN clients
+
+### Setup
+
+Authentication is controlled entirely by environment variables — no UI toggle required.
+
+| Variable | Default | Description |
+|---|---|---|
+| `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs |
+| `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email (used on first startup only) |
+| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no account exists yet |
+
+On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables. On subsequent startups the account already exists — changing the env vars does not affect the stored password (use **Settings → Change Password** instead).
+
+### Behavior
+
+- If `M3UNDLE_AUTH_ENABLED=false` (default), the UI and management APIs are open on your network.
+- If `M3UNDLE_AUTH_ENABLED=true`, the UI and `/api/v1/*` management APIs require login.
+- The following endpoints remain anonymous by design:
+  - `/m3u/m3undle.m3u`
+  - `/xmltv/m3undle.xml`
+  - `/stream/<streamKey>` and related compatibility stream paths
+  - `/status`
+  - `/health`
+
+---
+
 ## Docker
 
 ```bash

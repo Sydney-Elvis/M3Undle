@@ -1,5 +1,6 @@
 using M3Undle.Core.M3u;
 using M3Undle.Web.Application;
+using M3Undle.Web.Security;
 using M3Undle.Web.Contracts;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -14,6 +15,7 @@ public static class ChannelFilterApiEndpoints
     public static IEndpointRouteBuilder MapChannelFilterApiEndpoints(this IEndpointRouteBuilder app)
     {
         var profiles = app.MapGroup("/api/v1/profiles");
+        profiles.RequireAuthorization(UiAccessPolicy.Name);
         profiles.MapGet("/active", GetActiveProfileAsync);
         profiles.MapGet("/{profileId}/group-filters", ListGroupFiltersAsync);
         profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync);
@@ -25,8 +27,8 @@ public static class ChannelFilterApiEndpoints
         profiles.MapPut("/{profileId}/group-filters/{filterId}/channel-selections", UpdateChannelSelectionsAsync);
         profiles.MapGet("/{profileId}/group-filters/{filterId}/raw-provider-m3u", GetRawProviderM3uAsync); // DEBUG - REMOVE
 
-        app.MapGet("/api/v1/channel-stats", GetChannelStatsAsync);
-        app.MapGet("/api/v1/debug/parse-verify", GetParseVerificationAsync); // DEBUG - REMOVE
+        app.MapGet("/api/v1/channel-stats", GetChannelStatsAsync).RequireAuthorization(UiAccessPolicy.Name);
+        app.MapGet("/api/v1/debug/parse-verify", GetParseVerificationAsync).RequireAuthorization(UiAccessPolicy.Name); // DEBUG - REMOVE
 
         return app;
     }

@@ -88,7 +88,10 @@
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"ASPNETCORE_URLS": "http://+:8080",
-					"M3UNDLE_CONFIG_DIR": "/config"
+					"M3UNDLE_CONFIG_DIR": "/config",
+					"M3UNDLE_ADMIN_USER": "admin",
+					"M3UNDLE_ADMIN_PASSWORD": "dog123",
+					"M3UNDLE_AUTH_ENABLED": "true"
 				},
 				"volumes": [
 					{
@@ -136,7 +139,10 @@
 				"env": {
 					"ASPNETCORE_ENVIRONMENT": "Development",
 					"ASPNETCORE_URLS": "http://+:8080",
-					"M3UNDLE_CONFIG_DIR": "/config"
+					"M3UNDLE_CONFIG_DIR": "/config",
+					"M3UNDLE_ADMIN_USER": "admin",
+					"M3UNDLE_ADMIN_PASSWORD": "dog123",
+					"M3UNDLE_AUTH_ENABLED": "true"
 				},
 				"volumes": [
 					{

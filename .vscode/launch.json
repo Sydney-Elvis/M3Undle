@@ -10,6 +10,7 @@
       "cwd": "${workspaceFolder}/src/M3Undle.Web",
       "console": "internalConsole",
       "stopAtEntry": false,
+      "justMyCode": true,
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "ASPNETCORE_URLS": "http://localhost:5283",
@@ -30,7 +31,8 @@
       "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {
-        "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
+        "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
+        "justMyCode": true
       },
       "dockerServerReadyAction": {
         "action": "openExternally",
@@ -46,7 +48,8 @@
       "postDebugTask": "docker-stop: m3undle-debug",
       "platform": "netCore",
       "netCore": {
-        "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
+        "appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
+        "justMyCode": true
       },
       "dockerServerReadyAction": {
         "action": "openExternally",

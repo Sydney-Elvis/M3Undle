@@ -5,9 +5,14 @@ using M3Undle.Web.Components;
 using M3Undle.Web.Components.Account;
 using M3Undle.Web.Data;
 using M3Undle.Web.Logging;
+using M3Undle.Web.Security;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using MudBlazor.Services;
@@ -15,9 +20,10 @@ using Serilog;
 using Serilog.Formatting.Compact;
 using System.Data.Common;
 
-// Static web assets initialization expects the default web root directory to exist.
-// Ensure it's present so startup doesn't fail in environments/checkouts where it is missing.
-Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"));
+// Static web assets initialization runs during CreateBuilder and can fail before the app
+// has a chance to configure a custom web root. Create the likely content-root candidates
+// up front so startup works from the project folder, solution folder, and bin output.
+EnsureWebRootExists();
 
 var builder = WebApplication.CreateBuilder(args);
 var runtimePaths = RuntimePaths.Resolve(builder.Configuration, builder.Environment);
@@ -67,12 +73,23 @@ builder.Services.AddRazorComponents()
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddScoped<IdentityRedirectManager>();
 builder.Services.AddScoped<AuthenticationStateProvider, IdentityRevalidatingAuthenticationStateProvider>();
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy(UiAccessPolicy.Name, policy => policy.Requirements.Add(new UiAccessRequirement())));
+builder.Services.AddSingleton<IAuthorizationHandler, UiAccessHandler>();
 builder.Services.AddAuthentication(options =>
     {
         options.DefaultScheme = IdentityConstants.ApplicationScheme;
         options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
     })
     .AddIdentityCookies();
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.LoginPath = "/Account/Login";
+    options.AccessDeniedPath = "/Account/AccessDenied";
+    options.SlidingExpiration = true;
+    options.Events.OnRedirectToLogin = context => HandleApiAuthRedirectAsync(context, StatusCodes.Status401Unauthorized);
+    options.Events.OnRedirectToAccessDenied = context => HandleApiAuthRedirectAsync(context, StatusCodes.Status403Forbidden);
+});
 
 var sqliteInterceptor = new SqliteConnectionInterceptor();
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -112,18 +129,30 @@ builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddScoped<SnapshotBuilder>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
+builder.Services.AddScoped<ProviderPageService>();
+builder.Services.AddScoped<ChannelMappingPageService>();
+builder.Services.AddScoped<ChannelListPageService>();
+builder.Services.AddSingleton<ChannelStatsService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshService>());
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
-        options.SignIn.RequireConfirmedAccount = true;
+        options.SignIn.RequireConfirmedAccount = false;
         options.Stores.SchemaVersion = IdentitySchemaVersions.Version3;
+        options.Password.RequireDigit = false;
+        options.Password.RequireLowercase = false;
+        options.Password.RequireUppercase = false;
+        options.Password.RequireNonAlphanumeric = false;
+        options.Password.RequiredLength = 6;
     })
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddSignInManager()
     .AddDefaultTokenProviders();
+
+builder.Services.Configure<PasswordHasherOptions>(options =>
+    options.IterationCount = builder.Configuration.GetValue("Identity:PasswordHasherIterationCount", 100_000));
 
 builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSender>();
 builder.Services.AddMudServices();
@@ -136,6 +165,8 @@ using (var scope = app.Services.CreateScope())
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 }
+
+await SeedAdminAccountIfNeededAsync(app.Services);
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -154,6 +185,8 @@ else
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
 
 app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseAntiforgery();
 
 app.MapStaticAssets();
@@ -169,6 +202,72 @@ app.MapCompatibilityEndpoints();
 app.MapHealthChecks("/health");
 
 app.Run();
+
+static async Task SeedAdminAccountIfNeededAsync(IServiceProvider services)
+{
+    var env = services.GetRequiredService<EnvironmentVariableService>();
+    var authEnabled = string.Equals(env.GetValue("M3UNDLE_AUTH_ENABLED")?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+    if (!authEnabled) return;
+
+    await using var scope = services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    if (await db.Users.AsNoTracking().AnyAsync()) return;
+
+    var adminUser = env.GetValue("M3UNDLE_ADMIN_USER")?.Trim() ?? "admin";
+    var adminPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
+        ?? throw new InvalidOperationException(
+            "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_AUTH_ENABLED=true and no admin account exists.");
+
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+    var user = new ApplicationUser { UserName = adminUser, Email = adminUser, EmailConfirmed = true };
+    var result = await userManager.CreateAsync(user, adminPassword);
+    if (!result.Succeeded)
+        throw new InvalidOperationException(
+            $"Failed to create admin account: {string.Join(", ", result.Errors.Select(e => e.Description))}");
+
+    services.GetRequiredService<ILogger<Program>>()
+        .LogInformation("Admin account '{User}' created from environment variables.", adminUser);
+}
+
+static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptions> context, int statusCode)
+{
+    if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+    {
+        context.Response.StatusCode = statusCode;
+        return Task.CompletedTask;
+    }
+
+    context.Response.Redirect(context.RedirectUri);
+    return Task.CompletedTask;
+}
+
+static void EnsureWebRootExists()
+{
+    var candidateRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot"),
+        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "wwwroot")),
+    };
+
+    var aspNetCoreContentRoot = Environment.GetEnvironmentVariable("ASPNETCORE_CONTENTROOT");
+    if (!string.IsNullOrWhiteSpace(aspNetCoreContentRoot))
+    {
+        candidateRoots.Add(Path.Combine(aspNetCoreContentRoot, "wwwroot"));
+    }
+
+    foreach (var candidateRoot in candidateRoots)
+    {
+        try
+        {
+            Directory.CreateDirectory(candidateRoot);
+        }
+        catch
+        {
+            // Ignore non-fatal path issues here and let normal host startup surface
+            // a real error if no usable web root can be established.
+        }
+    }
+}
 
 sealed class SqliteConnectionInterceptor : DbConnectionInterceptor
 {

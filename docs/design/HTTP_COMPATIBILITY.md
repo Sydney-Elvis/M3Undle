@@ -6,6 +6,11 @@
 - The playlist and stream URL contract is stable even if internal implementation changes.
 - Provider credentials are never exposed to clients. Stream relay is a security requirement.
 
+## Scope Note
+- This document defines the external HTTP contract for client consumption and compatibility.
+- Blazor Server UI internals may call application services directly instead of issuing loopback HTTP calls to `/api/v1/*`.
+- Internal implementation choices MUST NOT change compatibility endpoint behavior.
+
 ## Endpoint Naming
 
 The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed to `m3undle`:
