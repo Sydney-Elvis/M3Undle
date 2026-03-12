@@ -41,7 +41,7 @@
     <AuthorizeView>
         <Authorized>
             <MudNavMenu>
-                <MudNavLink Href="Account/Manage" Icon="@Icons.Material.Filled.Person" OnClick="HandleNavClick">@context.User.Identity?.Name</MudNavLink>
+                <MudNavLink Icon="@Icons.Material.Filled.Person">@context.User.Identity?.Name</MudNavLink>
             </MudNavMenu>
             <form action="Account/Logout" method="post" class="mt-2">
                 <AntiforgeryToken />

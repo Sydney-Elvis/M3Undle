@@ -1,7 +1,5 @@
 using System.Globalization;
-using M3Undle.Core.M3u;
-using M3Undle.Web.Data;
-using Microsoft.EntityFrameworkCore;
+using M3Undle.Web.Security;
 
 namespace M3Undle.Web.Application;
 
@@ -18,25 +16,22 @@ public sealed record HdHomeRunLineupResult(
     DateTime SnapshotCreatedUtc,
     IReadOnlyList<HdHomeRunLineupEntry> Channels);
 
-public sealed class HdHomeRunLineupService(ApplicationDbContext db)
+public sealed class HdHomeRunLineupService
 {
-    public async Task<HdHomeRunLineupResult?> TryBuildActiveLineupAsync(string baseUrl, CancellationToken cancellationToken)
+    public async Task<HdHomeRunLineupResult?> TryBuildActiveLineupAsync(
+        string baseUrl,
+        RenderedLineup lineup,
+        HttpContext context,
+        CancellationToken cancellationToken)
     {
-        var snapshot = await db.Snapshots
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Status == "active", cancellationToken);
-
-        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.ChannelIndexPath))
-            return null;
-        if (!File.Exists(snapshot.ChannelIndexPath))
-            throw new IOException("Active snapshot channel index path does not exist.");
-
         var channels = new List<HdHomeRunLineupEntry>();
         var fallbackGuideNumber = 1000;
 
-        await foreach (var channel in ChannelIndexStore.StreamAllAsync(snapshot.ChannelIndexPath, cancellationToken))
+        foreach (var channel in lineup.Channels)
         {
-            if (LiveClassifier.ClassifyContent(channel.StreamUrl) != "live")
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (channel.ContentType != "live")
                 continue;
 
             var guideNumber = channel.TvgChno.HasValue
@@ -51,12 +46,11 @@ public sealed class HdHomeRunLineupService(ApplicationDbContext db)
                 ChannelId: channel.StreamKey,
                 GuideNumber: guideNumber,
                 GuideName: guideName,
-                Url: $"{baseUrl}/tune/{channel.StreamKey}",
+                Url: $"{baseUrl}/hdhr/tune/{channel.StreamKey}".ApplyClientAccessQuery(context),
                 TvgId: channel.TvgId,
                 LogoUrl: channel.LogoUrl));
         }
 
-        return new HdHomeRunLineupResult(snapshot.SnapshotId, snapshot.CreatedUtc, channels);
+        return new HdHomeRunLineupResult(lineup.SnapshotId, lineup.SnapshotCreatedUtc, channels);
     }
 }
-

@@ -122,7 +122,7 @@ The web UI supports a simple local authentication model:
 
 - One access level only: authenticated or not authenticated
 - No roles or user tiers
-- Compatibility endpoints remain anonymous for LAN clients
+- Endpoint authentication is configured separately in the UI
 
 ### Setup
 
@@ -140,12 +140,9 @@ On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created 
 
 - If `M3UNDLE_AUTH_ENABLED=false` (default), the UI and management APIs are open on your network.
 - If `M3UNDLE_AUTH_ENABLED=true`, the UI and `/api/v1/*` management APIs require login.
-- The following endpoints remain anonymous by design:
-  - `/m3u/m3undle.m3u`
-  - `/xmltv/m3undle.xml`
-  - `/stream/<streamKey>` and related compatibility stream paths
-  - `/status`
-  - `/health`
+- Compatibility endpoints can be secured independently from UI auth using **Settings → Endpoint Security**.
+- Endpoint credentials are stored hashed in the database and validated with stateless username/password auth.
+- `/status` and `/health` remain unauthenticated.
 
 ---
 
@@ -175,13 +172,15 @@ M3Undle publishes endpoints compatible with common clients:
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 - `/stream/<streamKey>`
-- `/discover.json`
-- `/lineup.json`
-- `/lineup.xml`
-- `/lineup.m3u`
-- `/lineup_status.json`
-- `/device.xml`
-- `/tune/<streamKey>`
+- `/hdhr/discover.json`
+- `/hdhr/lineup.json`
+- `/hdhr/lineup.xml`
+- `/hdhr/lineup.m3u`
+- `/hdhr/lineup_status.json`
+- `/hdhr/device.xml`
+- `/hdhr/tune/<streamKey>`
+
+Legacy HDHomeRun root aliases (`/discover.json`, `/lineup.json`, etc.) are still available for compatibility.
 
 Automatic discovery support:
 - SSDP/UPnP (`UDP 1900`)

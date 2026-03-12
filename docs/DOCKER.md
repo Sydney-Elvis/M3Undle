@@ -139,9 +139,11 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 
 | Variable | Default | Description |
 |---|---|---|
-| `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs. Compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`) remain anonymous. |
+| `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs. |
 | `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email. Used only on first startup when no account exists. |
 | `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no admin account exists yet. Used only for the initial seed — changing this later has no effect (use Settings → Change Password instead). |
+
+Endpoint security (M3U/XMLTV/stream/HDHR username/password auth) is managed in **Settings → Endpoint Security** and stored in the database.
 
 ### Optional — Provider Features
 

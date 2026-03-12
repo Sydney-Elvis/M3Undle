@@ -1400,6 +1400,7 @@ else
             foreach (var f in _allFilters)
                 f.IsNew = false;
 
+            EventBus.Publish(AppEventKind.GroupFiltersChanged);
             StateHasChanged();
         }
         catch (Exception ex)

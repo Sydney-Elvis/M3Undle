@@ -1,8 +1,7 @@
-using System.Text;
 using System.Text.Json;
-using M3Undle.Core.M3u;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
+using M3Undle.Web.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace M3Undle.Web.Api;
@@ -15,77 +14,59 @@ public static class CompatibilityEndpoints
         WriteIndented = false,
     };
 
-
     public static IEndpointRouteBuilder MapCompatibilityEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/m3u/m3undle.m3u", ServeM3uAsync).AllowAnonymous();
-        app.MapGet("/xmltv/m3undle.xml", ServeXmltvAsync).AllowAnonymous();
-        app.MapGet("/live/{streamKey}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/live/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/movie/{streamKey}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/movie/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/vod/{streamKey}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/vod/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/series/{streamKey}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/series/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/stream/{streamKey}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/tune/{streamKey}", ServeStreamAsync).AllowAnonymous();
-        app.MapGet("/tune/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
+        var client = app.MapClientSurface();
+
+        client.MapGet("m3u/m3undle.m3u", ServeM3uAsync);
+        client.MapGet("xmltv/m3undle.xml", ServeXmltvAsync);
+        client.MapGet("live/{streamKey}", ServeStreamAsync);
+        client.MapGet("live/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("movie/{streamKey}", ServeStreamAsync);
+        client.MapGet("movie/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("vod/{streamKey}", ServeStreamAsync);
+        client.MapGet("vod/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("series/{streamKey}", ServeStreamAsync);
+        client.MapGet("series/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("stream/{streamKey}", ServeStreamAsync);
+        client.MapGet("tune/{streamKey}", ServeStreamAsync);
+        client.MapGet("tune/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("hdhr/tune/{streamKey}", ServeStreamAsync);
+        client.MapGet("hdhr/tune/{streamKey}/{*tail}", ServeStreamAsync);
+
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
 
         return app;
     }
 
-    // -------------------------------------------------------------------------
-    // GET /m3u/m3undle.m3u
-    // -------------------------------------------------------------------------
-
-    private static async Task ServeM3uAsync(HttpContext ctx, ApplicationDbContext db, CancellationToken cancellationToken)
+    private static async Task ServeM3uAsync(
+        HttpContext context,
+        ILineupRenderer lineupRenderer,
+        IM3USerializer m3uSerializer,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var snapshot = await db.Snapshots
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Status == "active", cancellationToken);
+            var access = context.GetResolvedClientAccess();
+            var lineup = await lineupRenderer.TryRenderActiveLineupAsync(access.Binding.ActiveProfileId, cancellationToken);
 
-            if (snapshot is null)
+            if (lineup is null)
             {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                ctx.Response.Headers.Append("Retry-After", "60");
-                await ctx.Response.WriteAsync("No active snapshot available. Waiting for first refresh.", cancellationToken);
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.Append("Retry-After", "60");
+                await context.Response.WriteAsync("No active snapshot available. Waiting for first refresh.", cancellationToken);
                 return;
             }
 
-            var baseUrl  = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
-            var xmltvUrl = $"{baseUrl}/xmltv/m3undle.xml";
-
-            ctx.Response.ContentType = "application/x-mpegurl; charset=utf-8";
-            await ctx.Response.WriteAsync(
-                $"#EXTM3U url-tvg=\"{xmltvUrl}\" x-tvg-url=\"{xmltvUrl}\"\n", cancellationToken);
-
-            try
+            await m3uSerializer.WriteAsync(context, lineup, cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            if (!context.Response.HasStarted)
             {
-                var sb = new StringBuilder(512);
-                await foreach (var ch in ChannelIndexStore.StreamAllAsync(
-                    snapshot.ChannelIndexPath, cancellationToken))
-                {
-                    sb.Clear();
-                    sb.Append(BuildExtInf(ch));
-                    sb.Append('\n');
-                    sb.Append(BuildProxyStreamUrl(baseUrl, ch));
-                    sb.Append('\n');
-                    await ctx.Response.WriteAsync(sb.ToString(), cancellationToken);
-                }
-            }
-            catch (Exception ex) when (ex is IOException or JsonException)
-            {
-                if (!ctx.Response.HasStarted)
-                {
-                    ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                    ctx.Response.Headers.Append("Retry-After", "30");
-                    await ctx.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
-                }
-                return;
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.Append("Retry-After", "30");
+                await context.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -94,51 +75,36 @@ public static class CompatibilityEndpoints
         }
     }
 
-    // -------------------------------------------------------------------------
-    // GET /xmltv/m3undle.xml
-    // -------------------------------------------------------------------------
-
-    private static async Task ServeXmltvAsync(HttpContext ctx, ApplicationDbContext db, CancellationToken cancellationToken)
+    private static async Task<IResult> ServeXmltvAsync(
+        HttpContext context,
+        ILineupRenderer lineupRenderer,
+        IXmlTvSerializer xmlTvSerializer,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var snapshot = await db.Snapshots
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Status == "active", cancellationToken);
-
-            if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.XmltvPath))
+            var access = context.GetResolvedClientAccess();
+            var lineup = await lineupRenderer.TryRenderActiveLineupAsync(access.Binding.ActiveProfileId, cancellationToken);
+            if (lineup is null)
             {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                ctx.Response.Headers.Append("Retry-After", "60");
-                await ctx.Response.WriteAsync("No active snapshot available.", cancellationToken);
-                return;
+                return TypedResults.Problem(
+                    "No active snapshot available.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            if (!File.Exists(snapshot.XmltvPath))
-            {
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                ctx.Response.Headers.Append("Retry-After", "30");
-                await ctx.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
-                return;
-            }
-
-            ctx.Response.ContentType = "application/xml; charset=utf-8";
-            await ctx.Response.SendFileAsync(snapshot.XmltvPath, cancellationToken);
+            return xmlTvSerializer.Serialize(lineup);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception ex) when (ex is IOException or JsonException)
         {
-            // Client disconnected before response completed
+            return TypedResults.Problem(
+                "Active snapshot data is unavailable.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
-
-    // -------------------------------------------------------------------------
-    // GET /stream/{streamKey}
-    // Security: MUST relay — MUST NOT redirect. Provider URLs embed credentials.
-    // -------------------------------------------------------------------------
 
     private static async Task ServeStreamAsync(
         string streamKey,
-        HttpContext ctx,
+        HttpContext context,
         ApplicationDbContext db,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
@@ -147,18 +113,22 @@ public static class CompatibilityEndpoints
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
         using var streamScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Stream" });
 
-        // CancellationToken.None: these quick DB reads must not be cancelled by EF Core's
-        // internal SQLite busy timeout, which throws TaskCanceledException without setting
-        // the HTTP request token — causing the exception to escape the guarded catch below.
+        var access = context.GetResolvedClientAccess();
+
         var snapshot = await db.Snapshots
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.Status == "active", CancellationToken.None);
+            .Where(x => x.Status == "active" && x.ProfileId == access.Binding.ActiveProfileId)
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(CancellationToken.None);
 
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.ChannelIndexPath))
         {
-            logger.LogWarning("Stream tune-in failed: no active snapshot. key={StreamKey} client={Client}",
-                streamKey, ctx.Connection.RemoteIpAddress);
-            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            logger.LogWarning(
+                "Stream tune-in failed: no active snapshot for profile {ProfileId}. key={StreamKey} client={Client}",
+                access.Binding.ActiveProfileId,
+                streamKey,
+                context.Connection.RemoteIpAddress);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             return;
         }
 
@@ -169,10 +139,11 @@ public static class CompatibilityEndpoints
             if (hit is null)
             {
                 logger.LogWarning("Stream tune-in failed: unknown key. key={StreamKey} client={Client}",
-                    streamKey, ctx.Connection.RemoteIpAddress);
-                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+                    streamKey, context.Connection.RemoteIpAddress);
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
+
             entry = hit.Value;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -181,21 +152,19 @@ public static class CompatibilityEndpoints
         }
         catch
         {
-            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             return;
         }
 
         logger.LogInformation("Stream tune-in: channel={Channel} key={StreamKey} client={Client}",
-            entry.DisplayName, streamKey, ctx.Connection.RemoteIpAddress);
+            entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
 
-        // CancellationToken.None — same reason as the snapshot query above.
         var provider = await db.Providers
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, CancellationToken.None);
 
         try
         {
-            // Named client has Timeout.InfiniteTimeSpan — live streams run indefinitely
             using var client = httpClientFactory.CreateClient("stream-relay");
 
             if (provider is not null)
@@ -205,8 +174,7 @@ public static class CompatibilityEndpoints
                     client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
             }
 
-            // Forward Range header if present (enables VOD/catchup seeking)
-            if (ctx.Request.Headers.TryGetValue("Range", out var rangeValue))
+            if (context.Request.Headers.TryGetValue("Range", out var rangeValue))
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Range", rangeValue.ToArray());
 
             using var upstreamResponse = await client.GetAsync(
@@ -215,52 +183,58 @@ public static class CompatibilityEndpoints
                 cancellationToken);
 
             logger.LogInformation("Stream upstream: channel={Channel} status={Status} contentType={ContentType}",
-                entry.DisplayName, (int)upstreamResponse.StatusCode,
+                entry.DisplayName,
+                (int)upstreamResponse.StatusCode,
                 upstreamResponse.Content.Headers.ContentType?.ToString() ?? "none");
 
-            ctx.Response.StatusCode = (int)upstreamResponse.StatusCode;
+            context.Response.StatusCode = (int)upstreamResponse.StatusCode;
 
             if (upstreamResponse.Content.Headers.ContentType is not null)
-                ctx.Response.ContentType = upstreamResponse.Content.Headers.ContentType.ToString();
+                context.Response.ContentType = upstreamResponse.Content.Headers.ContentType.ToString();
 
             if (upstreamResponse.Content.Headers.ContentLength.HasValue)
-                ctx.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
+                context.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
 
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
-            await upstreamStream.CopyToAsync(ctx.Response.Body, cancellationToken);
+            await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
 
             logger.LogDebug("Stream complete: channel={Channel} client={Client}",
-                entry.DisplayName, ctx.Connection.RemoteIpAddress);
+                entry.DisplayName,
+                context.Connection.RemoteIpAddress);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Client disconnected — normal for live streams
             logger.LogDebug("Stream client disconnected: channel={Channel} client={Client}",
-                entry.DisplayName, ctx.Connection.RemoteIpAddress);
+                entry.DisplayName,
+                context.Connection.RemoteIpAddress);
         }
         catch (HttpRequestException ex)
         {
             logger.LogError(ex, "Stream upstream request failed: channel={Channel} key={StreamKey}",
-                entry.DisplayName, streamKey);
-            if (!ctx.Response.HasStarted)
-                ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+                entry.DisplayName,
+                streamKey);
+            if (!context.Response.HasStarted)
+                context.Response.StatusCode = StatusCodes.Status502BadGateway;
         }
     }
 
     private static async Task<(string StreamUrl, string DisplayName)?> GetStreamEntryAsync(
-        string snapshotId, string channelIndexPath, string streamKey, CancellationToken cancellationToken)
+        string snapshotId,
+        string channelIndexPath,
+        string streamKey,
+        CancellationToken cancellationToken)
     {
         var idxPath = ChannelIndexStore.GetIdxPath(channelIndexPath);
-        var entry   = await ChannelIndexStore.TryLookupAsync(
-            snapshotId, channelIndexPath, idxPath, streamKey, cancellationToken);
+        var entry = await ChannelIndexStore.TryLookupAsync(
+            snapshotId,
+            channelIndexPath,
+            idxPath,
+            streamKey,
+            cancellationToken);
         return entry is null ? null : (entry.StreamUrl, entry.DisplayName);
     }
 
-    // -------------------------------------------------------------------------
-    // GET /status
-    // -------------------------------------------------------------------------
-
-    private static async Task ServeStatusAsync(HttpContext ctx, ApplicationDbContext db, CancellationToken cancellationToken)
+    private static async Task ServeStatusAsync(HttpContext context, ApplicationDbContext db, CancellationToken cancellationToken)
     {
         try
         {
@@ -303,92 +277,14 @@ public static class CompatibilityEndpoints
 
             var status = new StatusResponse(Status: lineupStatus, Lineups: [lineup]);
 
-            ctx.Response.ContentType = "application/json; charset=utf-8";
-            await JsonSerializer.SerializeAsync(ctx.Response.Body, status, JsonOptions, cancellationToken);
+            context.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(context.Response.Body, status, JsonOptions, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Client disconnected before response completed
         }
     }
-
-    // -------------------------------------------------------------------------
-    // M3U helpers
-    // -------------------------------------------------------------------------
-
-    private static string BuildExtInf(ChannelIndexEntry channel)
-    {
-        var sb = new StringBuilder("#EXTINF:-1");
-
-        if (!string.IsNullOrWhiteSpace(channel.TvgId))
-        {
-            sb.Append($" tvg-id=\"{channel.TvgId}\"");
-        }
-
-        var tvgName = !string.IsNullOrWhiteSpace(channel.TvgName) ? channel.TvgName : channel.DisplayName;
-        sb.Append($" tvg-name=\"{tvgName}\"");
-
-        if (!string.IsNullOrWhiteSpace(channel.LogoUrl))
-        {
-            sb.Append($" tvg-logo=\"{channel.LogoUrl}\"");
-        }
-
-        if (!string.IsNullOrWhiteSpace(channel.GroupTitle))
-        {
-            sb.Append($" group-title=\"{channel.GroupTitle}\"");
-        }
-
-        if (channel.TvgChno.HasValue)
-        {
-            sb.Append($" tvg-chno=\"{channel.TvgChno.Value}\"");
-        }
-
-        sb.Append($",{channel.DisplayName}");
-        return sb.ToString();
-    }
-
-    private static string GetProxyRouteSegment(ChannelIndexEntry channel)
-        => LiveClassifier.ClassifyContent(channel.StreamUrl) switch
-        {
-            "series" => "series",
-            "vod" => "movie",
-            _ => "live",
-        };
-
-    private static string BuildProxyStreamUrl(string baseUrl, ChannelIndexEntry channel)
-    {
-        var routeSegment = GetProxyRouteSegment(channel);
-
-        // Keep live URLs short; for VOD/Series append the original filename segment so
-        // clients that key off file-style movie/series URLs can classify them.
-        if (routeSegment == "live")
-            return $"{baseUrl}/{routeSegment}/{channel.StreamKey}";
-
-        var tail = GetUpstreamTailSegment(channel.StreamUrl);
-        if (string.IsNullOrWhiteSpace(tail))
-            return $"{baseUrl}/{routeSegment}/{channel.StreamKey}";
-
-        return $"{baseUrl}/{routeSegment}/{channel.StreamKey}/{Uri.EscapeDataString(tail)}";
-    }
-
-    private static string? GetUpstreamTailSegment(string? streamUrl)
-    {
-        if (string.IsNullOrWhiteSpace(streamUrl))
-            return null;
-
-        if (Uri.TryCreate(streamUrl, UriKind.Absolute, out var uri))
-        {
-            var tail = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-            return string.IsNullOrWhiteSpace(tail) ? null : tail;
-        }
-
-        var fallback = streamUrl.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-        return string.IsNullOrWhiteSpace(fallback) ? null : fallback;
-    }
-
-    // -------------------------------------------------------------------------
-    // Status response records
-    // -------------------------------------------------------------------------
 
     private sealed record StatusResponse(
         string Status,

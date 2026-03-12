@@ -1,6 +1,7 @@
 @page "/settings"
 @using M3Undle.Web.Application
 @inject ISiteSettingsService SiteSettings
+@inject IEndpointSecurityService EndpointSecurity
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -9,36 +10,176 @@
 <MudGrid Spacing="3">
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1">
-            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
-                <MudText Typo="Typo.h6">Security</MudText>
-                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Alpha 3</MudChip>
-            </MudStack>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Authentication is controlled by the <code>M3UNDLE_AUTH_ENABLED</code> environment variable.
-            </MudText>
+            <MudText Typo="Typo.h6" Class="mb-1">UI Security</MudText>
 
-            @if (_authEnabled)
+            @if (_uiAuthEnabled)
             {
-                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                    Authentication is <strong>enabled</strong>. The UI and management APIs require login. Compatibility endpoints remain anonymous.
+                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">
+                    UI Authentication is enabled.
                 </MudAlert>
-                <MudButton Variant="Variant.Text" Color="Color.Primary" Href="Account/Manage/ChangePassword">Change Password</MudButton>
             }
             else
             {
                 <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                    Authentication is <strong>disabled</strong>. The UI is open on your network. Set <code>M3UNDLE_AUTH_ENABLED=true</code> to require login.
+                    UI authentication is <strong>disabled</strong>. The UI is open on your network.
                 </MudAlert>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Endpoint Security</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls M3U/XMLTV/stream/HDHR endpoint authentication.
+            </MudText>
+
+            @if (_loadingEndpointSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                <MudSwitch T="bool" Label="Enable endpoint security" @bind-Value="_endpointEnabled" Class="mb-3" />
+
+                <MudTextField @bind-Value="_endpointUsername"
+                              Label="Endpoint Username"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              FullWidth="true"
+                              Placeholder="iptv-client"
+                              Required="_endpointEnabled" />
+
+                <MudTextField @bind-Value="_endpointPassword"
+                              Label="Endpoint Password"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              FullWidth="true"
+                              Placeholder="Leave blank to keep existing"
+                              InputType="InputType.Password"
+                              HelperText="Stored as password hash in database." />
+
+                @if (!string.IsNullOrWhiteSpace(_activeProfileId))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
+                        Bound profile: @_activeProfileId
+                    </MudText>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_endpointError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_endpointError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_endpointSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_endpointSuccess
+                    </MudAlert>
+                }
+
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Disabled="_savingEndpointSettings"
+                               OnClick="SaveEndpointSecurityAsync">
+                        @_saveButtonText
+                    </MudButton>
+
+                    @if (_endpointHasCredential)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success">Credential configured</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">No credential configured</MudChip>
+                    }
+                </MudStack>
             }
         </MudPaper>
     </MudItem>
 </MudGrid>
 
 @code {
-    private bool _authEnabled;
+    private bool _uiAuthEnabled;
+    private bool _loadingEndpointSettings;
+    private bool _savingEndpointSettings;
+
+    private bool _endpointEnabled;
+    private bool _endpointHasCredential;
+    private string _endpointUsername = string.Empty;
+    private string _endpointPassword = string.Empty;
+    private string? _activeProfileId;
+    private string? _endpointError;
+    private string? _endpointSuccess;
+
+    private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
 
     protected override async Task OnInitializedAsync()
     {
-        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        await LoadEndpointSecurityAsync();
+    }
+
+    private async Task LoadEndpointSecurityAsync()
+    {
+        _loadingEndpointSettings = true;
+        _endpointError = null;
+
+        try
+        {
+            var settings = await EndpointSecurity.GetSettingsAsync(CancellationToken.None);
+            _endpointEnabled = settings.Enabled;
+            _endpointUsername = settings.Username ?? string.Empty;
+            _endpointHasCredential = settings.HasCredential;
+            _activeProfileId = settings.ActiveProfileId;
+        }
+        catch (Exception ex)
+        {
+            _endpointError = $"Failed to load endpoint security settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingEndpointSettings = false;
+        }
+    }
+
+    private async Task SaveEndpointSecurityAsync()
+    {
+        _savingEndpointSettings = true;
+        _endpointError = null;
+        _endpointSuccess = null;
+
+        try
+        {
+            var result = await EndpointSecurity.UpdateAsync(new UpdateEndpointSecurityCommand(
+                Enabled: _endpointEnabled,
+                Username: string.IsNullOrWhiteSpace(_endpointUsername) ? null : _endpointUsername.Trim(),
+                Password: string.IsNullOrWhiteSpace(_endpointPassword) ? null : _endpointPassword,
+                ActiveProfileId: _activeProfileId), CancellationToken.None);
+
+            if (!result.Succeeded)
+            {
+                _endpointError = result.Error ?? "Endpoint security update failed.";
+                return;
+            }
+
+            _endpointEnabled = result.Settings.Enabled;
+            _endpointUsername = result.Settings.Username ?? string.Empty;
+            _endpointHasCredential = result.Settings.HasCredential;
+            _activeProfileId = result.Settings.ActiveProfileId;
+            _endpointPassword = string.Empty;
+            _endpointSuccess = "Endpoint security settings saved.";
+        }
+        catch (Exception ex)
+        {
+            _endpointError = $"Failed to save endpoint security settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingEndpointSettings = false;
+        }
     }
 }

@@ -6,7 +6,6 @@
     <AuthorizeView>
         <Authorized>
             <MudMenu Label="@UserName" Color="Color.Inherit">
-                <MudMenuItem Href="Account/Manage">Manage Account</MudMenuItem>
                 <MudMenuItem>
                     <form action="Account/Logout" method="post" class="d-inline">
                         <AntiforgeryToken />

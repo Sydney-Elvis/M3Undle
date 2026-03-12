@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using M3Undle.Web.Application;
+using M3Undle.Web.Security;
 
 namespace M3Undle.Web.Api;
 
@@ -15,14 +16,27 @@ public static class HdHomeRunEndpoints
 
     public static IEndpointRouteBuilder MapHdHomeRunEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/discover.json", ServeDiscoverAsync).AllowAnonymous();
-        app.MapGet("/lineup.json", ServeLineupJsonAsync).AllowAnonymous();
-        app.MapGet("/lineup.xml", ServeLineupXmlAsync).AllowAnonymous();
-        app.MapGet("/lineup.m3u", ServeLineupM3uAsync).AllowAnonymous();
-        app.MapGet("/lineup_status.json", ServeLineupStatusAsync).AllowAnonymous();
-        app.MapGet("/lineup.post", ServeLineupPost).AllowAnonymous();
-        app.MapPost("/lineup.post", ServeLineupPost).AllowAnonymous();
-        app.MapGet("/device.xml", ServeDeviceXmlAsync).AllowAnonymous();
+        var client = app.MapClientSurface();
+        var hdhr = client.MapGroup("hdhr");
+
+        hdhr.MapGet("discover.json", ServeDiscoverAsync);
+        hdhr.MapGet("lineup.json", ServeLineupJsonAsync);
+        hdhr.MapGet("lineup.xml", ServeLineupXmlAsync);
+        hdhr.MapGet("lineup.m3u", ServeLineupM3uAsync);
+        hdhr.MapGet("lineup_status.json", ServeLineupStatusAsync);
+        hdhr.MapGet("lineup.post", ServeLineupPost);
+        hdhr.MapPost("lineup.post", ServeLineupPost);
+        hdhr.MapGet("device.xml", ServeDeviceXmlAsync);
+
+        // Legacy aliases kept for HDHR client compatibility.
+        client.MapGet("discover.json", ServeDiscoverAsync);
+        client.MapGet("lineup.json", ServeLineupJsonAsync);
+        client.MapGet("lineup.xml", ServeLineupXmlAsync);
+        client.MapGet("lineup.m3u", ServeLineupM3uAsync);
+        client.MapGet("lineup_status.json", ServeLineupStatusAsync);
+        client.MapGet("lineup.post", ServeLineupPost);
+        client.MapPost("lineup.post", ServeLineupPost);
+        client.MapGet("device.xml", ServeDeviceXmlAsync);
 
         return app;
     }
@@ -36,7 +50,8 @@ public static class HdHomeRunEndpoints
             return TypedResults.NotFound();
 
         var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
-        var baseUrl = deviceService.ResolveBaseUrl(context);
+        var baseUrl = deviceService.ResolveBaseUrl(context).TrimEnd('/');
+        var hdhrBaseUrl = $"{baseUrl}/hdhr";
 
         var payload = new DiscoverResponse(
             FriendlyName: device.FriendlyName,
@@ -46,8 +61,8 @@ public static class HdHomeRunEndpoints
             FirmwareVersion: device.FirmwareVersion,
             DeviceID: device.DeviceId,
             DeviceAuth: device.DeviceAuth,
-            BaseURL: baseUrl,
-            LineupURL: $"{baseUrl}/lineup.json",
+            BaseURL: hdhrBaseUrl,
+            LineupURL: $"{hdhrBaseUrl}/lineup.json".ApplyClientAccessQuery(context),
             TunerCount: device.TunerCount);
 
         return TypedResults.Json(payload, JsonOptions);
@@ -56,35 +71,29 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> ServeLineupJsonAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
         CancellationToken cancellationToken)
     {
-        var lineupResult = await TryBuildLineupAsync(context, deviceService, lineupService, cancellationToken);
+        var lineupResult = await TryBuildLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
         return lineupResult;
     }
 
     private static async Task<IResult> ServeLineupXmlAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
 
-        HdHomeRunLineupResult? lineup;
-        try
-        {
-            var baseUrl = deviceService.ResolveBaseUrl(context);
-            lineup = await lineupService.TryBuildActiveLineupAsync(baseUrl, cancellationToken);
-        }
-        catch (Exception ex) when (ex is IOException or JsonException)
-        {
-            return TypedResults.Problem("Active snapshot data is unavailable.", statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
+        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
+        if (!lineupResult.Succeeded)
+            return lineupResult.ErrorResult!;
 
-        if (lineup is null)
-            return TypedResults.Problem("No active snapshot available.", statusCode: StatusCodes.Status503ServiceUnavailable);
+        var lineup = lineupResult.Lineup!;
 
         using var ms = new MemoryStream(2048);
         var settings = new XmlWriterSettings
@@ -106,6 +115,7 @@ public static class HdHomeRunEndpoints
                 writer.WriteElementString("URL", channel.Url);
                 writer.WriteEndElement();
             }
+
             writer.WriteEndElement();
             writer.WriteEndDocument();
         }
@@ -116,25 +126,18 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> ServeLineupM3uAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
 
-        HdHomeRunLineupResult? lineup;
-        try
-        {
-            var baseUrl = deviceService.ResolveBaseUrl(context);
-            lineup = await lineupService.TryBuildActiveLineupAsync(baseUrl, cancellationToken);
-        }
-        catch (Exception ex) when (ex is IOException or JsonException)
-        {
-            return TypedResults.Problem("Active snapshot data is unavailable.", statusCode: StatusCodes.Status503ServiceUnavailable);
-        }
+        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
+        if (!lineupResult.Succeeded)
+            return lineupResult.ErrorResult!;
 
-        if (lineup is null)
-            return TypedResults.Problem("No active snapshot available.", statusCode: StatusCodes.Status503ServiceUnavailable);
+        var lineup = lineupResult.Lineup!;
 
         var sb = new StringBuilder(4096);
         sb.Append("#EXTM3U").Append('\n');
@@ -142,14 +145,12 @@ public static class HdHomeRunEndpoints
         {
             sb.Append("#EXTINF:-1");
             if (!string.IsNullOrWhiteSpace(channel.TvgId))
-            {
                 sb.Append(" tvg-id=\"").Append(channel.TvgId).Append('"');
-            }
+
             sb.Append(" tvg-chno=\"").Append(channel.GuideNumber).Append('"');
             if (!string.IsNullOrWhiteSpace(channel.LogoUrl))
-            {
                 sb.Append(" tvg-logo=\"").Append(channel.LogoUrl).Append('"');
-            }
+
             sb.Append(',').Append(channel.GuideName).Append('\n');
             sb.Append(channel.Url).Append('\n');
         }
@@ -160,6 +161,7 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> ServeLineupStatusAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
         CancellationToken cancellationToken)
     {
@@ -169,17 +171,13 @@ public static class HdHomeRunEndpoints
         var channelCount = 0;
         var status = "No active snapshot";
 
-        try
+        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
+        if (lineupResult.Succeeded)
         {
-            var baseUrl = deviceService.ResolveBaseUrl(context);
-            var lineup = await lineupService.TryBuildActiveLineupAsync(baseUrl, cancellationToken);
-            if (lineup is not null)
-            {
-                channelCount = lineup.Channels.Count;
-                status = $"Ready ({channelCount} channels)";
-            }
+            channelCount = lineupResult.Lineup!.Channels.Count;
+            status = $"Ready ({channelCount} channels)";
         }
-        catch (Exception ex) when (ex is IOException or JsonException)
+        else if (lineupResult.ErrorResult is IStatusCodeHttpResult { StatusCode: StatusCodes.Status503ServiceUnavailable })
         {
             status = "Snapshot data unavailable";
         }
@@ -212,7 +210,8 @@ public static class HdHomeRunEndpoints
             return TypedResults.NotFound();
 
         var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
-        var baseUrl = deviceService.ResolveBaseUrl(context);
+        var baseUrl = deviceService.ResolveBaseUrl(context).TrimEnd('/');
+        var hdhrBaseUrl = $"{baseUrl}/hdhr";
 
         using var ms = new MemoryStream(2048);
         var settings = new XmlWriterSettings
@@ -231,7 +230,7 @@ public static class HdHomeRunEndpoints
             writer.WriteElementString("minor", "0");
             writer.WriteEndElement();
 
-            writer.WriteElementString("URLBase", $"{baseUrl}/");
+            writer.WriteElementString("URLBase", $"{hdhrBaseUrl}/");
             writer.WriteStartElement("device");
             writer.WriteElementString("deviceType", "urn:schemas-upnp-org:device:MediaServer:1");
             writer.WriteElementString("friendlyName", device.FriendlyName);
@@ -241,7 +240,7 @@ public static class HdHomeRunEndpoints
             writer.WriteElementString("modelNumber", device.ModelNumber);
             writer.WriteElementString("serialNumber", device.DeviceId);
             writer.WriteElementString("UDN", $"uuid:{device.DeviceId}");
-            writer.WriteElementString("presentationURL", baseUrl);
+            writer.WriteElementString("presentationURL", hdhrBaseUrl);
             writer.WriteEndElement();
             writer.WriteEndElement();
             writer.WriteEndDocument();
@@ -253,33 +252,61 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> TryBuildLineupAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
         CancellationToken cancellationToken)
     {
-        if (!deviceService.IsEnabled)
-            return TypedResults.NotFound();
+        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
+        if (!lineupResult.Succeeded)
+            return lineupResult.ErrorResult!;
 
+        var payload = lineupResult.Lineup!.Channels
+            .Select(x => new LineupChannelResponse(
+                GuideNumber: x.GuideNumber,
+                GuideName: x.GuideName,
+                URL: x.Url))
+            .ToList();
+
+        return TypedResults.Json(payload, JsonOptions);
+    }
+
+    private static async Task<LineupBuildResult> TryBuildHdhrLineupAsync(
+        HttpContext context,
+        HdHomeRunDeviceService deviceService,
+        ILineupRenderer lineupRenderer,
+        HdHomeRunLineupService lineupService,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            var baseUrl = deviceService.ResolveBaseUrl(context);
-            var lineup = await lineupService.TryBuildActiveLineupAsync(baseUrl, cancellationToken);
-            if (lineup is null)
+            var access = context.GetResolvedClientAccess();
+            var renderedLineup = await lineupRenderer.TryRenderActiveLineupAsync(access.Binding.ActiveProfileId, cancellationToken);
+            if (renderedLineup is null)
             {
-                return TypedResults.Problem("No active snapshot available.", statusCode: StatusCodes.Status503ServiceUnavailable);
+                return LineupBuildResult.Failure(
+                    TypedResults.Problem(
+                        "No active snapshot available.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable));
             }
 
-            var payload = lineup.Channels
-                .Select(x => new LineupChannelResponse(
-                    GuideNumber: x.GuideNumber,
-                    GuideName: x.GuideName,
-                    URL: x.Url))
-                .ToList();
+            var baseUrl = deviceService.ResolveBaseUrl(context).TrimEnd('/');
+            var lineup = await lineupService.TryBuildActiveLineupAsync(baseUrl, renderedLineup, context, cancellationToken);
+            if (lineup is null)
+            {
+                return LineupBuildResult.Failure(
+                    TypedResults.Problem(
+                        "No active snapshot available.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable));
+            }
 
-            return TypedResults.Json(payload, JsonOptions);
+            return LineupBuildResult.Success(lineup);
         }
         catch (Exception ex) when (ex is IOException or JsonException)
         {
-            return TypedResults.Problem("Active snapshot data is unavailable.", statusCode: StatusCodes.Status503ServiceUnavailable);
+            return LineupBuildResult.Failure(
+                TypedResults.Problem(
+                    "Active snapshot data is unavailable.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable));
         }
     }
 
@@ -304,4 +331,13 @@ public static class HdHomeRunEndpoints
         IReadOnlyList<string> SourceList,
         string Status,
         int ChannelCount);
+
+    private sealed record LineupBuildResult(HdHomeRunLineupResult? Lineup, IResult? ErrorResult)
+    {
+        public bool Succeeded => Lineup is not null;
+
+        public static LineupBuildResult Success(HdHomeRunLineupResult lineup) => new(lineup, null);
+
+        public static LineupBuildResult Failure(IResult error) => new(null, error);
+    }
 }

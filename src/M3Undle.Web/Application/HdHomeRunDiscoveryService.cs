@@ -92,7 +92,7 @@ public sealed class HdHomeRunDiscoveryService(
                     ? SsdpMediaServerType
                     : searchTarget;
 
-                var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, baseUrl);
+                var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, $"{baseUrl.TrimEnd('/')}/hdhr");
                 var bytes = Encoding.ASCII.GetBytes(response);
                 await udp.SendAsync(bytes, result.RemoteEndPoint, cancellationToken);
             }
@@ -133,7 +133,7 @@ public sealed class HdHomeRunDiscoveryService(
                 if (!ShouldRespondToDiscover(request, deviceId))
                     continue;
 
-                var baseUrl = deviceService.ResolveBaseUrl();
+                var baseUrl = $"{deviceService.ResolveBaseUrl().TrimEnd('/')}/hdhr";
                 var lineupUrl = $"{baseUrl}/lineup.json";
                 var packet = BuildDiscoverResponsePacket(
                     deviceId,
@@ -413,4 +413,3 @@ public sealed class HdHomeRunDiscoveryService(
 
     private readonly record struct DiscoverRequest(uint? DeviceIdFilter, bool AcceptsTuners);
 }
-

@@ -1,4 +1,5 @@
 using M3Undle.Core.M3u;
+using Microsoft.AspNetCore.Diagnostics;
 using M3Undle.Web.Api;
 using M3Undle.Web.Application;
 using M3Undle.Web.Components;
@@ -119,6 +120,7 @@ builder.Services.AddHttpClient("stream-relay", client =>
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
+builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.GetSection("M3Undle:EndpointAccess"));
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
@@ -141,9 +143,17 @@ builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddScoped<SnapshotBuilder>();
 builder.Services.AddScoped<HdHomeRunLineupService>();
+builder.Services.AddScoped<ILineupRenderer, ActiveSnapshotLineupRenderer>();
+builder.Services.AddSingleton<IM3USerializer, M3uSerializer>();
+builder.Services.AddSingleton<IXmlTvSerializer, XmlTvSerializer>();
 builder.Services.AddSingleton<HdHomeRunDeviceService>();
 builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
+builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
+builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
+builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
+builder.Services.AddScoped<IAccessResolver, ClientEndpointAccessResolver>();
+builder.Services.AddScoped<ClientEndpointAccessFilter>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
@@ -200,6 +210,16 @@ else
         app.UseHttpsRedirection();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+// Don't redirect API errors through Blazor's /not-found page — preserve the real status code.
+app.Use(static async (ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+    {
+        var feature = ctx.Features.Get<IStatusCodePagesFeature>();
+        if (feature is not null) feature.Enabled = false;
+    }
+    await next(ctx);
+});
 
 app.UseStaticFiles();
 app.UseAuthentication();
@@ -215,6 +235,7 @@ app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
 app.MapChannelFilterApiEndpoints();
 app.MapChannelListApiEndpoints();
+app.MapSiteSettingsApiEndpoints();
 app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
 app.MapHealthChecks("/health");
