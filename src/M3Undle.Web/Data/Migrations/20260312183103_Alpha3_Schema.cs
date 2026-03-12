@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace M3Undle.Web.Data.Migrations
 {
     /// <inheritdoc />
-    public partial class Alpha3_EndpointSecurity : Migration
+    public partial class Alpha3_Schema : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)

@@ -11,8 +11,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260312183103_Alpha3_EndpointSecurity")]
-    partial class Alpha3_EndpointSecurity
+    [Migration("20260312183103_Alpha3_Schema")]
+    partial class Alpha3_Schema
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
