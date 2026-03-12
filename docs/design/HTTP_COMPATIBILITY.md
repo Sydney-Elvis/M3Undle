@@ -18,6 +18,13 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 - `/stream/<streamKey>`
+- `/discover.json`
+- `/lineup.json`
+- `/lineup.xml`
+- `/lineup.m3u`
+- `/lineup_status.json`
+- `/device.xml`
+- `/tune/<streamKey>`
 
 ## Endpoints
 
@@ -77,6 +84,7 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
 
 ### Stream
 - GET /stream/<streamKey>
+- GET /tune/<streamKey>
   - Resolves streamKey -> canonical channel in active snapshot
   - Serves playable stream for that channel
   - Must be resilient:
@@ -86,6 +94,28 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
     Provider stream URLs typically embed credentials (`http://provider/{username}/{password}/stream.ts`).
     An HTTP 302 redirect would deliver raw credentials to every client that follows the stream URL.
     Relay is a security contract, not an implementation detail. This MUST NOT be changed to a redirect.
+
+### HDHomeRun HTTP API
+- GET `/discover.json`
+  - Returns stable device identity metadata (`DeviceID`, `DeviceAuth`, `FriendlyName`, `ModelNumber`, `BaseURL`, `LineupURL`, `TunerCount`).
+- GET `/lineup.json`
+  - Returns live channels from the active snapshot with stable `GuideNumber`, `GuideName`, and M3Undle-owned tune URLs.
+- GET `/lineup.xml`
+  - XML lineup equivalent of `/lineup.json`.
+- GET `/lineup.m3u`
+  - M3U lineup equivalent of `/lineup.json`.
+- GET `/lineup_status.json`
+  - Returns lineup readiness and channel count.
+- GET/POST `/lineup.post`
+  - No-op compatibility endpoint expected by some HDHomeRun clients.
+- GET `/device.xml`
+  - UPnP device description used by SSDP/manual client probes.
+
+### Discovery (optional)
+- SSDP / UPnP listener on UDP `1900`
+- SiliconDust discovery listener on UDP `65001`
+- Discovery uses the same device identity and base URL as manual HTTP endpoints.
+- Discovery is disabled by default; manual add via `/discover.json` remains available.
 
 ## Authentication
 Auth infrastructure (ASP.NET Core Identity) is present in the codebase. Whether to enable it is configured at first-run setup. Compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`) are designed to be accessible without auth to support LAN clients. The web UI can optionally require login.

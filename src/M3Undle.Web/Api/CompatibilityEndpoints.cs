@@ -29,6 +29,8 @@ public static class CompatibilityEndpoints
         app.MapGet("/series/{streamKey}", ServeStreamAsync).AllowAnonymous();
         app.MapGet("/series/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
         app.MapGet("/stream/{streamKey}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/tune/{streamKey}", ServeStreamAsync).AllowAnonymous();
+        app.MapGet("/tune/{streamKey}/{*tail}", ServeStreamAsync).AllowAnonymous();
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
 
         return app;

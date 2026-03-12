@@ -15,15 +15,15 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Database-backed provider configuration
 > - Provider switching with snapshot lifecycle
 > - Group preview (read-only catalog browsing)
-> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`
+> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API
 > - Stream relay proxy (relay-only, no buffering)
 > - Web UI for provider management (Pre-Alpha)
+> - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`)
 > 
 > **Forthcoming**
 > - Group-based inclusion rules
 > - Channel numbering controls
 > - Advanced channel filtering workflows
-> - HDHomeRun emulation
 > - Additional Service/Web UI hardening toward Alpha
 
 ---
@@ -106,10 +106,11 @@ Current Pre-Alpha work includes:
 - Provider switching with snapshot lifecycle
 - Group preview (read-only catalog browse)
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
+- HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
 - Stream relay proxy (relay-only, no buffering)
 - Web UI for provider management
 
-Future releases will add: group-based inclusion rules, channel numbering, filtering, HDHomeRun emulation, and more.
+Future releases will add: group-based inclusion rules, channel numbering, filtering, and more.
 
 See: `docs/SERVICE.md`
 
@@ -174,6 +175,18 @@ M3Undle publishes endpoints compatible with common clients:
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 - `/stream/<streamKey>`
+- `/discover.json`
+- `/lineup.json`
+- `/lineup.xml`
+- `/lineup.m3u`
+- `/lineup_status.json`
+- `/device.xml`
+- `/tune/<streamKey>`
+
+Automatic discovery support:
+- SSDP/UPnP (`UDP 1900`)
+- SiliconDust discovery (`UDP 65001`)
+- Discovery is disabled by default; manual add works without discovery
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 

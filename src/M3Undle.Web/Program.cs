@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using MudBlazor.Services;
@@ -117,6 +118,7 @@ builder.Services.AddHttpClient("stream-relay", client =>
 
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
+builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
@@ -124,10 +126,23 @@ builder.Services.PostConfigure<SnapshotOptions>(options =>
         dataDirectory: runtimePaths.DataDirectory,
         defaultRelativePath: "snapshots");
 });
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto |
+        ForwardedHeaders.XForwardedHost |
+        ForwardedHeaders.XForwardedPrefix;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddScoped<SnapshotBuilder>();
+builder.Services.AddScoped<HdHomeRunLineupService>();
+builder.Services.AddSingleton<HdHomeRunDeviceService>();
+builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
@@ -169,6 +184,8 @@ using (var scope = app.Services.CreateScope())
 await SeedAdminAccountIfNeededAsync(app.Services);
 
 // Configure the HTTP request pipeline.
+app.UseForwardedHeaders();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseMigrationsEndPoint();
@@ -198,6 +215,7 @@ app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
 app.MapChannelFilterApiEndpoints();
 app.MapChannelListApiEndpoints();
+app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
 app.MapHealthChecks("/health");
 
