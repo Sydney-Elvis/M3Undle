@@ -13,9 +13,15 @@
       "justMyCode": true,
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "ASPNETCORE_URLS": "http://localhost:5283",
+        "ASPNETCORE_URLS": "http://0.0.0.0:5283",
         "M3UNDLE_CONFIG_DIR": "${workspaceFolder}/.config",
-        "M3UNDLE_DATA_DIR": "${workspaceFolder}/data"
+        "M3UNDLE_DATA_DIR": "${workspaceFolder}/data",
+        "M3UNDLE_HDHR_ENABLED": "true",
+        "M3UNDLE_HDHR_DISCOVERY_ENABLED": "true",
+        "M3UNDLE_HDHR_SSDP_ENABLED": "true",
+        "M3UNDLE_HDHR_SILICONDUST_DISCOVERY_ENABLED": "true",
+        "M3UNDLE_HDHR_TUNER_COUNT": "1",
+        "M3UNDLE_HDHR_ADVERTISED_BASE_URL": "${env:M3UNDLE_HDHR_ADVERTISED_BASE_URL}"
       },
       "serverReadyAction": {
         "action": "openExternally",
