@@ -226,7 +226,7 @@ static async Task SeedAdminAccountIfNeededAsync(IServiceProvider services)
             $"Failed to create admin account: {string.Join(", ", result.Errors.Select(e => e.Description))}");
 
     services.GetRequiredService<ILogger<Program>>()
-        .LogInformation("Admin account '{User}' created from environment variables.", adminUser);
+        .LogInformation("Admin account created from environment variables.");
 }
 
 static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptions> context, int statusCode)
