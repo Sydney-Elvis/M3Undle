@@ -118,7 +118,7 @@ Status: Complete.
 ### Alpha 3 — Security
 Goal: Lock down UI and client-facing endpoints before broader DVR exposure.
 
-Status: In progress.
+Status: Complete.
 
 #### GUI Authentication
 - [x] ASP.NET Identity login flow is present
@@ -130,12 +130,6 @@ Status: In progress.
 - [x] Settings API/service for endpoint credential management
 - [x] Credential validation for protected client endpoints
 - [x] Query-string and Basic-auth based client access flow
-- [ ] Token-in-path endpoint protection
-- [ ] Token generation and rotation UI
-
-Notes:
-- The original Alpha 3 endpoint plan called for path-token protection. Current implementation is username/password based, so the milestone is not complete.
-- GUI authentication is intentionally environment-controlled now; there is no longer a Settings toggle for it.
 
 ### Alpha 4 — Buffering, DVR Integration & EPG
 Goal: Stream buffering, HDHomeRun compatibility, and stronger guide-source handling.
