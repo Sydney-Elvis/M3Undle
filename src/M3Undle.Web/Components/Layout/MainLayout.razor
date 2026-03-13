@@ -7,8 +7,10 @@
 @inject ISnackbar Snackbar
 @using System.Reflection
 @using System.Threading.Channels
+@using Microsoft.AspNetCore.Components.Authorization
 @using M3Undle.Web.Contracts
-@inject HttpClient Http
+@inject M3Undle.Web.Application.ChannelStatsService StatsService
+@inject M3Undle.Web.Application.ISiteSettingsService SiteSettings
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
@@ -85,6 +87,9 @@
     private bool _pendingProviderSwitchNotification;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthStateTask { get; set; }
     private MudThemeProvider _themeProvider = default!;
 
     private static readonly string _version =
@@ -170,22 +175,34 @@
         }
     };
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
-        _ = LoadChannelStatsAsync();
+
+        if (await CanAccessApiAsync())
+            _ = LoadChannelStatsAsync();
+    }
+
+    private async Task<bool> CanAccessApiAsync()
+    {
+        if (!await SiteSettings.GetAuthenticationEnabledAsync())
+            return true;
+        if (AuthStateTask is null)
+            return false;
+        var state = await AuthStateTask;
+        return state.User.Identity?.IsAuthenticated == true;
     }
 
     private async Task LoadChannelStatsAsync()
     {
         try
         {
-            _channelStats = await Http.GetFromJsonAsync<ChannelMappingStatsDto>("/api/v1/channel-stats", _cts.Token);
+            _channelStats = await StatsService.GetStatsAsync(_cts.Token);
             await InvokeAsync(StateHasChanged);
         }
-        catch { }
+        catch (OperationCanceledException) { }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

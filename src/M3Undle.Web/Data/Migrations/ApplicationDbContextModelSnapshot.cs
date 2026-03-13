@@ -285,6 +285,104 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("channel_sources", (string)null);
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointAccessBinding", b =>
+                {
+                    b.Property<string>("EndpointAccessBindingId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("endpoint_access_binding_id");
+
+                    b.Property<string>("ActiveProfileId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("active_profile_id");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<string>("DefaultProfileId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("default_profile_id");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("EndpointCredentialId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("endpoint_credential_id");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.Property<string>("VirtualTunerId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("virtual_tuner_id");
+
+                    b.HasKey("EndpointAccessBindingId");
+
+                    b.HasIndex("ActiveProfileId")
+                        .HasDatabaseName("idx_endpoint_access_bindings_active_profile");
+
+                    b.HasIndex("DefaultProfileId");
+
+                    b.HasIndex("EndpointCredentialId")
+                        .IsUnique()
+                        .HasDatabaseName("idx_endpoint_access_bindings_credential");
+
+                    b.ToTable("endpoint_access_bindings", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointCredential", b =>
+                {
+                    b.Property<string>("EndpointCredentialId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("endpoint_credential_id");
+
+                    b.Property<string>("AuthType")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("auth_type");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("NormalizedUsername")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("normalized_username");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("password_hash");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.Property<string>("Username")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("username");
+
+                    b.HasKey("EndpointCredentialId");
+
+                    b.HasIndex("NormalizedUsername")
+                        .IsUnique();
+
+                    b.HasIndex("Username")
+                        .IsUnique();
+
+                    b.ToTable("endpoint_credentials", (string)null);
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgChannelMap", b =>
                 {
                     b.Property<string>("EpgMapId")
@@ -873,6 +971,12 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("authentication_enabled");
 
+                    b.Property<bool>("EndpointSecurityEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("endpoint_security_enabled");
+
                     b.HasKey("Id");
 
                     b.ToTable("site_settings", (string)null);
@@ -881,7 +985,8 @@ namespace M3Undle.Web.Data.Migrations
                         new
                         {
                             Id = 1,
-                            AuthenticationEnabled = false
+                            AuthenticationEnabled = false,
+                            EndpointSecurityEnabled = false
                         });
                 });
 
@@ -1201,6 +1306,31 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("ProviderChannel");
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointAccessBinding", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.Profile", "ActiveProfile")
+                        .WithMany("ActiveEndpointAccessBindings")
+                        .HasForeignKey("ActiveProfileId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("M3Undle.Web.Data.Entities.Profile", "DefaultProfile")
+                        .WithMany("DefaultEndpointAccessBindings")
+                        .HasForeignKey("DefaultProfileId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("M3Undle.Web.Data.Entities.EndpointCredential", "Credential")
+                        .WithMany("Bindings")
+                        .HasForeignKey("EndpointCredentialId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ActiveProfile");
+
+                    b.Navigation("Credential");
+
+                    b.Navigation("DefaultProfile");
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgChannelMap", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.CanonicalChannel", "Channel")
@@ -1466,6 +1596,11 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("TargetingMatchRules");
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointCredential", b =>
+                {
+                    b.Navigation("Bindings");
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.FetchRun", b =>
                 {
                     b.Navigation("ProviderChannels");
@@ -1473,9 +1608,13 @@ namespace M3Undle.Web.Data.Migrations
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Profile", b =>
                 {
+                    b.Navigation("ActiveEndpointAccessBindings");
+
                     b.Navigation("CanonicalChannels");
 
                     b.Navigation("ChannelMatchRules");
+
+                    b.Navigation("DefaultEndpointAccessBindings");
 
                     b.Navigation("EpgChannelMaps");
 

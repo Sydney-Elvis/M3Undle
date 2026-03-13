@@ -1,13 +1,11 @@
 @using M3Undle.Web.Application
 @inject ISiteSettingsService SiteSettings
-@implements IDisposable
 
 @if (_authEnabled)
 {
     <AuthorizeView>
         <Authorized>
             <MudMenu Label="@UserName" Color="Color.Inherit">
-                <MudMenuItem Href="Account/Manage">Manage Account</MudMenuItem>
                 <MudMenuItem>
                     <form action="Account/Logout" method="post" class="d-inline">
                         <AntiforgeryToken />
@@ -40,18 +38,5 @@
     {
         Context = await AuthenticationStateTask;
         _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        SiteSettings.OnSettingsChanged += HandleSettingsChanged;
-    }
-
-    private async void HandleSettingsChanged()
-    {
-        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await InvokeAsync(StateHasChanged);
-    }
-
-    public void Dispose()
-    {
-        SiteSettings.OnSettingsChanged -= HandleSettingsChanged;
     }
 }
-

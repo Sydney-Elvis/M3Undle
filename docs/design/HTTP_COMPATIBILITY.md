@@ -6,6 +6,11 @@
 - The playlist and stream URL contract is stable even if internal implementation changes.
 - Provider credentials are never exposed to clients. Stream relay is a security requirement.
 
+## Scope Note
+- This document defines the external HTTP contract for client consumption and compatibility.
+- Blazor Server UI internals may call application services directly instead of issuing loopback HTTP calls to `/api/v1/*`.
+- Internal implementation choices MUST NOT change compatibility endpoint behavior.
+
 ## Endpoint Naming
 
 The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed to `m3undle`:
@@ -13,6 +18,15 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 - `/stream/<streamKey>`
+- `/hdhr/discover.json`
+- `/hdhr/lineup.json`
+- `/hdhr/lineup.xml`
+- `/hdhr/lineup.m3u`
+- `/hdhr/lineup_status.json`
+- `/hdhr/device.xml`
+- `/hdhr/tune/<streamKey>`
+
+Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`, `/tune/<streamKey>`) remain available for compatibility.
 
 ## Endpoints
 
@@ -72,6 +86,7 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
 
 ### Stream
 - GET /stream/<streamKey>
+- GET /tune/<streamKey>
   - Resolves streamKey -> canonical channel in active snapshot
   - Serves playable stream for that channel
   - Must be resilient:
@@ -82,5 +97,32 @@ The service uses lineup-scoped endpoint paths. In Core, the lineup name is fixed
     An HTTP 302 redirect would deliver raw credentials to every client that follows the stream URL.
     Relay is a security contract, not an implementation detail. This MUST NOT be changed to a redirect.
 
+### HDHomeRun HTTP API
+- GET `/hdhr/discover.json`
+  - Returns stable device identity metadata (`DeviceID`, `DeviceAuth`, `FriendlyName`, `ModelNumber`, `BaseURL`, `LineupURL`, `TunerCount`).
+- GET `/hdhr/lineup.json`
+  - Returns live channels from the active snapshot with stable `GuideNumber`, `GuideName`, and M3Undle-owned tune URLs.
+- GET `/hdhr/lineup.xml`
+  - XML lineup equivalent of `/lineup.json`.
+- GET `/hdhr/lineup.m3u`
+  - M3U lineup equivalent of `/lineup.json`.
+- GET `/hdhr/lineup_status.json`
+  - Returns lineup readiness and channel count.
+- GET/POST `/hdhr/lineup.post`
+  - No-op compatibility endpoint expected by some HDHomeRun clients.
+- GET `/hdhr/device.xml`
+  - UPnP device description used by SSDP/manual client probes.
+
+### Discovery (optional)
+- SSDP / UPnP listener on UDP `1900`
+- SiliconDust discovery listener on UDP `65001`
+- Discovery uses the same device identity and base URL as manual HTTP endpoints.
+- Discovery is disabled by default; manual add via `/discover.json` remains available.
+
 ## Authentication
-Auth infrastructure (ASP.NET Core Identity) is present in the codebase. Whether to enable it is configured at first-run setup. Compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`) are designed to be accessible without auth to support LAN clients. The web UI can optionally require login.
+UI authentication and client endpoint authentication are independent:
+
+- UI auth (`M3UNDLE_AUTH_ENABLED`) controls access to the web UI and management APIs.
+- Endpoint auth is configured in the web UI (**Settings → Endpoint Security**) and stored in the database.
+- When endpoint auth is enabled, M3U/XMLTV/stream/HDHR endpoints require stateless username/password access (no redirects, no session-cookie requirements).
+- When endpoint auth is disabled, endpoint behavior remains open as before.

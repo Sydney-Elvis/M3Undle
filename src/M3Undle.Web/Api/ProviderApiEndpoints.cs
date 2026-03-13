@@ -1,4 +1,5 @@
 using M3Undle.Web.Application;
+using M3Undle.Web.Security;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -15,10 +16,12 @@ public static class ProviderApiEndpoints
     public static IEndpointRouteBuilder MapProviderApiEndpoints(this IEndpointRouteBuilder app)
     {
         var profiles = app.MapGroup("/api/v1/profiles");
+        profiles.RequireAuthorization(UiAccessPolicy.Name);
         profiles.MapGet("/", ListProfilesAsync);
         profiles.MapPost("/", CreateProfileAsync);
 
         var providers = app.MapGroup("/api/v1/providers");
+        providers.RequireAuthorization(UiAccessPolicy.Name);
         providers.MapGet("/", ListProvidersAsync);
         providers.MapPost("/", CreateProviderAsync);
         providers.MapGet("/{providerId}", GetProviderAsync);
@@ -38,9 +41,11 @@ public static class ProviderApiEndpoints
             TypedResults.Ok(new { available = enc.IsAvailable }));
 
         var fs = app.MapGroup("/api/v1/fs");
+        fs.RequireAuthorization(UiAccessPolicy.Name);
         fs.MapGet("/browse", BrowseFilesystemAsync);
 
         var snapshots = app.MapGroup("/api/v1/snapshots");
+        snapshots.RequireAuthorization(UiAccessPolicy.Name);
         snapshots.MapPost("/refresh", TriggerRefreshAsync);
         snapshots.MapPost("/build", TriggerBuildOnlyAsync);
         snapshots.MapPost("/cancel", CancelRefreshAsync);

@@ -1,5 +1,6 @@
 using M3Undle.Core.M3u;
 using M3Undle.Web.Application;
+using M3Undle.Web.Security;
 using M3Undle.Web.Contracts;
 using M3Undle.Web.Data;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -11,10 +12,10 @@ public static class ChannelListApiEndpoints
 {
     public static IEndpointRouteBuilder MapChannelListApiEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/v1/channels", GetChannelsAsync);
-        app.MapGet("/api/v1/channels/groups", GetMappedGroupsAsync);
-        app.MapPatch("/api/v1/channels/{providerChannelId}", UpdateOutputChannelAsync);
-        app.MapDelete("/api/v1/channels/{providerChannelId}", RemoveOutputChannelAsync);
+        app.MapGet("/api/v1/channels", GetChannelsAsync).RequireAuthorization(UiAccessPolicy.Name);
+        app.MapGet("/api/v1/channels/groups", GetMappedGroupsAsync).RequireAuthorization(UiAccessPolicy.Name);
+        app.MapPatch("/api/v1/channels/{providerChannelId}", UpdateOutputChannelAsync).RequireAuthorization(UiAccessPolicy.Name);
+        app.MapDelete("/api/v1/channels/{providerChannelId}", RemoveOutputChannelAsync).RequireAuthorization(UiAccessPolicy.Name);
         return app;
     }
 

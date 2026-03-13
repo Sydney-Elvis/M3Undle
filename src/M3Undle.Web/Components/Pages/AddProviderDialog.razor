@@ -1,6 +1,5 @@
 @using M3Undle.Web.Contracts.Providers
-@using System.Text.Json
-@inject HttpClient Http
+@inject M3Undle.Web.Application.ProviderPageService ProviderPageService
 
 <MudDialog Style="min-width:680px">
     <DialogContent>
@@ -346,30 +345,19 @@
     {
         _localProfiles = [.. Profiles];
 
-        var encTask = Http.GetAsync("/api/v1/providers/encryption-status");
-        var browseTask = Http.GetAsync("/api/v1/fs/browse");
-        var configTask = Http.GetFromJsonAsync<List<ConfigYamlProviderDto>>("/api/v1/providers/config/available");
-        var importedTask = Http.GetFromJsonAsync<List<ProviderDto>>("/api/v1/providers");
+        _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync();
 
-        await Task.WhenAll(encTask, browseTask);
-
-        try
-        {
-            var encBody = await (await encTask).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-            _encryptionAvailable = encBody.GetProperty("available").GetBoolean();
-        }
-        catch { _encryptionAvailable = false; }
-
-        var browseResponse = await browseTask;
-        _fileBrowseRootMissing = !browseResponse.IsSuccessStatusCode;
+        var browse = await ProviderPageService.BrowseFilesystemAsync(null);
+        _fileBrowseRootMissing = browse.Data is null;
         if (_fileBrowseRootMissing)
-            _fileBrowseError = await browseResponse.Content.ReadAsStringAsync();
+            _fileBrowseError = browse.Error;
 
         try
         {
-            await Task.WhenAll(configTask, importedTask);
-            _configProviders.AddRange(configTask.Result ?? []);
-            _importedProviders.AddRange(importedTask.Result ?? []);
+            var config = await ProviderPageService.GetAvailableConfigProvidersAsync(CancellationToken.None);
+            var pageData = await ProviderPageService.GetPageDataAsync(CancellationToken.None);
+            _configProviders.AddRange(config);
+            _importedProviders.AddRange(pageData.Providers);
             _showImportTab = _configProviders.Count > 0;
         }
         catch { }
@@ -446,14 +434,16 @@
         StateHasChanged();
         try
         {
-            var url = string.IsNullOrWhiteSpace(path)
-                ? "/api/v1/fs/browse"
-                : $"/api/v1/fs/browse?path={Uri.EscapeDataString(path)}";
-            var r = await Http.GetAsync(url);
-            if (r.IsSuccessStatusCode)
-                _browseData = await r.Content.ReadFromJsonAsync<FileBrowseDto>();
+            var browse = await ProviderPageService.BrowseFilesystemAsync(path);
+            if (browse.Data is not null)
+            {
+                _browseData = browse.Data;
+            }
             else
+            {
                 _fileBrowseRootMissing = true;
+                _fileBrowseError = browse.Error;
+            }
         }
         catch { _fileBrowseRootMissing = true; }
         finally
@@ -482,12 +472,12 @@
 
         try
         {
-            HttpResponseMessage response;
+            (ProviderDto? Provider, string? Error) result;
 
             if (_activeTab == 0)
             {
                 if (_urlForm is not null) { await _urlForm.Validate(); if (!_urlForm.IsValid) return; }
-                response = await Http.PostAsJsonAsync("/api/v1/providers", new CreateProviderRequest
+                result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
                 {
                     Name = _urlModel.Name.Trim(),
                     PlaylistUrl = _urlModel.PlaylistUrl.Trim(),
@@ -499,7 +489,7 @@
                     IncludeSeries = _urlModel.IncludeSeries,
                     TimeoutSeconds = _urlModel.TimeoutSeconds,
                     AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
-                });
+                }, CancellationToken.None);
             }
             else if (_activeTab == 1)
             {
@@ -509,7 +499,7 @@
                     _error = "Please select a file using the Browse button.";
                     return;
                 }
-                response = await Http.PostAsJsonAsync("/api/v1/providers", new CreateProviderRequest
+                result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
                 {
                     Name = _fileModel.Name.Trim(),
                     PlaylistUrl = _fileModel.PlaylistUrl,
@@ -519,12 +509,12 @@
                     IncludeSeries = _fileModel.IncludeSeries,
                     TimeoutSeconds = _fileModel.TimeoutSeconds,
                     AssociateToProfileIds = ProfileIdList(_fileModel.ProfileId),
-                });
+                }, CancellationToken.None);
             }
             else
             {
                 if (_xtreamForm is not null) { await _xtreamForm.Validate(); if (!_xtreamForm.IsValid) return; }
-                response = await Http.PostAsJsonAsync("/api/v1/providers", new CreateProviderRequest
+                result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
                 {
                     Name = _xtreamModel.Name.Trim(),
                     XtreamBaseUrl = _xtreamModel.XtreamBaseUrl.Trim(),
@@ -536,12 +526,12 @@
                     IncludeSeries = _xtreamModel.IncludeSeries,
                     TimeoutSeconds = _xtreamModel.TimeoutSeconds,
                     AssociateToProfileIds = ProfileIdList(_xtreamModel.ProfileId),
-                });
+                }, CancellationToken.None);
             }
 
-            if (!response.IsSuccessStatusCode)
+            if (!string.IsNullOrWhiteSpace(result.Error))
             {
-                _error = await ReadErrorAsync(response);
+                _error = result.Error;
                 return;
             }
 
@@ -586,9 +576,9 @@
         StateHasChanged();
         try
         {
-            var r = await Http.PostAsJsonAsync("/api/v1/providers/config/probe", new ProbeConfigProviderRequest { Name = name });
-            if (!r.IsSuccessStatusCode) { state.Ok = false; state.Error = await ReadErrorAsync(r); return; }
-            var result = await r.Content.ReadFromJsonAsync<ProbeConfigProviderResultDto>();
+            var probe = await ProviderPageService.ProbeConfigProviderAsync(name, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(probe.Error)) { state.Ok = false; state.Error = probe.Error; return; }
+            var result = probe.Result;
             state.Ok = result?.Ok ?? false; state.ChannelCount = result?.ChannelCount; state.Error = result?.Error;
         }
         catch (Exception ex) { state.Ok = false; state.Error = ex.Message; }
@@ -603,16 +593,16 @@
         try
         {
             var opts = GetImportOptions(name);
-            var r = await Http.PostAsJsonAsync("/api/v1/providers/config/import",
-                new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries });
-            if (!r.IsSuccessStatusCode) { _importError = await ReadErrorAsync(r); return; }
-            var dto = await r.Content.ReadFromJsonAsync<ProviderDto>();
+            var import = await ProviderPageService.ImportConfigProviderAsync(
+                new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries },
+                CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(import.Error)) { _importError = import.Error; return; }
+            var dto = import.Provider;
             if (dto is not null)
             {
                 _importedProviders.Add(dto);
                 if (opts.SetAsActive)
-                    await Http.PatchAsJsonAsync($"/api/v1/providers/{dto.ProviderId}/active",
-                        new SetProviderActiveRequest { IsActive = true });
+                    await ProviderPageService.SetProviderActiveAsync(dto.ProviderId, true, CancellationToken.None);
             }
             await OnSaved.InvokeAsync();
             MudDialog.Close(DialogResult.Ok(true));
@@ -628,35 +618,6 @@
     private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
     private static List<string>? ProfileIdList(string id) =>
         string.IsNullOrWhiteSpace(id) ? null : [id];
-
-    private static async Task<string> ReadErrorAsync(HttpResponseMessage response)
-    {
-        var body = await response.Content.ReadAsStringAsync();
-        if (string.IsNullOrWhiteSpace(body))
-            return $"Request failed: {(int)response.StatusCode} {response.ReasonPhrase}";
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Object)
-                {
-                    var msgs = new List<string>();
-                    foreach (var err in errors.EnumerateObject())
-                        foreach (var msg in err.Value.EnumerateArray())
-                        { var t = msg.GetString(); if (!string.IsNullOrWhiteSpace(t)) msgs.Add(t); }
-                    if (msgs.Count > 0) return string.Join("; ", msgs);
-                }
-                if (doc.RootElement.TryGetProperty("title", out var title))
-                {
-                    var detail = doc.RootElement.TryGetProperty("detail", out var dp) ? dp.GetString() : null;
-                    return string.IsNullOrWhiteSpace(detail) ? title.GetString() ?? "Request failed" : $"{title.GetString()}: {detail}";
-                }
-            }
-        }
-        catch (JsonException) { }
-        return body;
-    }
 
     // ------------------------------------------------------------------
     // Inner types

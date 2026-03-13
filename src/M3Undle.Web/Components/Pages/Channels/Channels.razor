@@ -1,6 +1,7 @@
 @page "/channels"
+@using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
-@inject HttpClient Http
+@inject ChannelListPageService ChannelListPageService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
@@ -264,8 +265,7 @@ else
     {
         try
         {
-            var groups = await Http.GetFromJsonAsync<List<string>>("/api/v1/channels/groups");
-            _availableGroups = groups ?? [];
+            _availableGroups = await ChannelListPageService.GetMappedGroupsAsync(CancellationToken.None);
         }
         catch
         {
@@ -299,34 +299,29 @@ else
 
     private async Task<GridData<ChannelListItemDto>> LoadChannelsAsync(GridState<ChannelListItemDto> state)
     {
-        var page = state.Page + 1; // GridState is 0-based
-        var url = $"/api/v1/channels?page={page}&pageSize={state.PageSize}" +
-                  $"&search={Uri.EscapeDataString(_search)}" +
-                  $"&group={Uri.EscapeDataString(_groupFilter)}";
+        var page = state.Page + 1;
 
         try
         {
-            var response = await Http.GetAsync(url);
+            var result = await ChannelListPageService.GetChannelsAsync(
+                page,
+                state.PageSize,
+                _search,
+                _groupFilter,
+                CancellationToken.None);
 
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            if (result is null)
             {
                 await InvokeAsync(() => { _noSnapshot = true; StateHasChanged(); });
                 return new GridData<ChannelListItemDto> { Items = [], TotalItems = 0 };
             }
-
-            response.EnsureSuccessStatusCode();
-            var result = await response.Content.ReadFromJsonAsync<ChannelListResponse>();
-
-            if (result is not null)
+            await InvokeAsync(() =>
             {
-                await InvokeAsync(() =>
-                {
-                    _noSnapshot = false;
-                    _total = result.Total;
-                    StateHasChanged();
-                });
-                return new GridData<ChannelListItemDto> { Items = result.Items, TotalItems = result.Total };
-            }
+                _noSnapshot = false;
+                _total = result.Total;
+                StateHasChanged();
+            });
+            return new GridData<ChannelListItemDto> { Items = result.Items, TotalItems = result.Total };
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -370,18 +365,19 @@ else
                 ClearOutputGroupName = string.IsNullOrWhiteSpace(_editGroupName),
             };
 
-            var response = await Http.PatchAsJsonAsync(
-                $"/api/v1/channels/{Uri.EscapeDataString(_editChannel.ProviderChannelId)}",
-                request);
+            var updated = await ChannelListPageService.UpdateOutputChannelAsync(
+                _editChannel.ProviderChannelId,
+                request,
+                CancellationToken.None);
 
-            if (response.IsSuccessStatusCode)
+            if (updated == true)
             {
                 Snackbar.Add("Channel updated. Rebuild output to apply changes.", Severity.Success);
                 _pendingRebuild = true;
                 CloseEditDialog();
                 await ReloadGridAsync();
             }
-            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            else if (updated == false)
             {
                 Snackbar.Add("Channel not found — it may have been removed already.", Severity.Warning);
             }
@@ -416,16 +412,15 @@ else
 
         try
         {
-            var response = await Http.DeleteAsync(
-                $"/api/v1/channels/{Uri.EscapeDataString(channel.ProviderChannelId)}");
+            var removed = await ChannelListPageService.RemoveOutputChannelAsync(channel.ProviderChannelId, CancellationToken.None);
 
-            if (response.IsSuccessStatusCode)
+            if (removed == true)
             {
                 Snackbar.Add($"\"{channel.DisplayName}\" removed. Rebuild output to apply.", Severity.Success);
                 _pendingRebuild = true;
                 await ReloadGridAsync();
             }
-            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            else if (removed == false)
             {
                 Snackbar.Add("Channel not found — it may have been removed already.", Severity.Warning);
                 await ReloadGridAsync();

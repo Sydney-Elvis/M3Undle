@@ -15,15 +15,15 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Database-backed provider configuration
 > - Provider switching with snapshot lifecycle
 > - Group preview (read-only catalog browsing)
-> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`
+> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API
 > - Stream relay proxy (relay-only, no buffering)
 > - Web UI for provider management (Pre-Alpha)
+> - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`)
 > 
 > **Forthcoming**
 > - Group-based inclusion rules
 > - Channel numbering controls
 > - Advanced channel filtering workflows
-> - HDHomeRun emulation
 > - Additional Service/Web UI hardening toward Alpha
 
 ---
@@ -106,12 +106,43 @@ Current Pre-Alpha work includes:
 - Provider switching with snapshot lifecycle
 - Group preview (read-only catalog browse)
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
+- HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
 - Stream relay proxy (relay-only, no buffering)
 - Web UI for provider management
 
-Future releases will add: group-based inclusion rules, channel numbering, filtering, HDHomeRun emulation, and more.
+Future releases will add: group-based inclusion rules, channel numbering, filtering, and more.
 
 See: `docs/SERVICE.md`
+
+---
+
+## UI Authentication
+
+The web UI supports a simple local authentication model:
+
+- One access level only: authenticated or not authenticated
+- No roles or user tiers
+- Endpoint authentication is configured separately in the UI
+
+### Setup
+
+Authentication is controlled entirely by environment variables — no UI toggle required.
+
+| Variable | Default | Description |
+|---|---|---|
+| `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs |
+| `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email (used on first startup only) |
+| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no account exists yet |
+
+On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables. On subsequent startups the account already exists — changing the env vars does not affect the stored password (use **Settings → Change Password** instead).
+
+### Behavior
+
+- If `M3UNDLE_AUTH_ENABLED=false` (default), the UI and management APIs are open on your network.
+- If `M3UNDLE_AUTH_ENABLED=true`, the UI and `/api/v1/*` management APIs require login.
+- Compatibility endpoints can be secured independently from UI auth using **Settings → Endpoint Security**.
+- Endpoint credentials are stored hashed in the database and validated with stateless username/password auth.
+- `/status` and `/health` remain unauthenticated.
 
 ---
 
@@ -141,6 +172,20 @@ M3Undle publishes endpoints compatible with common clients:
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 - `/stream/<streamKey>`
+- `/hdhr/discover.json`
+- `/hdhr/lineup.json`
+- `/hdhr/lineup.xml`
+- `/hdhr/lineup.m3u`
+- `/hdhr/lineup_status.json`
+- `/hdhr/device.xml`
+- `/hdhr/tune/<streamKey>`
+
+Legacy HDHomeRun root aliases (`/discover.json`, `/lineup.json`, etc.) are still available for compatibility.
+
+Automatic discovery support:
+- SSDP/UPnP (`UDP 1900`)
+- SiliconDust discovery (`UDP 65001`)
+- Discovery is disabled by default; manual add works without discovery
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 

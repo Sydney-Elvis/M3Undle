@@ -5,71 +5,123 @@
 @using Microsoft.AspNetCore.Identity
 @using M3Undle.Web.Data
 
-@inject UserManager<ApplicationUser> UserManager
 @inject SignInManager<ApplicationUser> SignInManager
 @inject ILogger<Login> Logger
 @inject NavigationManager NavigationManager
 @inject IdentityRedirectManager RedirectManager
 
-<PageTitle>Log in</PageTitle>
+<PageTitle>Log in — M3Undle</PageTitle>
 
-<h1>Log in</h1>
-<div class="row">
-    <div class="col-lg-6">
-        <section>
+<div class="d-flex justify-center" style="padding-top: 3rem;">
+    <MudPaper Class="login-card pa-8" Elevation="2" Style="width: 100%; max-width: 400px;">
+        <MudStack Spacing="4">
+
+            <MudStack Spacing="1">
+                <MudText Typo="Typo.h5">Log in</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Use your local account to continue.</MudText>
+            </MudStack>
+
             <StatusMessage Message="@errorMessage" />
+
             <EditForm EditContext="editContext" method="post" OnSubmit="LoginUser" FormName="login">
                 <DataAnnotationsValidator />
-                <h2>Use a local account to log in.</h2>
-                <hr />
-                <ValidationSummary class="text-danger" role="alert" />
-                <div class="form-floating mb-3">
-                    <InputText @bind-Value="Input.Email" id="Input.Email" class="form-control" autocomplete="username webauthn" aria-required="true" placeholder="name@example.com" />
-                    <label for="Input.Email" class="form-label">Email</label>
-                    <ValidationMessage For="() => Input.Email" class="text-danger" />
-                </div>
-                <div class="form-floating mb-3">
-                    <InputText type="password" @bind-Value="Input.Password" id="Input.Password" class="form-control" autocomplete="current-password" aria-required="true" placeholder="password" />
-                    <label for="Input.Password" class="form-label">Password</label>
-                    <ValidationMessage For="() => Input.Password" class="text-danger" />
-                </div>
-                <div class="checkbox mb-3">
-                    <label class="form-label">
-                        <InputCheckbox @bind-Value="Input.RememberMe" class="darker-border-checkbox form-check-input" />
+
+                <MudStack Spacing="3">
+                    <div>
+                        <label class="login-label" for="Input.Email">Username</label>
+                        <InputText @bind-Value="Input.Email" id="Input.Email" class="login-input" autocomplete="username webauthn" />
+                        <ValidationMessage For="() => Input.Email" class="login-validation" />
+                    </div>
+
+                    <div>
+                        <label class="login-label" for="Input.Password">Password</label>
+                        <InputText type="password" @bind-Value="Input.Password" id="Input.Password" class="login-input" autocomplete="current-password" />
+                        <ValidationMessage For="() => Input.Password" class="login-validation" />
+                    </div>
+
+                    <label class="d-flex align-center" style="gap: 8px; cursor: pointer; font-size: 0.875rem; color: var(--mud-palette-text-primary);">
+                        <InputCheckbox @bind-Value="Input.RememberMe" style="width:16px; height:16px; accent-color: var(--mud-palette-primary);" />
                         Remember me
                     </label>
-                </div>
-                <div>
-                    <button type="submit" class="w-100 btn btn-lg btn-primary">Log in</button>
-                </div>
-                <hr />
-                <div class="d-flex flex-column">
-                    <span class="text-secondary mx-auto mt-2">OR</span>
-                    <PasskeySubmit Operation="PasskeyOperation.Request" Name="Input.Passkey" EmailName="Input.Email" class="btn btn-link mx-auto">Log in with a passkey</PasskeySubmit>
-                </div>
-                <hr />
-                <div>
-                    <p>
-                        <a href="Account/ForgotPassword">Forgot your password?</a>
-                    </p>
-                    <p>
-                        <a href="@(NavigationManager.GetUriWithQueryParameters("Account/Register", new Dictionary<string, object?> { ["ReturnUrl"] = ReturnUrl }))">Register as a new user</a>
-                    </p>
-                    <p>
-                        <a href="Account/ResendEmailConfirmation">Resend email confirmation</a>
-                    </p>
-                </div>
+
+                    <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" Size="Size.Large">
+                        Log in
+                    </MudButton>
+                </MudStack>
             </EditForm>
-        </section>
-    </div>
-    <div class="col-lg-4 col-lg-offset-2">
-        <section>
-            <h3>Use another service to log in.</h3>
-            <hr />
-            <ExternalLoginPicker />
-        </section>
-    </div>
+
+        </MudStack>
+    </MudPaper>
 </div>
+
+<style>
+    .login-label {
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--mud-palette-text-secondary);
+        margin-bottom: 6px;
+        font-family: inherit;
+    }
+    .login-input {
+        display: block;
+        width: 100%;
+        padding: 10px 12px;
+        font-size: 1rem;
+        font-family: inherit;
+        border: 1px solid var(--mud-palette-lines-input, rgba(0,0,0,.23));
+        border-radius: var(--mud-default-borderradius, 4px);
+        background: transparent;
+        color: var(--mud-palette-text-primary);
+        outline: none;
+        box-sizing: border-box;
+        transition: border-color 0.15s;
+    }
+    .login-input:focus {
+        border-color: var(--mud-palette-primary);
+        border-width: 2px;
+        padding: 9px 11px;
+    }
+    .login-validation {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--mud-palette-error);
+        margin-top: 4px;
+        font-family: inherit;
+    }
+
+    /* System dark mode — applies when the user hasn't overridden the theme in-app.
+       MudThemeProvider runs via JS (interactive) so it can't set dark CSS vars on this
+       SSR-only page; these media query overrides fill the gap using the app's dark palette. */
+    @@media (prefers-color-scheme: dark) {
+        body, .mud-layout-main {
+            background-color: #0F1720 !important;
+        }
+        .login-card {
+            background-color: #111B26 !important;
+        }
+        .login-card .mud-typography {
+            color: #E6EDF3;
+        }
+        .login-card .mud-typography.mud-secondary-text {
+            color: #9FB2C4;
+        }
+        .login-label {
+            color: #9FB2C4;
+        }
+        .login-input {
+            border-color: rgba(255, 255, 255, 0.15);
+            color: #E6EDF3;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .login-input:focus {
+            border-color: #1FB6A6;
+        }
+        .login-validation {
+            color: #EF4444;
+        }
+    }
+</style>
 
 @code {
     private string? errorMessage;
@@ -87,42 +139,19 @@
     protected override async Task OnInitializedAsync()
     {
         Input ??= new();
-
         editContext = new EditContext(Input);
 
         if (HttpMethods.IsGet(HttpContext.Request.Method))
         {
-            // Clear the existing external cookie to ensure a clean login process
             await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
         }
     }
 
     public async Task LoginUser()
     {
-        if (!string.IsNullOrEmpty(Input.Passkey?.Error))
-        {
-            errorMessage = $"Error: {Input.Passkey.Error}";
-            return;
-        }
+        if (!editContext.Validate()) return;
 
-        SignInResult result;
-        if (!string.IsNullOrEmpty(Input.Passkey?.CredentialJson))
-        {
-            // When performing passkey sign-in, don't perform form validation.
-            result = await SignInManager.PasskeySignInAsync(Input.Passkey.CredentialJson);
-        }
-        else
-        {
-            // If doing a password sign-in, validate the form.
-            if (!editContext.Validate())
-            {
-                return;
-            }
-
-            // This doesn't count login failures towards account lockout
-            // To enable password failures to trigger account lockout, set lockoutOnFailure: true
-            result = await SignInManager.PasswordSignInAsync(Input.Email, Input.Password, Input.RememberMe, lockoutOnFailure: false);
-        }
+        var result = await SignInManager.PasswordSignInAsync(Input.Email, Input.Password, Input.RememberMe, lockoutOnFailure: false);
 
         if (result.Succeeded)
         {
@@ -142,14 +171,13 @@
         }
         else
         {
-            errorMessage = "Error: Invalid login attempt.";
+            errorMessage = "Error: Invalid username or password.";
         }
     }
 
     private sealed class InputModel
     {
         [Required]
-        [EmailAddress]
         public string Email { get; set; } = "";
 
         [Required]
@@ -158,8 +186,5 @@
 
         [Display(Name = "Remember me?")]
         public bool RememberMe { get; set; }
-
-        public PasskeyInputModel? Passkey { get; set; }
     }
 }
-

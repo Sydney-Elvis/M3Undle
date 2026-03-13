@@ -1,7 +1,9 @@
 @page "/"
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
+@using System.Net.Http.Json
 @inject HttpClient Http
+@inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @inject AppEventBus EventBus
@@ -289,6 +291,12 @@
         _m3uUrl = $"{baseUri}/m3u/m3undle.m3u";
         _xmltvUrl = $"{baseUri}/xmltv/m3undle.xml";
 
+        // Skip I/O during SSR prerender — no circuit, no event bus, no API calls.
+        // OnInitializedAsync runs twice (SSR then interactive); only do real work
+        // in the interactive phase so we don't leak subscriptions or make loopback
+        // HTTP calls that have no auth cookie and no useful prerendered output.
+        if (!RendererInfo.IsInteractive) return;
+
         _isRefreshing = RefreshTrigger.IsRefreshing;
         if (_isRefreshing)
         {
@@ -366,10 +374,9 @@
     {
         try
         {
-            _channelStats = await Http.GetFromJsonAsync<ChannelMappingStatsDto>("/api/v1/channel-stats", _cts.Token);
+            _channelStats = await StatsService.GetStatsAsync(_cts.Token);
         }
         catch (OperationCanceledException) { return; }
-        catch { }
 
         StateHasChanged();
     }
@@ -432,8 +439,9 @@
         if (_isCancelling) return;
         _isCancelling = true;
         StateHasChanged();
-        try { await Http.PostAsync("/api/v1/snapshots/cancel", null, _cts.Token); }
+        try { RefreshTrigger.CancelRefresh(); }
         catch { }
+        await Task.CompletedTask;
     }
 
     private async Task CopyAsync(string text)

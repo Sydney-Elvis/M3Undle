@@ -3,7 +3,7 @@
 @using M3Undle.Web.Contracts
 @using System
 @using System.Text.RegularExpressions
-@inject HttpClient Http
+@inject ChannelMappingPageService ChannelMappingPageService
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject ISnackbar Snackbar
@@ -1124,7 +1124,7 @@ else
 
         try
         {
-            var profile = await Http.GetFromJsonAsync<ActiveProfileDto>("/api/v1/profiles/active", _cts.Token);
+            var profile = await ChannelMappingPageService.GetActiveProfileAsync(_cts.Token);
             if (profile is null)
             {
                 _profileId = null;
@@ -1150,15 +1150,10 @@ else
 
             _profileId = newProfileId;
 
-            _allFilters = await Http.GetFromJsonAsync<List<GroupFilterDto>>(
-                $"/api/v1/profiles/{_profileId}/group-filters", _cts.Token) ?? [];
+            _allFilters = await ChannelMappingPageService.ListGroupFiltersAsync(_profileId, _cts.Token);
 
             _sessionChangedFilterIds.Clear();
             RebuildDisplayOrder();
-        }
-        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            _profileId = null;
         }
         catch (OperationCanceledException)
         {
@@ -1185,13 +1180,10 @@ else
 
         try
         {
-            var response = await Http.PostAsync("/api/v1/snapshots/build", null);
-            if (!response.IsSuccessStatusCode)
+            var triggered = ChannelMappingPageService.TriggerBuildOnly();
+            if (!triggered)
             {
-                var msg = response.StatusCode == System.Net.HttpStatusCode.Conflict
-                    ? "A build is already in progress."
-                    : $"Failed to trigger build: {response.ReasonPhrase}";
-                Snackbar.Add(msg, Severity.Warning);
+                Snackbar.Add("A build is already in progress.", Severity.Warning);
                 _isRefreshing = false;
             }
             else
@@ -1227,12 +1219,10 @@ else
         try
         {
             var req = new UpdateGroupFilterRequest { Decision = decision };
-            var response = await Http.PatchAsJsonAsync(
-                $"/api/v1/profiles/{_profileId}/group-filters/{filterId}", req);
-
-            if (!response.IsSuccessStatusCode)
+            var updated = await ChannelMappingPageService.UpdateGroupFilterAsync(_profileId, filterId, req, _cts.Token);
+            if (!updated)
             {
-                Snackbar.Add($"Failed to update group: {response.ReasonPhrase}", Severity.Error);
+                Snackbar.Add("Failed to update group.", Severity.Error);
                 return;
             }
 
@@ -1271,12 +1261,15 @@ else
         try
         {
             var req = new BulkGroupDecisionRequest { Decision = decision, ProviderGroupIds = groupIds };
-            var response = await Http.PostAsJsonAsync(
-                $"/api/v1/profiles/{_profileId}/group-filters/bulk-decide", req);
+            var updated = await ChannelMappingPageService.BulkDecideAsync(
+                _profileId,
+                req.Decision,
+                req.ProviderGroupIds,
+                _cts.Token);
 
-            if (!response.IsSuccessStatusCode)
+            if (updated <= 0)
             {
-                Snackbar.Add($"Bulk update failed: {response.ReasonPhrase}", Severity.Error);
+                Snackbar.Add("Bulk update failed.", Severity.Error);
                 return;
             }
 
@@ -1398,16 +1391,16 @@ else
 
         try
         {
-            var response = await Http.PostAsync($"/api/v1/profiles/{_profileId}/group-filters/dismiss-new", null);
-            if (!response.IsSuccessStatusCode)
+            await ChannelMappingPageService.DismissNewGroupsAsync(_profileId, _cts.Token);
+            if (_cts.IsCancellationRequested)
             {
-                Snackbar.Add($"Dismiss failed: {response.ReasonPhrase}", Severity.Error);
                 return;
             }
 
             foreach (var f in _allFilters)
                 f.IsNew = false;
 
+            EventBus.Publish(AppEventKind.GroupFiltersChanged);
             StateHasChanged();
         }
         catch (Exception ex)
@@ -1523,11 +1516,14 @@ else
         if (_profileId is null) return;
         try
         {
-            var response = await Http.PatchAsJsonAsync(
-                $"/api/v1/profiles/{_profileId}/group-filters/{filter.ProfileGroupFilterId}", req);
-            if (!response.IsSuccessStatusCode)
+            var updated = await ChannelMappingPageService.UpdateGroupFilterAsync(
+                _profileId,
+                filter.ProfileGroupFilterId,
+                req,
+                _cts.Token);
+            if (!updated)
             {
-                Snackbar.Add($"Save failed: {response.ReasonPhrase}", Severity.Error);
+                Snackbar.Add("Save failed.", Severity.Error);
                 return;
             }
             mutate(filter);
@@ -1728,11 +1724,7 @@ else
 
         try
         {
-            var results = await Http.GetFromJsonAsync<List<ChannelSearchGroupResult>>(
-                $"/api/v1/profiles/{_profileId}/channels/search?q={Uri.EscapeDataString(term)}",
-                _cts.Token);
-
-            results ??= [];
+            var results = await ChannelMappingPageService.SearchChannelsAsync(_profileId, term, _cts.Token);
             _globalChannelSearchResults = results.ToDictionary(r => r.FilterId, r => r.Channels);
 
             var channelLoadTasks = new List<Task>();
@@ -1770,10 +1762,6 @@ else
 
             if (channelLoadTasks.Count > 0)
                 await Task.WhenAll(channelLoadTasks);
-        }
-        catch (HttpRequestException ex)
-        {
-            Snackbar.Add($"Channel search failed: {ex.Message}", Severity.Error);
         }
         catch (OperationCanceledException) { }
         finally
@@ -1880,9 +1868,10 @@ else
 
         try
         {
-            var sel = await Http.GetFromJsonAsync<ChannelSelectionsDto>(
-                $"/api/v1/profiles/{_profileId}/group-filters/{filterId}/channel-selections",
-                _cts.Token);
+            if (_profileId is null)
+                return;
+
+            var sel = await ChannelMappingPageService.GetChannelSelectionsAsync(_profileId, filterId, _cts.Token);
 
             if (sel is not null)
             {
@@ -2038,12 +2027,14 @@ else
 
         try
         {
-            var response = await Http.PutAsJsonAsync(
-                $"/api/v1/profiles/{_profileId}/group-filters/{filterId}/channel-selections",
-                new UpdateChannelSelectionsRequest { ChannelMode = "select", Channels = items });
+            var updated = await ChannelMappingPageService.UpdateChannelSelectionsAsync(
+                _profileId,
+                filterId,
+                new UpdateChannelSelectionsRequest { ChannelMode = "select", Channels = items },
+                _cts.Token);
 
-            if (!response.IsSuccessStatusCode)
-                Snackbar.Add($"Channel save failed: {response.ReasonPhrase}", Severity.Error);
+            if (!updated)
+                Snackbar.Add("Channel save failed.", Severity.Error);
         }
         catch (Exception ex)
         {

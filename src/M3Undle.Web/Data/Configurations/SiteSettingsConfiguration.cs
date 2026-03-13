@@ -14,8 +14,16 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.AuthenticationEnabled)
             .HasColumnName("authentication_enabled")
             .HasDefaultValue(true);
+        builder.Property(s => s.EndpointSecurityEnabled)
+            .HasColumnName("endpoint_security_enabled")
+            .HasDefaultValue(false);
 
-        builder.HasData(new SiteSettings { Id = 1, AuthenticationEnabled = false });
+        builder.HasData(new SiteSettings
+        {
+            Id = 1,
+            AuthenticationEnabled = false,
+            EndpointSecurityEnabled = false,
+        });
     }
 }
 
