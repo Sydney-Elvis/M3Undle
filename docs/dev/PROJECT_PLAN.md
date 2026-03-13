@@ -131,16 +131,21 @@ Status: Complete.
 - [x] Credential validation for protected client endpoints
 - [x] Query-string and Basic-auth based client access flow
 
-### Alpha 4 — Buffering, DVR Integration & EPG
-Goal: Stream buffering, HDHomeRun compatibility, and stronger guide-source handling.
+### Alpha 4 — Stream Proxy, DVR Integration & EPG
+Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
 Status: Planned.
 
-#### Buffering
-- [ ] FFmpeg buffering support
-- [ ] VLC/CVLC buffering support
-- [ ] Buffer size setting
-- [ ] Client connection timeout setting
+#### Stream Proxy (Shared Live Streaming)
+- [ ] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
+- [ ] One upstream provider connection per active live channel session, fanned out to many subscribers
+- [ ] In-memory ring buffer for late joiners (byte-bounded, default 4 MiB per session, hard cap 32 MiB)
+- [ ] Upstream stall detection and minimal reconnect (default 30s stall timeout, 75s outage window)
+- [ ] Basic slow-subscriber eviction (queue-full disconnect)
+- [ ] Source strike cooldown after retry exhaustion to prevent retry storms (default 5m, in-memory only)
+- [ ] Explicit route split: `/live`, `/stream`, `/tune`, `/hdhr/tune` → shared session; `/movie`, `/vod`, `/series` → direct relay
+- [ ] Streaming observability endpoints: `/status/streams`, `/status/streams/clients`, `/status/streams/providers`
+- [ ] Settings page controls: max concurrent sessions, buffer size per session, stall timeout, outage window, idle grace period, status retention window
 
 #### DVR Integration (HDHomeRun Emulation)
 - [~] Initial HDHomeRun compatibility groundwork is already present:
@@ -186,4 +191,5 @@ Status: Planned.
 - [HTTP_COMPATIBILITY.md](../design/HTTP_COMPATIBILITY.md)
 - [LINEUP_RULES.md](../design/LINEUP_RULES.md)
 - [NUMBERING_RULES.md](../design/NUMBERING_RULES.md)
+- [stream_proxy_design.md](../design/stream_proxy_design.md)
 - [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
