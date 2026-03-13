@@ -128,6 +128,7 @@ builder.Services.PostConfigure<SnapshotOptions>(options =>
         dataDirectory: runtimePaths.DataDirectory,
         defaultRelativePath: "snapshots");
 });
+builder.Services.Configure<ReverseProxyOptions>(builder.Configuration.GetSection("M3Undle:ReverseProxy"));
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders =
@@ -135,8 +136,27 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         ForwardedHeaders.XForwardedProto |
         ForwardedHeaders.XForwardedHost |
         ForwardedHeaders.XForwardedPrefix;
-    options.KnownIPNetworks.Clear();
-    options.KnownProxies.Clear();
+
+    var proxyConfig = builder.Configuration.GetSection("M3Undle:ReverseProxy").Get<ReverseProxyOptions>()
+        ?? new ReverseProxyOptions();
+
+    options.ForwardLimit = proxyConfig.ForwardLimit;
+
+    foreach (var ip in proxyConfig.TrustedProxies)
+    {
+        if (!System.Net.IPAddress.TryParse(ip, out var address))
+            throw new InvalidOperationException(
+                $"M3Undle:ReverseProxy:TrustedProxies contains an invalid IP address: '{ip}'.");
+        options.KnownProxies.Add(address);
+    }
+
+    foreach (var cidr in proxyConfig.TrustedNetworks)
+    {
+        if (!System.Net.IPNetwork.TryParse(cidr, out var network))
+            throw new InvalidOperationException(
+                $"M3Undle:ReverseProxy:TrustedNetworks contains an invalid CIDR network: '{cidr}'.");
+        options.KnownIPNetworks.Add(network);
+    }
 });
 builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton<AppEventBus>();
