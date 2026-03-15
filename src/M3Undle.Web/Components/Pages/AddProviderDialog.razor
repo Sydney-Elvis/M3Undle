@@ -35,6 +35,8 @@
                             <MudTextField Label="Headers JSON (optional)" @bind-Value="_urlModel.HeadersJson" Lines="2"
                                           HelperText='e.g. {"X-Custom-Header":"value"}' />
                             <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_urlModel.TimeoutSeconds" Min="1" Max="1800" />
+                            <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_urlModel.MaxConcurrentStreams" Min="1" Max="100"
+                                             HelperText="Leave blank to use the global setting" />
                             @RenderContentToggles(_urlModel)
                             <MudSwitch @bind-Value="_urlModel.Enabled" Color="Color.Success" Label="Enabled" />
                         </MudStack>
@@ -118,6 +120,8 @@
                             <MudTextField Label="XMLTV URL (optional)" @bind-Value="_fileModel.XmltvUrl"
                                           HelperText="http/https URL or leave empty" />
                             <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_fileModel.TimeoutSeconds" Min="1" Max="1800" />
+                            <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_fileModel.MaxConcurrentStreams" Min="1" Max="100"
+                                             HelperText="Leave blank to use the global setting" />
                             @RenderContentToggles(_fileModel)
                             <MudSwitch @bind-Value="_fileModel.Enabled" Color="Color.Success" Label="Enabled" />
                         </MudStack>
@@ -165,6 +169,9 @@
                                        Label="Include XMLTV guide from same server"
                                        Disabled="!_encryptionAvailable" />
                             <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_xtreamModel.TimeoutSeconds" Min="1" Max="1800"
+                                             Disabled="!_encryptionAvailable" />
+                            <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_xtreamModel.MaxConcurrentStreams" Min="1" Max="100"
+                                             HelperText="Leave blank to use the global setting"
                                              Disabled="!_encryptionAvailable" />
                             @RenderContentToggles(_xtreamModel)
                             <MudSwitch @bind-Value="_xtreamModel.Enabled" Color="Color.Success" Label="Enabled"
@@ -258,6 +265,10 @@
                                                     <MudCheckBox T="bool" @bind-Value="opts.SetAsActive" Size="Size.Small" Label="Set active"
                                                                  Disabled="@(_importingName == context.Name)" />
                                                 }
+                                                <MudNumericField T="int?" @bind-Value="opts.MaxConcurrentStreams"
+                                                                 Placeholder="Max streams" Min="1" Max="100"
+                                                                 Style="width:110px" Margin="Margin.Dense"
+                                                                 Disabled="@(_importingName == context.Name)" />
                                             }
                                             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
                                                        Disabled="@(IsAlreadyImported(context.Name) || context.MissingEnvVars.Count > 0 || _importingName == context.Name)"
@@ -488,6 +499,7 @@
                     IncludeVod = _urlModel.IncludeVod,
                     IncludeSeries = _urlModel.IncludeSeries,
                     TimeoutSeconds = _urlModel.TimeoutSeconds,
+                    MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
                 }, CancellationToken.None);
             }
@@ -508,6 +520,7 @@
                     IncludeVod = _fileModel.IncludeVod,
                     IncludeSeries = _fileModel.IncludeSeries,
                     TimeoutSeconds = _fileModel.TimeoutSeconds,
+                    MaxConcurrentStreams = _fileModel.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(_fileModel.ProfileId),
                 }, CancellationToken.None);
             }
@@ -525,6 +538,7 @@
                     IncludeVod = _xtreamModel.IncludeVod,
                     IncludeSeries = _xtreamModel.IncludeSeries,
                     TimeoutSeconds = _xtreamModel.TimeoutSeconds,
+                    MaxConcurrentStreams = _xtreamModel.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(_xtreamModel.ProfileId),
                 }, CancellationToken.None);
             }
@@ -594,7 +608,7 @@
         {
             var opts = GetImportOptions(name);
             var import = await ProviderPageService.ImportConfigProviderAsync(
-                new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries },
+                new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries, MaxConcurrentStreams = opts.MaxConcurrentStreams },
                 CancellationToken.None);
             if (!string.IsNullOrWhiteSpace(import.Error)) { _importError = import.Error; return; }
             var dto = import.Provider;
@@ -632,6 +646,7 @@
         public string? UserAgent { get; set; }
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
+        public int? MaxConcurrentStreams { get; set; }
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
         public string ProfileId { get; set; } = string.Empty;
@@ -646,6 +661,7 @@
         public bool XtreamIncludeXmltv { get; set; }
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
+        public int? MaxConcurrentStreams { get; set; }
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
         public string ProfileId { get; set; } = string.Empty;
@@ -664,5 +680,6 @@
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
         public bool SetAsActive { get; set; }
+        public int? MaxConcurrentStreams { get; set; }
     }
 }

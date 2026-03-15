@@ -21,8 +21,8 @@ Primary published endpoints:
 
 - Alpha 1: complete
 - Alpha 2: complete
-- Alpha 3: in progress
-- Alpha 4: planned, with some HDHomeRun groundwork already landed early
+- Alpha 3: complete
+- Alpha 4: in progress — stream proxy complete; DVR integration and EPG remaining
 - Alpha 5: planned
 - Beta: hardening and release prep
 
@@ -134,24 +134,24 @@ Status: Complete.
 ### Alpha 4 — Stream Proxy, DVR Integration & EPG
 Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
-Status: Planned.
+Status: In progress.
 
 #### Stream Proxy (Shared Live Streaming)
-- [ ] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
-- [ ] One upstream provider connection per active live channel session, fanned out to many subscribers
-- [ ] In-memory ring buffer for late joiners (byte-bounded, default 4 MiB per session, hard cap 32 MiB)
-- [ ] Upstream stall detection and minimal reconnect (default 30s stall timeout, 75s outage window)
-- [ ] Basic slow-subscriber eviction (queue-full disconnect)
-- [ ] Source strike cooldown after retry exhaustion to prevent retry storms (default 5m, in-memory only)
-- [ ] Explicit route split: `/live`, `/stream`, `/tune`, `/hdhr/tune` → shared session; `/movie`, `/vod`, `/series` → direct relay
-- [ ] Streaming observability endpoints: `/status/streams`, `/status/streams/clients`, `/status/streams/providers`
-- [ ] Settings page controls: max concurrent sessions, buffer size per session, stall timeout, outage window, idle grace period, status retention window
+- [x] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
+- [x] One upstream provider connection per active live channel session, fanned out to many subscribers
+- [x] In-memory ring buffer for late joiners (byte-bounded, default 4 MiB per session, hard cap 32 MiB)
+- [x] Upstream stall detection and minimal reconnect (default 30s stall timeout, 75s outage window)
+- [x] Basic slow-subscriber eviction (queue-full disconnect)
+- [x] Source strike cooldown after retry exhaustion to prevent retry storms (default 5m, in-memory only)
+- [x] Explicit route split: `/live`, `/stream`, `/tune`, `/hdhr/tune` → shared session; `/movie`, `/vod`, `/series` → direct relay
+- [x] Streaming observability endpoints: `/status/streams`, `/status/streams/clients`, `/status/streams/providers`
+- [~] Settings page stream UI: enable/disable toggle and read-only visibility for max sessions, buffer sizing, stall timeout, outage window, and idle grace; editing those tuning values remains config-file-only
 
 #### DVR Integration (HDHomeRun Emulation)
-- [~] Initial HDHomeRun compatibility groundwork is already present:
+- [x] Initial HDHomeRun compatibility groundwork:
   `GET /discover.json`, `GET /lineup.json`, `GET /lineup_status.json`, discovery service, device identity, lineup rendering tests
-- [ ] Number of tuners setting in user-facing configuration
-- [ ] Connection limiting
+- [x] Number of tuners setting in user-facing configuration
+- [ ] Connection limiting (session-level limits exist; HDHomeRun-specific tuner slot enforcement not yet done)
 - [ ] End-to-end validation with Plex, Emby, and Jellyfin
 
 #### EPG Sources

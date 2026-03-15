@@ -8,6 +8,7 @@
 @inject IJSRuntime JS
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
+@inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @implements IDisposable
 
 <PageTitle>M3Undle</PageTitle>
@@ -23,7 +24,16 @@
         <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
             <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
                 <MudText Typo="Typo.h6">System Status</MudText>
-                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadStatusAsync" Disabled="_isLoading" />
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    @if (_streamSessions > 0)
+                    {
+                        <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.FiberManualRecord"
+                                 Size="Size.Small" OnClick="@(() => Nav.NavigateTo("streams"))">
+                            @_streamSessions session@(_streamSessions == 1 ? "" : "s"), @_streamClients client@(_streamClients == 1 ? "" : "s")
+                        </MudChip>
+                    }
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadStatusAsync" Disabled="_isLoading" />
+                </MudStack>
             </MudStack>
 
             @if (_isLoading)
@@ -283,7 +293,10 @@
     private IDisposable? _eventSubscription;
     private DateTime? _refreshStartedAt;
     private PeriodicTimer? _elapsedTimer;
+    private PeriodicTimer? _streamTimer;
     private bool _isCancelling;
+    private int _streamSessions;
+    private int _streamClients;
 
     protected override async Task OnInitializedAsync()
     {
@@ -306,6 +319,10 @@
 
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
+
+        RefreshStreamCounts();
+        _streamTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        _ = RunStreamTimerAsync(_streamTimer);
 
         await Task.WhenAll(LoadStatusAsync(), LoadChannelStatsAsync());
     }
@@ -387,6 +404,23 @@
         _cts.Dispose();
         _eventSubscription?.Dispose();
         _elapsedTimer?.Dispose();
+        _streamTimer?.Dispose();
+    }
+
+    private void RefreshStreamCounts()
+    {
+        _streamSessions = StreamingRegistry.GetActiveSessions().Count;
+        _streamClients = StreamingRegistry.GetActiveClients().Count;
+    }
+
+    private async Task RunStreamTimerAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(() => { RefreshStreamCounts(); StateHasChanged(); });
+        }
+        catch (OperationCanceledException) { }
     }
 
     private void StartElapsedTimer()

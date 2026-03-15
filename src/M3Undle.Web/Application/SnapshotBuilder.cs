@@ -25,6 +25,7 @@ public sealed class SnapshotBuilder(
 
     // In-memory channel data used by BuildChannelIndex — sourced from DB provider_channels
     private sealed record ChannelBuildData(
+        string ProviderChannelId,
         string? ProviderChannelKey,
         string DisplayName,
         string? StreamUrl,
@@ -242,6 +243,7 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var channels = dbChannels.Select(ch => new ChannelBuildData(
+            ch.ProviderChannelId,
             ch.ProviderChannelKey,
             ch.DisplayName,
             ch.StreamUrl,
@@ -259,9 +261,9 @@ public sealed class SnapshotBuilder(
                 if (string.IsNullOrWhiteSpace(ch.StreamUrl)) continue;
                 var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);
                 if (contentType == "vod" && provider.IncludeVod)
-                    channels.Add(new ChannelBuildData(ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "vod", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
+                    channels.Add(new ChannelBuildData(string.Empty, ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "vod", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
                 else if (contentType == "series" && provider.IncludeSeries)
-                    channels.Add(new ChannelBuildData(ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "series", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
+                    channels.Add(new ChannelBuildData(string.Empty, ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "series", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
             }
         }
 
@@ -494,7 +496,7 @@ public sealed class SnapshotBuilder(
             LogoUrl: channel.LogoUrl,
             GroupTitle: groupTitle,
             TvgChno: tvgChno,
-            ProviderChannelId: string.Empty,
+            ProviderChannelId: channel.ProviderChannelId,
             StreamUrl: channel.StreamUrl!);
     }
 

@@ -1,7 +1,15 @@
 @page "/settings"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Streaming.Configuration
+@using M3Undle.Web.Streaming.Observability
+@using Microsoft.Extensions.Options
 @inject ISiteSettingsService SiteSettings
 @inject IEndpointSecurityService EndpointSecurity
+@inject IStreamingSettingsService StreamingSettings
+@inject StreamingRegistry StreamingRegistry
+@inject IOptions<StreamProxyOptions> StreamProxyOpts
+@inject IOptions<BufferOptions> BufferOpts
+@inject IOptions<ReconnectOptions> ReconnectOpts
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -100,6 +108,104 @@
             }
         </MudPaper>
     </MudItem>
+
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Stream Proxy</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls whether the stream relay is active. When disabled, all stream requests return 503.
+            </MudText>
+
+            @if (_loadingStreamingSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                @if (!_streamingEnabled && _activeStreamCount > 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        @_activeStreamCount active session@(_activeStreamCount == 1 ? "" : "s") will be terminated immediately when saved.
+                    </MudAlert>
+                }
+                else if (_activeStreamCount > 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        @_activeStreamCount active session@(_activeStreamCount == 1 ? "" : "s") currently streaming.
+                        Disabling will terminate them immediately.
+                    </MudAlert>
+                }
+
+                <MudSwitch T="bool" Label="Enable stream proxy" @bind-Value="_streamingEnabled" Class="mb-3"
+                           Color="Color.Primary" />
+
+                @if (!string.IsNullOrWhiteSpace(_streamingError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_streamingError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_streamingSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_streamingSuccess
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_savingStreamingSettings"
+                           OnClick="SaveStreamingSettingsAsync" Class="mb-4">
+                    @(_savingStreamingSettings ? "Saving..." : "Save Stream Settings")
+                </MudButton>
+
+                <MudDivider Class="mb-3" />
+
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
+                    Current configuration (from appsettings / environment)
+                </MudText>
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Max Concurrent Sessions</MudText>
+                        <MudText Typo="Typo.body2">@StreamProxyOpts.Value.MaxConcurrentSessions</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Idle Grace</MudText>
+                        <MudText Typo="Typo.body2">@StreamProxyOpts.Value.IdleGrace.TotalSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Idle Grace Hard Cap</MudText>
+                        <MudText Typo="Typo.body2">@StreamProxyOpts.Value.IdleGraceHardCap.TotalSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Buffer per Session</MudText>
+                        <MudText Typo="Typo.body2">@(BufferOpts.Value.MaxBytesPerSession / 1048576) MB</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Buffer Hard Cap</MudText>
+                        <MudText Typo="Typo.body2">@(BufferOpts.Value.MaxBytesHardCap / 1048576) MB</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Read Chunk Size</MudText>
+                        <MudText Typo="Typo.body2">@(BufferOpts.Value.ReadChunkSizeBytes / 1024) KB</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Reconnect Stall Timeout</MudText>
+                        <MudText Typo="Typo.body2">@ReconnectOpts.Value.ReadStallTimeout.TotalSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Outage Window</MudText>
+                        <MudText Typo="Typo.body2">@ReconnectOpts.Value.OutageWindow.TotalSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Connect Timeout</MudText>
+                        <MudText Typo="Typo.body2">@ReconnectOpts.Value.ConnectTimeout.TotalSeconds s</MudText>
+                    </MudItem>
+                </MudGrid>
+            }
+        </MudPaper>
+    </MudItem>
 </MudGrid>
 
 @code {
@@ -115,12 +221,19 @@
     private string? _endpointError;
     private string? _endpointSuccess;
 
+    private bool _loadingStreamingSettings;
+    private bool _savingStreamingSettings;
+    private bool _streamingEnabled;
+    private int _activeStreamCount;
+    private string? _streamingError;
+    private string? _streamingSuccess;
+
     private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
 
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await LoadEndpointSecurityAsync();
+        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync());
     }
 
     private async Task LoadEndpointSecurityAsync()
@@ -143,6 +256,48 @@
         finally
         {
             _loadingEndpointSettings = false;
+        }
+    }
+
+    private async Task LoadStreamingSettingsAsync()
+    {
+        _loadingStreamingSettings = true;
+        _streamingError = null;
+
+        try
+        {
+            _streamingEnabled = await StreamingSettings.GetEnabledAsync(CancellationToken.None);
+            _activeStreamCount = StreamingRegistry.GetActiveSessions().Count;
+        }
+        catch (Exception ex)
+        {
+            _streamingError = $"Failed to load stream settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingStreamingSettings = false;
+        }
+    }
+
+    private async Task SaveStreamingSettingsAsync()
+    {
+        _savingStreamingSettings = true;
+        _streamingError = null;
+        _streamingSuccess = null;
+        _activeStreamCount = StreamingRegistry.GetActiveSessions().Count;
+
+        try
+        {
+            await StreamingSettings.SetEnabledAsync(_streamingEnabled, CancellationToken.None);
+            _streamingSuccess = _streamingEnabled ? "Stream proxy enabled." : "Stream proxy disabled.";
+        }
+        catch (Exception ex)
+        {
+            _streamingError = $"Failed to save stream settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingStreamingSettings = false;
         }
     }
 

@@ -1,7 +1,13 @@
 using System.Text.Json;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Observability;
+using M3Undle.Web.Streaming.Resolution;
+using M3Undle.Web.Streaming.Sessions;
+using M3Undle.Web.Streaming.Upstream;
 using Microsoft.EntityFrameworkCore;
 
 namespace M3Undle.Web.Api;
@@ -35,6 +41,13 @@ public static class CompatibilityEndpoints
         client.MapGet("hdhr/tune/{streamKey}/{*tail}", ServeStreamAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
+
+        var streamStatus = app.MapGroup("/status/streams")
+            .RequireAuthorization(UiAccessPolicy.Name);
+        streamStatus.MapGet(string.Empty, ServeStreamsStatusSummaryAsync);
+        streamStatus.MapGet("clients", ServeStreamsClientsStatusAsync);
+        streamStatus.MapGet("providers", ServeStreamsProvidersStatusAsync);
+        streamStatus.MapGet("{sessionId}", ServeStreamsSingleSessionStatusAsync);
 
         return app;
     }
@@ -106,45 +119,20 @@ public static class CompatibilityEndpoints
         string streamKey,
         HttpContext context,
         ApplicationDbContext db,
+        StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
+        IStreamingSettingsService streamingSettings,
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
         using var streamScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Stream" });
 
-        var access = context.GetResolvedClientAccess();
-
-        var snapshot = await db.Snapshots
-            .AsNoTracking()
-            .Where(x => x.Status == "active" && x.ProfileId == access.Binding.ActiveProfileId)
-            .OrderByDescending(x => x.CreatedUtc)
-            .FirstOrDefaultAsync(CancellationToken.None);
-
-        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.ChannelIndexPath))
-        {
-            logger.LogWarning(
-                "Stream tune-in failed: no active snapshot for profile {ProfileId}. key={StreamKey} client={Client}",
-                access.Binding.ActiveProfileId,
-                streamKey,
-                context.Connection.RemoteIpAddress);
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            return;
-        }
-
-        (string StreamUrl, string DisplayName) entry;
+        StreamResolveResult resolved;
         try
         {
-            var hit = await GetStreamEntryAsync(snapshot.SnapshotId, snapshot.ChannelIndexPath, streamKey, cancellationToken);
-            if (hit is null)
-            {
-                logger.LogWarning("Stream tune-in failed: unknown key. key={StreamKey} client={Client}",
-                    streamKey, context.Connection.RemoteIpAddress);
-                context.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
-
-            entry = hit.Value;
+            resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -156,12 +144,99 @@ public static class CompatibilityEndpoints
             return;
         }
 
+        if (!resolved.IsSuccess || resolved.Entry is null)
+        {
+            context.Response.StatusCode = resolved.FailureStatusCode ?? StatusCodes.Status503ServiceUnavailable;
+            if (!string.IsNullOrWhiteSpace(resolved.FailureMessage))
+                await context.Response.WriteAsync(resolved.FailureMessage, cancellationToken);
+            return;
+        }
+
+        if (!await streamingSettings.GetEnabledAsync(cancellationToken))
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.Append("Retry-After", "60");
+            await context.Response.WriteAsync("Stream proxy is disabled.", cancellationToken);
+            return;
+        }
+
+        var entry = resolved.Entry;
         logger.LogInformation("Stream tune-in: channel={Channel} key={StreamKey} client={Client}",
             entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
 
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, CancellationToken.None);
+        if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        {
+            try
+            {
+                var session = await channelSessionManager.GetOrCreateAsync(resolved.SourceDescriptor, cancellationToken);
+                var subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
+                await subscriber.Completion;
+                return;
+            }
+            catch (StreamAdmissionException ex)
+            {
+                logger.LogWarning(
+                    "Shared stream admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
+                    resolved.SourceDescriptor.ProviderId,
+                    resolved.SourceDescriptor.ProviderChannelId,
+                    ex.Message);
+                if (ex.RetryAfterSeconds is { } retryAfter)
+                    context.Response.Headers["Retry-After"] = retryAfter.ToString();
+
+                context.Response.StatusCode = ex.StatusCode;
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (UpstreamConnectException ex)
+            {
+                logger.LogWarning(
+                    "Shared stream upstream startup/connect failure for key={StreamKey}. kind={FailureKind} status={StatusCode}",
+                    streamKey,
+                    ex.FailureKind,
+                    ex.StatusCode);
+
+                if (!context.Response.HasStarted)
+                {
+                    context.Response.StatusCode = ex.FailureKind is UpstreamFailureKind.UpstreamAuth
+                        or UpstreamFailureKind.UpstreamNotFound
+                        or UpstreamFailureKind.StartupFatal
+                        ? StatusCodes.Status502BadGateway
+                        : StatusCodes.Status503ServiceUnavailable;
+                }
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Shared stream delivery failed for key={StreamKey}.", streamKey);
+                if (!context.Response.HasStarted)
+                    context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return;
+            }
+        }
+
+        await ServeDirectRelayAsync(
+            context,
+            db,
+            httpClientFactory,
+            logger,
+            entry.StreamUrl,
+            entry.DisplayName,
+            cancellationToken);
+    }
+
+    private static async Task ServeDirectRelayAsync(
+        HttpContext context,
+        ApplicationDbContext db,
+        IHttpClientFactory httpClientFactory,
+        ILogger logger,
+        string streamUrl,
+        string displayName,
+        CancellationToken cancellationToken)
+    {
+        var provider = await ResolveProviderForDirectRelayAsync(db, context, cancellationToken);
 
         try
         {
@@ -178,12 +253,12 @@ public static class CompatibilityEndpoints
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Range", rangeValue.ToArray());
 
             using var upstreamResponse = await client.GetAsync(
-                entry.StreamUrl,
+                streamUrl,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
 
             logger.LogInformation("Stream upstream: channel={Channel} status={Status} contentType={ContentType}",
-                entry.DisplayName,
+                displayName,
                 (int)upstreamResponse.StatusCode,
                 upstreamResponse.Content.Headers.ContentType?.ToString() ?? "none");
 
@@ -199,39 +274,47 @@ public static class CompatibilityEndpoints
             await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
 
             logger.LogDebug("Stream complete: channel={Channel} client={Client}",
-                entry.DisplayName,
+                displayName,
                 context.Connection.RemoteIpAddress);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             logger.LogDebug("Stream client disconnected: channel={Channel} client={Client}",
-                entry.DisplayName,
+                displayName,
                 context.Connection.RemoteIpAddress);
         }
         catch (HttpRequestException ex)
         {
             logger.LogError(ex, "Stream upstream request failed: channel={Channel} key={StreamKey}",
-                entry.DisplayName,
-                streamKey);
+                displayName,
+                "direct-relay");
             if (!context.Response.HasStarted)
                 context.Response.StatusCode = StatusCodes.Status502BadGateway;
         }
     }
 
-    private static async Task<(string StreamUrl, string DisplayName)?> GetStreamEntryAsync(
-        string snapshotId,
-        string channelIndexPath,
-        string streamKey,
+    private static async Task<Provider?> ResolveProviderForDirectRelayAsync(
+        ApplicationDbContext db,
+        HttpContext context,
         CancellationToken cancellationToken)
     {
-        var idxPath = ChannelIndexStore.GetIdxPath(channelIndexPath);
-        var entry = await ChannelIndexStore.TryLookupAsync(
-            snapshotId,
-            channelIndexPath,
-            idxPath,
-            streamKey,
-            cancellationToken);
-        return entry is null ? null : (entry.StreamUrl, entry.DisplayName);
+        var access = context.GetResolvedClientAccess();
+        var profileProvider = await db.ProfileProviders
+            .AsNoTracking()
+            .Where(x => x.ProfileId == access.Binding.ActiveProfileId && x.Enabled)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (profileProvider is null)
+        {
+            return await db.Providers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+        }
+
+        return await db.Providers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ProviderId == profileProvider.ProviderId && x.Enabled, cancellationToken);
     }
 
     private static async Task ServeStatusAsync(HttpContext context, ApplicationDbContext db, CancellationToken cancellationToken)
@@ -286,6 +369,33 @@ public static class CompatibilityEndpoints
         }
     }
 
+    private static IResult ServeStreamsStatusSummaryAsync(StreamingRegistry registry)
+    {
+        var sessions = registry.GetActiveSessions();
+        var summary = new StreamStatusSummary(
+            ActiveSessionCount: sessions.Count,
+            ActiveSubscriberCount: sessions.Sum(x => x.SubscriberCount),
+            SessionsReconnecting: sessions.Count(x => x.State == SessionState.Reconnecting),
+            TotalReconnectAttempts: sessions.Sum(x => x.ReconnectAttempts),
+            ActiveSessions: sessions,
+            RecentEndedSessions: registry.GetRecentEndedSessions());
+        return Results.Json(summary, JsonOptions);
+    }
+
+    private static IResult ServeStreamsClientsStatusAsync(StreamingRegistry registry)
+        => Results.Json(registry.GetActiveClients(), JsonOptions);
+
+    private static IResult ServeStreamsProvidersStatusAsync(StreamingRegistry registry)
+        => Results.Json(registry.GetActiveProviderStreams(), JsonOptions);
+
+    private static IResult ServeStreamsSingleSessionStatusAsync(string sessionId, StreamingRegistry registry)
+    {
+        var snapshot = registry.TryGetSession(sessionId);
+        return snapshot is null
+            ? TypedResults.NotFound()
+            : Results.Json(snapshot, JsonOptions);
+    }
+
     private sealed record StatusResponse(
         string Status,
         IReadOnlyList<LineupStatusInfo> Lineups);
@@ -311,4 +421,12 @@ public static class CompatibilityEndpoints
         DateTime? FinishedUtc,
         int? ChannelCountSeen,
         string? ErrorSummary);
+
+    private sealed record StreamStatusSummary(
+        int ActiveSessionCount,
+        int ActiveSubscriberCount,
+        int SessionsReconnecting,
+        int TotalReconnectAttempts,
+        IReadOnlyList<StreamSessionSnapshot> ActiveSessions,
+        IReadOnlyList<StreamSessionSnapshot> RecentEndedSessions);
 }

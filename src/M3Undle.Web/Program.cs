@@ -7,6 +7,11 @@ using M3Undle.Web.Components.Account;
 using M3Undle.Web.Data;
 using M3Undle.Web.Logging;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.Observability;
+using M3Undle.Web.Streaming.Resolution;
+using M3Undle.Web.Streaming.Sessions;
+using M3Undle.Web.Streaming.Upstream;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -121,6 +126,9 @@ builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3U
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
 builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.GetSection("M3Undle:EndpointAccess"));
+builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection("M3Undle:Streaming"));
+builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
+builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
@@ -170,6 +178,7 @@ builder.Services.AddSingleton<HdHomeRunDeviceService>();
 builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
+builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
 builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
 builder.Services.AddScoped<IAccessResolver, ClientEndpointAccessResolver>();
@@ -181,6 +190,11 @@ builder.Services.AddSingleton<ChannelStatsService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshService>());
+builder.Services.AddSingleton<StreamingRegistry>();
+builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
+builder.Services.AddSingleton<UpstreamStreamConnector>();
+builder.Services.AddSingleton<ChannelSessionManager>();
+builder.Services.AddScoped<StreamRequestResolver>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {

@@ -17,12 +17,16 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.EndpointSecurityEnabled)
             .HasColumnName("endpoint_security_enabled")
             .HasDefaultValue(false);
+        builder.Property(s => s.StreamingEnabled)
+            .HasColumnName("streaming_enabled")
+            .HasDefaultValue(true);
 
         builder.HasData(new SiteSettings
         {
             Id = 1,
             AuthenticationEnabled = false,
             EndpointSecurityEnabled = false,
+            StreamingEnabled = true,
         });
     }
 }

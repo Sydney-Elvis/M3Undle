@@ -39,6 +39,7 @@ public sealed class ProviderDto
     public bool Enabled { get; set; }
     public bool IsActive { get; set; }
     public int TimeoutSeconds { get; set; }
+    public int? MaxConcurrentStreams { get; set; }
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public List<string> AssociatedProfileIds { get; set; } = [];
@@ -76,6 +77,9 @@ public sealed class CreateProviderRequest
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
 
+    [Range(1, 100)]
+    public int? MaxConcurrentStreams { get; set; }
+
     public List<string>? AssociateToProfileIds { get; set; }
 
     // Xtream Codes provider fields — all three required together
@@ -102,6 +106,9 @@ public sealed class UpdateProviderRequest
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
+
+    [Range(1, 100)]
+    public int? MaxConcurrentStreams { get; set; }
 
     public List<string>? AssociateToProfileIds { get; set; }
 
@@ -214,6 +221,9 @@ public sealed class ImportConfigProviderRequest
     public string Name { get; set; } = string.Empty;
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+
+    [Range(1, 100)]
+    public int? MaxConcurrentStreams { get; set; }
 }
 
 public sealed class CreateProfileRequest

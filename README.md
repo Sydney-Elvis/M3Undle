@@ -16,8 +16,9 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Provider switching with snapshot lifecycle
 > - Group preview (read-only catalog browsing)
 > - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API
-> - Stream relay proxy (relay-only, no buffering)
+> - Shared live stream proxy with byte-bounded buffering, reconnect handling, and direct-relay fallback for VOD-style routes
 > - Web UI for provider management (Pre-Alpha)
+> - Stream monitoring UI and stream status endpoints
 > - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`)
 > 
 > **Forthcoming**
@@ -107,7 +108,11 @@ Current Pre-Alpha work includes:
 - Group preview (read-only catalog browse)
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
 - HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
-- Stream relay proxy (relay-only, no buffering)
+- Shared live stream proxy for `/live`, `/stream`, `/tune`, and `/hdhr/tune`
+- Byte-bounded in-memory buffer for late joiners with reconnect handling and slow-subscriber eviction
+- Direct relay retained for `/movie`, `/vod`, and `/series`
+- Stream monitoring UI plus `/status/streams`, `/status/streams/clients`, and `/status/streams/providers`
+- Stream enable/disable control in Settings and provider-level max concurrent stream limits
 - Web UI for provider management
 
 Future releases will add: group-based inclusion rules, channel numbering, filtering, and more.
@@ -172,6 +177,8 @@ M3Undle publishes endpoints compatible with common clients:
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 - `/stream/<streamKey>`
+- `/live/<streamKey>`
+- `/tune/<streamKey>`
 - `/hdhr/discover.json`
 - `/hdhr/lineup.json`
 - `/hdhr/lineup.xml`
@@ -179,6 +186,10 @@ M3Undle publishes endpoints compatible with common clients:
 - `/hdhr/lineup_status.json`
 - `/hdhr/device.xml`
 - `/hdhr/tune/<streamKey>`
+
+Live routes use the shared stream proxy and keep provider credentials hidden from clients. Movie, VOD, and series routes remain direct relay paths.
+
+Operational stream visibility is available via the Streams page in the UI and the status endpoints `/status/streams`, `/status/streams/clients`, and `/status/streams/providers`.
 
 Legacy HDHomeRun root aliases (`/discover.json`, `/lineup.json`, etc.) are still available for compatibility.
 

@@ -194,6 +194,7 @@ public sealed class ProviderPageService(
             IsActive = false,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
+            MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
             ConfigSourcePath = configProvider.SourcePath,
             NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
             CreatedUtc = now,
@@ -245,6 +246,7 @@ public sealed class ProviderPageService(
             HeadersJson = isXtream ? null : (string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson),
             UserAgent = isXtream ? null : (string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim()),
             TimeoutSeconds = request.TimeoutSeconds,
+            MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
@@ -367,6 +369,7 @@ public sealed class ProviderPageService(
         provider.Name = request.Name.Trim();
         provider.Enabled = request.Enabled;
         provider.TimeoutSeconds = request.TimeoutSeconds;
+        provider.MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null;
         provider.IncludeVod = request.IncludeVod;
         provider.IncludeSeries = request.IncludeSeries;
         provider.UpdatedUtc = DateTime.UtcNow;
@@ -937,6 +940,7 @@ public sealed class ProviderPageService(
                     Enabled = provider.Enabled,
                     IsActive = provider.IsActive,
                     TimeoutSeconds = provider.TimeoutSeconds,
+                    MaxConcurrentStreams = provider.MaxConcurrentStreams,
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,
                     AssociatedProfileIds = associatedProfileIds,

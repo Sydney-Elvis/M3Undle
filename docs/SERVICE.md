@@ -22,7 +22,11 @@ At a high level, the service:
 - Publishes compatibility endpoints for clients:
   - M3U — `/m3u/m3undle.m3u`
   - XMLTV — `/xmltv/m3undle.xml`
-  - Stream relay proxy — `/stream/<streamKey>`
+  - Shared live stream proxy — `/live/<streamKey>`, `/stream/<streamKey>`, `/tune/<streamKey>`, `/hdhr/tune/<streamKey>`
+  - Direct relay for VOD-style routes — `/movie/<streamKey>`, `/vod/<streamKey>`, `/series/<streamKey>`
+ - Shares one upstream live connection across subscribers for the same channel session
+ - Keeps a small byte-bounded in-memory buffer for late joiners
+ - Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
 
 ---
 
@@ -78,6 +82,17 @@ The service publishes endpoints intended to be consumed by clients and DVR syste
 - `GET /m3u/m3undle.m3u`
 - `GET /xmltv/m3undle.xml`
 - `GET /stream/<streamKey>`
+- `GET /live/<streamKey>`
+- `GET /tune/<streamKey>`
+- `GET /hdhr/tune/<streamKey>`
+
+Live routes are served by the shared stream proxy. VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay paths.
+
+Operational status endpoints are also available for authenticated UI users:
+
+- `GET /status/streams`
+- `GET /status/streams/clients`
+- `GET /status/streams/providers`
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 
@@ -95,11 +110,15 @@ Views:
   - Check provider health (credentials defined, last successful fetch, etc.)
 - **Groups**: browse the provider's groups and channel counts (read-only preview)
 - **Snapshots / Status**: see refresh history and the current active snapshot
+- **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
+- **Settings**: enable or disable streaming and view the effective stream proxy, buffer, and reconnect configuration
 
 Design goals:
 - configuration should be explicit and understandable
 - changes should be visible (what changed, when)
 - credentials should be secure and managed externally via `.env`
+
+Provider configuration also supports an optional per-provider max concurrent stream limit, which is applied when admitting shared live sessions.
 
 ### Config.yaml Integration
 

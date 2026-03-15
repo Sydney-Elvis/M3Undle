@@ -47,6 +47,8 @@
                 }
 
                 <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800" />
+                <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_model.MaxConcurrentStreams" Min="1" Max="100"
+                                 HelperText="Leave blank to use the global setting" />
 
                 <MudSelect T="string" Label="Associated Profile" @bind-Value="_model.ProfileId"
                            ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(None)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
@@ -167,6 +169,7 @@
                 XtreamIncludeXmltv = Provider.XtreamIncludeXmltv,
                 Enabled = Provider.Enabled,
                 TimeoutSeconds = Provider.TimeoutSeconds,
+                MaxConcurrentStreams = Provider.MaxConcurrentStreams,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
@@ -180,6 +183,7 @@
                 HeadersJson = Provider.HeadersJson,
                 Enabled = Provider.Enabled,
                 TimeoutSeconds = Provider.TimeoutSeconds,
+                MaxConcurrentStreams = Provider.MaxConcurrentStreams,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
@@ -254,6 +258,7 @@
                     XtreamIncludeXmltv = _model.XtreamIncludeXmltv,
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
+                    MaxConcurrentStreams = _model.MaxConcurrentStreams,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     AssociateToProfileIds = profileIds,
@@ -270,6 +275,7 @@
                     HeadersJson = NullIfEmpty(_model.HeadersJson),
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
+                    MaxConcurrentStreams = _model.MaxConcurrentStreams,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     AssociateToProfileIds = profileIds,
@@ -319,6 +325,7 @@
         // Common
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
+        public int? MaxConcurrentStreams { get; set; }
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
         public string ProfileId { get; set; } = string.Empty;

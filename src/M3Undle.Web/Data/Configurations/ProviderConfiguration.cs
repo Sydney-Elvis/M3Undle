@@ -20,6 +20,7 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.HeadersJson).HasColumnName("headers_json");
         builder.Property(x => x.UserAgent).HasColumnName("user_agent");
         builder.Property(x => x.TimeoutSeconds).HasColumnName("timeout_seconds").HasDefaultValue(20);
+        builder.Property(x => x.MaxConcurrentStreams).HasColumnName("max_concurrent_streams");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
         builder.Property(x => x.ConfigSourcePath).HasColumnName("config_source_path");
