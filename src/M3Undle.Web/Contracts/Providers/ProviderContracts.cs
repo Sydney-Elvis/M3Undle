@@ -256,3 +256,25 @@ public sealed class ProbeConfigProviderResultDto
     public string? Error { get; set; }
 }
 
+public sealed class UpsertProviderResult
+{
+    public string Action { get; set; } = string.Empty; // "created" or "updated"
+    public ProviderDto Provider { get; set; } = new();
+}
+
+public sealed class SnapshotStatusDto
+{
+    public bool Running { get; set; }
+    public string? LastStatus { get; set; }
+    public DateTime? StartedUtc { get; set; }
+    public DateTime? CompletedUtc { get; set; }
+    public int? ChannelCountSeen { get; set; }
+    public string? ErrorSummary { get; set; }
+}
+
+public sealed class SelectAllChannelsResult
+{
+    public int GroupsUpdated { get; set; }
+    public int ChannelsSelected { get; set; }
+}
+

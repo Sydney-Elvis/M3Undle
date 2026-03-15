@@ -19,11 +19,13 @@ public static class ProviderApiEndpoints
         profiles.RequireAuthorization(UiAccessPolicy.Name);
         profiles.MapGet("/", ListProfilesAsync);
         profiles.MapPost("/", CreateProfileAsync);
+        profiles.MapPost("/{profileId}/select-all-channels", SelectAllChannelsAsync);
 
         var providers = app.MapGroup("/api/v1/providers");
         providers.RequireAuthorization(UiAccessPolicy.Name);
         providers.MapGet("/", ListProvidersAsync);
         providers.MapPost("/", CreateProviderAsync);
+        providers.MapPost("/upsert", UpsertProviderAsync);
         providers.MapGet("/{providerId}", GetProviderAsync);
         providers.MapPut("/{providerId}", UpdateProviderAsync);
         providers.MapDelete("/{providerId}", DeleteProviderAsync);
@@ -49,6 +51,7 @@ public static class ProviderApiEndpoints
         snapshots.MapPost("/refresh", TriggerRefreshAsync);
         snapshots.MapPost("/build", TriggerBuildOnlyAsync);
         snapshots.MapPost("/cancel", CancelRefreshAsync);
+        snapshots.MapGet("/status", GetSnapshotStatusAsync);
 
         return app;
     }
@@ -123,6 +126,71 @@ public static class ProviderApiEndpoints
             OutputName = profile.OutputName,
             MergeMode = profile.MergeMode,
             Enabled = profile.Enabled,
+        });
+    }
+
+    private static async Task<Results<Ok<SelectAllChannelsResult>, NotFound>> SelectAllChannelsAsync(
+        string profileId,
+        ApplicationDbContext db,
+        AppEventBus eventBus,
+        CancellationToken cancellationToken)
+    {
+        var profileExists = await db.Profiles.AsNoTracking()
+            .AnyAsync(x => x.ProfileId == profileId && x.Enabled, cancellationToken);
+
+        if (!profileExists)
+            return TypedResults.NotFound();
+
+        var groupFilters = await db.ProfileGroupFilters
+            .Where(x => x.ProfileId == profileId && x.Decision != "exclude")
+            .ToListAsync(cancellationToken);
+
+        if (groupFilters.Count == 0)
+            return TypedResults.Ok(new SelectAllChannelsResult { GroupsUpdated = 0, ChannelsSelected = 0 });
+
+        var filterIds = groupFilters.Select(x => x.ProfileGroupFilterId).ToList();
+        var groupIds = groupFilters.Select(x => x.ProviderGroupId).ToList();
+
+        // Remove all existing channel selections for these groups
+        await db.ProfileGroupChannelFilters
+            .Where(x => filterIds.Contains(x.ProfileGroupFilterId))
+            .ExecuteDeleteAsync(cancellationToken);
+
+        // Load all active channels for the included groups
+        var channels = await db.ProviderChannels
+            .AsNoTracking()
+            .Where(x => x.ProviderGroupId != null && groupIds.Contains(x.ProviderGroupId!) && x.Active)
+            .ToListAsync(cancellationToken);
+
+        var filterByGroupId = groupFilters.ToDictionary(x => x.ProviderGroupId, StringComparer.Ordinal);
+
+        var now = DateTime.UtcNow;
+        int channelsSelected = 0;
+
+        foreach (var channel in channels)
+        {
+            if (channel.ProviderGroupId is null) continue;
+            if (!filterByGroupId.TryGetValue(channel.ProviderGroupId, out var filter)) continue;
+
+            db.ProfileGroupChannelFilters.Add(new Data.Entities.ProfileGroupChannelFilter
+            {
+                ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                ProviderChannelId = channel.ProviderChannelId,
+                OutputGroupName = null,
+                ChannelNumber = null,
+                CreatedUtc = now,
+            });
+            channelsSelected++;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        eventBus.Publish(AppEventKind.GroupFiltersChanged);
+
+        return TypedResults.Ok(new SelectAllChannelsResult
+        {
+            GroupsUpdated = groupFilters.Count,
+            ChannelsSelected = channelsSelected,
         });
     }
 
@@ -227,6 +295,107 @@ public static class ProviderApiEndpoints
         eventBus.Publish(AppEventKind.ProviderChanged);
 
         return TypedResults.Created($"/api/v1/providers/{provider.ProviderId}", dto);
+    }
+
+    private static async Task<Results<Ok<UpsertProviderResult>, ValidationProblem>> UpsertProviderAsync(
+        CreateProviderRequest request,
+        ApplicationDbContext db,
+        AppEventBus eventBus,
+        SecretEncryptionService encryption,
+        ILogger<ProviderApiLog> logger,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name))
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["name"] = ["name is required."]
+            });
+        }
+
+        var name = request.Name.Trim();
+        var existing = await db.Providers.FirstOrDefaultAsync(x => x.Name == name, cancellationToken);
+
+        if (existing is not null)
+        {
+            // Update URL-based fields only; don't touch profile associations or Xtream fields
+            existing.PlaylistUrl = string.IsNullOrWhiteSpace(request.PlaylistUrl) ? existing.PlaylistUrl : request.PlaylistUrl.Trim();
+            existing.XmltvUrl = string.IsNullOrWhiteSpace(request.XmltvUrl) ? null : request.XmltvUrl.Trim();
+            existing.HeadersJson = string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson;
+            existing.UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim();
+            existing.TimeoutSeconds = request.TimeoutSeconds;
+            existing.IncludeVod = request.IncludeVod;
+            existing.IncludeSeries = request.IncludeSeries;
+            existing.Enabled = request.Enabled;
+            existing.MaxConcurrentStreams = request.MaxConcurrentStreams;
+            existing.UpdatedUtc = DateTime.UtcNow;
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            var dto = (await BuildProviderDtosAsync(db, [existing], cancellationToken)).Single();
+            using var updateScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
+            logger.LogInformation("Provider upserted (updated): {ProviderId} '{Name}'.", existing.ProviderId, existing.Name);
+            eventBus.Publish(AppEventKind.ProviderChanged);
+
+            return TypedResults.Ok(new UpsertProviderResult { Action = "updated", Provider = dto });
+        }
+
+        // Create new provider with auto-profile (same as CreateProviderAsync)
+        var validationErrors = await ValidateProviderRequestAsync(db, name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, null, cancellationToken);
+        if (validationErrors.Count > 0)
+            return TypedResults.ValidationProblem(validationErrors);
+
+        var now = DateTime.UtcNow;
+        var provider = new Provider
+        {
+            ProviderId = Guid.NewGuid().ToString(),
+            Name = name,
+            Enabled = request.Enabled,
+            PlaylistUrl = request.PlaylistUrl!.Trim(),
+            XmltvUrl = string.IsNullOrWhiteSpace(request.XmltvUrl) ? null : request.XmltvUrl.Trim(),
+            HeadersJson = string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson,
+            UserAgent = string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim(),
+            TimeoutSeconds = request.TimeoutSeconds,
+            IncludeVod = request.IncludeVod,
+            IncludeSeries = request.IncludeSeries,
+            MaxConcurrentStreams = request.MaxConcurrentStreams,
+            CreatedUtc = now,
+            UpdatedUtc = now,
+        };
+
+        db.Providers.Add(provider);
+
+        var profileIdsToApply = request.AssociateToProfileIds
+            ?.Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+
+        if (profileIdsToApply is null or { Count: 0 })
+        {
+            var profileName = await GetUniqueProfileNameAsync(db, name, cancellationToken);
+            var profile = new Profile
+            {
+                ProfileId = Guid.NewGuid().ToString(),
+                Name = profileName,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                Enabled = true,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+            db.Profiles.Add(profile);
+            profileIdsToApply = [profile.ProfileId];
+        }
+
+        ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        var newDto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
+        using var createScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
+        logger.LogInformation("Provider upserted (created): {ProviderId} '{Name}'.", provider.ProviderId, provider.Name);
+        eventBus.Publish(AppEventKind.ProviderChanged);
+
+        return TypedResults.Ok(new UpsertProviderResult { Action = "created", Provider = newDto });
     }
 
     private static async Task<Results<Ok<ProviderDto>, NotFound, ValidationProblem, Conflict<string>>> UpdateProviderAsync(
@@ -843,6 +1012,28 @@ public static class ProviderApiEndpoints
         trigger.CancelRefresh();
         logger.LogInformation("Snapshot refresh cancellation requested.");
         return Results.Ok();
+    }
+
+    private static async Task<Ok<SnapshotStatusDto>> GetSnapshotStatusAsync(
+        IRefreshTrigger trigger,
+        ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var latestRun = await db.FetchRuns
+            .AsNoTracking()
+            .Where(x => x.Type == "snapshot")
+            .OrderByDescending(x => x.StartedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return TypedResults.Ok(new SnapshotStatusDto
+        {
+            Running = trigger.IsRefreshing,
+            LastStatus = latestRun?.Status,
+            StartedUtc = latestRun?.StartedUtc,
+            CompletedUtc = latestRun?.FinishedUtc,
+            ChannelCountSeen = latestRun?.ChannelCountSeen,
+            ErrorSummary = latestRun?.ErrorSummary,
+        });
     }
 
     // -------------------------------------------------------------------------

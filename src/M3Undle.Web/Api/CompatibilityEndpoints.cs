@@ -41,6 +41,7 @@ public static class CompatibilityEndpoints
         client.MapGet("hdhr/tune/{streamKey}/{*tail}", ServeStreamAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
+        app.MapGet("/health/ready", ServeReadinessAsync).AllowAnonymous();
 
         var streamStatus = app.MapGroup("/status/streams")
             .RequireAuthorization(UiAccessPolicy.Name);
@@ -48,6 +49,20 @@ public static class CompatibilityEndpoints
         streamStatus.MapGet("clients", ServeStreamsClientsStatusAsync);
         streamStatus.MapGet("providers", ServeStreamsProvidersStatusAsync);
         streamStatus.MapGet("{sessionId}", ServeStreamsSingleSessionStatusAsync);
+
+        // Test-mode debug endpoints — only registered when M3UNDLE_TEST_MODE=true
+        var testMode = string.Equals(
+            Environment.GetEnvironmentVariable("M3UNDLE_TEST_MODE")?.Trim(),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (testMode)
+        {
+            var debug = app.MapGroup("/debug").RequireAuthorization(UiAccessPolicy.Name);
+            debug.MapPost("/streams/reset", ServeDebugStreamResetAsync);
+            debug.MapPost("/strikes/reset", ServeDebugStrikeResetAsync);
+            debug.MapGet("/streams/strikes", ServeDebugStrikesAsync);
+        }
 
         return app;
     }
@@ -315,6 +330,54 @@ public static class CompatibilityEndpoints
         return await db.Providers
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.ProviderId == profileProvider.ProviderId && x.Enabled, cancellationToken);
+    }
+
+    private static async Task<IResult> ServeReadinessAsync(
+        ApplicationDbContext db,
+        IRefreshTrigger refreshTrigger,
+        CancellationToken cancellationToken)
+    {
+        var reasons = new List<string>();
+
+        if (!await db.Providers.AsNoTracking().AnyAsync(x => x.IsActive && x.Enabled, cancellationToken))
+            reasons.Add("no active provider");
+
+        if (!await db.Snapshots.AsNoTracking().AnyAsync(x => x.Status == "active", cancellationToken))
+            reasons.Add("no active snapshot");
+
+        if (refreshTrigger.IsRefreshing)
+            reasons.Add("refresh in progress");
+
+        return reasons.Count == 0
+            ? Results.Ok(new { ready = true })
+            : Results.Json(new { ready = false, reasons }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static IResult ServeDebugStrikesAsync(UpstreamFailureStrikeStore strikeStore)
+    {
+        var cooldowns = strikeStore.GetActiveCooldowns();
+        var dtos = cooldowns
+            .Select(c => new
+            {
+                sessionKey = c.Key.ToString(),
+                providerId = c.Key.ProviderId,
+                providerChannelId = c.Key.ProviderChannelId,
+                remainingSeconds = Math.Round(c.Remaining.TotalSeconds, 1),
+            })
+            .ToArray();
+        return Results.Json(dtos, JsonOptions);
+    }
+
+    private static async Task<IResult> ServeDebugStreamResetAsync(ChannelSessionManager sessionManager)
+    {
+        await sessionManager.ResetAllAsync();
+        return Results.Ok(new { cleared = true });
+    }
+
+    private static IResult ServeDebugStrikeResetAsync(UpstreamFailureStrikeStore strikeStore)
+    {
+        strikeStore.ClearAll();
+        return Results.Ok(new { cleared = true });
     }
 
     private static async Task ServeStatusAsync(HttpContext context, ApplicationDbContext db, CancellationToken cancellationToken)

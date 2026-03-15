@@ -105,5 +105,18 @@ public sealed class ChannelSessionManager
 
         return Task.CompletedTask;
     }
+
+    public async Task ResetAllAsync()
+    {
+        ChannelStreamSession[] sessions;
+        lock (_admissionGate)
+        {
+            sessions = _sessions.Values.ToArray();
+            _sessions.Clear();
+        }
+
+        foreach (var session in sessions)
+            await session.StopAsync();
+    }
 }
 
