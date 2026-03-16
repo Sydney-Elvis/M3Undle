@@ -122,6 +122,15 @@ builder.Services.AddHttpClient("stream-relay", client =>
     client.Timeout = Timeout.InfiniteTimeSpan;
 });
 
+// Named HttpClient for EPG fetching — automatic gzip/deflate/brotli decompression
+builder.Services.AddHttpClient("epg", client =>
+{
+    client.DefaultRequestHeaders.AcceptEncoding.TryParseAdd("gzip, deflate, br");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AutomaticDecompression = System.Net.DecompressionMethods.All,
+});
+
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
@@ -169,6 +178,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Epg.XmltvParser>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
+builder.Services.AddScoped<M3Undle.Web.Application.Epg.EpgChannelMapper>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgCompiler>();
 builder.Services.AddScoped<SnapshotBuilder>();
 builder.Services.AddScoped<HdHomeRunLineupService>();
 builder.Services.AddScoped<ILineupRenderer, ActiveSnapshotLineupRenderer>();
@@ -186,6 +199,7 @@ builder.Services.AddScoped<ClientEndpointAccessFilter>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
+builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
@@ -272,6 +286,7 @@ app.MapChannelListApiEndpoints();
 app.MapSiteSettingsApiEndpoints();
 app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
+app.MapEpgApiEndpoints();
 app.MapHealthChecks("/health");
 
 app.Run();

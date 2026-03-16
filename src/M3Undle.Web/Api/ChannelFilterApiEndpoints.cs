@@ -403,9 +403,12 @@ public static class ChannelFilterApiEndpoints
         UpdateChannelSelectionsRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        EpgPageService epgPageService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var filter = await db.ProfileGroupFilters
+            .Include(x => x.ProviderGroup)
             .FirstOrDefaultAsync(x => x.ProfileGroupFilterId == filterId && x.ProfileId == profileId, cancellationToken);
 
         if (filter is null)
@@ -438,7 +441,34 @@ public static class ChannelFilterApiEndpoints
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
+        // Fire-and-forget EPG auto-map so newly mapped channels get guide data assigned
+        var providerId = filter.ProviderGroup.ProviderId;
+        _ = RunAutoMapSafeAsync(
+            epgPageService,
+            profileId,
+            providerId,
+            loggerFactory.CreateLogger("ChannelFilterApiEndpoints"));
+
         return await GetChannelSelectionsAsync(profileId, filterId, db, cancellationToken);
+    }
+
+    private static async Task RunAutoMapSafeAsync(
+        EpgPageService epgPageService,
+        string profileId,
+        string providerId,
+        ILogger logger)
+    {
+        try
+        {
+            await epgPageService.AutoMapForProviderAsync(profileId, providerId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "EPG auto-map failed after channel selection update for profile {ProfileId}, provider {ProviderId}.",
+                profileId,
+                providerId);
+        }
     }
 
     // -------------------------------------------------------------------------

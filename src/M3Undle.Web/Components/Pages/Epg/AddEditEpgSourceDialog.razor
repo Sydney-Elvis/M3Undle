@@ -1,0 +1,171 @@
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts.Epg
+@inject EpgPageService EpgPageService
+@inject ISnackbar Snackbar
+
+<MudDialog Style="min-width:640px">
+    <DialogContent>
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+        }
+
+        <MudForm @ref="_form">
+            <MudStack Spacing="3">
+                <MudTextField Label="Name" @bind-Value="_name"
+                              Required="true" RequiredError="Name is required."
+                              HelperText="A friendly label for this EPG source (e.g. Schedules Direct, XMLTV.co.uk)" />
+
+                <MudSelect T="string" Label="Kind" @bind-Value="_kind"
+                           Required="true" RequiredError="Kind is required."
+                           HelperText="How this source is fetched">
+                    <MudSelectItem Value="@("xmltv_url")">URL — fetch from an HTTP/HTTPS address</MudSelectItem>
+                    <MudSelectItem Value="@("xmltv_file")">File — read from a local path on the server</MudSelectItem>
+                    <MudSelectItem Value="@("provider_xmltv")">Provider XMLTV — use the provider's built-in guide</MudSelectItem>
+                </MudSelect>
+
+                @if (_kind == "xmltv_url")
+                {
+                    <MudTextField Label="URL" @bind-Value="_urlOrPath"
+                                  Required="true" RequiredError="URL is required."
+                                  HelperText="Full URL including http:// or https://. Use %VAR_NAME% for credentials from .env" />
+                }
+                else if (_kind == "xmltv_file")
+                {
+                    <MudTextField Label="File path" @bind-Value="_urlOrPath"
+                                  Required="true" RequiredError="Path is required."
+                                  HelperText="Absolute path to the XMLTV file on the server" />
+                }
+
+                <MudStack Row="true" Spacing="2">
+                    <MudNumericField T="int" Label="Priority" @bind-Value="_priority" Min="1" Max="100"
+                                     HelperText="Lower = higher priority (1 is used first)" Style="flex:1" />
+                    <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_timeout" Min="5" Max="1800" Style="flex:1" />
+                </MudStack>
+
+                <MudSwitch @bind-Value="_enabled" Color="Color.Success" Label="Enabled" />
+
+                <MudExpansionPanels Elevation="0">
+                    <MudExpansionPanel Text="Advanced (authentication, custom headers)">
+                        <MudStack Spacing="2" Class="pt-2">
+                            <MudTextField Label="User Agent (optional)" @bind-Value="_userAgent"
+                                          HelperText="Override the HTTP User-Agent header" />
+                            <MudTextField Label="Headers JSON (optional)" @bind-Value="_headersJson"
+                                          Lines="3"
+                                          HelperText='Extra HTTP headers as JSON, e.g. {"Authorization":"Bearer token123"}' />
+                        </MudStack>
+                    </MudExpansionPanel>
+                </MudExpansionPanels>
+            </MudStack>
+        </MudForm>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync" Disabled="_isSaving">
+            @(_isSaving ? "Saving…" : (IsEdit ? "Save Changes" : "Add Source"))
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string? ProviderId { get; set; }
+    [Parameter] public EpgSourceDto? Source { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private MudForm _form = default!;
+    private string _name = string.Empty;
+    private string _kind = "xmltv_url";
+    private string? _urlOrPath;
+    private int _priority = 10;
+    private int _timeout = 30;
+    private bool _enabled = true;
+    private string? _userAgent;
+    private string? _headersJson;
+    private bool _isSaving;
+    private string? _error;
+
+    private bool IsEdit => Source is not null;
+
+    protected override void OnParametersSet()
+    {
+        if (Source is not null)
+        {
+            _name = Source.Name;
+            _kind = Source.Kind;
+            _urlOrPath = Source.UrlOrPath;
+            _priority = Source.Priority;
+            _timeout = Source.TimeoutSeconds;
+            _enabled = Source.Enabled;
+            _userAgent = Source.UserAgent;
+            _headersJson = Source.HeadersJson;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SaveAsync()
+    {
+        await _form.Validate();
+        if (!_form.IsValid) return;
+
+        _isSaving = true;
+        _error = null;
+
+        try
+        {
+            string? error;
+            if (IsEdit)
+            {
+                var req = new UpdateEpgSourceRequest
+                {
+                    Name = _name,
+                    UrlOrPath = _urlOrPath ?? string.Empty,
+                    Priority = _priority,
+                    Enabled = _enabled,
+                    TimeoutSeconds = _timeout,
+                    UserAgent = _userAgent ?? string.Empty,
+                    HeadersJson = _headersJson ?? string.Empty,
+                };
+                (_, error) = await EpgPageService.UpdateSourceAsync(Source!.EpgSourceId, req, CancellationToken.None);
+            }
+            else
+            {
+                var req = new CreateEpgSourceRequest
+                {
+                    ProviderId = ProviderId,
+                    Name = _name,
+                    Kind = _kind,
+                    UrlOrPath = _urlOrPath,
+                    Priority = _priority,
+                    Enabled = _enabled,
+                    TimeoutSeconds = _timeout,
+                    UserAgent = _userAgent,
+                    HeadersJson = _headersJson,
+                };
+                (_, error) = await EpgPageService.CreateSourceAsync(req, CancellationToken.None);
+            }
+
+            if (error is not null)
+            {
+                _error = error;
+                return;
+            }
+
+            Snackbar.Add(IsEdit ? "EPG source updated." : "EPG source added.", Severity.Success);
+            MudDialog.Close();
+            if (OnSaved.HasDelegate)
+                await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to save: {ex.Message}";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

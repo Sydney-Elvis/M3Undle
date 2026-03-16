@@ -2,6 +2,13 @@ using System.ComponentModel.DataAnnotations;
 
 namespace M3Undle.Web.Contracts.Providers;
 
+public sealed class ProviderListItemDto
+{
+    public string ProviderId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+}
+
 public sealed class ProfileListItemDto
 {
     public string ProfileId { get; set; } = string.Empty;

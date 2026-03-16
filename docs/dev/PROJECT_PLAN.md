@@ -155,11 +155,11 @@ Status: In progress.
 - [ ] End-to-end validation with Plex, Emby, and Jellyfin
 
 #### EPG Sources
-- [ ] Additional XMLTV/EPG source URLs per provider
-- [ ] XMLTV merge into one guide feed
-- [ ] De-duplicate EPG entries by channel id
-- [ ] Source priority rules across guide inputs
-- [ ] Cross-source `tvg-id` mapping
+- [x] Additional XMLTV/EPG source URLs per provider
+- [x] XMLTV merge into one guide feed
+- [x] De-duplicate EPG entries by channel id
+- [x] Source priority rules across guide inputs
+- [~] Cross-source `tvg-id` mapping (via per-channel source mappings; canonical-channel mapping remains future work)
 
 ### Alpha 5 — Remaining Features
 Goal: Finish remaining lineup-management features before Beta hardening.
