@@ -64,6 +64,14 @@
                               InputType="InputType.Password"
                               HelperText="Stored as password hash in database." />
 
+                <MudTextField @bind-Value="_virtualTunerId"
+                              Label="Virtual Tuner ID"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              FullWidth="true"
+                              Placeholder="hdhr-main"
+                              HelperText="Used as the HDHomeRun tuner identity for retune/reuse behavior." />
+
                 @if (!string.IsNullOrWhiteSpace(_activeProfileId))
                 {
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
@@ -377,6 +385,7 @@
     private bool _endpointHasCredential;
     private string _endpointUsername = string.Empty;
     private string _endpointPassword = string.Empty;
+    private string _virtualTunerId = "hdhr-main";
     private string? _activeProfileId;
     private string? _endpointError;
     private string? _endpointSuccess;
@@ -420,6 +429,7 @@
             _endpointUsername = settings.Username ?? string.Empty;
             _endpointHasCredential = settings.HasCredential;
             _activeProfileId = settings.ActiveProfileId;
+            _virtualTunerId = string.IsNullOrWhiteSpace(settings.VirtualTunerId) ? "hdhr-main" : settings.VirtualTunerId;
         }
         catch (Exception ex)
         {
@@ -528,7 +538,8 @@
                 Enabled: _endpointEnabled,
                 Username: string.IsNullOrWhiteSpace(_endpointUsername) ? null : _endpointUsername.Trim(),
                 Password: string.IsNullOrWhiteSpace(_endpointPassword) ? null : _endpointPassword,
-                ActiveProfileId: _activeProfileId), CancellationToken.None);
+                ActiveProfileId: _activeProfileId,
+                VirtualTunerId: string.IsNullOrWhiteSpace(_virtualTunerId) ? "hdhr-main" : _virtualTunerId.Trim()), CancellationToken.None);
 
             if (!result.Succeeded)
             {
@@ -540,6 +551,7 @@
             _endpointUsername = result.Settings.Username ?? string.Empty;
             _endpointHasCredential = result.Settings.HasCredential;
             _activeProfileId = result.Settings.ActiveProfileId;
+            _virtualTunerId = string.IsNullOrWhiteSpace(result.Settings.VirtualTunerId) ? "hdhr-main" : result.Settings.VirtualTunerId;
             _endpointPassword = string.Empty;
             _endpointSuccess = "Endpoint security settings saved.";
         }

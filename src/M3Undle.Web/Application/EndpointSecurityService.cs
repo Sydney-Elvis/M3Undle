@@ -18,7 +18,8 @@ public sealed record UpdateEndpointSecurityCommand(
     bool Enabled,
     string? Username,
     string? Password,
-    string? ActiveProfileId);
+    string? ActiveProfileId,
+    string? VirtualTunerId);
 
 public sealed record EndpointSecurityUpdateResult(
     bool Succeeded,
@@ -193,6 +194,13 @@ public sealed class EndpointSecurityService(ApplicationDbContext db) : IEndpoint
 
             if (command.ActiveProfileId is not null)
                 binding.ActiveProfileId = string.IsNullOrWhiteSpace(command.ActiveProfileId) ? null : command.ActiveProfileId.Trim();
+
+            if (command.VirtualTunerId is not null)
+            {
+                binding.VirtualTunerId = string.IsNullOrWhiteSpace(command.VirtualTunerId)
+                    ? "hdhr-main"
+                    : command.VirtualTunerId.Trim();
+            }
 
             binding.Enabled = command.Enabled;
             binding.UpdatedUtc = now;

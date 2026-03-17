@@ -20,7 +20,7 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Shared live stream proxy with byte-bounded buffering, reconnect handling, and direct-relay fallback for VOD-style routes
 > - Web UI for provider management (Pre-Alpha)
 > - Stream monitoring UI and stream status endpoints
-> - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`)
+> - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`) with tuner-slot enforcement keyed by `VirtualTunerId`
 > 
 > **Forthcoming**
 > - Group-based inclusion rules
@@ -110,6 +110,7 @@ Current Pre-Alpha work includes:
 - EPG Sources UI and API for provider-linked guide sources, test fetches, and channel mapping
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
 - HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
+- HDHomeRun tuner-slot enforcement and retune/reuse behaviour keyed by endpoint `VirtualTunerId`
 - Shared live stream proxy for `/live`, `/stream`, `/tune`, and `/hdhr/tune`
 - Byte-bounded in-memory buffer for late joiners with reconnect handling and slow-subscriber eviction
 - Direct relay retained for `/movie`, `/vod`, and `/series`

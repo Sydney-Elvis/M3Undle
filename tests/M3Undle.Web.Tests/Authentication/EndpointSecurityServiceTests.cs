@@ -28,7 +28,8 @@ public sealed class EndpointSecurityServiceTests
             Enabled: true,
             Username: "iptv-user",
             Password: "secret-pass",
-            ActiveProfileId: null), CancellationToken.None);
+            ActiveProfileId: null,
+            VirtualTunerId: "tuner-a"), CancellationToken.None);
 
         Assert.IsTrue(result.Succeeded, result.Error);
 
@@ -44,7 +45,7 @@ public sealed class EndpointSecurityServiceTests
 
         var binding = await db.EndpointAccessBindings.AsNoTracking().SingleAsync();
         Assert.AreEqual(credential.EndpointCredentialId, binding.EndpointCredentialId);
-        Assert.AreEqual("hdhr-main", binding.VirtualTunerId);
+        Assert.AreEqual("tuner-a", binding.VirtualTunerId);
         Assert.IsTrue(binding.Enabled);
     }
 
@@ -62,13 +63,15 @@ public sealed class EndpointSecurityServiceTests
             Enabled: true,
             Username: "original-user",
             Password: "original-pass",
-            ActiveProfileId: null), CancellationToken.None);
+            ActiveProfileId: null,
+            VirtualTunerId: null), CancellationToken.None);
 
         var result = await service.UpdateAsync(new UpdateEndpointSecurityCommand(
             Enabled: true,
             Username: "updated-user",
             Password: "updated-pass",
-            ActiveProfileId: null), CancellationToken.None);
+            ActiveProfileId: null,
+            VirtualTunerId: null), CancellationToken.None);
 
         Assert.IsTrue(result.Succeeded, result.Error);
         Assert.AreEqual("updated-user", result.Settings.Username);
@@ -118,7 +121,8 @@ public sealed class EndpointSecurityServiceTests
             Enabled: true,
             Username: null,
             Password: null,
-            ActiveProfileId: null), CancellationToken.None);
+            ActiveProfileId: null,
+            VirtualTunerId: null), CancellationToken.None);
 
         Assert.IsFalse(result.Succeeded);
         Assert.IsTrue(result.Error!.Contains("Multiple", StringComparison.OrdinalIgnoreCase));

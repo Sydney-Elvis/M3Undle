@@ -111,6 +111,7 @@ Controls whether the M3U, XMLTV, stream, and HDHomeRun client endpoints require 
 
 - Enable or disable endpoint authentication
 - Set the username and password clients must supply
+- Set the `Virtual Tuner ID` used for HDHomeRun tuner ownership and retune/reuse behaviour
 - See whether a credential is currently configured
 
 **Stream Proxy**
@@ -123,6 +124,8 @@ Configures how M3Undle handles live stream relay. Settings are grouped into thre
 Each setting includes a plain-English description, and a help icon explains the purpose and default value in detail.
 
 Changes are saved to the database immediately but only take effect after a restart. The page shows the currently active (running) configuration alongside the saved values, and displays a warning banner when they differ. An in-app **Restart M3Undle** button is available once settings have been saved, and shows how many streams are currently active so you know the impact before restarting.
+
+For HDHomeRun-style access, tuner ownership is tracked by the configured `Virtual Tuner ID`, not by remote IP. Re-tuning from the same virtual tuner replaces the prior playback session instead of consuming another tuner slot.
 
 ---
 

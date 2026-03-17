@@ -113,6 +113,13 @@ Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, 
 - GET `/hdhr/device.xml`
   - UPnP device description used by SSDP/manual client probes.
 
+### HDHomeRun Tuner Semantics
+- HDHomeRun tune requests consume tuner slots from the configured `TunerCount`.
+- Tuner ownership is keyed by the resolved endpoint-binding `VirtualTunerId`, not by remote IP.
+- A new `/hdhr/tune/<streamKey>` request on the same `VirtualTunerId` replaces the prior playback from that tuner instead of consuming another slot.
+- Requests from distinct `VirtualTunerId` values can consume separate tuner slots up to the configured `TunerCount`.
+- Requests beyond the configured tuner count return a busy/unavailable response.
+
 ### Discovery (optional)
 - SSDP / UPnP listener on UDP `1900`
 - SiliconDust discovery listener on UDP `65001`
@@ -124,5 +131,6 @@ UI authentication and client endpoint authentication are independent:
 
 - UI auth (`M3UNDLE_AUTH_ENABLED`) controls access to the web UI and management APIs.
 - Endpoint auth is configured in the web UI (**Settings → Endpoint Security**) and stored in the database.
+- Endpoint auth settings also carry the HDHomeRun `Virtual Tuner ID` used for tuner-slot ownership.
 - When endpoint auth is enabled, M3U/XMLTV/stream/HDHR endpoints require stateless username/password access (no redirects, no session-cookie requirements).
 - When endpoint auth is disabled, endpoint behavior remains open as before.

@@ -134,7 +134,7 @@ Status: Complete.
 ### Alpha 4 — Stream Proxy, DVR Integration & EPG
 Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
-Status: In progress. EPG sources are implemented; remaining work is concentrated in HDHomeRun tuner semantics, client validation, and finishing stream tuning controls in the Settings UI.
+Status: In progress. EPG sources, stream settings UI, and HDHomeRun tuner-slot enforcement are implemented; remaining work is concentrated in end-to-end DVR client validation.
 
 #### Stream Proxy (Shared Live Streaming)
 - [x] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
@@ -151,7 +151,7 @@ Status: In progress. EPG sources are implemented; remaining work is concentrated
 - [x] Initial HDHomeRun compatibility groundwork:
   `GET /discover.json`, `GET /lineup.json`, `GET /lineup_status.json`, discovery service, device identity, lineup rendering tests
 - [x] Number of tuners setting in user-facing configuration
-- [ ] Connection limiting (session-level limits exist; HDHomeRun-specific tuner slot enforcement not yet done)
+- [x] Connection limiting via HDHomeRun tuner-slot enforcement keyed by `VirtualTunerId` from endpoint binding; same-tuner retunes replace prior subscriber instead of consuming another slot
 - [ ] End-to-end validation with Plex, Emby, and Jellyfin
 
 #### EPG Sources

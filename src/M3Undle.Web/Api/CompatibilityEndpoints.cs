@@ -8,6 +8,7 @@ using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
+using M3Undle.Web.Streaming.Subscribers;
 using M3Undle.Web.Streaming.Upstream;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -138,6 +139,7 @@ public static class CompatibilityEndpoints
         ApplicationDbContext db,
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
+        HdHomeRunTunerManager hdHomeRunTunerManager,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
         IOptions<StreamProxyOptions> streamProxyOptions,
@@ -183,10 +185,43 @@ public static class CompatibilityEndpoints
 
         if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
+            HdHomeRunTunerReservation? tunerReservation = null;
+            SubscriberConnection? subscriber = null;
             try
             {
+                if (IsHdHomeRunTuneRoute(context.Request.Path))
+                {
+                    var access = context.GetResolvedClientAccess();
+                    var tunerId = string.IsNullOrWhiteSpace(access.Binding.VirtualTunerId)
+                        ? "hdhr-main"
+                        : access.Binding.VirtualTunerId!;
+
+                    var tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
+                    if (!tunerAcquire.Succeeded || tunerAcquire.Reservation is null)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                        context.Response.Headers["Retry-After"] = "30";
+                        if (!string.IsNullOrWhiteSpace(tunerAcquire.Error))
+                            await context.Response.WriteAsync(tunerAcquire.Error, cancellationToken);
+                        return;
+                    }
+
+                    tunerReservation = tunerAcquire.Reservation;
+                    if (tunerAcquire.PriorSubscriber is not null)
+                        await tunerAcquire.PriorSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+                }
+
                 var session = await channelSessionManager.GetOrCreateAsync(resolved.SourceDescriptor, cancellationToken);
-                var subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
+                subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
+
+                if (tunerReservation is not null)
+                {
+                    hdHomeRunTunerManager.Activate(
+                        tunerReservation,
+                        subscriber,
+                        resolved.SourceDescriptor.DisplayName);
+                }
+
                 await subscriber.Completion;
                 return;
             }
@@ -231,6 +266,11 @@ public static class CompatibilityEndpoints
                 if (!context.Response.HasStarted)
                     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 return;
+            }
+            finally
+            {
+                if (tunerReservation is not null)
+                    hdHomeRunTunerManager.Release(tunerReservation.ReservationId, subscriber?.ClientId);
             }
         }
 
@@ -452,6 +492,11 @@ public static class CompatibilityEndpoints
 
     private static IResult ServeStreamsProvidersStatusAsync(StreamingRegistry registry)
         => Results.Json(registry.GetActiveProviderStreams(), JsonOptions);
+
+    // `/tune/*` exists only as the legacy HDHomeRun root alias for `/hdhr/tune/*`.
+    private static bool IsHdHomeRunTuneRoute(PathString path)
+        => path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase);
 
     private static IResult ServeStreamsSingleSessionStatusAsync(string sessionId, StreamingRegistry registry)
     {

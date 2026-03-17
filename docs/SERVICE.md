@@ -25,9 +25,10 @@ At a high level, the service:
   - XMLTV — `/xmltv/m3undle.xml`
   - Shared live stream proxy — `/live/<streamKey>`, `/stream/<streamKey>`, `/tune/<streamKey>`, `/hdhr/tune/<streamKey>`
   - Direct relay for VOD-style routes — `/movie/<streamKey>`, `/vod/<streamKey>`, `/series/<streamKey>`
- - Shares one upstream live connection across subscribers for the same channel session
- - Keeps a small byte-bounded in-memory buffer for late joiners
- - Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
+- Shares one upstream live connection across subscribers for the same channel session
+- Keeps a small byte-bounded in-memory buffer for late joiners
+- Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
+- Enforces HDHomeRun tuner-slot limits by `VirtualTunerId`, so the same virtual tuner can retune without consuming another slot
 
 ---
 
@@ -114,6 +115,7 @@ Views:
 - **Snapshots / Status**: see refresh history and the current active snapshot
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
 - **Settings**: configure stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button; changes are persisted to the database and applied on the next startup
+- **Settings**: configure endpoint security credentials and the HDHomeRun `Virtual Tuner ID` used for tuner ownership
 
 Design goals:
 - configuration should be explicit and understandable
