@@ -22,6 +22,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Options;
 using MudBlazor.Services;
 using Serilog;
 using Serilog.Formatting.Compact;
@@ -138,6 +139,15 @@ builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.Ge
 builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection("M3Undle:Streaming"));
 builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
 builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
+builder.Services.AddSingleton<IConfigureOptions<StreamProxyOptions>, StreamProxyDbOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<BufferOptions>, BufferDbOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<ReconnectOptions>, ReconnectDbOptionsConfigurator>();
+builder.Services.AddSingleton<IValidateOptions<StreamProxyOptions>, StreamProxyOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<BufferOptions>, BufferOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<ReconnectOptions>, ReconnectOptionsValidator>();
+builder.Services.AddOptions<StreamProxyOptions>().ValidateOnStart();
+builder.Services.AddOptions<BufferOptions>().ValidateOnStart();
+builder.Services.AddOptions<ReconnectOptions>().ValidateOnStart();
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
@@ -192,6 +202,7 @@ builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
 builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
+builder.Services.AddSingleton<IApplicationRestartService, ApplicationRestartService>();
 builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
 builder.Services.AddScoped<IAccessResolver, ClientEndpointAccessResolver>();
@@ -237,6 +248,9 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+
+    var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
+    await streamingSettings.ClearRestartRequiredAsync();
 }
 
 await SeedAdminAccountIfNeededAsync(app.Services);
@@ -375,4 +389,3 @@ sealed class SqliteConnectionInterceptor : DbConnectionInterceptor
         cmd.ExecuteNonQuery();
     }
 }
-

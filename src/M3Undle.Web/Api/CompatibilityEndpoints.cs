@@ -3,12 +3,14 @@ using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
 using M3Undle.Web.Streaming.Upstream;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Api;
 
@@ -138,7 +140,7 @@ public static class CompatibilityEndpoints
         ChannelSessionManager channelSessionManager,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
-        IStreamingSettingsService streamingSettings,
+        IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
@@ -167,7 +169,7 @@ public static class CompatibilityEndpoints
             return;
         }
 
-        if (!await streamingSettings.GetEnabledAsync(cancellationToken))
+        if (!streamProxyOptions.Value.StreamingEnabled)
         {
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             context.Response.Headers.Append("Retry-After", "60");

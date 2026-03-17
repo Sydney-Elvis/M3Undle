@@ -43,7 +43,7 @@ public sealed class XmltvParserTests
     public void Parse_ExtractsChannelCount()
     {
         var catalogue = _parser.Parse("src1", SampleXmltv);
-        Assert.AreEqual(2, catalogue.Channels.Count);
+        Assert.HasCount(2, catalogue.Channels);
     }
 
     [TestMethod]
@@ -86,7 +86,7 @@ public sealed class XmltvParserTests
     {
         var catalogue = _parser.Parse("src1", SampleXmltv);
         Assert.IsTrue(catalogue.ProgrammesByChannel.ContainsKey("cnn.us"));
-        Assert.AreEqual(2, catalogue.ProgrammesByChannel["cnn.us"].Count);
+        Assert.HasCount(2, catalogue.ProgrammesByChannel["cnn.us"]);
     }
 
     [TestMethod]
@@ -118,7 +118,7 @@ public sealed class XmltvParserTests
     {
         var catalogue = _parser.Parse("src1", SampleXmltv);
         var first = catalogue.ProgrammesByChannel["cnn.us"][0];
-        Assert.AreEqual(1, first.Categories.Count);
+        Assert.HasCount(1, first.Categories);
         Assert.AreEqual("News", first.Categories[0]);
     }
 
@@ -127,7 +127,7 @@ public sealed class XmltvParserTests
     {
         var catalogue = _parser.Parse("src1", SampleXmltv);
         var first = catalogue.ProgrammesByChannel["cnn.us"][0];
-        Assert.AreEqual(1, first.EpisodeNums.Count);
+        Assert.HasCount(1, first.EpisodeNums);
     }
 
     [TestMethod]
@@ -200,8 +200,8 @@ public sealed class XmltvParserTests
     public void Parse_EmptyString_ReturnsEmptyCatalogue()
     {
         var catalogue = _parser.Parse("src1", "");
-        Assert.AreEqual(0, catalogue.Channels.Count);
-        Assert.AreEqual(0, catalogue.ProgrammesByChannel.Count);
+        Assert.IsEmpty(catalogue.Channels);
+        Assert.IsEmpty(catalogue.ProgrammesByChannel);
     }
 
     [TestMethod]

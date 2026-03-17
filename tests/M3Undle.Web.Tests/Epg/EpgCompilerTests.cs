@@ -63,9 +63,9 @@ public sealed class EpgCompilerTests
 
         var (xml, report) = _compiler.Compile(outputChannels, sources, catalogues, mappings);
 
-        Assert.IsTrue(xml.Contains("<channel id=\"cnn.us\">"), "Should contain channel element");
-        Assert.IsTrue(xml.Contains("<programme"), "Should contain programme element");
-        Assert.IsTrue(xml.Contains("Breaking News"), "Should contain programme title");
+        Assert.Contains("<channel id=\"cnn.us\">", xml);
+        Assert.Contains("<programme", xml);
+        Assert.Contains("Breaking News", xml);
         Assert.AreEqual(1, report.TotalProgrammes);
         Assert.AreEqual(1, report.MappedChannels);
     }
@@ -88,7 +88,7 @@ public sealed class EpgCompilerTests
         var (xml, _) = _compiler.Compile(outputChannels, sources, catalogues, mappings);
 
         // Programme channel attribute must use the lineup tvg-id, not the source channel id
-        Assert.IsTrue(xml.Contains("channel=\"espn.us\""));
+        Assert.Contains("channel=\"espn.us\"", xml);
     }
 
     [TestMethod]
@@ -105,7 +105,7 @@ public sealed class EpgCompilerTests
 
         var (xml, report) = _compiler.Compile(outputChannels, sources, catalogues, mappings);
 
-        Assert.IsTrue(xml.Contains("<channel id=\"fox.us\">"));
+        Assert.Contains("<channel id=\"fox.us\">", xml);
         Assert.AreEqual(0, report.TotalProgrammes);
         Assert.AreEqual(0, report.MappedChannels);
     }
@@ -139,8 +139,8 @@ public sealed class EpgCompilerTests
 
         var (xml, report) = _compiler.Compile(outputChannels, sources, catalogues, mappings);
 
-        Assert.IsTrue(xml.Contains("Primary Title"), "Higher-priority source title should appear");
-        Assert.IsFalse(xml.Contains("Secondary Title"), "Lower-priority source title should not appear");
+        Assert.Contains("Primary Title", xml);
+        Assert.DoesNotContain("Secondary Title", xml);
     }
 
     // -------------------------------------------------------------------------
@@ -186,7 +186,7 @@ public sealed class EpgCompilerTests
 
         var (xml, _) = _compiler.Compile(outputChannels, sources, catalogues, mappings);
 
-        Assert.IsTrue(xml.StartsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?>"), "Should have UTF-8 declaration");
+        Assert.StartsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?>", xml);
     }
 
     [TestMethod]
@@ -200,8 +200,8 @@ public sealed class EpgCompilerTests
 
         var (xml, _) = _compiler.Compile(outputChannels, sources, catalogues, mappings);
 
-        Assert.IsTrue(xml.Contains("<tv ") || xml.Contains("<tv>"));
-        Assert.IsTrue(xml.Contains("</tv>"));
+        Assert.Contains("<tv", xml);
+        Assert.Contains("</tv>", xml);
     }
 
     // -------------------------------------------------------------------------

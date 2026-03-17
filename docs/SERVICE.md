@@ -18,6 +18,7 @@ The service focuses on **clarity, control, and predictable behavior**.
 At a high level, the service:
 
 - Ingests a provider playlist (M3U) and guide data (XMLTV)
+- Supports multiple provider-linked EPG sources, source-priority merge rules, and per-channel guide mapping
 - Builds **snapshots** and serves **last-known-good** output
 - Publishes compatibility endpoints for clients:
   - M3U — `/m3u/m3undle.m3u`
@@ -108,10 +109,11 @@ Views:
   - Import providers from config.yaml (read-only, credentials secure)
   - Add/edit providers directly in the GUI (for testing or one-off providers)
   - Check provider health (credentials defined, last successful fetch, etc.)
+- **EPG Sources**: manage provider-linked XMLTV sources, test guide fetches, and tune channel mappings
 - **Groups**: browse the provider's groups and channel counts (read-only preview)
 - **Snapshots / Status**: see refresh history and the current active snapshot
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
-- **Settings**: enable or disable streaming and view the effective stream proxy, buffer, and reconnect configuration
+- **Settings**: configure stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button; changes are persisted to the database and applied on the next startup
 
 Design goals:
 - configuration should be explicit and understandable

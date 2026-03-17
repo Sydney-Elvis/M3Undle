@@ -24,9 +24,9 @@ Add multiple providers and browse each one's catalog. You can switch the active 
 Configuration includes:
 
 - Playlist URL
-- EPG URL (optional)
 - Timeout settings
 - Enabled/disabled toggle
+- Optional per-provider max concurrent stream limit
 
 The UI shows:
 
@@ -35,9 +35,28 @@ The UI shows:
 - Channel count seen
 - Associated profile and snapshot status
 
+Provider configuration covers the playlist source and provider identity. Guide-source management is handled separately in the EPG section.
+
 ---
 
-### 2. Groups (Preview)
+### 2. EPG Sources
+
+The EPG Sources view manages guide inputs per provider.
+
+It supports:
+
+- Multiple XMLTV sources per provider
+- Provider-built-in XMLTV, remote URL, or local file sources
+- Source priority ordering
+- On-demand source test fetch and parse
+- Auto-mapping channels from a guide source
+- Manual channel-to-guide mapping overrides
+
+The published `/xmltv/m3undle.xml` output is compiled from the enabled sources, merged into one guide feed, and aligned with the active lineup.
+
+---
+
+### 3. Groups (Preview)
 
 The Groups view shows a read-only preview of your provider's catalog.
 
@@ -51,7 +70,7 @@ This view is read-only. Instead of manually inspecting thousands of channels, yo
 
 ---
 
-### 3. Snapshots & Status
+### 4. Snapshots & Status
 
 The Snapshots view shows:
 
@@ -66,7 +85,7 @@ The UI makes this behavior visible so you always know what clients are receiving
 
 ---
 
-### 4. Stream Identity
+### 5. Stream Identity
 
 Each published channel uses a stable stream key.
 
@@ -77,6 +96,33 @@ Clients receive URLs like:
 Stream keys are stable across refreshes. They only regenerate if the active provider is switched.
 
 This protects DVR mappings and client configurations.
+
+---
+
+### 6. Settings
+
+The Settings page is split into three panels.
+
+**UI Security**
+Shows whether UI authentication (login) is currently enabled. This is controlled by the `M3UNDLE_AUTH_ENABLED` environment variable and is read-only in the UI.
+
+**Endpoint Security**
+Controls whether the M3U, XMLTV, stream, and HDHomeRun client endpoints require a username and password. You can:
+
+- Enable or disable endpoint authentication
+- Set the username and password clients must supply
+- See whether a credential is currently configured
+
+**Stream Proxy**
+Configures how M3Undle handles live stream relay. Settings are grouped into three areas:
+
+- *Session Limits* — how many streams can play simultaneously, and how long a stream stays open after all viewers disconnect
+- *Buffering* — how much memory each stream uses for buffering, and how data is read from the source
+- *Reconnect Behaviour* — how quickly a stall is detected and how long M3Undle retries before giving up
+
+Each setting includes a plain-English description, and a help icon explains the purpose and default value in detail.
+
+Changes are saved to the database immediately but only take effect after a restart. The page shows the currently active (running) configuration alongside the saved values, and displays a warning banner when they differ. An in-app **Restart M3Undle** button is available once settings have been saved, and shows how many streams are currently active so you know the impact before restarting.
 
 ---
 

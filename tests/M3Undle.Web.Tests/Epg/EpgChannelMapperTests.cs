@@ -42,14 +42,14 @@ public sealed class EpgChannelMapperTests
     public void Tokenize_SplitsOnSpaces()
     {
         var tokens = EpgChannelMapper.Tokenize("cnn us hd");
-        Assert.AreEqual(3, tokens.Count);
+        Assert.HasCount(3, tokens);
     }
 
     [TestMethod]
     public void Tokenize_Null_ReturnsEmpty()
-        => Assert.AreEqual(0, EpgChannelMapper.Tokenize(null).Count);
+        => Assert.IsEmpty(EpgChannelMapper.Tokenize(null));
 
     [TestMethod]
     public void Tokenize_PunctuationOnly_ReturnsEmpty()
-        => Assert.AreEqual(0, EpgChannelMapper.Tokenize("---!!!").Count);
+        => Assert.IsEmpty(EpgChannelMapper.Tokenize("---!!!"));
 }

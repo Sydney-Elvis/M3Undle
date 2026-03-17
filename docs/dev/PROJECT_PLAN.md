@@ -22,7 +22,7 @@ Primary published endpoints:
 - Alpha 1: complete
 - Alpha 2: complete
 - Alpha 3: complete
-- Alpha 4: in progress — stream proxy complete; DVR integration and EPG remaining
+- Alpha 4: in progress — stream proxy, HDHomeRun groundwork, and EPG sources are in place; remaining work is HDHomeRun-specific validation and tuner-slot enforcement
 - Alpha 5: planned
 - Beta: hardening and release prep
 
@@ -134,7 +134,7 @@ Status: Complete.
 ### Alpha 4 — Stream Proxy, DVR Integration & EPG
 Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
-Status: In progress.
+Status: In progress. EPG sources are implemented; remaining work is concentrated in HDHomeRun tuner semantics, client validation, and finishing stream tuning controls in the Settings UI.
 
 #### Stream Proxy (Shared Live Streaming)
 - [x] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
@@ -145,7 +145,7 @@ Status: In progress.
 - [x] Source strike cooldown after retry exhaustion to prevent retry storms (default 5m, in-memory only)
 - [x] Explicit route split: `/live`, `/stream`, `/tune`, `/hdhr/tune` → shared session; `/movie`, `/vod`, `/series` → direct relay
 - [x] Streaming observability endpoints: `/status/streams`, `/status/streams/clients`, `/status/streams/providers`
-- [~] Settings page stream UI: enable/disable toggle and read-only visibility for max sessions, buffer sizing, stall timeout, outage window, and idle grace; editing those tuning values remains config-file-only
+- [x] Settings page stream UI: full read/write configuration for all stream proxy tuning values (enable/disable, session limits, buffer sizing, reconnect behaviour); values persisted to DB and loaded at startup via `IConfigureOptions`; in-app restart trigger with "restart required" banner when saved settings differ from the active runtime; startup `IValidateOptions` validation rejects out-of-range config from both appsettings and DB; byte-field upper bounds enforced in UI (1 GiB per session, 16 MiB read chunk) and service validation
 
 #### DVR Integration (HDHomeRun Emulation)
 - [x] Initial HDHomeRun compatibility groundwork:
@@ -155,6 +155,7 @@ Status: In progress.
 - [ ] End-to-end validation with Plex, Emby, and Jellyfin
 
 #### EPG Sources
+- [x] EPG source management UI + API (multiple sources per provider, test fetch, auto-map, manual mapping)
 - [x] Additional XMLTV/EPG source URLs per provider
 - [x] XMLTV merge into one guide feed
 - [x] De-duplicate EPG entries by channel id

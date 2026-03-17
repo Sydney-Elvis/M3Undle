@@ -1221,6 +1221,66 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("streaming_enabled");
 
+                    b.Property<int>("StreamBufferMaxBytesHardCap")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(33554432)
+                        .HasColumnName("stream_buffer_max_bytes_hard_cap");
+
+                    b.Property<int>("StreamBufferMaxBytesPerSession")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(4194304)
+                        .HasColumnName("stream_buffer_max_bytes_per_session");
+
+                    b.Property<int>("StreamBufferReadChunkSizeBytes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(32768)
+                        .HasColumnName("stream_buffer_read_chunk_size_bytes");
+
+                    b.Property<int>("StreamIdleGraceHardCapSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(120)
+                        .HasColumnName("stream_idle_grace_hard_cap_seconds");
+
+                    b.Property<int>("StreamIdleGraceSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(15)
+                        .HasColumnName("stream_idle_grace_seconds");
+
+                    b.Property<int>("StreamMaxConcurrentSessions")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(50)
+                        .HasColumnName("stream_max_concurrent_sessions");
+
+                    b.Property<int>("StreamReconnectConnectTimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(15)
+                        .HasColumnName("stream_reconnect_connect_timeout_seconds");
+
+                    b.Property<int>("StreamReconnectOutageWindowSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(75)
+                        .HasColumnName("stream_reconnect_outage_window_seconds");
+
+                    b.Property<int>("StreamReconnectReadStallTimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(30)
+                        .HasColumnName("stream_reconnect_read_stall_timeout_seconds");
+
+                    b.Property<bool>("StreamingSettingsRestartRequired")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("streaming_settings_restart_required");
+
                     b.HasKey("Id");
 
                     b.ToTable("site_settings", (string)null);
@@ -1231,7 +1291,17 @@ namespace M3Undle.Web.Data.Migrations
                             Id = 1,
                             AuthenticationEnabled = false,
                             EndpointSecurityEnabled = false,
-                            StreamingEnabled = true
+                            StreamBufferMaxBytesHardCap = 33554432,
+                            StreamBufferMaxBytesPerSession = 4194304,
+                            StreamBufferReadChunkSizeBytes = 32768,
+                            StreamIdleGraceHardCapSeconds = 120,
+                            StreamIdleGraceSeconds = 15,
+                            StreamMaxConcurrentSessions = 50,
+                            StreamReconnectConnectTimeoutSeconds = 15,
+                            StreamReconnectOutageWindowSeconds = 75,
+                            StreamReconnectReadStallTimeoutSeconds = 30,
+                            StreamingEnabled = true,
+                            StreamingSettingsRestartRequired = false
                         });
                 });
 

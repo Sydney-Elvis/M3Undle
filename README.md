@@ -15,6 +15,7 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Database-backed provider configuration
 > - Provider switching with snapshot lifecycle
 > - Group preview (read-only catalog browsing)
+> - EPG source management with multi-source XMLTV merge, mapping, and guide publishing
 > - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API
 > - Shared live stream proxy with byte-bounded buffering, reconnect handling, and direct-relay fallback for VOD-style routes
 > - Web UI for provider management (Pre-Alpha)
@@ -106,6 +107,7 @@ Current Pre-Alpha work includes:
 - Database-backed configuration
 - Provider switching with snapshot lifecycle
 - Group preview (read-only catalog browse)
+- EPG Sources UI and API for provider-linked guide sources, test fetches, and channel mapping
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
 - HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
 - Shared live stream proxy for `/live`, `/stream`, `/tune`, and `/hdhr/tune`
