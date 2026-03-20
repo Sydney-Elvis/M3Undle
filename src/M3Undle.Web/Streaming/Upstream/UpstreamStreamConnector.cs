@@ -26,6 +26,10 @@ public sealed class UpstreamStreamConnector(
 
         if (provider is null)
         {
+            logger.LogWarning(
+                "Cannot start stream for '{DisplayName}' — provider '{ProviderId}' is not found or is disabled.",
+                source.DisplayName,
+                source.ProviderId);
             throw new UpstreamConnectException(
                 $"Provider '{source.ProviderId}' is not available.",
                 UpstreamFailureKind.StartupFatal);
@@ -62,20 +66,37 @@ public sealed class UpstreamStreamConnector(
 
             var statusCode = (int)response.StatusCode;
             if (statusCode is 401 or 403)
+            {
+                logger.LogWarning(
+                    "Provider rejected the stream request for '{DisplayName}' with {StatusCode} — check your provider credentials.",
+                    source.DisplayName,
+                    statusCode);
                 throw new UpstreamConnectException("Provider authorization rejected stream request.", UpstreamFailureKind.UpstreamAuth, statusCode);
+            }
             if (statusCode == 404)
+            {
+                logger.LogWarning(
+                    "Provider returned 404 for '{DisplayName}' — the stream URL may be invalid or the channel is unavailable.",
+                    source.DisplayName);
                 throw new UpstreamConnectException("Provider stream endpoint not found.", UpstreamFailureKind.UpstreamNotFound, statusCode);
+            }
             if (statusCode >= 500)
+            {
+                logger.LogWarning(
+                    "Provider returned a server error ({StatusCode}) for '{DisplayName}' — will retry.",
+                    statusCode,
+                    source.DisplayName);
                 throw new UpstreamConnectException($"Upstream returned {statusCode}.", UpstreamFailureKind.UpstreamServerError, statusCode);
+            }
             if (!response.IsSuccessStatusCode)
                 throw new UpstreamConnectException($"Upstream returned non-success status {statusCode}.", UpstreamFailureKind.StartupFatal, statusCode);
 
             var stream = await response.Content.ReadAsStreamAsync(ct);
-            logger.LogDebug(
-                "Connected upstream stream for {ProviderId}/{ProviderChannelId} with status {Status}.",
-                source.ProviderId,
-                source.ProviderChannelId,
-                statusCode);
+            logger.LogInformation(
+                "Connected to upstream for '{DisplayName}' — HTTP {Status}, content type: {ContentType}.",
+                source.DisplayName,
+                statusCode,
+                response.Content.Headers.ContentType?.ToString() ?? "unknown");
 
             return new UpstreamConnection(client, response, stream);
         }

@@ -173,6 +173,7 @@ public static class CompatibilityEndpoints
 
         if (!streamProxyOptions.Value.StreamingEnabled)
         {
+            logger.LogWarning("Stream request rejected for key={StreamKey} — stream proxy is disabled in configuration.", streamKey);
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             context.Response.Headers.Append("Retry-After", "60");
             await context.Response.WriteAsync("Stream proxy is disabled.", cancellationToken);
@@ -330,13 +331,13 @@ public static class CompatibilityEndpoints
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
             await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
 
-            logger.LogDebug("Stream complete: channel={Channel} client={Client}",
+            logger.LogInformation("Stream ended: channel={Channel} client={Client}",
                 displayName,
                 context.Connection.RemoteIpAddress);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.LogDebug("Stream client disconnected: channel={Channel} client={Client}",
+            logger.LogInformation("Client disconnected from stream: channel={Channel} client={Client}",
                 displayName,
                 context.Connection.RemoteIpAddress);
         }

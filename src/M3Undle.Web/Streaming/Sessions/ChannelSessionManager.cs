@@ -16,6 +16,7 @@ public sealed class ChannelSessionManager
     private readonly UpstreamFailureStrikeStore _strikeStore;
     private readonly StreamingRegistry _registry;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<ChannelSessionManager> _logger;
     private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
 
@@ -35,6 +36,7 @@ public sealed class ChannelSessionManager
         _strikeStore = strikeStore;
         _registry = registry;
         _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
     }
 
     public ValueTask<ChannelStreamSession> GetOrCreateAsync(StreamSourceDescriptor source, CancellationToken ct)
@@ -44,6 +46,10 @@ public sealed class ChannelSessionManager
 
         if (_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
         {
+            _logger.LogWarning(
+                "Stream request rejected for '{DisplayName}' — upstream is in cooldown for {Seconds:F0}s more. Try again shortly.",
+                source.DisplayName,
+                cooldownRemaining.TotalSeconds);
             throw new StreamAdmissionException(
                 $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
                 StatusCodes.Status503ServiceUnavailable,
@@ -53,11 +59,22 @@ public sealed class ChannelSessionManager
         lock (_admissionGate)
         {
             if (_sessions.TryGetValue(key, out var existing))
+            {
+                _logger.LogDebug(
+                    "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
+                    existing.SessionId,
+                    source.DisplayName,
+                    existing.SubscriberCount);
                 return ValueTask.FromResult(existing);
+            }
 
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
             if (_sessions.Count >= maxSessions)
             {
+                _logger.LogWarning(
+                    "Stream request rejected for '{DisplayName}' — server is at the maximum of {Max} concurrent stream(s).",
+                    source.DisplayName,
+                    maxSessions);
                 throw new StreamAdmissionException(
                     $"Max concurrent sessions ({maxSessions}) reached.",
                     StatusCodes.Status503ServiceUnavailable,
@@ -70,12 +87,21 @@ public sealed class ChannelSessionManager
                 var providerSessionCount = _sessions.Keys.Count(x => x.ProviderId == key.ProviderId);
                 if (providerSessionCount >= providerCap)
                 {
+                    _logger.LogWarning(
+                        "Stream request rejected for '{DisplayName}' — provider has reached its upstream limit of {Cap} stream(s).",
+                        source.DisplayName,
+                        providerCap);
                     throw new StreamAdmissionException(
                         $"Provider upstream limit ({providerCap}) reached.",
                         StatusCodes.Status503ServiceUnavailable,
                         retryAfterSeconds: 30);
                 }
             }
+
+            _logger.LogInformation(
+                "Opening new stream session for '{DisplayName}' ({ActiveSessions} session(s) now active).",
+                source.DisplayName,
+                _sessions.Count + 1);
 
             var session = new ChannelStreamSession(
                 source,
@@ -114,6 +140,9 @@ public sealed class ChannelSessionManager
             sessions = _sessions.Values.ToArray();
             _sessions.Clear();
         }
+
+        if (sessions.Length > 0)
+            _logger.LogInformation("Resetting all {Count} active stream session(s).", sessions.Length);
 
         foreach (var session in sessions)
             await session.StopAsync();

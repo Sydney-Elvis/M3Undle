@@ -133,6 +133,7 @@ public static class ProviderApiEndpoints
         string profileId,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
     {
         var profileExists = await db.Profiles.AsNoTracking()
@@ -185,6 +186,14 @@ public static class ProviderApiEndpoints
         }
 
         await db.SaveChangesAsync(cancellationToken);
+
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Channel" });
+        logger.LogInformation(
+            "Selected all channels for profile {ProfileId}: {ChannelsSelected} channel(s) across {GroupsUpdated} group(s).",
+            profileId,
+            channelsSelected,
+            groupFilters.Count);
+
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
         return TypedResults.Ok(new SelectAllChannelsResult

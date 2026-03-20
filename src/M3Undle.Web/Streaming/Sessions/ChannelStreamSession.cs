@@ -94,6 +94,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _ = subscriber.StartAsync(snapshot, _sessionCts.Token);
         _registry.UpsertClient(subscriber.Snapshot());
         PublishSnapshots();
+
+        _logger.LogInformation(
+            "Client {RemoteIp} started watching '{DisplayName}' — {ViewerCount} viewer(s) on this stream.",
+            subscriber.RemoteIp ?? "unknown",
+            _source.DisplayName,
+            _subscribers.Count);
+
         return subscriber;
     }
 
@@ -102,6 +109,38 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_subscribers.TryRemove(subscriber.ClientId, out _))
         {
             _registry.RemoveClient(subscriber.ClientId);
+        }
+
+        var remainingViewers = _subscribers.Count;
+
+        var logMessage = reason switch
+        {
+            SubscriberDisconnectReason.ClientAborted  => "stopped watching (disconnected normally)",
+            SubscriberDisconnectReason.SlowClient     => "was dropped — too far behind to keep up",
+            SubscriberDisconnectReason.WriteFailure   => "was dropped — network write error",
+            SubscriberDisconnectReason.SessionClosed  => "disconnected — stream session ended",
+            SubscriberDisconnectReason.Retuned        => "was replaced by a retune request",
+            SubscriberDisconnectReason.Completed      => "finished watching (stream ended cleanly)",
+            _                                          => $"disconnected (reason: {reason})",
+        };
+
+        if (reason == SubscriberDisconnectReason.SlowClient)
+        {
+            _logger.LogWarning(
+                "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
+                subscriber.RemoteIp ?? "unknown",
+                logMessage,
+                _source.DisplayName,
+                remainingViewers);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
+                subscriber.RemoteIp ?? "unknown",
+                logMessage,
+                _source.DisplayName,
+                remainingViewers);
         }
 
         if (_subscribers.IsEmpty)
@@ -185,11 +224,23 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     _headersReadyTcs.TrySetResult(true);
 
                     if (reconnectAttempt > 0)
+                    {
+                        _logger.LogInformation(
+                            "Stream '{DisplayName}' recovered successfully after {Attempts} reconnect attempt(s).",
+                            _source.DisplayName,
+                            reconnectAttempt);
                         _buffer.ResetGeneration();
+                    }
 
                     reconnectAttempt = 0;
                     outageStartedUtc = null;
                     SetState(SessionState.Live);
+
+                    _logger.LogInformation(
+                        "Stream '{DisplayName}' is live — content type: {ContentType}.",
+                        _source.DisplayName,
+                        _contentType ?? "unknown");
+
                     PublishSnapshots();
                     await ReadFromUpstreamAsync(upstream, _sessionCts.Token);
 
@@ -220,6 +271,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
                     if (IsFatal(kind))
                     {
+                        _logger.LogError(
+                            "Stream '{DisplayName}' encountered a fatal error ({FailureKind}) and cannot recover. Check your provider settings.",
+                            _source.DisplayName,
+                            kind);
+
                         if (!_headersReadyTcs.Task.IsCompleted)
                             _headersReadyTcs.TrySetException(ex);
 
