@@ -480,12 +480,14 @@ public static class ChannelFilterApiEndpoints
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
         // Fire-and-forget EPG auto-map so newly mapped channels get guide data assigned
-        var providerId = filter.ProviderGroup.ProviderId;
-        _ = RunAutoMapSafeAsync(
-            epgPageService,
-            profileId,
-            providerId,
-            channelLogger);
+        if (filter.ProviderGroup is not null)
+        {
+            _ = RunAutoMapSafeAsync(
+                epgPageService,
+                profileId,
+                filter.ProviderGroup.ProviderId,
+                channelLogger);
+        }
 
         return await GetChannelSelectionsAsync(profileId, filterId, db, cancellationToken);
     }

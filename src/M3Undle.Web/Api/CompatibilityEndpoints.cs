@@ -1,8 +1,10 @@
+using System.Text;
 using System.Text.Json;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
@@ -10,6 +12,7 @@ using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
 using M3Undle.Web.Streaming.Subscribers;
 using M3Undle.Web.Streaming.Upstream;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -42,6 +45,7 @@ public static class CompatibilityEndpoints
         client.MapGet("tune/{streamKey}/{*tail}", ServeStreamAsync);
         client.MapGet("hdhr/tune/{streamKey}", ServeStreamAsync);
         client.MapGet("hdhr/tune/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
         app.MapGet("/health/ready", ServeReadinessAsync).AllowAnonymous();
@@ -141,6 +145,7 @@ public static class CompatibilityEndpoints
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
         IHttpClientFactory httpClientFactory,
+        HlsProxyService hlsProxyService,
         ILoggerFactory loggerFactory,
         IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
@@ -186,6 +191,45 @@ public static class CompatibilityEndpoints
 
         if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
+            // Only attempt HLS delivery when the client can consume it.
+            // HDHR/tune routes are always raw TS (used by Plex, Channels DVR).
+            // A .ts tail from a non-browser client means a native app expecting raw bytes.
+            // Browser-based apps (IPTVnator, Electron) send Mozilla UA and need HLS.
+            var tail = context.Request.RouteValues.TryGetValue("tail", out var tailVal)
+                ? tailVal?.ToString() ?? string.Empty
+                : string.Empty;
+            var isNativeClientRoute = IsHdHomeRunTuneRoute(context.Request.Path)
+                || (!IsBrowserClient(context) && tail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase));
+
+            if (!isNativeClientRoute)
+            {
+                var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
+                if (hlsCandidates.Count > 0)
+                {
+                    var baseUrl = GetBaseUrl(context);
+                    var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
+                    segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
+
+                    var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                        hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                    if (manifest is not null)
+                    {
+                        logger.LogInformation(
+                            "HLS delivery: channel={Channel} key={StreamKey}",
+                            entry.DisplayName, streamKey);
+                        context.Response.ContentType = "application/vnd.apple.mpegurl";
+                        context.Response.Headers.CacheControl = "no-cache";
+                        await context.Response.WriteAsync(manifest, cancellationToken);
+                        return;
+                    }
+
+                    logger.LogInformation(
+                        "HLS not available for '{Channel}', falling back to TS session.",
+                        entry.DisplayName);
+                }
+            }
+
             HdHomeRunTunerReservation? tunerReservation = null;
             SubscriberConnection? subscriber = null;
             try
@@ -284,6 +328,67 @@ public static class CompatibilityEndpoints
             entry.DisplayName,
             cancellationToken);
     }
+
+    private static async Task ServeHlsProxyAsync(
+        string streamKey,
+        HttpContext context,
+        HlsProxyService hlsProxyService,
+        string? u,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(u))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Missing 'u' parameter.", cancellationToken);
+            return;
+        }
+
+        string upstreamUrl;
+        try
+        {
+            upstreamUrl = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(u));
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Invalid 'u' parameter.", cancellationToken);
+            return;
+        }
+
+        if (!Uri.TryCreate(upstreamUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != "http" && uri.Scheme != "https"))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Invalid upstream URL.", cancellationToken);
+            return;
+        }
+
+        var baseUrl = GetBaseUrl(context);
+        var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
+        segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
+
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, cancellationToken);
+    }
+
+    private static string GetBaseUrl(HttpContext context)
+    {
+        var pathBase = context.Request.PathBase.HasValue
+            ? context.Request.PathBase.Value?.TrimEnd('/')
+            : null;
+
+        return string.IsNullOrWhiteSpace(pathBase)
+            ? $"{context.Request.Scheme}://{context.Request.Host}"
+            : $"{context.Request.Scheme}://{context.Request.Host}{pathBase}";
+    }
+
+    /// <summary>
+    /// Returns true when the request originates from a browser or Electron-based app.
+    /// These clients cannot decode raw MPEG-TS and require HLS delivery.
+    /// Native IPTV apps (TiviMate, IPTVator, Smarters) use non-browser User-Agent strings.
+    /// </summary>
+    private static bool IsBrowserClient(HttpContext context) =>
+        context.Request.Headers.UserAgent.ToString()
+            .Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
 
     private static async Task ServeDirectRelayAsync(
         HttpContext context,

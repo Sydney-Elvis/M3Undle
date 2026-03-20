@@ -4,12 +4,14 @@ using System.Text.Json;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
 using M3Undle.Web.Streaming.Subscribers;
 using M3Undle.Web.Streaming.Upstream;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -54,6 +56,7 @@ public static class XtreamEndpoints
         xtream.MapGet("movie/{xtreamUser}/{xtreamPass}/{streamId}/{*tail}", ServeXtreamStreamAsync);
         xtream.MapGet("series/{xtreamUser}/{xtreamPass}/{streamId}", ServeXtreamStreamAsync);
         xtream.MapGet("series/{xtreamUser}/{xtreamPass}/{streamId}/{*tail}", ServeXtreamStreamAsync);
+        xtream.MapGet("hls/{xtreamUser}/{xtreamPass}/{streamKey}/proxy", ServeXtreamHlsProxyAsync);
 
         return app;
     }
@@ -253,6 +256,7 @@ public static class XtreamEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         IHttpClientFactory httpClientFactory,
+        HlsProxyService hlsProxyService,
         ILoggerFactory loggerFactory,
         IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
@@ -329,6 +333,43 @@ public static class XtreamEndpoints
 
         if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
+            // Xtream clients request an explicit .ts extension for live streams.
+            // Skip HLS only when the client is a native app AND has requested .ts explicitly.
+            // Browser-based Xtream clients (IPTVnator, Electron apps) send a Mozilla User-Agent
+            // and cannot play raw TS — they must receive HLS regardless of the URL extension.
+            var isNativeAppTs = !IsBrowserClient(context)
+                && streamId.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
+
+            var hlsCandidates = !isNativeAppTs
+                ? HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl)
+                : [];
+            if (hlsCandidates.Count > 0)
+            {
+                var xtreamUser = context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty;
+                var xtreamPass = context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty;
+                var segmentProxyBase =
+                    $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
+
+                var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                    hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                if (manifest is not null)
+                {
+                    logger.LogInformation(
+                        "Xtream HLS delivery: channel={Channel} id={StreamId} segmentProxyBase={SegmentProxyBase}",
+                        entry.DisplayName, streamId, segmentProxyBase);
+                    context.Response.ContentType = "application/vnd.apple.mpegurl";
+                    context.Response.Headers.CacheControl = "no-cache";
+                    context.Response.Headers.AccessControlAllowOrigin = "*";
+                    await context.Response.WriteAsync(manifest, cancellationToken);
+                    return;
+                }
+
+                logger.LogInformation(
+                    "HLS not available for '{Channel}', falling back to TS session.",
+                    entry.DisplayName);
+            }
+
             SubscriberConnection? subscriber = null;
             try
             {
@@ -377,6 +418,52 @@ public static class XtreamEndpoints
         }
 
         await ServeDirectRelayAsync(context, db, httpClientFactory, logger, entry.StreamUrl, entry.DisplayName, cancellationToken);
+    }
+
+    private static async Task ServeXtreamHlsProxyAsync(
+        string streamKey,
+        HttpContext context,
+        HlsProxyService hlsProxyService,
+        ILoggerFactory loggerFactory,
+        string? u,
+        CancellationToken cancellationToken)
+    {
+        var logger = loggerFactory.CreateLogger("M3Undle.HlsProxy");
+
+        context.Response.Headers.AccessControlAllowOrigin = "*";
+
+        if (string.IsNullOrWhiteSpace(u))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
+        string upstreamUrl;
+        try
+        {
+            upstreamUrl = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(u));
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
+        if (!Uri.TryCreate(upstreamUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != "http" && uri.Scheme != "https"))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
+        logger.LogDebug("HLS segment proxy: key={StreamKey} upstream={UpstreamUrl}", streamKey, upstreamUrl);
+
+        var xtreamUser = context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty;
+        var xtreamPass = context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty;
+        var segmentProxyBase =
+            $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
+
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, cancellationToken);
     }
 
     private static async Task ServeDirectRelayAsync(
@@ -468,4 +555,13 @@ public static class XtreamEndpoints
 
     private static string GetBaseUrl(HttpContext context) =>
         $"{context.Request.Scheme}://{context.Request.Host}";
+
+    /// <summary>
+    /// Returns true when the request originates from a browser or Electron-based app.
+    /// These clients cannot decode raw MPEG-TS and require HLS delivery.
+    /// Native IPTV apps (TiviMate, IPTVator, Smarters) use non-browser User-Agent strings.
+    /// </summary>
+    private static bool IsBrowserClient(HttpContext context) =>
+        context.Request.Headers.UserAgent.ToString()
+            .Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
 }

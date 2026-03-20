@@ -11,6 +11,7 @@ using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
+using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Upstream;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -223,6 +224,8 @@ builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
 builder.Services.AddSingleton<UpstreamStreamConnector>();
 builder.Services.AddSingleton<ChannelSessionManager>();
 builder.Services.AddScoped<StreamRequestResolver>();
+builder.Services.AddSingleton<HlsManifestRewriter>();
+builder.Services.AddSingleton<HlsProxyService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
