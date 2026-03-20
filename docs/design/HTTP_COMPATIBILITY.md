@@ -120,6 +120,52 @@ Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, 
 - Requests from distinct `VirtualTunerId` values can consume separate tuner slots up to the configured `TunerCount`.
 - Requests beyond the configured tuner count return a busy/unavailable response.
 
+### Xtream Codes API
+
+M3Undle exposes a compatible Xtream Codes API surface, enabling clients such as TiviMate,
+GSE Player, and IPTV Smarters to connect using the endpoint-security username and password.
+
+#### player_api.php
+
+- `GET/POST /player_api.php` (no `action`) — same as `get_account_info`
+- `GET/POST /player_api.php?action=get_account_info` — returns `user_info` and `server_info` blocks
+- `GET/POST /player_api.php?action=get_live_categories` — live channel groups
+- `GET/POST /player_api.php?action=get_vod_categories` — VOD groups
+- `GET/POST /player_api.php?action=get_series_categories` — series groups
+- `GET/POST /player_api.php?action=get_live_streams[&category_id=N]` — live channel list
+- `GET/POST /player_api.php?action=get_vod_streams[&category_id=N]` — VOD list
+- `GET/POST /player_api.php?action=get_series[&category_id=N]` — series list
+
+Authentication is via query-string `username` and `password` parameters, matching the
+endpoint-security credentials configured in **Settings → Endpoint Security**.
+
+Stream IDs returned in the list responses are stable 31-bit integers derived from the channel's
+stream key (MD5, first 4 bytes). Category IDs are derived the same way from the group title.
+Both are stable for the lifetime of a snapshot and may change between snapshot refreshes.
+
+#### get.php
+
+- `GET /get.php` — serves the M3U playlist. Accepts the same `username`/`password` query
+  parameters as `player_api.php`. Equivalent to `/m3u/m3undle.m3u` with Xtream-style auth.
+
+#### Path-credential streaming
+
+Xtream clients construct tune URLs by embedding credentials in the path:
+
+```
+GET /live/{username}/{password}/{streamId}[.ts][/{*tail}]
+GET /movie/{username}/{password}/{streamId}[.mp4][/{*tail}]
+GET /series/{username}/{password}/{streamId}[.mkv][/{*tail}]
+```
+
+The `streamId` is the integer returned by `get_live_streams` / `get_vod_streams` / `get_series`.
+The optional file extension and trailing wildcard segments are accepted and ignored — they exist
+for player compatibility only. The stream itself is served through the same shared proxy or direct
+relay as all other stream routes.
+
+Credential validation follows the same rules as the standard endpoint filter: when endpoint
+security is disabled, any credentials in the path are accepted and the default profile is used.
+
 ### Discovery (optional)
 - SSDP / UPnP listener on UDP `1900`
 - SiliconDust discovery listener on UDP `65001`

@@ -118,7 +118,7 @@ Current Pre-Alpha work includes:
 - Stream enable/disable control in Settings and provider-level max concurrent stream limits
 - Web UI for provider management
 
-Future releases will add: group-based inclusion rules, channel numbering, filtering, and more.
+Planned work includes: group-based inclusion rules, channel numbering, filtering, and more.
 
 See: `docs/SERVICE.md`
 
@@ -219,7 +219,7 @@ See: `docs/design/HTTP_COMPATIBILITY.md`
 
 The current focus is delivering a stable, fully usable self-hosted lineup manager.
 
-Advanced features may be introduced in future releases as the project matures.
+The roadmap will continue expanding M3Undle's lineup management and publishing capabilities as the project matures.
 
 ---
 

@@ -207,6 +207,8 @@ builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
 builder.Services.AddScoped<IAccessResolver, ClientEndpointAccessResolver>();
 builder.Services.AddScoped<ClientEndpointAccessFilter>();
+builder.Services.AddScoped<XtreamPathCredentialFilter>();
+builder.Services.AddSingleton<XtreamStreamIdCache>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
@@ -301,6 +303,7 @@ app.MapChannelListApiEndpoints();
 app.MapSiteSettingsApiEndpoints();
 app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
+app.MapXtreamEndpoints();
 app.MapEpgApiEndpoints();
 app.MapHealthChecks("/health");
 

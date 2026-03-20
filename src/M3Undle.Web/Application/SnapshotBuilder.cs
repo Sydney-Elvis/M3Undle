@@ -723,6 +723,10 @@ public sealed class SnapshotBuilder(
 
         var byId = existing.ToDictionary(x => x.XmltvChannelId, StringComparer.Ordinal);
 
+        // Track IDs added during this call so XMLTV sources with duplicate channel
+        // entries don't trigger a second Add for the same (epg_source_id, xmltv_channel_id).
+        var addedThisRun = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var ch in channels)
         {
             if (byId.TryGetValue(ch.XmltvChannelId, out var row))
@@ -731,7 +735,7 @@ public sealed class SnapshotBuilder(
                 row.IconUrl = ch.IconUrl;
                 row.LastSeenUtc = now;
             }
-            else
+            else if (addedThisRun.Add(ch.XmltvChannelId))
             {
                 db.EpgSourceChannels.Add(new EpgSourceChannel
                 {

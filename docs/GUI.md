@@ -174,4 +174,4 @@ The GUI manages lineups.
 
 The current focus is delivering a stable, fully usable self-hosted lineup manager.
 
-Advanced features may be introduced in future releases as the project matures.
+The roadmap will continue expanding the UI's lineup management and operational visibility as the project matures.

@@ -25,6 +25,7 @@ At a high level, the service:
   - XMLTV — `/xmltv/m3undle.xml`
   - Shared live stream proxy — `/live/<streamKey>`, `/stream/<streamKey>`, `/tune/<streamKey>`, `/hdhr/tune/<streamKey>`
   - Direct relay for VOD-style routes — `/movie/<streamKey>`, `/vod/<streamKey>`, `/series/<streamKey>`
+  - Xtream Codes API — `/player_api.php`, `/get.php`, `/live/<user>/<pass>/<id>`, `/movie/<user>/<pass>/<id>`, `/series/<user>/<pass>/<id>`
 - Shares one upstream live connection across subscribers for the same channel session
 - Keeps a small byte-bounded in-memory buffer for late joiners
 - Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
@@ -89,6 +90,8 @@ The service publishes endpoints intended to be consumed by clients and DVR syste
 - `GET /hdhr/tune/<streamKey>`
 
 Live routes are served by the shared stream proxy. VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay paths.
+
+**Xtream Codes API** (`/player_api.php`, `/get.php`, path-credential stream URLs) is also available for clients such as TiviMate, GSE Player, and IPTV Smarters. See `docs/design/HTTP_COMPATIBILITY.md` for the full endpoint reference.
 
 Operational status endpoints are also available for authenticated UI users:
 
@@ -166,4 +169,4 @@ See: `CLI.md`
 
 The current focus is delivering a stable, fully usable self-hosted lineup manager.
 
-Advanced features may be introduced in future releases as the project matures.
+The roadmap will continue expanding M3Undle's lineup management, endpoint support, and operational tooling as the project matures.
