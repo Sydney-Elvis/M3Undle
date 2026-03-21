@@ -1215,12 +1215,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("endpoint_security_enabled");
 
-                    b.Property<bool>("StreamingEnabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true)
-                        .HasColumnName("streaming_enabled");
-
                     b.Property<int>("StreamBufferMaxBytesHardCap")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
@@ -1274,6 +1268,12 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasDefaultValue(30)
                         .HasColumnName("stream_reconnect_read_stall_timeout_seconds");
+
+                    b.Property<bool>("StreamingEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true)
+                        .HasColumnName("streaming_enabled");
 
                     b.Property<bool>("StreamingSettingsRestartRequired")
                         .ValueGeneratedOnAdd()

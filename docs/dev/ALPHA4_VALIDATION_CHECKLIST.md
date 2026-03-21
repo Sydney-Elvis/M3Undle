@@ -4,48 +4,48 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 
 ## Stream Proxy
 
-- [ ] Shared live routes (`/live`, `/stream`, `/tune`, `/hdhr/tune`) reuse one upstream session per live channel
-- [ ] VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay
+- [x] Shared live routes (`/live`, `/stream`, `/tune`, `/hdhr/tune`) reuse one upstream session per live channel
+- [x] VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay
 - [ ] Late joiners receive buffered data without breaking the active session
-- [ ] Slow subscribers are evicted without collapsing the shared session
-- [ ] Reconnect behavior works after upstream stalls
+- [x] Slow subscribers are evicted without collapsing the shared session
+- [x] Reconnect behavior works after upstream stalls
 - [ ] Provider stream limits still reject new sessions correctly
 
 ## Stream Settings UI
 
 - [ ] Settings page loads saved stream settings and current applied runtime settings distinctly
-- [ ] Saving changed stream settings marks restart required
-- [ ] Invalid values are rejected with visible validation errors
+- [x] Saving changed stream settings marks restart required
+- [x] Invalid values are rejected with visible validation errors
 - [ ] Runtime behavior does not change until restart
 - [ ] `Restart M3Undle` stops the app process cleanly
-- [ ] After restart, pending restart warning is cleared
+- [x] After restart, pending restart warning is cleared
 - [ ] After restart, saved settings are applied to runtime behavior
 
 ## HDHomeRun HTTP API
 
-- [ ] `/hdhr/discover.json` returns stable device identity and correct `TunerCount`
-- [ ] `/hdhr/lineup.json` returns only live channels with stable guide numbers and tune URLs
-- [ ] `/hdhr/lineup.xml` matches `/hdhr/lineup.json`
-- [ ] `/hdhr/lineup.m3u` matches `/hdhr/lineup.json`
-- [ ] `/hdhr/lineup_status.json` reports lineup readiness when an active snapshot exists
-- [ ] `/hdhr/device.xml` loads successfully from a client
-- [ ] Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`, `/tune/<streamKey>`) behave the same as `/hdhr/*`
+- [x] `/hdhr/discover.json` returns stable device identity and correct `TunerCount`
+- [x] `/hdhr/lineup.json` returns only live channels with stable guide numbers and tune URLs
+- [x] `/hdhr/lineup.xml` matches `/hdhr/lineup.json`
+- [x] `/hdhr/lineup.m3u` matches `/hdhr/lineup.json`
+- [x] `/hdhr/lineup_status.json` reports lineup readiness when an active snapshot exists
+- [x] `/hdhr/device.xml` loads successfully from a client
+- [x] Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`, `/tune/<streamKey>`) behave the same as `/hdhr/*`
 
 ## HDHomeRun Tuner Semantics
 
-- [ ] A first `/hdhr/tune/<streamKey>` request succeeds
-- [ ] A second request on the same `VirtualTunerId` retunes/replaces the prior subscriber instead of consuming another tuner slot
-- [ ] Distinct `VirtualTunerId` values can consume different tuner slots up to configured `TunerCount`
-- [ ] Requests beyond configured `TunerCount` are rejected
+- [x] A first `/hdhr/tune/<streamKey>` request succeeds
+- [x] A second request on the same `VirtualTunerId` retunes/replaces the prior subscriber instead of consuming another tuner slot
+- [x] Distinct `VirtualTunerId` values can consume different tuner slots up to configured `TunerCount`
+- [x] Requests beyond configured `TunerCount` are rejected
 - [ ] Disconnecting playback releases the tuner slot
-- [ ] Restarting M3Undle clears any active tuner leases
+- [x] Restarting M3Undle clears any active tuner leases
 - [ ] Generic `/stream/<streamKey>` requests are not blocked by HDHomeRun tuner enforcement
 
 ## Guide / EPG
 
 - [ ] Multiple EPG sources can be fetched and parsed successfully
-- [ ] Source priority affects merged guide selection as expected
-- [ ] Duplicate programme/channel entries are not duplicated in the published XMLTV
+- [x] Source priority affects merged guide selection as expected
+- [x] Duplicate programme/channel entries are not duplicated in the published XMLTV
 - [ ] Channel mappings persist and affect the published guide
 - [ ] Published `/xmltv/m3undle.xml` matches the active lineup
 

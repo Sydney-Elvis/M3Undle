@@ -106,6 +106,63 @@ public sealed class StreamingSettingsServiceTests
         Assert.AreEqual(60, state.Saved.MaxConcurrentSessions);
     }
 
+    [TestMethod]
+    public async Task UpdateAsync_SavedSettings_AreAppliedOnNextServiceConstruction()
+    {
+        // Checklist: After restart, saved settings are applied to runtime behavior.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"m3undle-stream-settings-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var dbPath = Path.Combine(tempDir, "settings.db");
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite($"Data Source={dbPath}")
+                .Options;
+
+            await using (var setupDb = new ApplicationDbContext(options))
+            {
+                await setupDb.Database.EnsureCreatedAsync();
+            }
+
+            await using (var firstDb = new ApplicationDbContext(options))
+            {
+                var firstService = CreateService(firstDb);
+                var update = await firstService.UpdateAsync(new UpdateStreamingSettingsCommand(
+                    StreamingEnabled: true,
+                    MaxConcurrentSessions: 61,
+                    IdleGraceSeconds: 27,
+                    IdleGraceHardCapSeconds: 150,
+                    BufferMaxBytesPerSession: 6 * 1024 * 1024,
+                    BufferMaxBytesHardCap: 40 * 1024 * 1024,
+                    BufferReadChunkSizeBytes: 48 * 1024,
+                    ReconnectReadStallTimeoutSeconds: 41,
+                    ReconnectOutageWindowSeconds: 95,
+                    ReconnectConnectTimeoutSeconds: 18));
+
+                Assert.IsTrue(update.Succeeded);
+                Assert.IsTrue(update.Changed);
+            }
+
+            await using (var secondDb = new ApplicationDbContext(options))
+            {
+                var secondService = CreateService(secondDb);
+                var state = await secondService.GetSettingsAsync();
+
+                Assert.AreEqual(61, state.Saved.MaxConcurrentSessions);
+                Assert.AreEqual(27, state.Saved.IdleGraceSeconds);
+                Assert.AreEqual(48 * 1024, state.Saved.BufferReadChunkSizeBytes);
+                Assert.AreEqual(41, state.Saved.ReconnectReadStallTimeoutSeconds);
+                Assert.IsTrue(state.RestartRequired);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static StreamingSettingsService CreateService(ApplicationDbContext db)
         => new(
             db,

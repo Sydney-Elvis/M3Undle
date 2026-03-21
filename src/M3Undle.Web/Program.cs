@@ -396,3 +396,5 @@ sealed class SqliteConnectionInterceptor : DbConnectionInterceptor
         cmd.ExecuteNonQuery();
     }
 }
+
+public partial class Program;

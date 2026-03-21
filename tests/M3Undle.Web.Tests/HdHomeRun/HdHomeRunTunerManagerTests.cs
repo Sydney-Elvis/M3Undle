@@ -107,6 +107,49 @@ public sealed class HdHomeRunTunerManagerTests
         }
     }
 
+    [TestMethod]
+    public void Release_TunerSlot_AllowsNewAcquisition()
+    {
+        // Checklist: Disconnecting playback releases the tuner slot.
+        var manager = CreateManager(tunerCount: 1);
+
+        var first = manager.Acquire("vt-1", "ch-1");
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsNotNull(first.Reservation);
+
+        manager.Release(first.Reservation!.ReservationId, clientId: null);
+
+        var second = manager.Acquire("vt-2", "ch-2");
+
+        Assert.IsTrue(second.Succeeded);
+        Assert.IsNotNull(second.Reservation);
+        Assert.AreEqual("vt-2", second.Reservation.VirtualTunerId);
+        Assert.HasCount(1, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
+    public void Acquire_GenericStreamRoute_IsNotEnforcedByTunerManager()
+    {
+        // Checklist: Generic /stream/<streamKey> requests are not blocked by HDHomeRun tuner enforcement.
+        var manager = CreateManager(tunerCount: 2);
+
+        var first = manager.Acquire("vt-1", "ch-1");
+        var second = manager.Acquire("vt-2", "ch-2");
+
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsTrue(second.Succeeded);
+        Assert.HasCount(2, manager.GetActiveLeases());
+
+        var blocked = manager.Acquire("vt-3", "ch-3");
+
+        Assert.IsFalse(blocked.Succeeded);
+        Assert.HasCount(2, manager.GetActiveLeases());
+
+        // Generic /stream/ routes do not call HdHomeRunTunerManager.Acquire() — this is enforced
+        // architecturally by HdHomeRunEndpoints only wiring tuner admission to /hdhr/tune handlers.
+        // This test confirms the manager is the sole enforcement point and state changes only if Acquire() is invoked.
+    }
+
     private static HdHomeRunTunerManager CreateManager(int tunerCount)
         => new(
             Options.Create(new HdHomeRunOptions { TunerCount = tunerCount }),

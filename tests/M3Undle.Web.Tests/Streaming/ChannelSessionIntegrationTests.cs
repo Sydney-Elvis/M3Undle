@@ -191,6 +191,71 @@ public sealed class ChannelSessionIntegrationTests
         await session.DisposeAsync();
     }
 
+    [TestMethod]
+    public async Task Session_LateJoiner_ReceivesBufferedData()
+    {
+        // Checklist: Late joiners receive buffered data without breaking the active session.
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var firstSubscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), timeout.Token);
+        await WaitUntilAsync(() => firstSubscriber.BytesSent >= 188 * 4, TimeSpan.FromSeconds(5));
+
+        var firstSubscriberBytesBeforeLateJoin = firstSubscriber.BytesSent;
+        var secondSubscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), timeout.Token);
+
+        await WaitUntilAsync(
+            () => secondSubscriber.BytesSent > 0 && firstSubscriber.BytesSent > firstSubscriberBytesBeforeLateJoin,
+            TimeSpan.FromSeconds(5));
+
+        Assert.IsGreaterThan(0L, secondSubscriber.BytesSent);
+        Assert.IsGreaterThan(firstSubscriberBytesBeforeLateJoin, firstSubscriber.BytesSent);
+        Assert.AreEqual(SessionState.Live, session.State);
+        Assert.IsTrue(fixture.Manager.TryGet(session.Key, out _));
+
+        timeout.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MaxConcurrentSessions_RejectsAdditionalSession()
+    {
+        // Checklist: Provider stream limits still reject new sessions correctly.
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                MaxConcurrentSessions = 1,
+                IdleGrace = TimeSpan.FromSeconds(10),
+            });
+
+        var firstSession = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        Assert.IsNotNull(firstSession);
+
+        var secondSource = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        try
+        {
+            await fixture.Manager.GetOrCreateAsync(secondSource, CancellationToken.None);
+            Assert.Fail("Expected StreamAdmissionException when max concurrent sessions is reached.");
+        }
+        catch (StreamAdmissionException ex)
+        {
+            Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, ex.StatusCode);
+            StringAssert.Contains(ex.Message, "Max concurrent sessions");
+        }
+    }
+
     private static async Task AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
     {
         try { await action(); Assert.Fail($"Expected {typeof(TException).Name} to be thrown."); }
