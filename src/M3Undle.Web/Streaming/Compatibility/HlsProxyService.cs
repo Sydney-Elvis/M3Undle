@@ -27,13 +27,8 @@ public sealed class HlsProxyService(
         string segmentProxyBaseUrl,
         CancellationToken ct)
     {
-        var (userAgent, headersJson) = await GetProviderMetaAsync(sourceDescriptor.ProviderId, ct);
-
         using var client = httpClientFactory.CreateClient("stream-relay");
-        if (!string.IsNullOrWhiteSpace(userAgent))
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
-        if (!string.IsNullOrWhiteSpace(headersJson))
-            ProviderFetcher.ApplyHeadersFromJson(client, headersJson);
+        await ApplyProviderHeadersAsync(client, sourceDescriptor.ProviderId, ct);
 
         foreach (var upstreamUrl in candidates)
         {
@@ -88,7 +83,7 @@ public sealed class HlsProxyService(
 
             var manifestUri = new Uri(upstreamM3u8Url);
             return manifestRewriter.Rewrite(content, manifestUri, segUri =>
-                BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString()));
+                BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString(), sourceDescriptor.ProviderId));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -107,14 +102,19 @@ public sealed class HlsProxyService(
     /// <summary>
     /// Proxies a single upstream URL (segment or sub-manifest) to the client response.
     /// If the upstream returns an M3U8, it is rewritten before forwarding.
+    /// When <paramref name="providerId"/> is supplied the same provider-specific headers
+    /// (User-Agent, custom headers) that are applied during manifest fetch are also applied
+    /// here, so segment/sub-manifest requests succeed for providers that require them.
     /// </summary>
     public async Task ProxyAsync(
         HttpContext context,
         string upstreamUrl,
         string segmentProxyBaseUrl,
+        string? providerId,
         CancellationToken ct)
     {
         using var client = httpClientFactory.CreateClient("stream-relay");
+        await ApplyProviderHeadersAsync(client, providerId, ct);
 
         try
         {
@@ -140,7 +140,7 @@ public sealed class HlsProxyService(
                 {
                     var manifestUri = new Uri(upstreamUrl);
                     var rewritten = manifestRewriter.Rewrite(content, manifestUri, segUri =>
-                        BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString()));
+                        BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString(), providerId));
 
                     context.Response.ContentType = "application/vnd.apple.mpegurl";
                     context.Response.Headers.CacheControl = "no-cache";
@@ -171,10 +171,25 @@ public sealed class HlsProxyService(
         }
     }
 
-    private static string BuildProxyUrl(string segmentProxyBaseUrl, string upstreamUri)
+    private static string BuildProxyUrl(string segmentProxyBaseUrl, string upstreamUri, string? providerId = null)
     {
         var encoded = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(upstreamUri));
-        return $"{segmentProxyBaseUrl}?u={encoded}";
+        var url = $"{segmentProxyBaseUrl}?u={encoded}";
+        if (!string.IsNullOrWhiteSpace(providerId))
+            url = QueryHelpers.AddQueryString(url, "p", providerId);
+        return url;
+    }
+
+    private async Task ApplyProviderHeadersAsync(HttpClient client, string? providerId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(providerId))
+            return;
+
+        var (userAgent, headersJson) = await GetProviderMetaAsync(providerId, ct);
+        if (!string.IsNullOrWhiteSpace(userAgent))
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+        if (!string.IsNullOrWhiteSpace(headersJson))
+            ProviderFetcher.ApplyHeadersFromJson(client, headersJson);
     }
 
     private async Task<(string? UserAgent, string? HeadersJson)> GetProviderMetaAsync(
