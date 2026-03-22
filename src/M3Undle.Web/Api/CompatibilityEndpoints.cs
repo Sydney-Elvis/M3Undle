@@ -333,8 +333,8 @@ public static class CompatibilityEndpoints
         string streamKey,
         HttpContext context,
         HlsProxyService hlsProxyService,
+        StreamRequestResolver streamRequestResolver,
         string? u,
-        string? p,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(u))
@@ -368,7 +368,31 @@ public static class CompatibilityEndpoints
         var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
         segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
 
-        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, p, cancellationToken);
+        string providerId;
+        try
+        {
+            var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
+            if (!resolved.IsSuccess || resolved.SourceDescriptor is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                await context.Response.WriteAsync("Unknown stream key.", cancellationToken);
+                return;
+            }
+
+            providerId = resolved.SourceDescriptor.ProviderId;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsync("Unknown stream key.", cancellationToken);
+            return;
+        }
+
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }
 
     private static string GetBaseUrl(HttpContext context)

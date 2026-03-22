@@ -83,7 +83,7 @@ public sealed class HlsProxyService(
 
             var manifestUri = new Uri(upstreamM3u8Url);
             return manifestRewriter.Rewrite(content, manifestUri, segUri =>
-                BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString(), sourceDescriptor.ProviderId));
+                BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString()));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -140,7 +140,7 @@ public sealed class HlsProxyService(
                 {
                     var manifestUri = new Uri(upstreamUrl);
                     var rewritten = manifestRewriter.Rewrite(content, manifestUri, segUri =>
-                        BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString(), providerId));
+                        BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString()));
 
                     context.Response.ContentType = "application/vnd.apple.mpegurl";
                     context.Response.Headers.CacheControl = "no-cache";
@@ -171,13 +171,10 @@ public sealed class HlsProxyService(
         }
     }
 
-    private static string BuildProxyUrl(string segmentProxyBaseUrl, string upstreamUri, string? providerId = null)
+    private static string BuildProxyUrl(string segmentProxyBaseUrl, string upstreamUri)
     {
         var encoded = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(upstreamUri));
-        var url = $"{segmentProxyBaseUrl}?u={encoded}";
-        if (!string.IsNullOrWhiteSpace(providerId))
-            url = QueryHelpers.AddQueryString(url, "p", providerId);
-        return url;
+        return QueryHelpers.AddQueryString(segmentProxyBaseUrl, "u", encoded);
     }
 
     private async Task ApplyProviderHeadersAsync(HttpClient client, string? providerId, CancellationToken ct)

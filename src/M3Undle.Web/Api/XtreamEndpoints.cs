@@ -424,9 +424,9 @@ public static class XtreamEndpoints
         string streamKey,
         HttpContext context,
         HlsProxyService hlsProxyService,
+        StreamRequestResolver streamRequestResolver,
         ILoggerFactory loggerFactory,
         string? u,
-        string? p,
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.HlsProxy");
@@ -464,7 +464,29 @@ public static class XtreamEndpoints
         var segmentProxyBase =
             $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
 
-        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, p, cancellationToken);
+        string providerId;
+        try
+        {
+            var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
+            if (!resolved.IsSuccess || resolved.SourceDescriptor is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            providerId = resolved.SourceDescriptor.ProviderId;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }
 
     private static async Task ServeDirectRelayAsync(
