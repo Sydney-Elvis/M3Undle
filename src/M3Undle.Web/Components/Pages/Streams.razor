@@ -1,0 +1,248 @@
+@page "/streams"
+@using M3Undle.Web.Streaming.Observability
+@using M3Undle.Web.Streaming.Models
+@inject StreamingRegistry Registry
+@implements IDisposable
+
+<PageTitle>Streams — M3Undle</PageTitle>
+
+<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h5">Stream Monitor</MudText>
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        @if (_sessions.Count > 0)
+        {
+            <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small">
+                @_sessions.Count active session@(_sessions.Count == 1 ? "" : "s"), @_clients.Count client@(_clients.Count == 1 ? "" : "s")
+            </MudChip>
+        }
+        <MudText Typo="Typo.caption" Color="Color.Secondary">Auto-refreshes every 3s</MudText>
+    </MudStack>
+</MudStack>
+
+<MudText Typo="Typo.h6" Class="mb-2">Active Sessions</MudText>
+@if (_sessions.Count == 0)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Color="Color.Secondary">No active stream sessions.</MudText>
+    </MudPaper>
+}
+else
+{
+    <MudPaper Elevation="1" Class="mb-4">
+        <MudTable T="StreamSessionSnapshot" Items="_sessions" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>Channel</MudTh>
+                <MudTh>State</MudTh>
+                <MudTh>Clients</MudTh>
+                <MudTh>Buffer</MudTh>
+                <MudTh>Reconnects</MudTh>
+                <MudTh>Running</MudTh>
+                <MudTh>Last Data</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Channel">
+                    <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@context.SessionId[..8]</MudText>
+                </MudTd>
+                <MudTd DataLabel="State">
+                    <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
+                </MudTd>
+                <MudTd DataLabel="Clients">@context.SubscriberCount</MudTd>
+                <MudTd DataLabel="Buffer" Style="min-width:130px;">
+                    @if (context.BufferMaxBytes > 0)
+                    {
+                        var pct = (double)context.BufferUsedBytes / context.BufferMaxBytes * 100.0;
+                        <MudProgressLinear Value="pct" Color="@BufferColor(pct)" Rounded="true" Size="Size.Small" Class="mb-1" />
+                        <MudText Typo="Typo.caption">@FormatBytes(context.BufferUsedBytes) / @FormatBytes(context.BufferMaxBytes)</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Reconnects">
+                    @if (context.ReconnectAttempts > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@context.ReconnectAttempts</MudChip>
+                        @if (context.LastFailureKind is not null)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.LastFailureKind</MudText>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2">0</MudText>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Running">
+                    <MudTooltip Text="@context.StartedUtc.ToString("u")">
+                        <MudText Typo="Typo.body2">@FormatElapsed(DateTimeOffset.UtcNow - context.StartedUtc)</MudText>
+                    </MudTooltip>
+                </MudTd>
+                <MudTd DataLabel="Last Data">
+                    @if (context.LastUpstreamByteUtc.HasValue)
+                    {
+                        var age = DateTimeOffset.UtcNow - context.LastUpstreamByteUtc.Value;
+                        <MudTooltip Text="@context.LastUpstreamByteUtc.Value.ToString("u")">
+                            <MudText Typo="Typo.body2" Color="@(age.TotalSeconds > 10 ? Color.Warning : Color.Default)">
+                                @FormatElapsed(age) ago
+                            </MudText>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudPaper>
+}
+
+<MudText Typo="Typo.h6" Class="mb-2">Connected Clients</MudText>
+@if (_clients.Count == 0)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudText Color="Color.Secondary">No connected clients.</MudText>
+    </MudPaper>
+}
+else
+{
+    <MudPaper Elevation="1" Class="mb-4">
+        <MudTable T="StreamClientSnapshot" Items="_clients" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>Route</MudTh>
+                <MudTh>IP</MudTh>
+                <MudTh>Sent</MudTh>
+                <MudTh>Queue</MudTh>
+                <MudTh>Connected</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Route">
+                    <MudText Typo="Typo.body2">@context.RequestedRoute</MudText>
+                </MudTd>
+                <MudTd DataLabel="IP">
+                    <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
+                </MudTd>
+                <MudTd DataLabel="Sent">
+                    <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                </MudTd>
+                <MudTd DataLabel="Queue">
+                    <MudText Typo="Typo.body2">@context.QueueDepth</MudText>
+                </MudTd>
+                <MudTd DataLabel="Connected">
+                    <MudTooltip Text="@context.ConnectedUtc.ToString("u")">
+                        <MudText Typo="Typo.body2">@FormatElapsed(DateTimeOffset.UtcNow - context.ConnectedUtc)</MudText>
+                    </MudTooltip>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    </MudPaper>
+}
+
+@if (_recentEnded.Count > 0)
+{
+    <MudExpansionPanels Elevation="1" Class="mb-4">
+        <MudExpansionPanel Text="@($"Recently Ended ({_recentEnded.Count})")">
+            <MudTable T="StreamSessionSnapshot" Items="_recentEnded" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
+                <HeaderContent>
+                    <MudTh>Channel</MudTh>
+                    <MudTh>Final State</MudTh>
+                    <MudTh>Reconnects</MudTh>
+                    <MudTh>Started</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Channel">
+                        <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                    </MudTd>
+                    <MudTd DataLabel="Final State">
+                        <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
+                        @if (context.LastFailureKind is not null)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.LastFailureKind</MudText>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Reconnects">@context.ReconnectAttempts</MudTd>
+                    <MudTd DataLabel="Started">
+                        <MudText Typo="Typo.body2">@context.StartedUtc.ToString("u")</MudText>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
+}
+
+@code {
+    private IReadOnlyList<StreamSessionSnapshot> _sessions = [];
+    private IReadOnlyList<StreamClientSnapshot> _clients = [];
+    private IReadOnlyList<StreamSessionSnapshot> _recentEnded = [];
+
+    private PeriodicTimer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override void OnInitialized()
+    {
+        if (!RendererInfo.IsInteractive) return;
+
+        Refresh();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        _ = RunTimerAsync(_timer);
+    }
+
+    private async Task RunTimerAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(() => { Refresh(); StateHasChanged(); });
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private void Refresh()
+    {
+        _sessions = Registry.GetActiveSessions();
+        _clients = Registry.GetActiveClients();
+        _recentEnded = Registry.GetRecentEndedSessions();
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _timer?.Dispose();
+    }
+
+    private static Color StateColor(SessionState state) => state switch
+    {
+        SessionState.Live => Color.Success,
+        SessionState.Connecting or SessionState.Initializing => Color.Info,
+        SessionState.Reconnecting => Color.Warning,
+        SessionState.Faulted => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static Color BufferColor(double pct) => pct switch
+    {
+        >= 90 => Color.Error,
+        >= 70 => Color.Warning,
+        _ => Color.Success,
+    };
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1_073_741_824 => $"{bytes / 1_073_741_824.0:F1} GB",
+        >= 1_048_576 => $"{bytes / 1_048_576.0:F1} MB",
+        >= 1_024 => $"{bytes / 1_024.0:F1} KB",
+        _ => $"{bytes} B",
+    };
+
+    private static string FormatBytes(int bytes) => FormatBytes((long)bytes);
+
+    private static string FormatElapsed(TimeSpan ts)
+    {
+        if (ts.TotalSeconds < 60) return $"{(int)ts.TotalSeconds}s";
+        if (ts.TotalMinutes < 60) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+    }
+}

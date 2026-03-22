@@ -87,36 +87,43 @@ public sealed class SnapshotRefreshService(
         _ = ScheduleLoopAsync(stoppingToken);
 
         // Process triggers
-        await foreach (var mode in _triggerChannel.Reader.ReadAllAsync(stoppingToken))
+        try
         {
-            // Non-blocking acquire: if something is already running, drop the trigger
-            if (!await _executionGate.WaitAsync(0, stoppingToken))
+            await foreach (var mode in _triggerChannel.Reader.ReadAllAsync(stoppingToken))
             {
-                logger.LogDebug("Scheduled refresh skipped — a refresh is already in progress.");
-                continue;
-            }
+                // Non-blocking acquire: if something is already running, drop the trigger
+                if (!await _executionGate.WaitAsync(0, stoppingToken))
+                {
+                    logger.LogDebug("Scheduled refresh skipped — a refresh is already in progress.");
+                    continue;
+                }
 
-            try
-            {
-                using var refreshScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
-                if (mode == RefreshMode.BuildOnly)
-                    await RunBuildOnlyAsync(stoppingToken);
-                else
-                    await RunRefreshAsync(stoppingToken);
+                try
+                {
+                    using var refreshScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
+                    if (mode == RefreshMode.BuildOnly)
+                        await RunBuildOnlyAsync(stoppingToken);
+                    else
+                        await RunRefreshAsync(stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    using var refreshScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
+                    logger.LogError(ex, "Snapshot refresh failed unexpectedly.");
+                }
+                finally
+                {
+                    _executionGate.Release();
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                using var refreshScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
-                logger.LogError(ex, "Snapshot refresh failed unexpectedly.");
-            }
-            finally
-            {
-                _executionGate.Release();
-            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Normal shutdown — stoppingToken cancelled while waiting for the next trigger
         }
 
         logger.LogInformation("SnapshotRefreshService stopped.");

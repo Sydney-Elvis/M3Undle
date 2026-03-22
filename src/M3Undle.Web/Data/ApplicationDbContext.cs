@@ -23,6 +23,10 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<EndpointAccessBinding> EndpointAccessBindings => Set<EndpointAccessBinding>();
     public DbSet<ProfileGroupFilter> ProfileGroupFilters => Set<ProfileGroupFilter>();
     public DbSet<ProfileGroupChannelFilter> ProfileGroupChannelFilters => Set<ProfileGroupChannelFilter>();
+    public DbSet<EpgSource> EpgSources => Set<EpgSource>();
+    public DbSet<EpgSourceChannel> EpgSourceChannels => Set<EpgSourceChannel>();
+    public DbSet<EpgChannelMapping> EpgChannelMappings => Set<EpgChannelMapping>();
+    public DbSet<EpgFetchRun> EpgFetchRuns => Set<EpgFetchRun>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

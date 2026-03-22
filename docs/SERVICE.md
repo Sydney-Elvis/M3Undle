@@ -18,11 +18,18 @@ The service focuses on **clarity, control, and predictable behavior**.
 At a high level, the service:
 
 - Ingests a provider playlist (M3U) and guide data (XMLTV)
+- Supports multiple provider-linked EPG sources, source-priority merge rules, and per-channel guide mapping
 - Builds **snapshots** and serves **last-known-good** output
 - Publishes compatibility endpoints for clients:
   - M3U — `/m3u/m3undle.m3u`
   - XMLTV — `/xmltv/m3undle.xml`
-  - Stream relay proxy — `/stream/<streamKey>`
+  - Shared live stream proxy — `/live/<streamKey>`, `/stream/<streamKey>`, `/tune/<streamKey>`, `/hdhr/tune/<streamKey>`
+  - Direct relay for VOD-style routes — `/movie/<streamKey>`, `/vod/<streamKey>`, `/series/<streamKey>`
+  - Xtream Codes API — `/player_api.php`, `/get.php`, `/live/<user>/<pass>/<id>`, `/movie/<user>/<pass>/<id>`, `/series/<user>/<pass>/<id>`
+- Shares one upstream live connection across subscribers for the same channel session
+- Keeps a small byte-bounded in-memory buffer for late joiners
+- Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
+- Enforces HDHomeRun tuner-slot limits by `VirtualTunerId`, so the same virtual tuner can retune without consuming another slot
 
 ---
 
@@ -78,6 +85,19 @@ The service publishes endpoints intended to be consumed by clients and DVR syste
 - `GET /m3u/m3undle.m3u`
 - `GET /xmltv/m3undle.xml`
 - `GET /stream/<streamKey>`
+- `GET /live/<streamKey>`
+- `GET /tune/<streamKey>`
+- `GET /hdhr/tune/<streamKey>`
+
+Live routes are served by the shared stream proxy. VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay paths.
+
+**Xtream Codes API** (`/player_api.php`, `/get.php`, path-credential stream URLs) is also available for clients such as TiviMate, GSE Player, and IPTV Smarters. See `docs/design/HTTP_COMPATIBILITY.md` for the full endpoint reference.
+
+Operational status endpoints are also available for authenticated UI users:
+
+- `GET /status/streams`
+- `GET /status/streams/clients`
+- `GET /status/streams/providers`
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 
@@ -93,13 +113,19 @@ Views:
   - Import providers from config.yaml (read-only, credentials secure)
   - Add/edit providers directly in the GUI (for testing or one-off providers)
   - Check provider health (credentials defined, last successful fetch, etc.)
+- **EPG Sources**: manage provider-linked XMLTV sources, test guide fetches, and tune channel mappings
 - **Groups**: browse the provider's groups and channel counts (read-only preview)
 - **Snapshots / Status**: see refresh history and the current active snapshot
+- **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
+- **Settings**: configure stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button; changes are persisted to the database and applied on the next startup
+- **Settings**: configure endpoint security credentials and the HDHomeRun `Virtual Tuner ID` used for tuner ownership
 
 Design goals:
 - configuration should be explicit and understandable
 - changes should be visible (what changed, when)
 - credentials should be secure and managed externally via `.env`
+
+Provider configuration also supports an optional per-provider max concurrent stream limit, which is applied when admitting shared live sessions.
 
 ### Config.yaml Integration
 
@@ -143,4 +169,4 @@ See: `CLI.md`
 
 The current focus is delivering a stable, fully usable self-hosted lineup manager.
 
-Advanced features may be introduced in future releases as the project matures.
+The roadmap will continue expanding M3Undle's lineup management, endpoint support, and operational tooling as the project matures.

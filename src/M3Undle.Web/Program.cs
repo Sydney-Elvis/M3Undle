@@ -7,6 +7,12 @@ using M3Undle.Web.Components.Account;
 using M3Undle.Web.Data;
 using M3Undle.Web.Logging;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.Observability;
+using M3Undle.Web.Streaming.Resolution;
+using M3Undle.Web.Streaming.Sessions;
+using M3Undle.Web.Streaming.Compatibility;
+using M3Undle.Web.Streaming.Upstream;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -17,6 +23,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Options;
 using MudBlazor.Services;
 using Serilog;
 using Serilog.Formatting.Compact;
@@ -117,10 +124,31 @@ builder.Services.AddHttpClient("stream-relay", client =>
     client.Timeout = Timeout.InfiniteTimeSpan;
 });
 
+// Named HttpClient for EPG fetching — automatic gzip/deflate/brotli decompression
+builder.Services.AddHttpClient("epg", client =>
+{
+    client.DefaultRequestHeaders.AcceptEncoding.TryParseAdd("gzip, deflate, br");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AutomaticDecompression = System.Net.DecompressionMethods.All,
+});
+
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
 builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.GetSection("M3Undle:EndpointAccess"));
+builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection("M3Undle:Streaming"));
+builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
+builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
+builder.Services.AddSingleton<IConfigureOptions<StreamProxyOptions>, StreamProxyDbOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<BufferOptions>, BufferDbOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<ReconnectOptions>, ReconnectDbOptionsConfigurator>();
+builder.Services.AddSingleton<IValidateOptions<StreamProxyOptions>, StreamProxyOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<BufferOptions>, BufferOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<ReconnectOptions>, ReconnectOptionsValidator>();
+builder.Services.AddOptions<StreamProxyOptions>().ValidateOnStart();
+builder.Services.AddOptions<BufferOptions>().ValidateOnStart();
+builder.Services.AddOptions<ReconnectOptions>().ValidateOnStart();
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
@@ -161,6 +189,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Epg.XmltvParser>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
+builder.Services.AddScoped<M3Undle.Web.Application.Epg.EpgChannelMapper>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgCompiler>();
 builder.Services.AddScoped<SnapshotBuilder>();
 builder.Services.AddScoped<HdHomeRunLineupService>();
 builder.Services.AddScoped<ILineupRenderer, ActiveSnapshotLineupRenderer>();
@@ -170,17 +202,30 @@ builder.Services.AddSingleton<HdHomeRunDeviceService>();
 builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
+builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
+builder.Services.AddSingleton<IApplicationRestartService, ApplicationRestartService>();
 builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
 builder.Services.AddScoped<IAccessResolver, ClientEndpointAccessResolver>();
 builder.Services.AddScoped<ClientEndpointAccessFilter>();
+builder.Services.AddScoped<XtreamPathCredentialFilter>();
+builder.Services.AddSingleton<XtreamStreamIdCache>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
+builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshService>());
+builder.Services.AddSingleton<HdHomeRunTunerManager>();
+builder.Services.AddSingleton<StreamingRegistry>();
+builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
+builder.Services.AddSingleton<UpstreamStreamConnector>();
+builder.Services.AddSingleton<ChannelSessionManager>();
+builder.Services.AddScoped<StreamRequestResolver>();
+builder.Services.AddSingleton<HlsManifestRewriter>();
+builder.Services.AddSingleton<HlsProxyService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
@@ -209,6 +254,9 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+
+    var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
+    await streamingSettings.ClearRestartRequiredAsync();
 }
 
 await SeedAdminAccountIfNeededAsync(app.Services);
@@ -258,6 +306,8 @@ app.MapChannelListApiEndpoints();
 app.MapSiteSettingsApiEndpoints();
 app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
+app.MapXtreamEndpoints();
+app.MapEpgApiEndpoints();
 app.MapHealthChecks("/health");
 
 app.Run();
@@ -347,3 +397,4 @@ sealed class SqliteConnectionInterceptor : DbConnectionInterceptor
     }
 }
 
+public partial class Program;

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using M3Undle.Core.M3u;
+using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -16,6 +17,11 @@ namespace M3Undle.Web.Application;
 public sealed class SnapshotBuilder(
     ApplicationDbContext db,
     ProviderFetcher fetcher,
+    EpgSourceFetcher epgSourceFetcher,
+    EpgChannelMapper epgChannelMapper,
+    EpgCompiler epgCompiler,
+    XmltvParser xmltvParser,
+    RuntimePaths runtimePaths,
     IWebHostEnvironment env,
     IOptions<SnapshotOptions> snapshotOptions,
     ILogger<SnapshotBuilder> logger)
@@ -25,6 +31,7 @@ public sealed class SnapshotBuilder(
 
     // In-memory channel data used by BuildChannelIndex — sourced from DB provider_channels
     private sealed record ChannelBuildData(
+        string ProviderChannelId,
         string? ProviderChannelKey,
         string DisplayName,
         string? StreamUrl,
@@ -108,29 +115,18 @@ public sealed class SnapshotBuilder(
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
         sw.Restart();
 
-        // 5 + 5b. XMLTV fetch + DB sync are wrapped together so that run-CT cancellation is
-        // never silently swallowed.  FetchXmltvAsync converts TaskCanceledException → ProviderFetchException;
-        // if the run CT was what fired, ThrowIfCancellationRequested re-surfaces it immediately.
+        // 5 + 5b. EPG fetch (multi-source) + DB sync.
+        // Individual source failures are soft — we continue with whatever sources succeed.
+        // If the run CT fires it is surfaced after EPG fetch via ThrowIfCancellationRequested.
         string xmltvContent;
         long xmltvBytes = 0;
         var stage = "xmltv";
         try
         {
-            try
-            {
-                var xmltvResult = await fetcher.FetchXmltvAsync(provider, cancellationToken);
-                xmltvContent = xmltvResult.Xml;
-                xmltvBytes = xmltvResult.Bytes;
-                logger.LogInformation("XMLTV fetched in {Elapsed}ms — {XmltvBytes} bytes for provider {ProviderId}.",
-                    sw.ElapsedMilliseconds, xmltvBytes, provider.ProviderId);
-            }
-            catch (ProviderFetchException ex)
-            {
-                logger.LogWarning(ex, "XMLTV fetch failed for provider {ProviderId} after {Elapsed}ms — using empty guide.", provider.ProviderId, sw.ElapsedMilliseconds);
-                xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
-            }
+            xmltvContent = await FetchAndCompileEpgAsync(provider, profileId, sw, cancellationToken);
+            xmltvBytes = Encoding.UTF8.GetByteCount(xmltvContent);
 
-            // If the run CT fired during XMLTV (silently wrapped above), surface it now before touching the DB.
+            // If the run CT fired during EPG fetch, surface it now before touching the DB.
             cancellationToken.ThrowIfCancellationRequested();
             sw.Restart();
 
@@ -161,7 +157,7 @@ public sealed class SnapshotBuilder(
         fetchRun.Status = "ok";
         fetchRun.ChannelCountSeen = playlistResult.Channels.Count;
         fetchRun.PlaylistBytes = (int)Math.Min(playlistResult.Bytes, int.MaxValue);
-        fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
+        fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue); // compiled guide size
         await db.SaveChangesAsync(cancellationToken);
 
         // 6-10. Build snapshot from synced DB data (live) + in-memory VOD/series
@@ -242,6 +238,7 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var channels = dbChannels.Select(ch => new ChannelBuildData(
+            ch.ProviderChannelId,
             ch.ProviderChannelKey,
             ch.DisplayName,
             ch.StreamUrl,
@@ -259,9 +256,9 @@ public sealed class SnapshotBuilder(
                 if (string.IsNullOrWhiteSpace(ch.StreamUrl)) continue;
                 var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);
                 if (contentType == "vod" && provider.IncludeVod)
-                    channels.Add(new ChannelBuildData(ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "vod", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
+                    channels.Add(new ChannelBuildData(string.Empty, ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "vod", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
                 else if (contentType == "series" && provider.IncludeSeries)
-                    channels.Add(new ChannelBuildData(ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "series", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
+                    channels.Add(new ChannelBuildData(string.Empty, ch.ProviderChannelKey, ch.DisplayName, ch.StreamUrl, "series", ch.GroupTitle, ch.TvgId, ch.TvgName, ch.LogoUrl));
             }
         }
 
@@ -494,8 +491,277 @@ public sealed class SnapshotBuilder(
             LogoUrl: channel.LogoUrl,
             GroupTitle: groupTitle,
             TvgChno: tvgChno,
-            ProviderChannelId: string.Empty,
+            ProviderChannelId: channel.ProviderChannelId,
             StreamUrl: channel.StreamUrl!);
+    }
+
+    // -------------------------------------------------------------------------
+    // EPG fetch + compile
+    // -------------------------------------------------------------------------
+
+    private static readonly string EmptyXmltvDocument =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+
+    private async Task<string> FetchAndCompileEpgAsync(
+        Provider provider,
+        string profileId,
+        Stopwatch sw,
+        CancellationToken cancellationToken)
+    {
+        // Load (or lazy-create) enabled EPG sources for this provider
+        var sources = await db.EpgSources
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
+            .OrderBy(x => x.Priority)
+            .ToListAsync(cancellationToken);
+
+        // Lazy backfill: if no sources exist yet, create one from provider.XmltvUrl / Xtream config
+        if (sources.Count == 0)
+            sources = await BackfillEpgSourceAsync(provider, cancellationToken);
+
+        if (sources.Count == 0)
+        {
+            logger.LogDebug("No EPG sources configured for provider {ProviderId} — using empty guide.", provider.ProviderId);
+            return EmptyXmltvDocument;
+        }
+
+        sw.Restart();
+        var epgCacheDir = Path.Combine(runtimePaths.DataDirectory, "epg-cache");
+
+        // Fetch all sources in parallel (soft-fail per source)
+        var fetchTasks = sources.Select(async source =>
+        {
+            var startedUtc = DateTime.UtcNow;
+            var cacheFile = Path.Combine(epgCacheDir, $"{source.EpgSourceId}.xml");
+            var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
+
+            return (Source: source, Result: result, Xml: xml, StartedUtc: startedUtc);
+        }).ToList();
+
+        var fetchResults = await Task.WhenAll(fetchTasks);
+        logger.LogInformation("EPG sources fetched in {Elapsed}ms ({Count} sources).", sw.ElapsedMilliseconds, sources.Count);
+        sw.Restart();
+
+        // Parse each source into a catalogue
+        var catalogues = new Dictionary<string, EpgCatalogue>(StringComparer.Ordinal);
+        foreach (var (source, result, xml, startedUtc) in fetchResults)
+        {
+            var catalogue = string.IsNullOrWhiteSpace(xml)
+                ? EpgCatalogue.Empty(source.EpgSourceId)
+                : xmltvParser.Parse(source.EpgSourceId, xml);
+
+            catalogues[source.EpgSourceId] = catalogue;
+
+            await PersistEpgFetchRunAsync(source, result, catalogue, startedUtc, cancellationToken);
+
+            // Upsert source channels discovered from XMLTV
+            if (catalogue.Channels.Count > 0)
+                await UpsertEpgSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        // Run auto-mapping (non-blocking on failure)
+        try
+        {
+            await epgChannelMapper.AutoMapAsync(profileId, provider.ProviderId, [.. catalogues.Values], cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "EPG auto-mapping failed — continuing without updated mappings.");
+        }
+
+        // Load mappings for compile
+        var mappings = await db.EpgChannelMappings
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId)
+            .ToListAsync(cancellationToken);
+
+        var mappingLookup = mappings.ToLookup(m => m.ProviderChannelId, StringComparer.Ordinal);
+
+        // Build output channel list aligned to the profile's selected output channels where available.
+        var configuredChannelIds = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(f => f.ProfileGroupFilter.ProfileId == profileId &&
+                        f.ProfileGroupFilter.Decision == "hold")
+            .Select(f => f.ProviderChannelId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var dbChannelsQuery = db.ProviderChannels
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "live");
+
+        if (configuredChannelIds.Count > 0)
+            dbChannelsQuery = dbChannelsQuery.Where(x => configuredChannelIds.Contains(x.ProviderChannelId));
+
+        var dbChannels = await dbChannelsQuery.ToListAsync(cancellationToken);
+
+        var outputChannels = dbChannels
+            .Where(ch => !string.IsNullOrWhiteSpace(ch.TvgId))
+            .Select(ch => new OutputChannel(ch.ProviderChannelId, ch.TvgId!, ch.DisplayName, ch.LogoUrl))
+            .ToList();
+
+        // Compile
+        var (compiledXml, report) = epgCompiler.Compile(outputChannels, sources, catalogues, mappingLookup);
+
+        // "Don't regress" guard: if compiled guide is empty and we have a previous active snapshot,
+        // re-use the previous guide rather than publishing an empty one.
+        if (report.TotalProgrammes == 0 && outputChannels.Count > 0)
+        {
+            logger.LogWarning("EPG compile produced 0 programmes — checking for previous guide to carry forward.");
+            var prevXmltvPath = await GetPreviousActiveXmltvPathAsync(profileId, cancellationToken);
+            if (prevXmltvPath is not null && File.Exists(prevXmltvPath))
+            {
+                var prevXml = await File.ReadAllTextAsync(prevXmltvPath, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(prevXml) && prevXml.Contains("<programme"))
+                {
+                    logger.LogWarning("Carrying forward previous snapshot guide to avoid EPG regression.");
+                    return prevXml;
+                }
+            }
+        }
+
+        logger.LogInformation("EPG compiled in {Elapsed}ms.", sw.ElapsedMilliseconds);
+        return compiledXml;
+    }
+
+    private async Task<List<EpgSource>> BackfillEpgSourceAsync(
+        Provider provider,
+        CancellationToken cancellationToken)
+    {
+        // Create a default EpgSource from provider configuration
+        var hasProviderXmltv = !string.IsNullOrWhiteSpace(provider.XmltvUrl) ||
+                               (provider.XtreamBaseUrl is not null && provider.XtreamIncludeXmltv);
+
+        if (!hasProviderXmltv)
+            return [];
+
+        var now = DateTime.UtcNow;
+        var isXtream = provider.XtreamBaseUrl is not null;
+
+        var source = new EpgSource
+        {
+            EpgSourceId = Guid.NewGuid().ToString(),
+            ProviderId = provider.ProviderId,
+            Name = "Provider XMLTV",
+            Kind = isXtream ? "provider_xmltv" : "xmltv_url",
+            UrlOrPath = isXtream ? null : provider.XmltvUrl,
+            Priority = 1,
+            Enabled = true,
+            TimeoutSeconds = provider.TimeoutSeconds,
+            HeadersJson = isXtream ? null : provider.HeadersJson,
+            UserAgent = isXtream ? null : provider.UserAgent,
+            CreatedUtc = now,
+            UpdatedUtc = now,
+        };
+
+        db.EpgSources.Add(source);
+        await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation("Auto-created EpgSource {EpgSourceId} for provider {ProviderId}.",
+            source.EpgSourceId, provider.ProviderId);
+
+        return [source];
+    }
+
+    private async Task PersistEpgFetchRunAsync(
+        EpgSource source,
+        EpgSourceFetcher.FetchResult result,
+        EpgCatalogue catalogue,
+        DateTime startedUtc,
+        CancellationToken cancellationToken)
+    {
+        var finishedUtc = DateTime.UtcNow;
+
+        // Update source status columns
+        var tracked = await db.EpgSources.FindAsync([source.EpgSourceId], cancellationToken);
+        if (tracked is not null)
+        {
+            if (result.Status is "ok" or "not_modified")
+            {
+                tracked.LastSuccessUtc = finishedUtc;
+                tracked.ETag = result.ETag ?? tracked.ETag;
+                tracked.LastModifiedUtc = result.LastModifiedUtc ?? tracked.LastModifiedUtc;
+            }
+            else
+            {
+                tracked.LastFailureUtc = finishedUtc;
+                logger.LogWarning(
+                    "EPG source {EpgSourceId} ({Name}) fetch failed: {Error}",
+                    source.EpgSourceId, source.Name, result.ErrorSummary ?? "unknown error");
+            }
+            tracked.UpdatedUtc = finishedUtc;
+        }
+
+        var channelCount = catalogue.Channels.Count;
+        var programmeCount = catalogue.ProgrammesByChannel.Values.Sum(p => p.Count);
+
+        db.EpgFetchRuns.Add(new EpgFetchRun
+        {
+            EpgFetchRunId = Guid.NewGuid().ToString(),
+            EpgSourceId = source.EpgSourceId,
+            StartedUtc = startedUtc,
+            FinishedUtc = finishedUtc,
+            Status = result.Status,
+            Bytes = result.Bytes > 0 ? (int)Math.Min(result.Bytes, int.MaxValue) : null,
+            ChannelCount = channelCount > 0 ? channelCount : null,
+            ProgrammeCount = programmeCount > 0 ? programmeCount : null,
+            ErrorSummary = result.ErrorSummary,
+        });
+    }
+
+    private async Task UpsertEpgSourceChannelsAsync(
+        string epgSourceId,
+        IReadOnlyList<EpgChannelRecord> channels,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var existing = await db.EpgSourceChannels
+            .Where(x => x.EpgSourceId == epgSourceId)
+            .ToListAsync(cancellationToken);
+
+        var byId = existing.ToDictionary(x => x.XmltvChannelId, StringComparer.Ordinal);
+
+        // Track IDs added during this call so XMLTV sources with duplicate channel
+        // entries don't trigger a second Add for the same (epg_source_id, xmltv_channel_id).
+        var addedThisRun = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var ch in channels)
+        {
+            if (byId.TryGetValue(ch.XmltvChannelId, out var row))
+            {
+                row.DisplayName = ch.DisplayName;
+                row.IconUrl = ch.IconUrl;
+                row.LastSeenUtc = now;
+            }
+            else if (addedThisRun.Add(ch.XmltvChannelId))
+            {
+                db.EpgSourceChannels.Add(new EpgSourceChannel
+                {
+                    EpgSourceChannelId = Guid.NewGuid().ToString(),
+                    EpgSourceId = epgSourceId,
+                    XmltvChannelId = ch.XmltvChannelId,
+                    DisplayName = ch.DisplayName,
+                    IconUrl = ch.IconUrl,
+                    LastSeenUtc = now,
+                });
+            }
+        }
+
+        // Deactivate channels no longer in the source (mark by setting LastSeenUtc far in past is optional;
+        // here we just let them persist for UI visibility unless explicitly deleted)
+    }
+
+    private async Task<string?> GetPreviousActiveXmltvPathAsync(string profileId, CancellationToken cancellationToken)
+    {
+        var snap = await db.Snapshots
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return snap?.XmltvPath;
     }
 
     private async Task<Dictionary<string, string>> SyncProviderGroupsAsync(

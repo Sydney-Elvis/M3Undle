@@ -8,7 +8,19 @@
 
 <PageTitle>Logs — M3Undle</PageTitle>
 
-<MudText Typo="Typo.h5" Class="mb-4">Live Log</MudText>
+<div class="d-flex align-center mb-4" style="gap:12px">
+    <MudText Typo="Typo.h5">Live Log</MudText>
+    @if (!_autoScroll)
+    {
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.KeyboardDoubleArrowDown"
+                   OnClick="ResumeScrollAsync">
+            Resume scrolling
+        </MudButton>
+    }
+</div>
 
 <MudPaper Elevation="2" Class="pa-0" Style="overflow:hidden">
     <div id="log-container"
@@ -37,21 +49,39 @@
     private readonly List<LogEntry> _entries = [];
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _subscription;
+    private DotNetObjectReference<Logs>? _dotNetRef;
+    private IJSObjectReference? _scrollCleanup;
+    private bool _autoScroll = true;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         _entries.AddRange(Store.GetRecent());
-
         var reader = Sink.Subscribe(out _subscription);
         _ = StreamLogsAsync(reader, _cts.Token);
-
-        await ScrollToBottomAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
+            _scrollCleanup = await JS.InvokeAsync<IJSObjectReference>("initLogScroll", "log-container", _dotNetRef);
             await ScrollToBottomAsync();
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnScrollPositionChanged(bool atBottom)
+    {
+        if (_autoScroll == atBottom) return;
+        _autoScroll = atBottom;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ResumeScrollAsync()
+    {
+        _autoScroll = true;
+        await ScrollToBottomAsync();
     }
 
     private async Task StreamLogsAsync(ChannelReader<LogEntry> reader, CancellationToken ct)
@@ -65,7 +95,9 @@
                     _entries.RemoveAt(0);
 
                 await InvokeAsync(StateHasChanged);
-                await ScrollToBottomAsync();
+
+                if (_autoScroll)
+                    await ScrollToBottomAsync();
             }
         }
         catch (OperationCanceledException) { }
@@ -95,6 +127,11 @@
         await _cts.CancelAsync();
         _cts.Dispose();
         _subscription?.Dispose();
+        if (_scrollCleanup is not null)
+        {
+            await _scrollCleanup.InvokeVoidAsync("dispose");
+            await _scrollCleanup.DisposeAsync();
+        }
+        _dotNetRef?.Dispose();
     }
 }
-

@@ -11,6 +11,7 @@ public sealed class Provider
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public int TimeoutSeconds { get; set; } = 120;
+    public int? MaxConcurrentStreams { get; set; }
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 

@@ -332,8 +332,13 @@ Several schema fields and tables are present for forward-compatibility but are n
 - **Future:** Auto-classification rules for mapping provider channels to canonical channels and identifying event/ephemeral channels.
 
 ### `epg_channel_map`
-- **Current:** Schema present, not populated. EPG is passed through from the provider directly using provider tvg-ids.
+- **Current:** Legacy canonical-channel mapping table remains in schema but is not used by the active web EPG pipeline.
 - **Future:** Explicit tvg-id mapping between canonical channels and XMLTV channel IDs. Used when provider tvg-ids are unstable or need overriding.
+
+### `epg_sources` / `epg_source_channels` / `epg_channel_mappings` / `epg_fetch_runs`
+- **Current:** Active web EPG pipeline stores provider-linked source definitions, discovered source channels, mapping records per profile+provider channel+source, and fetch history.
+- **Current:** Snapshot refresh compiles a merged guide.xml from enabled sources using source priority, coverage checks, and deduplication.
+- **Future:** Align this model with canonical channels for cross-provider EPG identity.
 
 ## Notes on stream_keys (V1 pass-through mode)
 

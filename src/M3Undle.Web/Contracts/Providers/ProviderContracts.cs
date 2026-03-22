@@ -2,6 +2,13 @@ using System.ComponentModel.DataAnnotations;
 
 namespace M3Undle.Web.Contracts.Providers;
 
+public sealed class ProviderListItemDto
+{
+    public string ProviderId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+}
+
 public sealed class ProfileListItemDto
 {
     public string ProfileId { get; set; } = string.Empty;
@@ -39,6 +46,7 @@ public sealed class ProviderDto
     public bool Enabled { get; set; }
     public bool IsActive { get; set; }
     public int TimeoutSeconds { get; set; }
+    public int? MaxConcurrentStreams { get; set; }
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public List<string> AssociatedProfileIds { get; set; } = [];
@@ -76,6 +84,9 @@ public sealed class CreateProviderRequest
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
 
+    [Range(1, 100)]
+    public int? MaxConcurrentStreams { get; set; }
+
     public List<string>? AssociateToProfileIds { get; set; }
 
     // Xtream Codes provider fields — all three required together
@@ -102,6 +113,9 @@ public sealed class UpdateProviderRequest
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
+
+    [Range(1, 100)]
+    public int? MaxConcurrentStreams { get; set; }
 
     public List<string>? AssociateToProfileIds { get; set; }
 
@@ -214,6 +228,9 @@ public sealed class ImportConfigProviderRequest
     public string Name { get; set; } = string.Empty;
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+
+    [Range(1, 100)]
+    public int? MaxConcurrentStreams { get; set; }
 }
 
 public sealed class CreateProfileRequest
@@ -244,5 +261,27 @@ public sealed class ProbeConfigProviderResultDto
     public bool Ok { get; set; }
     public int? ChannelCount { get; set; }
     public string? Error { get; set; }
+}
+
+public sealed class UpsertProviderResult
+{
+    public string Action { get; set; } = string.Empty; // "created" or "updated"
+    public ProviderDto Provider { get; set; } = new();
+}
+
+public sealed class SnapshotStatusDto
+{
+    public bool Running { get; set; }
+    public string? LastStatus { get; set; }
+    public DateTime? StartedUtc { get; set; }
+    public DateTime? CompletedUtc { get; set; }
+    public int? ChannelCountSeen { get; set; }
+    public string? ErrorSummary { get; set; }
+}
+
+public sealed class SelectAllChannelsResult
+{
+    public int GroupsUpdated { get; set; }
+    public int ChannelsSelected { get; set; }
 }
 

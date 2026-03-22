@@ -1,8 +1,20 @@
+using System.Text;
 using System.Text.Json;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Compatibility;
+using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Observability;
+using M3Undle.Web.Streaming.Resolution;
+using M3Undle.Web.Streaming.Sessions;
+using M3Undle.Web.Streaming.Subscribers;
+using M3Undle.Web.Streaming.Upstream;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Api;
 
@@ -33,8 +45,31 @@ public static class CompatibilityEndpoints
         client.MapGet("tune/{streamKey}/{*tail}", ServeStreamAsync);
         client.MapGet("hdhr/tune/{streamKey}", ServeStreamAsync);
         client.MapGet("hdhr/tune/{streamKey}/{*tail}", ServeStreamAsync);
+        client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
+        app.MapGet("/health/ready", ServeReadinessAsync).AllowAnonymous();
+
+        var streamStatus = app.MapGroup("/status/streams")
+            .RequireAuthorization(UiAccessPolicy.Name);
+        streamStatus.MapGet(string.Empty, ServeStreamsStatusSummaryAsync);
+        streamStatus.MapGet("clients", ServeStreamsClientsStatusAsync);
+        streamStatus.MapGet("providers", ServeStreamsProvidersStatusAsync);
+        streamStatus.MapGet("{sessionId}", ServeStreamsSingleSessionStatusAsync);
+
+        // Test-mode debug endpoints — only registered when M3UNDLE_TEST_MODE=true
+        var testMode = string.Equals(
+            Environment.GetEnvironmentVariable("M3UNDLE_TEST_MODE")?.Trim(),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (testMode)
+        {
+            var debug = app.MapGroup("/debug").RequireAuthorization(UiAccessPolicy.Name);
+            debug.MapPost("/streams/reset", ServeDebugStreamResetAsync);
+            debug.MapPost("/strikes/reset", ServeDebugStrikeResetAsync);
+            debug.MapGet("/streams/strikes", ServeDebugStrikesAsync);
+        }
 
         return app;
     }
@@ -106,45 +141,22 @@ public static class CompatibilityEndpoints
         string streamKey,
         HttpContext context,
         ApplicationDbContext db,
+        StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
+        HdHomeRunTunerManager hdHomeRunTunerManager,
         IHttpClientFactory httpClientFactory,
+        HlsProxyService hlsProxyService,
         ILoggerFactory loggerFactory,
+        IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
         using var streamScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Stream" });
 
-        var access = context.GetResolvedClientAccess();
-
-        var snapshot = await db.Snapshots
-            .AsNoTracking()
-            .Where(x => x.Status == "active" && x.ProfileId == access.Binding.ActiveProfileId)
-            .OrderByDescending(x => x.CreatedUtc)
-            .FirstOrDefaultAsync(CancellationToken.None);
-
-        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.ChannelIndexPath))
-        {
-            logger.LogWarning(
-                "Stream tune-in failed: no active snapshot for profile {ProfileId}. key={StreamKey} client={Client}",
-                access.Binding.ActiveProfileId,
-                streamKey,
-                context.Connection.RemoteIpAddress);
-            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            return;
-        }
-
-        (string StreamUrl, string DisplayName) entry;
+        StreamResolveResult resolved;
         try
         {
-            var hit = await GetStreamEntryAsync(snapshot.SnapshotId, snapshot.ChannelIndexPath, streamKey, cancellationToken);
-            if (hit is null)
-            {
-                logger.LogWarning("Stream tune-in failed: unknown key. key={StreamKey} client={Client}",
-                    streamKey, context.Connection.RemoteIpAddress);
-                context.Response.StatusCode = StatusCodes.Status404NotFound;
-                return;
-            }
-
-            entry = hit.Value;
+            resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -156,12 +168,263 @@ public static class CompatibilityEndpoints
             return;
         }
 
+        if (!resolved.IsSuccess || resolved.Entry is null)
+        {
+            context.Response.StatusCode = resolved.FailureStatusCode ?? StatusCodes.Status503ServiceUnavailable;
+            if (!string.IsNullOrWhiteSpace(resolved.FailureMessage))
+                await context.Response.WriteAsync(resolved.FailureMessage, cancellationToken);
+            return;
+        }
+
+        if (!streamProxyOptions.Value.StreamingEnabled)
+        {
+            logger.LogWarning("Stream request rejected for key={StreamKey} — stream proxy is disabled in configuration.", streamKey);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.Append("Retry-After", "60");
+            await context.Response.WriteAsync("Stream proxy is disabled.", cancellationToken);
+            return;
+        }
+
+        var entry = resolved.Entry;
         logger.LogInformation("Stream tune-in: channel={Channel} key={StreamKey} client={Client}",
             entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
 
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, CancellationToken.None);
+        if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        {
+            // Only attempt HLS delivery when the client can consume it.
+            // HDHR/tune routes are always raw TS (used by Plex, Channels DVR).
+            // A .ts tail from a non-browser client means a native app expecting raw bytes.
+            // Browser-based apps (IPTVnator, Electron) send Mozilla UA and need HLS.
+            var tail = context.Request.RouteValues.TryGetValue("tail", out var tailVal)
+                ? tailVal?.ToString() ?? string.Empty
+                : string.Empty;
+            var isNativeClientRoute = IsHdHomeRunTuneRoute(context.Request.Path)
+                || (!IsBrowserClient(context) && tail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase));
+
+            if (!isNativeClientRoute)
+            {
+                var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
+                if (hlsCandidates.Count > 0)
+                {
+                    var baseUrl = GetBaseUrl(context);
+                    var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
+                    segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
+
+                    var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                        hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                    if (manifest is not null)
+                    {
+                        logger.LogInformation(
+                            "HLS delivery: channel={Channel} key={StreamKey}",
+                            entry.DisplayName, streamKey);
+                        context.Response.ContentType = "application/vnd.apple.mpegurl";
+                        context.Response.Headers.CacheControl = "no-cache";
+                        await context.Response.WriteAsync(manifest, cancellationToken);
+                        return;
+                    }
+
+                    logger.LogInformation(
+                        "HLS not available for '{Channel}', falling back to TS session.",
+                        entry.DisplayName);
+                }
+            }
+
+            HdHomeRunTunerReservation? tunerReservation = null;
+            SubscriberConnection? subscriber = null;
+            try
+            {
+                if (IsHdHomeRunTuneRoute(context.Request.Path))
+                {
+                    var access = context.GetResolvedClientAccess();
+                    var tunerId = string.IsNullOrWhiteSpace(access.Binding.VirtualTunerId)
+                        ? "hdhr-main"
+                        : access.Binding.VirtualTunerId!;
+
+                    var tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
+                    if (!tunerAcquire.Succeeded || tunerAcquire.Reservation is null)
+                    {
+                        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                        context.Response.Headers["Retry-After"] = "30";
+                        if (!string.IsNullOrWhiteSpace(tunerAcquire.Error))
+                            await context.Response.WriteAsync(tunerAcquire.Error, cancellationToken);
+                        return;
+                    }
+
+                    tunerReservation = tunerAcquire.Reservation;
+                    if (tunerAcquire.PriorSubscriber is not null)
+                        await tunerAcquire.PriorSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+                }
+
+                var session = await channelSessionManager.GetOrCreateAsync(resolved.SourceDescriptor, cancellationToken);
+                subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
+
+                if (tunerReservation is not null)
+                {
+                    hdHomeRunTunerManager.Activate(
+                        tunerReservation,
+                        subscriber,
+                        resolved.SourceDescriptor.DisplayName);
+                }
+
+                await subscriber.Completion;
+                return;
+            }
+            catch (StreamAdmissionException ex)
+            {
+                logger.LogWarning(
+                    "Shared stream admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
+                    resolved.SourceDescriptor.ProviderId,
+                    resolved.SourceDescriptor.ProviderChannelId,
+                    ex.Message);
+                if (ex.RetryAfterSeconds is { } retryAfter)
+                    context.Response.Headers["Retry-After"] = retryAfter.ToString();
+
+                context.Response.StatusCode = ex.StatusCode;
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (UpstreamConnectException ex)
+            {
+                logger.LogWarning(
+                    "Shared stream upstream startup/connect failure for key={StreamKey}. kind={FailureKind} status={StatusCode}",
+                    streamKey,
+                    ex.FailureKind,
+                    ex.StatusCode);
+
+                if (!context.Response.HasStarted)
+                {
+                    context.Response.StatusCode = ex.FailureKind is UpstreamFailureKind.UpstreamAuth
+                        or UpstreamFailureKind.UpstreamNotFound
+                        or UpstreamFailureKind.StartupFatal
+                        ? StatusCodes.Status502BadGateway
+                        : StatusCodes.Status503ServiceUnavailable;
+                }
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Shared stream delivery failed for key={StreamKey}.", streamKey);
+                if (!context.Response.HasStarted)
+                    context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return;
+            }
+            finally
+            {
+                if (tunerReservation is not null)
+                    hdHomeRunTunerManager.Release(tunerReservation.ReservationId, subscriber?.ClientId);
+            }
+        }
+
+        await ServeDirectRelayAsync(
+            context,
+            db,
+            httpClientFactory,
+            logger,
+            entry.StreamUrl,
+            entry.DisplayName,
+            cancellationToken);
+    }
+
+    private static async Task ServeHlsProxyAsync(
+        string streamKey,
+        HttpContext context,
+        HlsProxyService hlsProxyService,
+        StreamRequestResolver streamRequestResolver,
+        string? u,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(u))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Missing 'u' parameter.", cancellationToken);
+            return;
+        }
+
+        string upstreamUrl;
+        try
+        {
+            upstreamUrl = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(u));
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Invalid 'u' parameter.", cancellationToken);
+            return;
+        }
+
+        if (!Uri.TryCreate(upstreamUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != "http" && uri.Scheme != "https"))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsync("Invalid upstream URL.", cancellationToken);
+            return;
+        }
+
+        var baseUrl = GetBaseUrl(context);
+        var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
+        segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
+
+        string providerId;
+        try
+        {
+            var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
+            if (!resolved.IsSuccess || resolved.SourceDescriptor is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                await context.Response.WriteAsync("Unknown stream key.", cancellationToken);
+                return;
+            }
+
+            providerId = resolved.SourceDescriptor.ProviderId;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            await context.Response.WriteAsync("Unknown stream key.", cancellationToken);
+            return;
+        }
+
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
+    }
+
+    private static string GetBaseUrl(HttpContext context)
+    {
+        var pathBase = context.Request.PathBase.HasValue
+            ? context.Request.PathBase.Value?.TrimEnd('/')
+            : null;
+
+        return string.IsNullOrWhiteSpace(pathBase)
+            ? $"{context.Request.Scheme}://{context.Request.Host}"
+            : $"{context.Request.Scheme}://{context.Request.Host}{pathBase}";
+    }
+
+    /// <summary>
+    /// Returns true when the request originates from a browser or Electron-based app.
+    /// These clients cannot decode raw MPEG-TS and require HLS delivery.
+    /// Native IPTV apps (TiviMate, IPTVator, Smarters) use non-browser User-Agent strings.
+    /// </summary>
+    private static bool IsBrowserClient(HttpContext context) =>
+        context.Request.Headers.UserAgent.ToString()
+            .Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task ServeDirectRelayAsync(
+        HttpContext context,
+        ApplicationDbContext db,
+        IHttpClientFactory httpClientFactory,
+        ILogger logger,
+        string streamUrl,
+        string displayName,
+        CancellationToken cancellationToken)
+    {
+        var provider = await ResolveProviderForDirectRelayAsync(db, context, cancellationToken);
 
         try
         {
@@ -178,12 +441,12 @@ public static class CompatibilityEndpoints
                 client.DefaultRequestHeaders.TryAddWithoutValidation("Range", rangeValue.ToArray());
 
             using var upstreamResponse = await client.GetAsync(
-                entry.StreamUrl,
+                streamUrl,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
 
             logger.LogInformation("Stream upstream: channel={Channel} status={Status} contentType={ContentType}",
-                entry.DisplayName,
+                displayName,
                 (int)upstreamResponse.StatusCode,
                 upstreamResponse.Content.Headers.ContentType?.ToString() ?? "none");
 
@@ -198,40 +461,96 @@ public static class CompatibilityEndpoints
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
             await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
 
-            logger.LogDebug("Stream complete: channel={Channel} client={Client}",
-                entry.DisplayName,
+            logger.LogInformation("Stream ended: channel={Channel} client={Client}",
+                displayName,
                 context.Connection.RemoteIpAddress);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            logger.LogDebug("Stream client disconnected: channel={Channel} client={Client}",
-                entry.DisplayName,
+            logger.LogInformation("Client disconnected from stream: channel={Channel} client={Client}",
+                displayName,
                 context.Connection.RemoteIpAddress);
         }
         catch (HttpRequestException ex)
         {
             logger.LogError(ex, "Stream upstream request failed: channel={Channel} key={StreamKey}",
-                entry.DisplayName,
-                streamKey);
+                displayName,
+                "direct-relay");
             if (!context.Response.HasStarted)
                 context.Response.StatusCode = StatusCodes.Status502BadGateway;
         }
     }
 
-    private static async Task<(string StreamUrl, string DisplayName)?> GetStreamEntryAsync(
-        string snapshotId,
-        string channelIndexPath,
-        string streamKey,
+    private static async Task<Provider?> ResolveProviderForDirectRelayAsync(
+        ApplicationDbContext db,
+        HttpContext context,
         CancellationToken cancellationToken)
     {
-        var idxPath = ChannelIndexStore.GetIdxPath(channelIndexPath);
-        var entry = await ChannelIndexStore.TryLookupAsync(
-            snapshotId,
-            channelIndexPath,
-            idxPath,
-            streamKey,
-            cancellationToken);
-        return entry is null ? null : (entry.StreamUrl, entry.DisplayName);
+        var access = context.GetResolvedClientAccess();
+        var profileProvider = await db.ProfileProviders
+            .AsNoTracking()
+            .Where(x => x.ProfileId == access.Binding.ActiveProfileId && x.Enabled)
+            .OrderBy(x => x.Priority)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (profileProvider is null)
+        {
+            return await db.Providers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+        }
+
+        return await db.Providers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ProviderId == profileProvider.ProviderId && x.Enabled, cancellationToken);
+    }
+
+    private static async Task<IResult> ServeReadinessAsync(
+        ApplicationDbContext db,
+        IRefreshTrigger refreshTrigger,
+        CancellationToken cancellationToken)
+    {
+        var reasons = new List<string>();
+
+        if (!await db.Providers.AsNoTracking().AnyAsync(x => x.IsActive && x.Enabled, cancellationToken))
+            reasons.Add("no active provider");
+
+        if (!await db.Snapshots.AsNoTracking().AnyAsync(x => x.Status == "active", cancellationToken))
+            reasons.Add("no active snapshot");
+
+        if (refreshTrigger.IsRefreshing)
+            reasons.Add("refresh in progress");
+
+        return reasons.Count == 0
+            ? Results.Ok(new { ready = true })
+            : Results.Json(new { ready = false, reasons }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static IResult ServeDebugStrikesAsync(UpstreamFailureStrikeStore strikeStore)
+    {
+        var cooldowns = strikeStore.GetActiveCooldowns();
+        var dtos = cooldowns
+            .Select(c => new
+            {
+                sessionKey = c.Key.ToString(),
+                providerId = c.Key.ProviderId,
+                providerChannelId = c.Key.ProviderChannelId,
+                remainingSeconds = Math.Round(c.Remaining.TotalSeconds, 1),
+            })
+            .ToArray();
+        return Results.Json(dtos, JsonOptions);
+    }
+
+    private static async Task<IResult> ServeDebugStreamResetAsync(ChannelSessionManager sessionManager)
+    {
+        await sessionManager.ResetAllAsync();
+        return Results.Ok(new { cleared = true });
+    }
+
+    private static IResult ServeDebugStrikeResetAsync(UpstreamFailureStrikeStore strikeStore)
+    {
+        strikeStore.ClearAll();
+        return Results.Ok(new { cleared = true });
     }
 
     private static async Task ServeStatusAsync(HttpContext context, ApplicationDbContext db, CancellationToken cancellationToken)
@@ -286,6 +605,38 @@ public static class CompatibilityEndpoints
         }
     }
 
+    private static IResult ServeStreamsStatusSummaryAsync(StreamingRegistry registry)
+    {
+        var sessions = registry.GetActiveSessions();
+        var summary = new StreamStatusSummary(
+            ActiveSessionCount: sessions.Count,
+            ActiveSubscriberCount: sessions.Sum(x => x.SubscriberCount),
+            SessionsReconnecting: sessions.Count(x => x.State == SessionState.Reconnecting),
+            TotalReconnectAttempts: sessions.Sum(x => x.ReconnectAttempts),
+            ActiveSessions: sessions,
+            RecentEndedSessions: registry.GetRecentEndedSessions());
+        return Results.Json(summary, JsonOptions);
+    }
+
+    private static IResult ServeStreamsClientsStatusAsync(StreamingRegistry registry)
+        => Results.Json(registry.GetActiveClients(), JsonOptions);
+
+    private static IResult ServeStreamsProvidersStatusAsync(StreamingRegistry registry)
+        => Results.Json(registry.GetActiveProviderStreams(), JsonOptions);
+
+    // `/tune/*` exists only as the legacy HDHomeRun root alias for `/hdhr/tune/*`.
+    private static bool IsHdHomeRunTuneRoute(PathString path)
+        => path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase);
+
+    private static IResult ServeStreamsSingleSessionStatusAsync(string sessionId, StreamingRegistry registry)
+    {
+        var snapshot = registry.TryGetSession(sessionId);
+        return snapshot is null
+            ? TypedResults.NotFound()
+            : Results.Json(snapshot, JsonOptions);
+    }
+
     private sealed record StatusResponse(
         string Status,
         IReadOnlyList<LineupStatusInfo> Lineups);
@@ -311,4 +662,12 @@ public static class CompatibilityEndpoints
         DateTime? FinishedUtc,
         int? ChannelCountSeen,
         string? ErrorSummary);
+
+    private sealed record StreamStatusSummary(
+        int ActiveSessionCount,
+        int ActiveSubscriberCount,
+        int SessionsReconnecting,
+        int TotalReconnectAttempts,
+        IReadOnlyList<StreamSessionSnapshot> ActiveSessions,
+        IReadOnlyList<StreamSessionSnapshot> RecentEndedSessions);
 }

@@ -38,7 +38,8 @@ public static class SiteSettingsApiEndpoints
             Enabled: request.Enabled,
             Username: request.Username,
             Password: request.Password,
-            ActiveProfileId: request.ActiveProfileId), cancellationToken);
+            ActiveProfileId: request.ActiveProfileId,
+            VirtualTunerId: request.VirtualTunerId), cancellationToken);
 
         if (!result.Succeeded)
         {
@@ -60,7 +61,8 @@ public static class SiteSettingsApiEndpoints
         bool Enabled,
         string? Username,
         string? Password,
-        string? ActiveProfileId);
+        string? ActiveProfileId,
+        string? VirtualTunerId);
 
     private sealed record EndpointSecurityResponse(
         bool Enabled,

@@ -1,7 +1,12 @@
 @page "/settings"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Streaming.Configuration
+@using M3Undle.Web.Streaming.Observability
 @inject ISiteSettingsService SiteSettings
 @inject IEndpointSecurityService EndpointSecurity
+@inject IStreamingSettingsService StreamingSettings
+@inject IApplicationRestartService ApplicationRestart
+@inject StreamingRegistry StreamingRegistry
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -59,6 +64,14 @@
                               InputType="InputType.Password"
                               HelperText="Stored as password hash in database." />
 
+                <MudTextField @bind-Value="_virtualTunerId"
+                              Label="Virtual Tuner ID"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              FullWidth="true"
+                              Placeholder="hdhr-main"
+                              HelperText="Used as the HDHomeRun tuner identity for retune/reuse behavior." />
+
                 @if (!string.IsNullOrWhiteSpace(_activeProfileId))
                 {
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
@@ -100,6 +113,267 @@
             }
         </MudPaper>
     </MudItem>
+
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Stream Proxy</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls how M3Undle relays live streams to your media player. Changes are saved immediately but only take effect after restarting the app.
+            </MudText>
+
+            @if (_loadingStreamingSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                @if (_streamingRestartRequired)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        Stream settings have been saved but are not active yet. Restart M3Undle to apply them.
+                    </MudAlert>
+                }
+
+                @if (_activeStreamCount > 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        @_activeStreamCount active stream@(_activeStreamCount == 1 ? "" : "s") currently playing.
+                        Restarting will disconnect all active viewers.
+                    </MudAlert>
+                }
+
+                <MudSwitch T="bool" Label="Enable Stream Proxy" @bind-Value="_streamingEnabled" Class="mb-3"
+                           Color="Color.Primary" />
+
+                <MudText Typo="Typo.subtitle2" Class="mb-2 mt-1">Session Limits</MudText>
+                <MudGrid Spacing="2" Class="mb-4">
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_maxConcurrentSessions"
+                                             Label="Max Simultaneous Streams"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="How many streams can play at the same time."
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="When this limit is reached, new viewers receive a 'retry later' response until an existing stream ends. Set this based on your server capacity and the number of streams your provider allows."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_idleGraceSeconds"
+                                             Label="Disconnect Grace Period (sec)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="Seconds to keep a stream alive after the last viewer leaves."
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="When all viewers disconnect from a channel, M3Undle keeps the upstream connection running for this long. This lets viewers reconnect quickly — for example after refreshing their player — without having to buffer from scratch. Default: 15 s."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_idleGraceHardCapSeconds"
+                                             Label="Maximum Idle Time (sec)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="Hard limit on how long a stream stays open with no viewers."
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="Even if viewers keep reconnecting and renewing the grace period, a stream is always closed after this many idle seconds. Prevents unused streams from staying open indefinitely. Must be ≥ disconnect grace. Default: 120 s."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Buffering</MudText>
+                <MudGrid Spacing="2" Class="mb-4">
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_bufferMaxBytesPerSession"
+                                             Label="Buffer per Stream (bytes)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Max="StreamingSettingsLimits.MaxBytesPerSession" Immediate="true"
+                                             HelperText="@($"~ {FormatMiB(_bufferMaxBytesPerSession)} MiB per stream (max 1 GiB)")"
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="Memory reserved to buffer each active stream. A larger buffer gives smoother playback and helps viewers recover from brief network hiccups without losing their place. Default: 4 MiB."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_bufferMaxBytesHardCap"
+                                             Label="Total Buffer Limit (bytes)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="@($"~ {FormatMiB(_bufferMaxBytesHardCap)} MiB across all streams")"
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="The maximum total memory used by all active stream buffers combined. Protects the server from running out of memory when many streams are active at once. Must be ≥ buffer per stream. Default: 32 MiB."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_bufferReadChunkSizeBytes"
+                                             Label="Download Chunk Size (bytes)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Max="StreamingSettingsLimits.MaxReadChunkSizeBytes" Immediate="true"
+                                             HelperText="@($"~ {Math.Max(1, _bufferReadChunkSizeBytes / 1024)} KiB per read (max 16 MiB)")"
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="How much data is fetched from the source in each read. Smaller values (e.g. 32 KiB) give quicker stream starts; larger values are more efficient on fast connections. Default: 32 KiB."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Reconnect Behaviour</MudText>
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_reconnectReadStallTimeoutSeconds"
+                                             Label="Stall Detection Timeout (sec)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="Seconds of silence before M3Undle treats a stream as stalled."
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="If no data arrives from the upstream source for this many seconds, M3Undle assumes the stream has stalled and begins reconnect attempts. Default: 30 s."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_reconnectOutageWindowSeconds"
+                                             Label="Reconnect Window (sec)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="How long M3Undle keeps retrying after a stall before giving up."
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="After detecting a stall, M3Undle retries the connection for up to this many seconds. If the stream doesn't recover in time, it closes and viewers must tune in again manually. Must be ≥ stall timeout. Default: 75 s."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int" @bind-Value="_reconnectConnectTimeoutSeconds"
+                                             Label="Connection Timeout (sec)"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Immediate="true"
+                                             HelperText="Seconds to wait for the source to respond when opening a stream."
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="If the upstream source doesn't start sending data within this many seconds, the connection attempt is abandoned and the viewer receives a 'service unavailable' response. Default: 15 s."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                @if (!string.IsNullOrWhiteSpace(_streamingError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_streamingError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_streamingSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_streamingSuccess
+                    </MudAlert>
+                }
+
+                <MudStack Row="true" Spacing="2" Class="mb-4">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="_savingStreamingSettings || _restartingApplication"
+                               OnClick="SaveStreamingSettingsAsync">
+                        @(_savingStreamingSettings ? "Saving..." : "Save Stream Settings")
+                    </MudButton>
+
+                    @if (_streamingRestartRequired)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                   Disabled="_restartingApplication"
+                                   OnClick="RestartApplicationAsync">
+                            @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
+                        </MudButton>
+                    }
+                </MudStack>
+
+                <MudDivider Class="mb-3" />
+
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
+                    Active configuration — requires restart to update
+                </MudText>
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Proxy</MudText>
+                        <MudText Typo="Typo.body2">@(_appliedStreamingSettings?.StreamingEnabled == true ? "Enabled" : "Disabled")</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Max Simultaneous Streams</MudText>
+                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.MaxConcurrentSessions</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Disconnect Grace</MudText>
+                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.IdleGraceSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Max Idle Time</MudText>
+                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.IdleGraceHardCapSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Buffer per Stream</MudText>
+                        <MudText Typo="Typo.body2">@FormatMiB(_appliedStreamingSettings?.BufferMaxBytesPerSession ?? 0) MiB</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Total Buffer Limit</MudText>
+                        <MudText Typo="Typo.body2">@FormatMiB(_appliedStreamingSettings?.BufferMaxBytesHardCap ?? 0) MiB</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Download Chunk Size</MudText>
+                        <MudText Typo="Typo.body2">@((_appliedStreamingSettings?.BufferReadChunkSizeBytes ?? 0) / 1024) KiB</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stall Detection Timeout</MudText>
+                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.ReconnectReadStallTimeoutSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Reconnect Window</MudText>
+                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.ReconnectOutageWindowSeconds s</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Connection Timeout</MudText>
+                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.ReconnectConnectTimeoutSeconds s</MudText>
+                    </MudItem>
+                </MudGrid>
+            }
+        </MudPaper>
+    </MudItem>
 </MudGrid>
 
 @code {
@@ -111,16 +385,36 @@
     private bool _endpointHasCredential;
     private string _endpointUsername = string.Empty;
     private string _endpointPassword = string.Empty;
+    private string _virtualTunerId = "hdhr-main";
     private string? _activeProfileId;
     private string? _endpointError;
     private string? _endpointSuccess;
+
+    private bool _loadingStreamingSettings;
+    private bool _savingStreamingSettings;
+    private bool _restartingApplication;
+    private bool _streamingRestartRequired;
+    private bool _streamingEnabled;
+    private int _maxConcurrentSessions;
+    private int _idleGraceSeconds;
+    private int _idleGraceHardCapSeconds;
+    private int _bufferMaxBytesPerSession;
+    private int _bufferMaxBytesHardCap;
+    private int _bufferReadChunkSizeBytes;
+    private int _reconnectReadStallTimeoutSeconds;
+    private int _reconnectOutageWindowSeconds;
+    private int _reconnectConnectTimeoutSeconds;
+    private int _activeStreamCount;
+    private string? _streamingError;
+    private string? _streamingSuccess;
+    private StreamingSettingsSnapshot? _appliedStreamingSettings;
 
     private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
 
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await LoadEndpointSecurityAsync();
+        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync());
     }
 
     private async Task LoadEndpointSecurityAsync()
@@ -135,6 +429,7 @@
             _endpointUsername = settings.Username ?? string.Empty;
             _endpointHasCredential = settings.HasCredential;
             _activeProfileId = settings.ActiveProfileId;
+            _virtualTunerId = string.IsNullOrWhiteSpace(settings.VirtualTunerId) ? "hdhr-main" : settings.VirtualTunerId;
         }
         catch (Exception ex)
         {
@@ -143,6 +438,91 @@
         finally
         {
             _loadingEndpointSettings = false;
+        }
+    }
+
+    private async Task LoadStreamingSettingsAsync()
+    {
+        _loadingStreamingSettings = true;
+        _streamingError = null;
+
+        try
+        {
+            var state = await StreamingSettings.GetSettingsAsync(CancellationToken.None);
+            ApplySavedStreamingSettings(state.Saved);
+            _appliedStreamingSettings = state.Applied;
+            _streamingRestartRequired = state.RestartRequired;
+            _activeStreamCount = StreamingRegistry.GetActiveSessions().Count;
+        }
+        catch (Exception ex)
+        {
+            _streamingError = $"Failed to load stream settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingStreamingSettings = false;
+        }
+    }
+
+    private async Task SaveStreamingSettingsAsync()
+    {
+        _savingStreamingSettings = true;
+        _streamingError = null;
+        _streamingSuccess = null;
+        _activeStreamCount = StreamingRegistry.GetActiveSessions().Count;
+
+        try
+        {
+            var result = await StreamingSettings.UpdateAsync(new UpdateStreamingSettingsCommand(
+                StreamingEnabled: _streamingEnabled,
+                MaxConcurrentSessions: _maxConcurrentSessions,
+                IdleGraceSeconds: _idleGraceSeconds,
+                IdleGraceHardCapSeconds: _idleGraceHardCapSeconds,
+                BufferMaxBytesPerSession: _bufferMaxBytesPerSession,
+                BufferMaxBytesHardCap: _bufferMaxBytesHardCap,
+                BufferReadChunkSizeBytes: _bufferReadChunkSizeBytes,
+                ReconnectReadStallTimeoutSeconds: _reconnectReadStallTimeoutSeconds,
+                ReconnectOutageWindowSeconds: _reconnectOutageWindowSeconds,
+                ReconnectConnectTimeoutSeconds: _reconnectConnectTimeoutSeconds), CancellationToken.None);
+
+            if (!result.Succeeded)
+            {
+                _streamingError = result.Error ?? "Failed to save stream settings.";
+                return;
+            }
+
+            ApplySavedStreamingSettings(result.Settings);
+            _streamingRestartRequired = result.RestartRequired;
+            _streamingSuccess = result.Changed
+                ? "Stream settings saved. Restart M3Undle to apply them."
+                : result.RestartRequired
+                    ? "No changes detected. A restart is still pending from a previous save."
+                    : "No stream setting changes were detected.";
+        }
+        catch (Exception ex)
+        {
+            _streamingError = $"Failed to save stream settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingStreamingSettings = false;
+        }
+    }
+
+    private async Task RestartApplicationAsync()
+    {
+        _restartingApplication = true;
+        _streamingError = null;
+        _streamingSuccess = "Restart requested. Waiting for M3Undle to stop.";
+
+        try
+        {
+            await ApplicationRestart.RequestRestartAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _restartingApplication = false;
+            _streamingError = $"Failed to request restart: {ex.Message}";
         }
     }
 
@@ -158,7 +538,8 @@
                 Enabled: _endpointEnabled,
                 Username: string.IsNullOrWhiteSpace(_endpointUsername) ? null : _endpointUsername.Trim(),
                 Password: string.IsNullOrWhiteSpace(_endpointPassword) ? null : _endpointPassword,
-                ActiveProfileId: _activeProfileId), CancellationToken.None);
+                ActiveProfileId: _activeProfileId,
+                VirtualTunerId: string.IsNullOrWhiteSpace(_virtualTunerId) ? "hdhr-main" : _virtualTunerId.Trim()), CancellationToken.None);
 
             if (!result.Succeeded)
             {
@@ -170,6 +551,7 @@
             _endpointUsername = result.Settings.Username ?? string.Empty;
             _endpointHasCredential = result.Settings.HasCredential;
             _activeProfileId = result.Settings.ActiveProfileId;
+            _virtualTunerId = string.IsNullOrWhiteSpace(result.Settings.VirtualTunerId) ? "hdhr-main" : result.Settings.VirtualTunerId;
             _endpointPassword = string.Empty;
             _endpointSuccess = "Endpoint security settings saved.";
         }
@@ -182,4 +564,21 @@
             _savingEndpointSettings = false;
         }
     }
+
+    private void ApplySavedStreamingSettings(StreamingSettingsSnapshot settings)
+    {
+        _streamingEnabled = settings.StreamingEnabled;
+        _maxConcurrentSessions = settings.MaxConcurrentSessions;
+        _idleGraceSeconds = settings.IdleGraceSeconds;
+        _idleGraceHardCapSeconds = settings.IdleGraceHardCapSeconds;
+        _bufferMaxBytesPerSession = settings.BufferMaxBytesPerSession;
+        _bufferMaxBytesHardCap = settings.BufferMaxBytesHardCap;
+        _bufferReadChunkSizeBytes = settings.BufferReadChunkSizeBytes;
+        _reconnectReadStallTimeoutSeconds = settings.ReconnectReadStallTimeoutSeconds;
+        _reconnectOutageWindowSeconds = settings.ReconnectOutageWindowSeconds;
+        _reconnectConnectTimeoutSeconds = settings.ReconnectConnectTimeoutSeconds;
+    }
+
+    private static string FormatMiB(int bytes)
+        => (bytes / 1048576d).ToString("0.##");
 }

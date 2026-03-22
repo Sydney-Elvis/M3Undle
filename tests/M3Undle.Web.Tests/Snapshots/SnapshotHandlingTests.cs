@@ -728,7 +728,26 @@ public sealed class SnapshotHandlingTests
             new SecretEncryptionService(envSvc),
             NullLogger<ProviderFetcher>.Instance);
         var env = new FakeWebHostEnvironment(tempDir);
-        return new SnapshotBuilder(db, fetcher, env, Options.Create(new SnapshotOptions()), NullLogger<SnapshotBuilder>.Instance);
+        var runtimePaths = new RuntimePaths(
+            DataDirectory: tempDir,
+            DatabasePath: Path.Combine(tempDir, "m3undle.db"),
+            DatabaseConnectionString: $"Data Source={Path.Combine(tempDir, "m3undle.db")}",
+            LogDirectory: tempDir,
+            SnapshotDirectory: tempDir);
+        var xmltvParser = new M3Undle.Web.Application.Epg.XmltvParser();
+        var epgSourceFetcher = new M3Undle.Web.Application.Epg.EpgSourceFetcher(
+            factory,
+            fetcher,
+            envSvc,
+            NullLogger<M3Undle.Web.Application.Epg.EpgSourceFetcher>.Instance);
+        var epgChannelMapper = new M3Undle.Web.Application.Epg.EpgChannelMapper(
+            db,
+            NullLogger<M3Undle.Web.Application.Epg.EpgChannelMapper>.Instance);
+        var epgCompiler = new M3Undle.Web.Application.Epg.EpgCompiler(
+            NullLogger<M3Undle.Web.Application.Epg.EpgCompiler>.Instance);
+        return new SnapshotBuilder(
+            db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
+            runtimePaths, env, Options.Create(new SnapshotOptions()), NullLogger<SnapshotBuilder>.Instance);
     }
 
     private static async Task<TestFixture> CreateFixtureAsync()

@@ -97,12 +97,15 @@ public static class ChannelFilterApiEndpoints
         return TypedResults.Ok(dtos);
     }
 
+    private sealed class ChannelFilterLog { }
+
     private static async Task<Results<Ok<GroupFilterDto>, NotFound>> UpdateGroupFilterAsync(
         string profileId,
         string filterId,
         UpdateGroupFilterRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        ILogger<ChannelFilterLog> logger,
         CancellationToken cancellationToken)
     {
         var filter = await db.ProfileGroupFilters
@@ -156,7 +159,15 @@ public static class ChannelFilterApiEndpoints
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Active, false), cancellationToken);
 
         if (request.Decision is not null)
+        {
+            using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Channel" });
+            logger.LogInformation(
+                "Channel group '{GroupName}' set to '{Decision}' for profile {ProfileId}.",
+                filter.ProviderGroup?.RawName ?? filterId,
+                request.Decision,
+                profileId);
             eventBus.Publish(AppEventKind.GroupFiltersChanged);
+        }
 
         return TypedResults.Ok(ToDto(filter));
     }
@@ -178,6 +189,7 @@ public static class ChannelFilterApiEndpoints
         BulkGroupDecisionRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        ILogger<ChannelFilterLog> logger,
         CancellationToken cancellationToken)
     {
         if (request.Decision is not ("exclude" or "hold"))
@@ -231,6 +243,12 @@ public static class ChannelFilterApiEndpoints
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Active, false), cancellationToken);
         }
 
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Channel" });
+        logger.LogInformation(
+            "Bulk channel group decision: {Count} group(s) set to '{Decision}' for profile {ProfileId}.",
+            updated,
+            request.Decision,
+            profileId);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
         return TypedResults.Ok((object)new { updated });
@@ -403,9 +421,12 @@ public static class ChannelFilterApiEndpoints
         UpdateChannelSelectionsRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        EpgPageService epgPageService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var filter = await db.ProfileGroupFilters
+            .Include(x => x.ProviderGroup)
             .FirstOrDefaultAsync(x => x.ProfileGroupFilterId == filterId && x.ProfileId == profileId, cancellationToken);
 
         if (filter is null)
@@ -436,9 +457,58 @@ public static class ChannelFilterApiEndpoints
         }
 
         await db.SaveChangesAsync(cancellationToken);
+
+        var channelLogger = loggerFactory.CreateLogger("ChannelFilterApiEndpoints");
+        using var scope = channelLogger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Channel" });
+
+        if (filter.ChannelMode == "select")
+        {
+            channelLogger.LogInformation(
+                "{Count} channel(s) mapped in group '{GroupName}' for profile {ProfileId}.",
+                request.Channels.Count,
+                filter.ProviderGroup?.RawName ?? filterId,
+                profileId);
+        }
+        else
+        {
+            channelLogger.LogInformation(
+                "Channel group '{GroupName}' set to include all channels for profile {ProfileId}.",
+                filter.ProviderGroup?.RawName ?? filterId,
+                profileId);
+        }
+
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
+        // Fire-and-forget EPG auto-map so newly mapped channels get guide data assigned
+        if (filter.ProviderGroup is not null)
+        {
+            _ = RunAutoMapSafeAsync(
+                epgPageService,
+                profileId,
+                filter.ProviderGroup.ProviderId,
+                channelLogger);
+        }
+
         return await GetChannelSelectionsAsync(profileId, filterId, db, cancellationToken);
+    }
+
+    private static async Task RunAutoMapSafeAsync(
+        EpgPageService epgPageService,
+        string profileId,
+        string providerId,
+        ILogger logger)
+    {
+        try
+        {
+            await epgPageService.AutoMapForProviderAsync(profileId, providerId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "EPG auto-map failed after channel selection update for profile {ProfileId}, provider {ProviderId}.",
+                profileId,
+                providerId);
+        }
     }
 
     // -------------------------------------------------------------------------

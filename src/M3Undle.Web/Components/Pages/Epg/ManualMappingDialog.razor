@@ -1,0 +1,188 @@
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts.Epg
+@inject EpgPageService EpgPageService
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<MudDialog Style="min-width:560px">
+    <DialogContent>
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+        }
+
+        <MudStack Spacing="1" Class="mb-4">
+            <MudText Typo="Typo.subtitle2">Channel</MudText>
+            <MudText Typo="Typo.body1">@Mapping.ProviderChannelDisplayName</MudText>
+            @if (!string.IsNullOrWhiteSpace(Mapping.ProviderChannelTvgId))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary">tvg-id: @Mapping.ProviderChannelTvgId</MudText>
+            }
+        </MudStack>
+
+        <MudStack Spacing="3">
+            <MudSelect T="EpgSourceDto?" Label="EPG Source"
+                       Value="_selectedSource"
+                       ValueChanged="OnSourceChangedAsync"
+                       ToStringFunc="@(s => s?.Name ?? "— none —")"
+                       HelperText="Which EPG source to look up guide data from"
+                       Required="true" RequiredError="Please select a source.">
+                @foreach (var src in Sources)
+                {
+                    <MudSelectItem T="EpgSourceDto?" Value="@src">@src.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_selectedSource is not null)
+            {
+                @if (_loadingChannels)
+                {
+                    <MudProgressLinear Indeterminate="true" />
+                }
+                else if (_sourceChannels.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+                        No channels found in this source. Run a test fetch first to populate channels.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAutocomplete T="EpgSourceChannelDto?"
+                                     Label="EPG Channel"
+                                     @bind-Value="_selectedChannel"
+                                     SearchFunc="SearchChannelsAsync"
+                                     ToStringFunc="@(c => c is null ? string.Empty : $"{c.DisplayName} ({c.XmltvChannelId})")"
+                                     HelperText="Search by name or xmltv channel id"
+                                     Required="true"
+                                     MinCharacters="0"
+                                     CoerceText="true"
+                                     ResetValueOnEmptyText="true"
+                                     ShowProgressIndicator="true" />
+                }
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync"
+                   Disabled="@(_isSaving || _selectedSource is null || _selectedChannel is null)">
+            @(_isSaving ? "Saving…" : "Save Mapping")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter, EditorRequired] public EpgChannelMappingDto Mapping { get; set; } = default!;
+    [Parameter, EditorRequired] public List<EpgSourceDto> Sources { get; set; } = [];
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private EpgSourceDto? _selectedSource;
+    private EpgSourceChannelDto? _selectedChannel;
+    private List<EpgSourceChannelDto> _sourceChannels = [];
+    private bool _loadingChannels;
+    private bool _isSaving;
+    private string? _error;
+    private string? _loadedSourceId;
+
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override void OnParametersSet()
+    {
+        // Pre-select existing source if already mapped
+        if (!string.IsNullOrEmpty(Mapping.EpgSourceId))
+            _selectedSource = Sources.FirstOrDefault(s => s.EpgSourceId == Mapping.EpgSourceId);
+    }
+
+    private async Task OnSourceChangedAsync(EpgSourceDto? source)
+    {
+        _selectedSource = source;
+        _selectedChannel = null;
+        _sourceChannels = [];
+
+        if (source is null || source.EpgSourceId == _loadedSourceId)
+            return;
+
+        _loadingChannels = true;
+        StateHasChanged();
+
+        try
+        {
+            _sourceChannels = await EpgPageService.GetSourceChannelsAsync(source.EpgSourceId, _cts.Token);
+            _loadedSourceId = source.EpgSourceId;
+
+            // Pre-select existing channel if mapping exists for this source
+            if (source.EpgSourceId == Mapping.EpgSourceId && !string.IsNullOrEmpty(Mapping.XmltvChannelId))
+                _selectedChannel = _sourceChannels.FirstOrDefault(c => c.XmltvChannelId == Mapping.XmltvChannelId);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load channels: {ex.Message}";
+        }
+        finally
+        {
+            _loadingChannels = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task<IEnumerable<EpgSourceChannelDto?>> SearchChannelsAsync(string? search, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return Task.FromResult<IEnumerable<EpgSourceChannelDto?>>(_sourceChannels.Take(50).Cast<EpgSourceChannelDto?>());
+
+        var lower = search.ToLowerInvariant();
+        var matches = _sourceChannels
+            .Where(c => c.DisplayName.Contains(lower, StringComparison.OrdinalIgnoreCase) ||
+                        c.XmltvChannelId.Contains(lower, StringComparison.OrdinalIgnoreCase))
+            .Take(50)
+            .Cast<EpgSourceChannelDto?>();
+
+        return Task.FromResult(matches);
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SaveAsync()
+    {
+        if (_selectedSource is null || _selectedChannel is null) return;
+
+        _isSaving = true;
+        _error = null;
+
+        try
+        {
+            var req = new UpsertEpgMappingRequest
+            {
+                ProfileId = Mapping.ProfileId,
+                ProviderChannelId = Mapping.ProviderChannelId,
+                EpgSourceId = _selectedSource.EpgSourceId,
+                XmltvChannelId = _selectedChannel.XmltvChannelId,
+            };
+
+            var error = await EpgPageService.UpsertMappingAsync(req, CancellationToken.None);
+            if (error is not null)
+            {
+                _error = error;
+                return;
+            }
+
+            Snackbar.Add("Mapping saved.", Severity.Success);
+            MudDialog.Close();
+            if (OnSaved.HasDelegate)
+                await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to save: {ex.Message}";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    public void Dispose() => _cts.Cancel();
+}

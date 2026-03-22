@@ -21,8 +21,8 @@ Primary published endpoints:
 
 - Alpha 1: complete
 - Alpha 2: complete
-- Alpha 3: in progress
-- Alpha 4: planned, with some HDHomeRun groundwork already landed early
+- Alpha 3: complete
+- Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; DVR client validation (Plex/Emby/Jellyfin) moved to Beta
 - Alpha 5: planned
 - Beta: hardening and release prep
 
@@ -131,30 +131,36 @@ Status: Complete.
 - [x] Credential validation for protected client endpoints
 - [x] Query-string and Basic-auth based client access flow
 
-### Alpha 4 — Buffering, DVR Integration & EPG
-Goal: Stream buffering, HDHomeRun compatibility, and stronger guide-source handling.
+### Alpha 4 — Stream Proxy, DVR Integration & EPG
+Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
-Status: Planned.
+Status: Complete. All checklist items passed. End-to-end DVR client validation (Plex, Emby, Jellyfin) moved to Beta — see BETA_VALIDATION_CHECKLIST.md.
 
-#### Buffering
-- [ ] FFmpeg buffering support
-- [ ] VLC/CVLC buffering support
-- [ ] Buffer size setting
-- [ ] Client connection timeout setting
+#### Stream Proxy (Shared Live Streaming)
+- [x] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
+- [x] One upstream provider connection per active live channel session, fanned out to many subscribers
+- [x] In-memory ring buffer for late joiners (byte-bounded, default 4 MiB per session, hard cap 32 MiB)
+- [x] Upstream stall detection and minimal reconnect (default 30s stall timeout, 75s outage window)
+- [x] Basic slow-subscriber eviction (queue-full disconnect)
+- [x] Source strike cooldown after retry exhaustion to prevent retry storms (default 5m, in-memory only)
+- [x] Explicit route split: `/live`, `/stream`, `/tune`, `/hdhr/tune` → shared session; `/movie`, `/vod`, `/series` → direct relay
+- [x] Streaming observability endpoints: `/status/streams`, `/status/streams/clients`, `/status/streams/providers`
+- [x] Settings page stream UI: full read/write configuration for all stream proxy tuning values (enable/disable, session limits, buffer sizing, reconnect behaviour); values persisted to DB and loaded at startup via `IConfigureOptions`; in-app restart trigger with "restart required" banner when saved settings differ from the active runtime; startup `IValidateOptions` validation rejects out-of-range config from both appsettings and DB; byte-field upper bounds enforced in UI (1 GiB per session, 16 MiB read chunk) and service validation
 
 #### DVR Integration (HDHomeRun Emulation)
-- [~] Initial HDHomeRun compatibility groundwork is already present:
+- [x] Initial HDHomeRun compatibility groundwork:
   `GET /discover.json`, `GET /lineup.json`, `GET /lineup_status.json`, discovery service, device identity, lineup rendering tests
-- [ ] Number of tuners setting in user-facing configuration
-- [ ] Connection limiting
-- [ ] End-to-end validation with Plex, Emby, and Jellyfin
+- [x] Number of tuners setting in user-facing configuration
+- [x] Connection limiting via HDHomeRun tuner-slot enforcement keyed by `VirtualTunerId` from endpoint binding; same-tuner retunes replace prior subscriber instead of consuming another slot
+- [ ] End-to-end validation with Plex, Emby, and Jellyfin *(moved to Beta — see BETA_VALIDATION_CHECKLIST.md)*
 
 #### EPG Sources
-- [ ] Additional XMLTV/EPG source URLs per provider
-- [ ] XMLTV merge into one guide feed
-- [ ] De-duplicate EPG entries by channel id
-- [ ] Source priority rules across guide inputs
-- [ ] Cross-source `tvg-id` mapping
+- [x] EPG source management UI + API (multiple sources per provider, test fetch, auto-map, manual mapping)
+- [x] Additional XMLTV/EPG source URLs per provider
+- [x] XMLTV merge into one guide feed
+- [x] De-duplicate EPG entries by channel id
+- [x] Source priority rules across guide inputs
+- [~] Cross-source `tvg-id` mapping (via per-channel source mappings; canonical-channel mapping remains future work)
 
 ### Alpha 5 — Remaining Features
 Goal: Finish remaining lineup-management features before Beta hardening.
@@ -178,6 +184,7 @@ Status: Planned.
 - [ ] Performance validation for large providers
 - [ ] Bug fixes and polish
 - [ ] Documentation complete and accurate
+- [ ] DVR client validation — Plex, Emby, Jellyfin (see [BETA_VALIDATION_CHECKLIST.md](BETA_VALIDATION_CHECKLIST.md))
 
 ## Design Documents
 
@@ -186,4 +193,4 @@ Status: Planned.
 - [HTTP_COMPATIBILITY.md](../design/HTTP_COMPATIBILITY.md)
 - [LINEUP_RULES.md](../design/LINEUP_RULES.md)
 - [NUMBERING_RULES.md](../design/NUMBERING_RULES.md)
-- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
+- [stream_proxy_design.md](../design/stream_proxy_design.md)

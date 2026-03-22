@@ -144,6 +144,7 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 | `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no admin account exists yet. Used only for the initial seed — changing this later has no effect (use Settings → Change Password instead). |
 
 Endpoint security (M3U/XMLTV/stream/HDHR username/password auth) is managed in **Settings → Endpoint Security** and stored in the database.
+The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for tuner-slot ownership and retune behaviour.
 
 ### Optional — Provider Features
 
@@ -236,10 +237,19 @@ Once running, clients consume these endpoints directly:
 | `GET /m3u/m3undle.m3u` | M3U playlist |
 | `GET /xmltv/m3undle.xml` | XMLTV guide data |
 | `GET /stream/<streamKey>` | Stream relay proxy |
+| `GET /player_api.php` | Xtream Codes API (account info, categories, stream lists) |
+| `GET /get.php` | Xtream Codes M3U playlist |
+| `GET /live/<user>/<pass>/<id>` | Xtream Codes live stream (path-credential) |
+| `GET /movie/<user>/<pass>/<id>` | Xtream Codes VOD stream (path-credential) |
+| `GET /series/<user>/<pass>/<id>` | Xtream Codes series stream (path-credential) |
+| `GET /hdhr/discover.json` | HDHomeRun discovery |
+| `GET /hdhr/lineup.json` | HDHomeRun channel lineup |
 | `GET /health` | Health check |
 | `GET /status` | Machine-readable status JSON |
 
-Point your DVR or media server at `http://<host>:8080/m3u/m3undle.m3u`.
+**M3U/XMLTV clients** — point at `http://<host>:8080/m3u/m3undle.m3u`.
+
+**Xtream clients** (TiviMate, GSE Player, IPTV Smarters) — add M3Undle as an Xtream source with your server URL and the endpoint-security username/password from **Settings → Endpoint Security**.
 
 Stream URLs in the playlist point to the relay proxy — provider credentials are never exposed to clients.
 
