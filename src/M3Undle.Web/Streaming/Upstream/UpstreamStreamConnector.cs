@@ -67,6 +67,7 @@ public sealed class UpstreamStreamConnector(
             var statusCode = (int)response.StatusCode;
             if (statusCode is 401 or 403)
             {
+                response.Dispose();
                 logger.LogWarning(
                     "Provider rejected the stream request for '{DisplayName}' with {StatusCode} — check your provider credentials.",
                     source.DisplayName,
@@ -75,6 +76,7 @@ public sealed class UpstreamStreamConnector(
             }
             if (statusCode == 404)
             {
+                response.Dispose();
                 logger.LogWarning(
                     "Provider returned 404 for '{DisplayName}' — the stream URL may be invalid or the channel is unavailable.",
                     source.DisplayName);
@@ -82,6 +84,7 @@ public sealed class UpstreamStreamConnector(
             }
             if (statusCode >= 500)
             {
+                response.Dispose();
                 logger.LogWarning(
                     "Provider returned a server error ({StatusCode}) for '{DisplayName}' — will retry.",
                     statusCode,
@@ -89,7 +92,10 @@ public sealed class UpstreamStreamConnector(
                 throw new UpstreamConnectException($"Upstream returned {statusCode}.", UpstreamFailureKind.UpstreamServerError, statusCode);
             }
             if (!response.IsSuccessStatusCode)
+            {
+                response.Dispose();
                 throw new UpstreamConnectException($"Upstream returned non-success status {statusCode}.", UpstreamFailureKind.StartupFatal, statusCode);
+            }
 
             var stream = await response.Content.ReadAsStreamAsync(ct);
             logger.LogInformation(
