@@ -6,20 +6,20 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 
 - [x] Shared live routes (`/live`, `/stream`, `/tune`, `/hdhr/tune`) reuse one upstream session per live channel
 - [x] VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay
-- [ ] Late joiners receive buffered data without breaking the active session
+- [x] Late joiners receive buffered data without breaking the active session
 - [x] Slow subscribers are evicted without collapsing the shared session
 - [x] Reconnect behavior works after upstream stalls
-- [ ] Provider stream limits still reject new sessions correctly
+- [x] Provider stream limits still reject new sessions correctly
 
 ## Stream Settings UI
 
-- [ ] Settings page loads saved stream settings and current applied runtime settings distinctly
+- [x] Settings page loads saved stream settings and current applied runtime settings distinctly
 - [x] Saving changed stream settings marks restart required
 - [x] Invalid values are rejected with visible validation errors
 - [ ] Runtime behavior does not change until restart
 - [ ] `Restart M3Undle` stops the app process cleanly
 - [x] After restart, pending restart warning is cleared
-- [ ] After restart, saved settings are applied to runtime behavior
+- [x] After restart, saved settings are applied to runtime behavior
 
 ## HDHomeRun HTTP API
 
@@ -37,9 +37,9 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 - [x] A second request on the same `VirtualTunerId` retunes/replaces the prior subscriber instead of consuming another tuner slot
 - [x] Distinct `VirtualTunerId` values can consume different tuner slots up to configured `TunerCount`
 - [x] Requests beyond configured `TunerCount` are rejected
-- [ ] Disconnecting playback releases the tuner slot
+- [x] Disconnecting playback releases the tuner slot
 - [x] Restarting M3Undle clears any active tuner leases
-- [ ] Generic `/stream/<streamKey>` requests are not blocked by HDHomeRun tuner enforcement
+- [x] Generic `/stream/<streamKey>` requests are not blocked by HDHomeRun tuner enforcement
 
 ## Guide / EPG
 
