@@ -56,10 +56,11 @@ public sealed class UpstreamStreamConnector(
         using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         connectCts.CancelAfter(_reconnectOptions.ConnectTimeout);
 
+        HttpResponseMessage? response = null;
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, effectiveStreamUrl);
-            var response = await client.SendAsync(
+            response = await client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 connectCts.Token);
@@ -104,20 +105,25 @@ public sealed class UpstreamStreamConnector(
                 statusCode,
                 response.Content.Headers.ContentType?.ToString() ?? "unknown");
 
-            return new UpstreamConnection(client, response, stream);
+            var connection = new UpstreamConnection(client, response, stream);
+            response = null; // ownership transferred to UpstreamConnection
+            return connection;
         }
         catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
         {
+            response?.Dispose();
             client.Dispose();
             throw new UpstreamConnectException("Upstream connection attempt timed out.", UpstreamFailureKind.TimeoutOrStall, null, ex);
         }
         catch (HttpRequestException ex)
         {
+            response?.Dispose();
             client.Dispose();
             throw new UpstreamConnectException("Upstream request failed.", UpstreamFailureKind.Transport, ex.StatusCode is null ? null : (int)ex.StatusCode, ex);
         }
         catch (UpstreamConnectException)
         {
+            response?.Dispose();
             client.Dispose();
             throw;
         }
