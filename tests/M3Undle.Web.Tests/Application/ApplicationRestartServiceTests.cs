@@ -28,7 +28,7 @@ public sealed class ApplicationRestartServiceTests
         sw.Stop();
 
         // Must return well before the 1-second grace delay fires
-        Assert.IsTrue(sw.ElapsedMilliseconds < 500,
+        Assert.IsLessThan(500, sw.ElapsedMilliseconds,
             $"RequestRestartAsync should return immediately but took {sw.ElapsedMilliseconds}ms");
 
         // StopApplication has not been called yet

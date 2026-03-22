@@ -47,4 +47,4 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 - [x] Source priority affects merged guide selection as expected
 - [x] Duplicate programme/channel entries are not duplicated in the published XMLTV
 - [x] Channel mappings persist and affect the published guide
-- [ ] Published `/xmltv/m3undle.xml` matches the active lineup
+- [x] Published `/xmltv/m3undle.xml` matches the active lineup
