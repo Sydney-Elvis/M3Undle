@@ -1,0 +1,41 @@
+# Alpha 5 Validation Checklist
+
+Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
+
+## Core Lineup Management
+
+- [ ] Channel reorder (explicit sort position)
+- [ ] Custom `tvg-id` override per channel
+- [ ] Channel number pinning and stable reordering
+- [ ] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
+
+## Dynamic and Review Workflow
+
+- [ ] Dynamic groups for rotating/event feeds
+- [ ] New channels inbox / review queue
+- [ ] Provider switch assistance (migrations, delta preview)
+
+## Refresh / Source Control
+
+- [ ] Configurable refresh schedule in Settings UI
+- [ ] Real-time trigger + manual refresh with status
+- [ ] Persisted preferred refresh policy per profile
+
+## HDHomeRun / DVR Client Scenario
+
+- [ ] Ensure HDHomeRun endpoints still valid after lineup changes
+- [ ] Verify `lineup.json`, `lineup.xml`, `lineup.m3u` in final lineup state
+- [ ] Tuner admission rules and retune semantics intact
+
+## Compatibility and Behavior
+
+- [ ] HLS playback for JavaScript/browser clients
+- [ ] CORS support for external network access
+- [ ] VOD / Series counts match UI & exported stats
+- [ ] IPTVnavtor groups and MacOS behavior validated
+
+## Documentation
+
+- [ ] Update roadmap & user docs with Alpha 5 scope and status
+- [ ] Add release notes for Alpha 5 features
+- [ ] Mark Beta transition criteria (after all Alpha checkboxes complete)

@@ -165,15 +165,19 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
 ### Alpha 5 — Remaining Features
 Goal: Finish remaining lineup-management features before Beta hardening.
 
-Status: Planned.
+Status: Planned. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 
-- [ ] Channel reorder (explicit sort position)
+- [ ] Channel reorder (explicit sort position) — #3
 - [ ] Custom `tvg-id` override per channel
 - [ ] Configurable refresh schedule in Settings UI
 - [ ] New channels inbox / review queue
 - [ ] Dynamic groups for rotating/event feeds
 - [ ] Provider switch assistance
 - [ ] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
+
+
+> See the Alpha 5 validation checklist for concrete acceptance criteria:
+> `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`
 
 ### Beta — Hardening & Release Prep
 Goal: No major feature additions. Stabilize, validate, and document.
