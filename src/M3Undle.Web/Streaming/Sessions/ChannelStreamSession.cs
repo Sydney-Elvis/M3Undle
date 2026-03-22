@@ -343,7 +343,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
             _lastUpstreamByteUtc = DateTimeOffset.UtcNow;
             using var published = _buffer.Write(readBuffer.AsMemory(0, bytesRead));
-            var slowSubscribers = new List<SubscriberConnection>();
+            List<SubscriberConnection>? slowSubscribers = null;
 
             foreach (var subscriber in _subscribers.Values)
             {
@@ -351,6 +351,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 if (!subscriber.TryEnqueue(perSubscriber))
                 {
                     perSubscriber.Dispose();
+                    slowSubscribers ??= [];
                     slowSubscribers.Add(subscriber);
                     continue;
                 }
@@ -358,8 +359,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 _registry.UpsertClient(subscriber.Snapshot());
             }
 
-            foreach (var slow in slowSubscribers)
-                await slow.CompleteAsync(SubscriberDisconnectReason.SlowClient);
+            if (slowSubscribers is not null)
+            {
+                foreach (var slow in slowSubscribers)
+                    await slow.CompleteAsync(SubscriberDisconnectReason.SlowClient);
+            }
 
             var tick = Environment.TickCount64;
             if (tick - _lastPublishTick >= 100)
@@ -402,7 +406,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         if (_idleGrace <= TimeSpan.Zero)
         {
-            _ = StopAsync();
+            _ = StopSafelyAsync();
             return;
         }
 
@@ -418,13 +422,29 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 try
                 {
                     await Task.Delay(_idleGrace, token);
-                    await StopAsync();
+                    await StopSafelyAsync();
                 }
                 catch (OperationCanceledException)
                 {
                     // no-op
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Idle shutdown task failed unexpectedly for session {SessionId}.", _sessionId);
+                }
             }, token);
+        }
+    }
+
+    private async Task StopSafelyAsync()
+    {
+        try
+        {
+            await StopAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to stop stream session {SessionId}.", _sessionId);
         }
     }
 

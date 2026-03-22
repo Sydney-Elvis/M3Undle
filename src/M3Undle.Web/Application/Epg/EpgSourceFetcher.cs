@@ -180,7 +180,7 @@ public sealed class EpgSourceFetcher(
     // Cache helpers
     // -------------------------------------------------------------------------
 
-    private static async Task WriteCacheAsync(string path, string xml, CancellationToken cancellationToken)
+    private async Task WriteCacheAsync(string path, string xml, CancellationToken cancellationToken)
     {
         try
         {
@@ -190,9 +190,13 @@ public sealed class EpgSourceFetcher(
 
             await File.WriteAllTextAsync(path, xml, System.Text.Encoding.UTF8, cancellationToken);
         }
-        catch
+        catch (OperationCanceledException)
         {
-            // Cache write failure is non-fatal
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to write EPG cache file {CachePath}.", path);
         }
     }
 

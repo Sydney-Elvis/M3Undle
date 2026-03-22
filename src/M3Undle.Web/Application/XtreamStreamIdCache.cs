@@ -5,17 +5,17 @@ namespace M3Undle.Web.Application;
 
 /// <summary>
 /// Singleton that maintains a per-snapshot mapping between Xtream numeric stream IDs
-/// (a stable CRC32 of the streamKey) and the actual stream keys used by M3Undle's
+/// (a stable 31-bit value derived from MD5(streamKey)) and the actual stream keys used by M3Undle's
 /// channel index. Invalidated automatically when the active snapshot changes.
 /// </summary>
-public sealed class XtreamStreamIdCache
+public sealed class XtreamStreamIdCache(ILogger<XtreamStreamIdCache> logger)
 {
     private string? _cachedSnapshotId;
     private Dictionary<int, string>? _idToKey;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     /// <summary>
-    /// Computes a stable 31-bit numeric stream ID from a stream key using CRC32.
+    /// Computes a stable 31-bit numeric stream ID from a stream key using MD5.
     /// The sign bit is masked off so the value is always a positive <see cref="int"/>.
     /// </summary>
     public static int ToStreamId(string streamKey)
@@ -58,7 +58,14 @@ public sealed class XtreamStreamIdCache
             await foreach (var entry in ChannelIndexStore.StreamAllAsync(ndjsonPath, cancellationToken))
             {
                 var id = ToStreamId(entry.StreamKey);
-                map.TryAdd(id, entry.StreamKey); // on collision, first entry wins
+                if (!map.TryAdd(id, entry.StreamKey))
+                {
+                    logger.LogWarning(
+                        "Xtream stream ID collision detected: id={StreamId} existingStreamKey={ExistingStreamKey} droppedStreamKey={DroppedStreamKey}.",
+                        id,
+                        map[id],
+                        entry.StreamKey);
+                }
             }
 
             _idToKey = map;

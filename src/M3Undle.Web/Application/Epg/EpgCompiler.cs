@@ -228,7 +228,7 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
                         XmltvChannelId = outputChannelId,
                         StartUtc = prog.StartUtc,
                         WinnerSourceId = winnerSourceId,
-                        LoserSourceId = winnerSourceId,
+                        LoserSourceId = prog.SourceId,
                         WinnerTitle = resolved[^1].Title,
                         LoserTitle = prog.Title,
                     });

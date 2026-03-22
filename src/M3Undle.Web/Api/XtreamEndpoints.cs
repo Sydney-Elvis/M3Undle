@@ -356,8 +356,8 @@ public static class XtreamEndpoints
                 if (manifest is not null)
                 {
                     logger.LogInformation(
-                        "Xtream HLS delivery: channel={Channel} id={StreamId} segmentProxyBase={SegmentProxyBase}",
-                        entry.DisplayName, streamId, segmentProxyBase);
+                        "Xtream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
+                        entry.DisplayName, streamId, streamKey);
                     context.Response.ContentType = "application/vnd.apple.mpegurl";
                     context.Response.Headers.CacheControl = "no-cache";
                     context.Response.Headers.AccessControlAllowOrigin = "*";
