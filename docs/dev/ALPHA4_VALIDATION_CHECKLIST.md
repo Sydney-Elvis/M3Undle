@@ -16,8 +16,8 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 - [x] Settings page loads saved stream settings and current applied runtime settings distinctly
 - [x] Saving changed stream settings marks restart required
 - [x] Invalid values are rejected with visible validation errors
-- [ ] Runtime behavior does not change until restart
-- [ ] `Restart M3Undle` stops the app process cleanly
+- [x] Runtime behavior does not change until restart
+- [x] `Restart M3Undle` stops the app process cleanly
 - [x] After restart, pending restart warning is cleared
 - [x] After restart, saved settings are applied to runtime behavior
 
@@ -48,30 +48,3 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 - [x] Duplicate programme/channel entries are not duplicated in the published XMLTV
 - [x] Channel mappings persist and affect the published guide
 - [ ] Published `/xmltv/m3undle.xml` matches the active lineup
-
-## DVR Client Validation
-
-### Plex
-- [ ] Device can be added manually
-- [ ] Channel scan completes
-- [ ] Guide data matches channels
-- [ ] Live playback starts
-- [ ] Retune behavior works on the same virtual tuner
-- [ ] Tuner exhaustion is handled predictably
-
-### Emby
-- [ ] Device can be added manually
-- [ ] Channel scan completes
-- [ ] Guide data matches channels
-- [ ] Live playback starts
-- [ ] Retune behavior works on the same virtual tuner
-- [ ] Tuner exhaustion is handled predictably
-
-### Jellyfin
-- [ ] Device can be added manually
-- [ ] Discovery works if enabled
-- [ ] Channel scan completes
-- [ ] Guide data matches channels
-- [ ] Live playback starts
-- [ ] Retune behavior works on the same virtual tuner
-- [ ] Tuner exhaustion is handled predictably

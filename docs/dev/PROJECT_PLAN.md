@@ -152,7 +152,7 @@ Status: In progress. EPG sources, stream settings UI, and HDHomeRun tuner-slot e
   `GET /discover.json`, `GET /lineup.json`, `GET /lineup_status.json`, discovery service, device identity, lineup rendering tests
 - [x] Number of tuners setting in user-facing configuration
 - [x] Connection limiting via HDHomeRun tuner-slot enforcement keyed by `VirtualTunerId` from endpoint binding; same-tuner retunes replace prior subscriber instead of consuming another slot
-- [ ] End-to-end validation with Plex, Emby, and Jellyfin
+- [ ] End-to-end validation with Plex, Emby, and Jellyfin *(moved to Beta — see BETA_VALIDATION_CHECKLIST.md)*
 
 #### EPG Sources
 - [x] EPG source management UI + API (multiple sources per provider, test fetch, auto-map, manual mapping)
@@ -184,6 +184,7 @@ Status: Planned.
 - [ ] Performance validation for large providers
 - [ ] Bug fixes and polish
 - [ ] Documentation complete and accurate
+- [ ] DVR client validation — Plex, Emby, Jellyfin (see [BETA_VALIDATION_CHECKLIST.md](BETA_VALIDATION_CHECKLIST.md))
 
 ## Design Documents
 
