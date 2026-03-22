@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -6,11 +6,34 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace M3Undle.Web.Data.Migrations
 {
     /// <inheritdoc />
-    public partial class Alpha4_EpgSources : Migration
+    public partial class Alpha4_Schema : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // From Alpha4_StreamingSettings
+            migrationBuilder.AddColumn<bool>(
+                name: "streaming_enabled",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: true);
+
+            migrationBuilder.UpdateData(
+                table: "site_settings",
+                keyColumn: "id",
+                keyValue: 1,
+                column: "streaming_enabled",
+                value: true);
+
+            // From Alpha4_ProviderStreamLimits
+            migrationBuilder.AddColumn<int>(
+                name: "max_concurrent_streams",
+                table: "providers",
+                type: "INTEGER",
+                nullable: true);
+
+            // From Alpha4_EpgSources
             migrationBuilder.CreateTable(
                 name: "epg_sources",
                 columns: table => new
@@ -189,11 +212,124 @@ FROM providers
 WHERE xmltv_url IS NOT NULL
    OR (xtream_base_url IS NOT NULL AND xtream_include_xmltv = 1);
 ");
+
+            // From Alpha4_StreamSettingsUi
+            migrationBuilder.AddColumn<int>(
+                name: "stream_buffer_max_bytes_hard_cap",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 33554432);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_buffer_max_bytes_per_session",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 4194304);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_buffer_read_chunk_size_bytes",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 32768);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_idle_grace_hard_cap_seconds",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 120);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_idle_grace_seconds",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 15);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_max_concurrent_sessions",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 50);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_reconnect_connect_timeout_seconds",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 15);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_reconnect_outage_window_seconds",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 75);
+
+            migrationBuilder.AddColumn<int>(
+                name: "stream_reconnect_read_stall_timeout_seconds",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: 30);
+
+            migrationBuilder.AddColumn<bool>(
+                name: "streaming_settings_restart_required",
+                table: "site_settings",
+                type: "INTEGER",
+                nullable: false,
+                defaultValue: false);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Reverse Alpha4_StreamSettingsUi
+            migrationBuilder.DropColumn(
+                name: "stream_buffer_max_bytes_hard_cap",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_buffer_max_bytes_per_session",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_buffer_read_chunk_size_bytes",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_idle_grace_hard_cap_seconds",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_idle_grace_seconds",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_max_concurrent_sessions",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_reconnect_connect_timeout_seconds",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_reconnect_outage_window_seconds",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "stream_reconnect_read_stall_timeout_seconds",
+                table: "site_settings");
+
+            migrationBuilder.DropColumn(
+                name: "streaming_settings_restart_required",
+                table: "site_settings");
+
+            // Reverse Alpha4_EpgSources
             migrationBuilder.DropTable(
                 name: "epg_channel_mappings");
 
@@ -205,6 +341,16 @@ WHERE xmltv_url IS NOT NULL
 
             migrationBuilder.DropTable(
                 name: "epg_sources");
+
+            // Reverse Alpha4_ProviderStreamLimits
+            migrationBuilder.DropColumn(
+                name: "max_concurrent_streams",
+                table: "providers");
+
+            // Reverse Alpha4_StreamingSettings
+            migrationBuilder.DropColumn(
+                name: "streaming_enabled",
+                table: "site_settings");
         }
     }
 }

@@ -11,10 +11,9 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260314152455_Alpha4_ProviderStreamLimits")]
-    partial class Alpha4_ProviderStreamLimits
+    [Migration("20260314145015_Alpha4_Schema")]
+    partial class Alpha4_Schema
     {
-        /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
@@ -432,6 +431,240 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDatabaseName("idx_epg_map_profile");
 
                     b.ToTable("epg_channel_map", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgChannelMapping", b =>
+                {
+                    b.Property<string>("EpgChannelMappingId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_channel_mapping_id");
+
+                    b.Property<float>("Confidence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("REAL")
+                        .HasDefaultValue(1f)
+                        .HasColumnName("confidence");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<string>("EpgSourceId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_id");
+
+                    b.Property<string>("MappingMode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("auto_id")
+                        .HasColumnName("mapping_mode");
+
+                    b.Property<string>("ProfileId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("profile_id");
+
+                    b.Property<string>("ProviderChannelId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_channel_id");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.Property<string>("XmltvChannelId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("xmltv_channel_id");
+
+                    b.HasKey("EpgChannelMappingId");
+
+                    b.HasIndex("EpgSourceId");
+
+                    b.HasIndex("ProviderChannelId");
+
+                    b.HasIndex("ProfileId", "ProviderChannelId", "EpgSourceId")
+                        .IsUnique()
+                        .HasDatabaseName("idx_epg_channel_mappings_profile_channel_source");
+
+                    b.ToTable("epg_channel_mappings", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgFetchRun", b =>
+                {
+                    b.Property<string>("EpgFetchRunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_fetch_run_id");
+
+                    b.Property<int?>("Bytes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("bytes");
+
+                    b.Property<int?>("ChannelCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("channel_count");
+
+                    b.Property<string>("EpgSourceId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_id");
+
+                    b.Property<string>("ErrorSummary")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("error_summary");
+
+                    b.Property<DateTime?>("FinishedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("finished_utc");
+
+                    b.Property<int?>("ProgrammeCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("programme_count");
+
+                    b.Property<DateTime>("StartedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("started_utc");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.HasKey("EpgFetchRunId");
+
+                    b.HasIndex("EpgSourceId", "StartedUtc")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("idx_epg_fetch_runs_source_time");
+
+                    b.ToTable("epg_fetch_runs", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSource", b =>
+                {
+                    b.Property<string>("EpgSourceId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_id");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<string>("ETag")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("etag");
+
+                    b.Property<bool>("Enabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true)
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("HeadersJson")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("headers_json");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("xmltv_url")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTime?>("LastFailureUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_failure_utc");
+
+                    b.Property<DateTime?>("LastModifiedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_modified_utc");
+
+                    b.Property<DateTime?>("LastSuccessUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_success_utc");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
+
+                    b.Property<int>("Priority")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(10)
+                        .HasColumnName("priority");
+
+                    b.Property<string>("ProviderId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_id");
+
+                    b.Property<int>("TimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(30)
+                        .HasColumnName("timeout_seconds");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.Property<string>("UrlOrPath")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("url_or_path");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("user_agent");
+
+                    b.HasKey("EpgSourceId");
+
+                    b.HasIndex("ProviderId")
+                        .HasDatabaseName("idx_epg_sources_provider");
+
+                    b.HasIndex("ProviderId", "Priority")
+                        .HasDatabaseName("idx_epg_sources_provider_priority");
+
+                    b.ToTable("epg_sources", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSourceChannel", b =>
+                {
+                    b.Property<string>("EpgSourceChannelId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_channel_id");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("EpgSourceId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_id");
+
+                    b.Property<string>("IconUrl")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("icon_url");
+
+                    b.Property<DateTime>("LastSeenUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_seen_utc");
+
+                    b.Property<string>("XmltvChannelId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("xmltv_channel_id");
+
+                    b.HasKey("EpgSourceChannelId");
+
+                    b.HasIndex("EpgSourceId", "XmltvChannelId")
+                        .IsUnique()
+                        .HasDatabaseName("idx_epg_source_channels_source_channel");
+
+                    b.ToTable("epg_source_channels", (string)null);
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.FetchRun", b =>
@@ -984,11 +1217,71 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("endpoint_security_enabled");
 
+                    b.Property<int>("StreamBufferMaxBytesHardCap")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(33554432)
+                        .HasColumnName("stream_buffer_max_bytes_hard_cap");
+
+                    b.Property<int>("StreamBufferMaxBytesPerSession")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(4194304)
+                        .HasColumnName("stream_buffer_max_bytes_per_session");
+
+                    b.Property<int>("StreamBufferReadChunkSizeBytes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(32768)
+                        .HasColumnName("stream_buffer_read_chunk_size_bytes");
+
+                    b.Property<int>("StreamIdleGraceHardCapSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(120)
+                        .HasColumnName("stream_idle_grace_hard_cap_seconds");
+
+                    b.Property<int>("StreamIdleGraceSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(15)
+                        .HasColumnName("stream_idle_grace_seconds");
+
+                    b.Property<int>("StreamMaxConcurrentSessions")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(50)
+                        .HasColumnName("stream_max_concurrent_sessions");
+
+                    b.Property<int>("StreamReconnectConnectTimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(15)
+                        .HasColumnName("stream_reconnect_connect_timeout_seconds");
+
+                    b.Property<int>("StreamReconnectOutageWindowSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(75)
+                        .HasColumnName("stream_reconnect_outage_window_seconds");
+
+                    b.Property<int>("StreamReconnectReadStallTimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(30)
+                        .HasColumnName("stream_reconnect_read_stall_timeout_seconds");
+
                     b.Property<bool>("StreamingEnabled")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasDefaultValue(true)
                         .HasColumnName("streaming_enabled");
+
+                    b.Property<bool>("StreamingSettingsRestartRequired")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("streaming_settings_restart_required");
 
                     b.HasKey("Id");
 
@@ -1000,7 +1293,17 @@ namespace M3Undle.Web.Data.Migrations
                             Id = 1,
                             AuthenticationEnabled = false,
                             EndpointSecurityEnabled = false,
-                            StreamingEnabled = true
+                            StreamBufferMaxBytesHardCap = 33554432,
+                            StreamBufferMaxBytesPerSession = 4194304,
+                            StreamBufferReadChunkSizeBytes = 32768,
+                            StreamIdleGraceHardCapSeconds = 120,
+                            StreamIdleGraceSeconds = 15,
+                            StreamMaxConcurrentSessions = 50,
+                            StreamReconnectConnectTimeoutSeconds = 15,
+                            StreamReconnectOutageWindowSeconds = 75,
+                            StreamReconnectReadStallTimeoutSeconds = 30,
+                            StreamingEnabled = true,
+                            StreamingSettingsRestartRequired = false
                         });
                 });
 
@@ -1364,6 +1667,65 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Profile");
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgChannelMapping", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.EpgSource", "EpgSource")
+                        .WithMany("ChannelMappings")
+                        .HasForeignKey("EpgSourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("M3Undle.Web.Data.Entities.Profile", "Profile")
+                        .WithMany()
+                        .HasForeignKey("ProfileId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("M3Undle.Web.Data.Entities.ProviderChannel", "ProviderChannel")
+                        .WithMany()
+                        .HasForeignKey("ProviderChannelId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("EpgSource");
+
+                    b.Navigation("Profile");
+
+                    b.Navigation("ProviderChannel");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgFetchRun", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.EpgSource", "EpgSource")
+                        .WithMany("FetchRuns")
+                        .HasForeignKey("EpgSourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("EpgSource");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSource", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
+                        .WithMany()
+                        .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("Provider");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSourceChannel", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.EpgSource", "EpgSource")
+                        .WithMany("Channels")
+                        .HasForeignKey("EpgSourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("EpgSource");
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.FetchRun", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
@@ -1613,6 +1975,15 @@ namespace M3Undle.Web.Data.Migrations
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointCredential", b =>
                 {
                     b.Navigation("Bindings");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSource", b =>
+                {
+                    b.Navigation("ChannelMappings");
+
+                    b.Navigation("Channels");
+
+                    b.Navigation("FetchRuns");
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.FetchRun", b =>
