@@ -5,10 +5,10 @@ window.scrollToBottom = (id) => {
 
 // Attaches a scroll listener to the log container.
 // Calls dotnetRef.OnScrollPositionChanged(atBottom) whenever the user scrolls.
-// Returns a cleanup function (stored by the caller if needed).
+// Returns an object with a dispose() method that removes the listener.
 window.initLogScroll = (id, dotnetRef) => {
     const el = document.getElementById(id);
-    if (!el) return;
+    if (!el) return { dispose: () => {} };
 
     const onScroll = () => {
         const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
@@ -16,4 +16,6 @@ window.initLogScroll = (id, dotnetRef) => {
     };
 
     el.addEventListener('scroll', onScroll, { passive: true });
+
+    return { dispose: () => el.removeEventListener('scroll', onScroll) };
 };
