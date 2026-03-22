@@ -15,18 +15,22 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Database-backed provider configuration
 > - Provider switching with snapshot lifecycle
 > - Group preview (read-only catalog browsing)
+> - Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
+> - Channel numbering assignment and group renaming at the output layer
 > - EPG source management with multi-source XMLTV merge, mapping, and guide publishing
-> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API
+> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API, Xtream Codes API
 > - Shared live stream proxy with byte-bounded buffering, reconnect handling, and direct-relay fallback for VOD-style routes
-> - Web UI for provider management (Pre-Alpha)
+> - Web UI for provider management (Alpha)
 > - Stream monitoring UI and stream status endpoints
 > - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`) with tuner-slot enforcement keyed by `VirtualTunerId`
-> 
+>
 > **Forthcoming**
-> - Group-based inclusion rules
-> - Channel numbering controls
-> - Advanced channel filtering workflows
-> - Additional Service/Web UI hardening toward Alpha
+> - Channel reorder (explicit sort position)
+> - Custom `tvg-id` override per channel
+> - Configurable refresh schedule in Settings UI
+> - New channels inbox / review queue
+> - Dynamic groups for rotating/event feeds
+> - Provider switch assistance
 
 ---
 
@@ -98,27 +102,31 @@ See: `docs/CLI.md`
 
 ---
 
-### Service + Web UI (Pre-Alpha)
+### Service + Web UI (Alpha 4)
 
-The service layer is in **Pre-Alpha** — actively building toward the Alpha checkpoint (minimal, functional proof-of-concept). Still incomplete and will change significantly.
+The service layer is in **Alpha** — functional for daily-driver LAN use. See `docs/SERVICE.md` for the full feature list and design notes.
 
-Current Pre-Alpha work includes:
+Current Alpha capabilities include:
 
 - Database-backed configuration
 - Provider switching with snapshot lifecycle
 - Group preview (read-only catalog browse)
+- Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
+- Channel numbering assignment and group rename at the output layer
 - EPG Sources UI and API for provider-linked guide sources, test fetches, and channel mapping
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
 - HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
 - HDHomeRun tuner-slot enforcement and retune/reuse behaviour keyed by endpoint `VirtualTunerId`
+- Xtream Codes API (`/player_api.php`, `/get.php`, path-credential stream URLs)
 - Shared live stream proxy for `/live`, `/stream`, `/tune`, and `/hdhr/tune`
 - Byte-bounded in-memory buffer for late joiners with reconnect handling and slow-subscriber eviction
 - Direct relay retained for `/movie`, `/vod`, and `/series`
 - Stream monitoring UI plus `/status/streams`, `/status/streams/clients`, and `/status/streams/providers`
 - Stream enable/disable control in Settings and provider-level max concurrent stream limits
+- UI authentication (`M3UNDLE_AUTH_ENABLED`) and endpoint security with credential management
 - Web UI for provider management
 
-Planned work includes: group-based inclusion rules, channel numbering, filtering, and more.
+Planned work (Alpha 5 and beyond): channel reorder, custom tvg-id override, configurable refresh schedule, new channels inbox, dynamic groups for rotating/event feeds.
 
 See: `docs/SERVICE.md`
 
@@ -234,4 +242,4 @@ See `LICENSE` for details.
 
 **CLI:** Stable and usable.
 
-**Service + Web UI:** **Pre-Alpha** — actively building toward the Alpha checkpoint. Foundational concepts being proven. Not production-ready. Will change significantly.
+**Service + Web UI:** **Alpha 4** — functional for daily-driver LAN use. Not production-ready. Active development continues toward Alpha 5 and Beta.

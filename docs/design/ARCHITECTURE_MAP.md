@@ -18,13 +18,16 @@ A single unified process (`M3Undle.Web`) provides:
 - StreamKey: stable token used in published `/stream/<streamKey>` URLs. **In V1**, derived from stable channel properties (tvg-id when present, otherwise `displayName + "\u001f" + streamUrl`), SHA-256 hashed with profileId, truncated to 16 base64url chars. Keys are stable across refreshes as long as the channel identity is stable.
 - Snapshot: atomic published output for a profile (M3U + XMLTV + channel index JSON). Staged then promoted to active.
 
-## Key Alpha (Minimal Proof-of-Concept) Requirements
+## Key Alpha Requirements
+
+These constraints held for Alpha 1 (pass-through) and continue to apply in current releases unless noted:
+
 - Single active provider: only one provider drives the published output at a time.
 - Output name locked: Core publishes to `/m3u/m3undle.m3u` and `/xmltv/m3undle.xml`. Named per-profile endpoints are a future feature.
 - Last-known-good snapshots: refresh failures do not break clients. The last active snapshot continues to be served.
 - Stream proxy required: published playlists reference `/stream/<streamKey>` — clients never see raw provider URLs.
-- Pass-through: no group filtering, no channel numbering, no lineup shaping. All provider channels are published as-is.
-- In-memory snapshot build: `SnapshotBuilder` builds the channel index directly from `ParsedProviderChannel` (in-memory M3U parse result). It does NOT write to `provider_channels` or `provider_groups`. This is a deliberate performance decision — see docs/dev/DESIGN_DECISIONS.md.
+- Pass-through (Alpha 1 only): no group filtering, no channel numbering, no lineup shaping. As of Alpha 2 these features are implemented.
+- In-memory snapshot build: `SnapshotBuilder` builds the channel index directly from `ParsedProviderChannel` (in-memory M3U parse result). It does NOT write to `provider_channels` or `provider_groups`. This is a deliberate performance decision.
 - Profile auto-creation: importing a provider automatically creates a profile with the same name, making the provider immediately functional without manual steps.
 
 ## Alpha Client Contract
@@ -33,5 +36,5 @@ A single unified process (`M3Undle.Web`) provides:
 - Clients do not consume raw provider URLs.
 - The output endpoint is always `/m3u/m3undle.m3u` — clients should be pointed here.
 
-Note: Alpha publishes all provider channels as-is. Future releases will add group filtering, channel numbering, and lineup shaping.
+Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Full lineup shaping (channel reorder, custom tvg-id, new-channel inbox, dynamic groups) is planned for Alpha 5.
 

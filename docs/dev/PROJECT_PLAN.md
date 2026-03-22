@@ -22,7 +22,7 @@ Primary published endpoints:
 - Alpha 1: complete
 - Alpha 2: complete
 - Alpha 3: complete
-- Alpha 4: in progress — stream proxy, HDHomeRun groundwork, and EPG sources are in place; remaining work is HDHomeRun-specific validation and tuner-slot enforcement
+- Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; DVR client validation (Plex/Emby/Jellyfin) moved to Beta
 - Alpha 5: planned
 - Beta: hardening and release prep
 
@@ -134,7 +134,7 @@ Status: Complete.
 ### Alpha 4 — Stream Proxy, DVR Integration & EPG
 Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
-Status: In progress. EPG sources, stream settings UI, and HDHomeRun tuner-slot enforcement are implemented; remaining work is concentrated in end-to-end DVR client validation.
+Status: Complete. All checklist items passed. End-to-end DVR client validation (Plex, Emby, Jellyfin) moved to Beta — see BETA_VALIDATION_CHECKLIST.md.
 
 #### Stream Proxy (Shared Live Streaming)
 - [x] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
@@ -194,4 +194,3 @@ Status: Planned.
 - [LINEUP_RULES.md](../design/LINEUP_RULES.md)
 - [NUMBERING_RULES.md](../design/NUMBERING_RULES.md)
 - [stream_proxy_design.md](../design/stream_proxy_design.md)
-- [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md)
