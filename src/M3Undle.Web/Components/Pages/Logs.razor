@@ -50,6 +50,7 @@
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _subscription;
     private DotNetObjectReference<Logs>? _dotNetRef;
+    private IJSObjectReference? _scrollCleanup;
     private bool _autoScroll = true;
 
     protected override void OnInitialized()
@@ -64,7 +65,7 @@
         if (firstRender)
         {
             _dotNetRef = DotNetObjectReference.Create(this);
-            await JS.InvokeVoidAsync("initLogScroll", "log-container", _dotNetRef);
+            _scrollCleanup = await JS.InvokeAsync<IJSObjectReference>("initLogScroll", "log-container", _dotNetRef);
             await ScrollToBottomAsync();
         }
     }
@@ -126,6 +127,11 @@
         await _cts.CancelAsync();
         _cts.Dispose();
         _subscription?.Dispose();
+        if (_scrollCleanup is not null)
+        {
+            await _scrollCleanup.InvokeVoidAsync("dispose");
+            await _scrollCleanup.DisposeAsync();
+        }
         _dotNetRef?.Dispose();
     }
 }
