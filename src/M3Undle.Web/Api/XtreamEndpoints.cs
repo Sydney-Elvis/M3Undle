@@ -426,6 +426,7 @@ public static class XtreamEndpoints
         HlsProxyService hlsProxyService,
         ILoggerFactory loggerFactory,
         string? u,
+        string? p,
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.HlsProxy");
@@ -463,7 +464,7 @@ public static class XtreamEndpoints
         var segmentProxyBase =
             $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
 
-        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, cancellationToken);
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, p, cancellationToken);
     }
 
     private static async Task ServeDirectRelayAsync(

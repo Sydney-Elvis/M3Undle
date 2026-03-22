@@ -334,6 +334,7 @@ public static class CompatibilityEndpoints
         HttpContext context,
         HlsProxyService hlsProxyService,
         string? u,
+        string? p,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(u))
@@ -367,7 +368,7 @@ public static class CompatibilityEndpoints
         var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
         segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
 
-        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, cancellationToken);
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, p, cancellationToken);
     }
 
     private static string GetBaseUrl(HttpContext context)
