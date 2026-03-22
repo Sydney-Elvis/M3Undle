@@ -43,10 +43,10 @@ Legend: `[ ]` not run | `[x]` passed | `[!]` failed / investigate
 
 ## Guide / EPG
 
-- [ ] Multiple EPG sources can be fetched and parsed successfully
+- [x] Multiple EPG sources can be fetched and parsed successfully
 - [x] Source priority affects merged guide selection as expected
 - [x] Duplicate programme/channel entries are not duplicated in the published XMLTV
-- [ ] Channel mappings persist and affect the published guide
+- [x] Channel mappings persist and affect the published guide
 - [ ] Published `/xmltv/m3undle.xml` matches the active lineup
 
 ## DVR Client Validation

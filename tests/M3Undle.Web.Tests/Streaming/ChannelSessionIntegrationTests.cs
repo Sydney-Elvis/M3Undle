@@ -221,6 +221,41 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ProviderTunerLimit_RejectsAdditionalProviderSession()
+    {
+        // Checklist: Provider stream limits still reject new sessions correctly (per-provider TunerLimit path).
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        // First session — no TunerLimit set, creates fine
+        var firstSession = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        Assert.IsNotNull(firstSession);
+
+        // Second source: same provider, different channel, TunerLimit = 1
+        // The manager sees 1 existing session for provider-1, cap is 1 → rejected
+        var secondSource = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 1,
+        };
+
+        try
+        {
+            await fixture.Manager.GetOrCreateAsync(secondSource, CancellationToken.None);
+            Assert.Fail("Expected StreamAdmissionException when provider tuner limit is reached.");
+        }
+        catch (StreamAdmissionException ex)
+        {
+            Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, ex.StatusCode);
+            StringAssert.Contains(ex.Message, "Provider upstream limit");
+        }
+
+        await firstSession.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MaxConcurrentSessions_RejectsAdditionalSession()
     {
         // Checklist: Provider stream limits still reject new sessions correctly.
