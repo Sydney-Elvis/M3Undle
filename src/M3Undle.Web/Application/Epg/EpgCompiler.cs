@@ -44,7 +44,10 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
 
         // Priority order for source lookup
         var sourceById = sources.ToDictionary(s => s.EpgSourceId, s => s);
-        var sourcesByPriority = sources.OrderBy(s => s.Priority).ToList();
+        var priorityIndex = sources
+            .OrderBy(s => s.Priority)
+            .Select((s, i) => (s.EpgSourceId, i))
+            .ToDictionary(x => x.EpgSourceId, x => x.i);
 
         var sb = new StringBuilder();
         using var sw = new StringWriter(sb);
@@ -72,7 +75,7 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
 
             // Find the best source for this channel
             var channelMappingsForChannel = mappings[ch.ProviderChannelId]
-                .OrderBy(m => sourcesByPriority.FindIndex(s => s.EpgSourceId == m.EpgSourceId))
+                .OrderBy(m => priorityIndex.TryGetValue(m.EpgSourceId, out var idx) ? idx : int.MaxValue)
                 .ToList();
 
             EpgChannelMapping? selectedMapping = null;
