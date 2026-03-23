@@ -167,6 +167,87 @@ public sealed class ChannelListPageService(
                 ? null
                 : request.OutputGroupName.Trim();
 
+        if (request.ClearTvgIdOverride)
+            channelFilter.TvgIdOverride = null;
+        else if (request.TvgIdOverride is not null)
+            channelFilter.TvgIdOverride = string.IsNullOrWhiteSpace(request.TvgIdOverride)
+                ? null
+                : request.TvgIdOverride.Trim();
+
+        await db.SaveChangesAsync(cancellationToken);
+        eventBus.Publish(AppEventKind.GroupFiltersChanged);
+        return true;
+    }
+
+    public async Task<List<NumberManagerChannelDto>> GetNumberManagerChannelsAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
+        if (profileId is null)
+            return [];
+
+        var rows = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter)
+            .ThenInclude(f => f.ProviderGroup)
+            .Include(x => x.ProviderChannel)
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.ProfileGroupFilter.Decision != "exclude"
+                        && x.ProviderChannel.Active
+                        && x.ProviderChannel.ContentType == "live")
+            .Select(x => new NumberManagerChannelDto
+            {
+                ProviderChannelId = x.ProviderChannelId,
+                DisplayName = x.ProviderChannel.DisplayName,
+                GroupTitle = x.ProfileGroupFilter.OutputName ?? x.ProfileGroupFilter.ProviderGroup.RawName,
+                ChannelNumber = x.ChannelNumber,
+            })
+            .ToListAsync(cancellationToken);
+
+        rows.Sort((a, b) =>
+        {
+            if (a.ChannelNumber is null && b.ChannelNumber is null)
+                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal);
+            if (a.ChannelNumber is null) return 1;
+            if (b.ChannelNumber is null) return -1;
+            var cmp = a.ChannelNumber.Value.CompareTo(b.ChannelNumber.Value);
+            return cmp != 0 ? cmp : string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal);
+        });
+
+        return rows;
+    }
+
+    public async Task<bool> BulkUpdateChannelNumbersAsync(BulkChannelNumbersRequest request, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
+        if (profileId is null)
+            return false;
+
+        if (request.Channels is not { Count: > 0 })
+            return true;
+
+        var ids = request.Channels.Select(c => c.ProviderChannelId).ToList();
+
+        var filters = await db.ProfileGroupChannelFilters
+            .Include(x => x.ProfileGroupFilter)
+            .Where(x => ids.Contains(x.ProviderChannelId)
+                        && x.ProfileGroupFilter.ProfileId == profileId)
+            .ToListAsync(cancellationToken);
+
+        var lookup = filters.ToDictionary(f => f.ProviderChannelId);
+
+        foreach (var item in request.Channels)
+        {
+            if (!lookup.TryGetValue(item.ProviderChannelId, out var f))
+                continue;
+            f.ChannelNumber = item.ChannelNumber;
+        }
+
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
         return true;
@@ -195,6 +276,24 @@ public sealed class ChannelListPageService(
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
         return true;
+    }
+
+    public async Task<string?> GetTvgIdOverrideAsync(string providerChannelId, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
+        if (profileId is null)
+            return null;
+
+        return await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter)
+            .Where(x => x.ProviderChannelId == providerChannelId
+                        && x.ProfileGroupFilter.ProfileId == profileId)
+            .Select(x => x.TvgIdOverride)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static ChannelListItemDto MapEntry(ChannelIndexEntry e) => new()

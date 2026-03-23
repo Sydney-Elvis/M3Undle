@@ -27,7 +27,7 @@ public sealed class SnapshotBuilder(
     ILogger<SnapshotBuilder> logger)
 {
     private sealed record GroupFilterConfig(string ProfileGroupFilterId, string OutputName, int? AutoNumStart, int? AutoNumEnd);
-    private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber);
+    private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber, string? TvgIdOverride);
 
     // In-memory channel data used by BuildChannelIndex — sourced from DB provider_channels
     private sealed record ChannelBuildData(
@@ -302,7 +302,7 @@ public sealed class SnapshotBuilder(
                         .GroupBy(x => x.ProviderChannel.StreamUrl, StringComparer.Ordinal)
                         .ToDictionary(
                             sg => sg.Key,
-                            sg => sg.Select(x => new ChannelOverride(x.OutputGroupName, x.ChannelNumber)).First(),
+                            sg => sg.Select(x => new ChannelOverride(x.OutputGroupName, x.ChannelNumber, x.TvgIdOverride)).First(),
                             StringComparer.Ordinal));
         }
 
@@ -378,7 +378,7 @@ public sealed class SnapshotBuilder(
         if (includedGroups.Count == 0 && !includeVod && !includeSeries)
             return [];
 
-        var pending = new List<(string OutputGroup, ChannelBuildData Channel, int? ExplicitNumber)>();
+        var pending = new List<(string OutputGroup, ChannelBuildData Channel, int? ExplicitNumber, string? TvgIdOverride)>();
 
         foreach (var channel in channels.Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl)))
         {
@@ -405,7 +405,7 @@ public sealed class SnapshotBuilder(
                     : contentType == "vod" ? "Movies"
                     : "Live";
 
-                pending.Add((fallbackGroup, channel, null));
+                pending.Add((fallbackGroup, channel, null, null));
                 continue;
             }
 
@@ -421,7 +421,7 @@ public sealed class SnapshotBuilder(
             var effectiveGroup = string.IsNullOrWhiteSpace(ov.OutputGroupName)
                 ? filter.OutputName
                 : ov.OutputGroupName;
-            pending.Add((effectiveGroup, channel, ov.ChannelNumber));
+            pending.Add((effectiveGroup, channel, ov.ChannelNumber, ov.TvgIdOverride));
         }
 
         var result = new List<ChannelIndexEntry>();
@@ -448,13 +448,13 @@ public sealed class SnapshotBuilder(
                 .ThenBy(x => x.Channel.StreamUrl, StringComparer.Ordinal)
                 .ToList();
 
-            foreach (var (_, channel, num) in withNum)
-                result.Add(BuildEntry(channel, outputName, num, profileId));
+            foreach (var (_, channel, num, tvgIdOverride) in withNum)
+                result.Add(BuildEntry(channel, outputName, num, profileId, tvgIdOverride));
 
             int? nextNum = parentFilter?.AutoNumStart;
             int? maxNum = parentFilter?.AutoNumEnd;
 
-            foreach (var (_, channel, _) in withoutNum)
+            foreach (var (_, channel, _, tvgIdOverride) in withoutNum)
             {
                 int? assignedNum = null;
                 if (nextNum.HasValue)
@@ -464,7 +464,7 @@ public sealed class SnapshotBuilder(
                     if (maxNum.HasValue && nextNum > maxNum)
                         nextNum = null;
                 }
-                result.Add(BuildEntry(channel, outputName, assignedNum, profileId));
+                result.Add(BuildEntry(channel, outputName, assignedNum, profileId, tvgIdOverride));
             }
         }
 
@@ -475,7 +475,8 @@ public sealed class SnapshotBuilder(
         ChannelBuildData channel,
         string? groupTitle,
         int? tvgChno,
-        string profileId)
+        string profileId,
+        string? tvgIdOverride = null)
     {
         // Include stream URL + display/group context to avoid collapsing distinct items
         // that share tvg-id/URL across multiple provider groups.
@@ -486,7 +487,7 @@ public sealed class SnapshotBuilder(
         return new ChannelIndexEntry(
             StreamKey: DeriveStreamKey(stableKey, profileId),
             DisplayName: channel.DisplayName,
-            TvgId: channel.TvgId,
+            TvgId: string.IsNullOrWhiteSpace(tvgIdOverride) ? channel.TvgId : tvgIdOverride,
             TvgName: channel.TvgName,
             LogoUrl: channel.LogoUrl,
             GroupTitle: groupTitle,

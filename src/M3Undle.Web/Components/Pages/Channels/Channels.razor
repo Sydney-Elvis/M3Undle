@@ -14,7 +14,7 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary">Live channels in the active output snapshot.</MudText>
         </MudStack>
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-            @if (_total.HasValue)
+            @if (_total.HasValue && !_numberManagerMode)
             {
                 <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
                     @_total.Value.ToString("N0") channels
@@ -27,15 +27,136 @@
                     Rebuild needed
                 </MudChip>
             }
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+            @if (_numberManagerMode)
+            {
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Default"
                            Size="Size.Small"
-                           OnClick="@(() => _grid!.ReloadServerData())"
-                           Disabled="@(_grid is null)" />
+                           StartIcon="@Icons.Material.Filled.Close"
+                           OnClick="ExitNumberManager">
+                    Exit Number Manager
+                </MudButton>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Default"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.FormatListNumbered"
+                           OnClick="EnterNumberManagerAsync">
+                    Manage Numbers
+                </MudButton>
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                               Size="Size.Small"
+                               OnClick="@(() => _grid!.ReloadServerData())"
+                               Disabled="@(_grid is null)" />
+            }
         </MudStack>
     </MudStack>
 </MudPaper>
 
-@if (_noSnapshot)
+@if (_numberManagerMode)
+{
+    <!-- =========================================================
+         Number Manager inline panel
+         ========================================================= -->
+    <MudPaper Elevation="2" Class="pa-0">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="pa-3 pb-2">
+            <MudStack Spacing="0">
+                <MudText Typo="Typo.subtitle1">Channel Number Manager</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Edit numbers directly or use ▲ ▼ to swap adjacent channels. Rebuild output after saving.
+                </MudText>
+            </MudStack>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                @if (_nmDirty.Count > 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Warning">@_nmDirty.Count unsaved change(s)</MudText>
+                }
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           Disabled="@(_nmSaving || _nmDirty.Count == 0)"
+                           OnClick="NmApplyAllAsync">
+                    @(_nmSaving ? "Saving…" : "Apply All")
+                </MudButton>
+            </MudStack>
+        </MudStack>
+
+        @if (_nmLoading)
+        {
+            <MudStack AlignItems="AlignItems.Center" Class="pa-8">
+                <MudProgressCircular Indeterminate="true" />
+                <MudText Color="Color.Secondary">Loading channels…</MudText>
+            </MudStack>
+        }
+        else if (_nmChannels.Count == 0)
+        {
+            <MudStack AlignItems="AlignItems.Center" Class="pa-8" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Outlined.Tv" Size="Size.Large" Color="Color.Secondary" />
+                <MudText Color="Color.Secondary">No channels found. Map some channels first.</MudText>
+            </MudStack>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" Style="overflow-x:auto;">
+                <thead>
+                    <tr>
+                        <th style="width:80px; text-align:center;">Reorder</th>
+                        <th style="width:120px;">Ch. Number</th>
+                        <th>Channel Name</th>
+                        <th style="width:200px;">Group</th>
+                        <th style="width:32px;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @for (int i = 0; i < _nmChannels.Count; i++)
+                    {
+                        var ch = _nmChannels[i];
+                        var idx = i;
+                        <tr>
+                            <td style="text-align:center; padding:2px 4px;">
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp"
+                                               Size="Size.Small"
+                                               Disabled="@(idx == 0)"
+                                               OnClick="@(() => NmMoveUp(idx))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                                               Size="Size.Small"
+                                               Disabled="@(idx == _nmChannels.Count - 1)"
+                                               OnClick="@(() => NmMoveDown(idx))" />
+                            </td>
+                            <td style="padding:2px 8px;">
+                                <MudNumericField T="int?"
+                                                 Value="@ch.ChannelNumber"
+                                                 ValueChanged="@(v => NmSetNumber(ch, v))"
+                                                 HideSpinButtons="true"
+                                                 Variant="Variant.Outlined"
+                                                 Margin="Margin.Dense"
+                                                 Placeholder="auto"
+                                                 Style="width:100px;" />
+                            </td>
+                            <td>
+                                <MudText Typo="Typo.body2">@ch.DisplayName</MudText>
+                            </td>
+                            <td>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@ch.GroupTitle</MudText>
+                            </td>
+                            <td style="padding:2px 4px;">
+                                @if (_nmDirty.Contains(ch.ProviderChannelId))
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.FiberManualRecord"
+                                             Size="Size.Small"
+                                             Color="Color.Warning" />
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudPaper>
+}
+else if (_noSnapshot)
 {
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
         No active snapshot found. <MudLink Href="channels/mapping">Build your output</MudLink> first.
@@ -187,8 +308,10 @@ else
     </MudDataGrid>
 }
 
-<!-- Edit Channel Dialog -->
-<MudDialog @bind-Visible="_editDialogOpen" Options="_dialogOptions">
+<!-- =========================================================
+     Edit Channel Dialog
+     ========================================================= -->
+<MudDialog @bind-Visible="_editDialogOpen" Options="_editDialogOptions">
     <TitleContent>
         <MudText Typo="Typo.h6">Edit Channel</MudText>
     </TitleContent>
@@ -219,6 +342,54 @@ else
                         <MudSelectItem Value="@g">@g</MudSelectItem>
                     }
                 </MudSelect>
+
+                <!-- EPG ID override — locked by default -->
+                <MudPaper Outlined="true" Class="pa-3">
+                    <MudStack Spacing="1">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.subtitle2">EPG ID Override</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Provider value: @(_editChannel.TvgId ?? "none")
+                                </MudText>
+                            </MudStack>
+                            <MudTooltip Text="@(_epgIdUnlocked ? "Lock EPG ID override" : "Unlock to set a custom EPG ID")">
+                                <MudIconButton Icon="@(_epgIdUnlocked ? Icons.Material.Filled.LockOpen : Icons.Material.Filled.Lock)"
+                                               Size="Size.Small"
+                                               Color="@(_epgIdUnlocked ? Color.Warning : Color.Default)"
+                                               OnClick="ToggleEpgIdLockAsync" />
+                            </MudTooltip>
+                        </MudStack>
+
+                        @if (_epgIdUnlocked)
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-1">
+                                A custom EPG ID replaces the provider's value in the output. Only set this if you know the exact ID your guide source expects.
+                            </MudAlert>
+                            <MudTextField @bind-Value="_editTvgIdOverride"
+                                          Label="Custom EPG ID"
+                                          Placeholder="Leave empty to revert to provider value"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Clearable="true"
+                                          HelperText="Applies to the next rebuilt snapshot" />
+                        }
+                        else
+                        {
+                            @if (!string.IsNullOrEmpty(_editTvgIdOverride))
+                            {
+                                <MudChip T="string" Color="Color.Warning" Size="Size.Small" Variant="Variant.Outlined"
+                                         Icon="@Icons.Material.Filled.Edit">
+                                    Override active: @_editTvgIdOverride
+                                </MudChip>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Tertiary">No override — using provider value.</MudText>
+                            }
+                        }
+                    </MudStack>
+                </MudPaper>
             </MudStack>
         }
     </DialogContent>
@@ -233,6 +404,7 @@ else
     </DialogActions>
 </MudDialog>
 
+
 @code {
     private MudDataGrid<ChannelListItemDto>? _grid;
     private string _search = string.Empty;
@@ -242,19 +414,34 @@ else
     private bool _pendingRebuild;
     private List<string> _availableGroups = [];
 
+    // -------------------------------------------------------------------------
     // Edit dialog state
+    // -------------------------------------------------------------------------
+
     private bool _editDialogOpen;
     private ChannelListItemDto? _editChannel;
     private int? _editChannelNumber;
     private string? _editGroupName;
+    private string? _editTvgIdOverride;
+    private bool _epgIdUnlocked;
     private bool _isSaving;
 
-    private readonly DialogOptions _dialogOptions = new()
+    private readonly DialogOptions _editDialogOptions = new()
     {
         MaxWidth = MaxWidth.Small,
         FullWidth = true,
         CloseOnEscapeKey = true,
     };
+
+    // -------------------------------------------------------------------------
+    // Number Manager state
+    // -------------------------------------------------------------------------
+
+    private bool _numberManagerMode;
+    private bool _nmLoading;
+    private bool _nmSaving;
+    private List<NumberManagerChannelDto> _nmChannels = [];
+    private readonly HashSet<string> _nmDirty = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -336,11 +523,21 @@ else
     // Edit dialog
     // -------------------------------------------------------------------------
 
-    private void OpenEditDialogAsync(ChannelListItemDto channel)
+    private async Task OpenEditDialogAsync(ChannelListItemDto channel)
     {
         _editChannel = channel;
         _editChannelNumber = channel.ChannelNumber;
         _editGroupName = channel.GroupTitle;
+        _epgIdUnlocked = false;
+        _editTvgIdOverride = null;
+
+        try
+        {
+            _editTvgIdOverride = await ChannelListPageService.GetTvgIdOverrideAsync(
+                channel.ProviderChannelId, CancellationToken.None);
+        }
+        catch { /* non-fatal */ }
+
         _editDialogOpen = true;
     }
 
@@ -348,6 +545,30 @@ else
     {
         _editDialogOpen = false;
         _editChannel = null;
+        _epgIdUnlocked = false;
+    }
+
+    private async Task ToggleEpgIdLockAsync()
+    {
+        if (_epgIdUnlocked)
+        {
+            // Locking — confirm if they had typed something
+            _epgIdUnlocked = false;
+        }
+        else
+        {
+            // Unlocking — show confirmation
+            var confirmed = await DialogService.ShowMessageBoxAsync(
+                "Unlock EPG ID Override",
+                "Setting a custom EPG ID replaces the provider's value in your output. " +
+                "Only do this if you know the correct ID your guide source expects for this channel. " +
+                "An incorrect ID will break guide data for this channel.\n\nProceed?",
+                yesText: "Unlock",
+                cancelText: "Cancel");
+
+            if (confirmed == true)
+                _epgIdUnlocked = true;
+        }
     }
 
     private async Task SaveEditAsync()
@@ -363,6 +584,8 @@ else
                 ClearChannelNumber = _editChannelNumber is null,
                 OutputGroupName = _editGroupName,
                 ClearOutputGroupName = string.IsNullOrWhiteSpace(_editGroupName),
+                TvgIdOverride = _epgIdUnlocked ? _editTvgIdOverride : null,
+                ClearTvgIdOverride = _epgIdUnlocked && string.IsNullOrWhiteSpace(_editTvgIdOverride),
             };
 
             var updated = await ChannelListPageService.UpdateOutputChannelAsync(
@@ -433,6 +656,124 @@ else
         catch (Exception ex)
         {
             Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Number Manager
+    // -------------------------------------------------------------------------
+
+    private async Task EnterNumberManagerAsync()
+    {
+        _numberManagerMode = true;
+        _nmDirty.Clear();
+        _nmLoading = true;
+        _nmChannels = [];
+
+        try
+        {
+            _nmChannels = await ChannelListPageService.GetNumberManagerChannelsAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load channels: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _nmLoading = false;
+        }
+    }
+
+    private void ExitNumberManager()
+    {
+        _numberManagerMode = false;
+        _nmDirty.Clear();
+    }
+
+    private void NmSetNumber(NumberManagerChannelDto channel, int? value)
+    {
+        channel.ChannelNumber = value;
+        _nmDirty.Add(channel.ProviderChannelId);
+        NmSort();
+    }
+
+    private void NmMoveUp(int idx)
+    {
+        if (idx <= 0 || idx >= _nmChannels.Count) return;
+        var ch = _nmChannels[idx];
+        var above = _nmChannels[idx - 1];
+        (ch.ChannelNumber, above.ChannelNumber) = (above.ChannelNumber, ch.ChannelNumber);
+        _nmDirty.Add(ch.ProviderChannelId);
+        _nmDirty.Add(above.ProviderChannelId);
+        NmSort();
+    }
+
+    private void NmMoveDown(int idx)
+    {
+        if (idx < 0 || idx >= _nmChannels.Count - 1) return;
+        var ch = _nmChannels[idx];
+        var below = _nmChannels[idx + 1];
+        (ch.ChannelNumber, below.ChannelNumber) = (below.ChannelNumber, ch.ChannelNumber);
+        _nmDirty.Add(ch.ProviderChannelId);
+        _nmDirty.Add(below.ProviderChannelId);
+        NmSort();
+    }
+
+    private void NmSort()
+    {
+        _nmChannels.Sort((a, b) =>
+        {
+            if (a.ChannelNumber is null && b.ChannelNumber is null)
+                return string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal);
+            if (a.ChannelNumber is null) return 1;
+            if (b.ChannelNumber is null) return -1;
+            var cmp = a.ChannelNumber.Value.CompareTo(b.ChannelNumber.Value);
+            return cmp != 0 ? cmp : string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal);
+        });
+        // Force re-render by replacing the list reference
+        _nmChannels = [.. _nmChannels];
+    }
+
+    private async Task NmApplyAllAsync()
+    {
+        if (_nmDirty.Count == 0) return;
+
+        _nmSaving = true;
+        try
+        {
+            var request = new BulkChannelNumbersRequest
+            {
+                Channels = _nmChannels
+                    .Where(c => _nmDirty.Contains(c.ProviderChannelId))
+                    .Select(c => new BulkChannelNumberItem
+                    {
+                        ProviderChannelId = c.ProviderChannelId,
+                        ChannelNumber = c.ChannelNumber,
+                    })
+                    .ToList(),
+            };
+
+            var ok = await ChannelListPageService.BulkUpdateChannelNumbersAsync(request, CancellationToken.None);
+
+            if (ok)
+            {
+                _nmDirty.Clear();
+                _pendingRebuild = true;
+                Snackbar.Add("Channel numbers updated. Rebuild output to apply changes.", Severity.Success);
+                StateHasChanged();
+            }
+            else
+            {
+                Snackbar.Add("Failed to update channel numbers.", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _nmSaving = false;
         }
     }
 }

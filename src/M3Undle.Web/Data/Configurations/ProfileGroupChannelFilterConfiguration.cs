@@ -16,6 +16,7 @@ public sealed class ProfileGroupChannelFilterConfiguration : IEntityTypeConfigur
         builder.Property(x => x.ProviderChannelId).HasColumnName("provider_channel_id").IsRequired();
         builder.Property(x => x.OutputGroupName).HasColumnName("output_group_name");
         builder.Property(x => x.ChannelNumber).HasColumnName("channel_number");
+        builder.Property(x => x.TvgIdOverride).HasColumnName("tvg_id_override");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();
 
         builder.HasIndex(x => new { x.ProfileGroupFilterId, x.ProviderChannelId })

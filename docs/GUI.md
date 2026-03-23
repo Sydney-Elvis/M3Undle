@@ -129,14 +129,69 @@ For HDHomeRun-style access, tuner ownership is tracked by the configured `Virtua
 
 ---
 
-## Lineup Shaping (Planned)
+### 7. Channel Mapping
 
-A future release will add lineup shaping controls to the UI:
+The Channel Mapping page is where you build your output lineup from the provider's channel catalog.
 
-- Group inclusion (select which groups appear in your lineup)
-- Channel numbering (start ranges, pinned numbers, overflow handling)
-- New channels inbox (review and approve newly discovered channels)
-- Dynamic groups for rotating sports or event feeds
+**Group decisions**
+
+Every provider group arrives in a "hold" state. You explicitly include or exclude each group:
+
+- **Include** — channels from this group appear in your output
+- **Exclude** — group is ignored entirely
+- **Hold** — parked; not yet decided
+
+Groups marked as new (never seen before) are highlighted so you can review and decide without losing track of them. A "Dismiss new" action clears the flag once you have reviewed.
+
+**Group settings**
+
+For each included group you can:
+
+- Set a custom **output name** (renames the group in the published M3U)
+- Set an **auto-numbering range** (start–end numbers assigned automatically to unnumbered channels)
+- Track or ignore new channels as they appear in the group
+
+**Per-channel control**
+
+Within a group you can select individual channels and set per-channel overrides:
+
+- **Channel number** — explicit `tvg-chno` that takes precedence over auto-numbering
+- **Output group** — move a channel to a different output group without changing its source group
+
+**Build Output**
+
+After making changes, use **Build Output** to regenerate the active snapshot. Changes to channel settings are pending until the next build.
+
+---
+
+### 8. Channels
+
+The Channels page shows the live channels currently in the active output snapshot.
+
+You can search by channel name, group, or EPG ID, and filter by group. Each row shows the channel number, logo, display name, group, and EPG ID.
+
+**Edit channel**
+
+The edit button on each row opens a dialog where you can:
+
+- Override the **channel number** (or clear it to fall back to auto-numbering)
+- Override the **output group**
+- Set a **custom EPG ID** — this field is locked by default; click the padlock to unlock it, read the warning, and confirm before editing. An incorrect EPG ID will break guide data for that channel. The override applies at the next Build Output.
+
+**Remove channel**
+
+The delete button removes a channel from the output. The change takes effect after the next Build Output.
+
+**Number Manager mode**
+
+The **Manage Numbers** button in the page header switches the page into Number Manager mode. The channel grid is replaced by a full-channel editable list:
+
+- Each row shows the current channel number (editable), channel name, and group
+- **▲ ▼** buttons swap a channel with its neighbour, transferring their numbers
+- Editing a number field directly updates the value and re-sorts the list
+- Changed rows are marked with an indicator
+- **Apply All** saves all pending number changes to the database
+- Changes take effect after a Build Output; exit the mode with **Exit Number Manager**
 
 ---
 

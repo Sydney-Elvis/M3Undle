@@ -212,6 +212,45 @@ Indexes:
 
 ---
 
+### profile_group_filters
+V1 per-group inclusion decisions for a profile. Drives what channels appear in the output.
+- profile_group_filter_id (PK, TEXT, uuid)
+- profile_id (FK profiles)
+- provider_group_id (FK provider_groups)
+- decision (TEXT) — `'hold'` | `'exclude'`; included = not excluded and has channel selections
+- is_new (INTEGER, 0/1) — flagged when first discovered, cleared on dismiss
+- channel_mode (TEXT) — always `'select'` in V1
+- output_name (TEXT, nullable) — renames the group in the published output; defaults to provider raw_name
+- auto_num_start (INTEGER, nullable) — first channel number for auto-numbering within this group
+- auto_num_end (INTEGER, nullable) — last channel number before auto-numbering stops
+- track_new_channels (INTEGER, 0/1)
+- sort_override (INTEGER, nullable)
+- created_utc (TEXT)
+- updated_utc (TEXT)
+
+Unique:
+- (profile_id, provider_group_id)
+
+---
+
+### profile_group_channel_filters
+V1 per-channel selections and overrides within a group filter.
+- profile_group_channel_filter_id (PK, TEXT, uuid)
+- profile_group_filter_id (FK profile_group_filters)
+- provider_channel_id (FK provider_channels)
+- output_group_name (TEXT, nullable) — moves channel to a different output group
+- channel_number (INTEGER, nullable) — explicit `tvg-chno`; takes precedence over auto-numbering
+- tvg_id_override (TEXT, nullable) — replaces the provider's `tvg-id` in the snapshot output; lock-gated in UI to prevent accidental EPG breakage
+- created_utc (TEXT)
+
+Unique:
+- (profile_group_filter_id, provider_channel_id)
+
+Indexes:
+- idx_pgcf_filter_channel_unique (profile_group_filter_id, provider_channel_id)
+
+---
+
 ### snapshots
 - snapshot_id (PK, TEXT, uuid)
 - profile_id (FK profiles)
@@ -309,15 +348,21 @@ Several schema fields and tables are present for forward-compatibility but are n
 - **Current:** Stored but has no effect. Currently one active provider per profile.
 - **Future:** Priority ordering for multi-provider merge and failover.
 
-## Tables reserved for future use
+## Tables active in V1 (beyond the original design)
 
 ### `provider_channels`
-- **Current:** Schema present and table exists in DB. **Not populated** by the snapshot builder or preview path. The V1 snapshot build operates entirely in-memory from parsed M3U data — no channel upserts are performed. See docs/dev/DESIGN_DECISIONS.md.
-- **Future:** Tracks the volatile provider channel universe. Foundation for canonical channel mapping, event detection, and diff-based inbox UX.
+- **Current:** Actively populated by each snapshot refresh. Only live channels are persisted; VOD/Series remain in-memory for the snapshot build. Used as the source of truth for the Channels and Channel Mapping pages.
+- **Future:** Full population including VOD/Series. Foundation for canonical channel mapping, event detection, and diff-based inbox UX.
 
 ### `provider_groups`
-- **Current:** Schema present and table exists in DB. **Not populated** by the snapshot builder or preview path. Same reason as `provider_channels`.
-- **Future:** Group catalog for a provider. Used for group-based inclusion rules and group filtering.
+- **Current:** Actively populated by each snapshot refresh. Used to drive the group-level inclusion/exclusion UI (Channel Mapping page).
+- **Future:** Group catalog extended for group-ordering and dynamic group rules.
+
+### `profile_group_filters` and `profile_group_channel_filters`
+- **Current:** Active V1 per-group and per-channel override tables. Store group decisions (include/exclude/hold), output name overrides, auto-numbering ranges, channel number pins, and `tvg_id_override`.
+- **Future:** These tables are the V1 bridge until `canonical_channels` and `channel_sources` are fully activated.
+
+## Tables reserved for future use
 
 ### `canonical_channels`
 - **Current:** Schema present, not populated. V1 snapshot build does not create canonical channels; stream keys are derived from stable channel properties directly (see `stream_keys` note below).

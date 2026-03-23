@@ -7,6 +7,7 @@ public sealed class ProfileGroupChannelFilter
     public string ProviderChannelId { get; set; } = string.Empty;
     public string? OutputGroupName { get; set; }
     public int? ChannelNumber { get; set; }
+    public string? TvgIdOverride { get; set; }
     public DateTime CreatedUtc { get; set; }
 
     public ProfileGroupFilter ProfileGroupFilter { get; set; } = null!;

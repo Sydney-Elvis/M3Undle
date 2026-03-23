@@ -153,6 +153,7 @@ public sealed class ChannelListItemDto
     public string? LogoUrl { get; set; }
     public string? GroupTitle { get; set; }
     public string? TvgId { get; set; }
+    public string? TvgIdOverride { get; set; }
     public string StreamKey { get; set; } = string.Empty;
     public string ProviderChannelId { get; set; } = string.Empty;
 }
@@ -163,6 +164,27 @@ public sealed class UpdateOutputChannelRequest
     public bool ClearChannelNumber { get; set; }
     public string? OutputGroupName { get; set; }
     public bool ClearOutputGroupName { get; set; }
+    public string? TvgIdOverride { get; set; }
+    public bool ClearTvgIdOverride { get; set; }
+}
+
+public sealed class NumberManagerChannelDto
+{
+    public string ProviderChannelId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? GroupTitle { get; set; }
+    public int? ChannelNumber { get; set; }
+}
+
+public sealed class BulkChannelNumberItem
+{
+    public string ProviderChannelId { get; set; } = string.Empty;
+    public int? ChannelNumber { get; set; }
+}
+
+public sealed class BulkChannelNumbersRequest
+{
+    public List<BulkChannelNumberItem> Channels { get; set; } = [];
 }
 
 public sealed class ChannelListResponse

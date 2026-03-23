@@ -165,10 +165,10 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
 ### Alpha 5 — Remaining Features
 Goal: Finish remaining lineup-management features before Beta hardening.
 
-Status: Planned. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
+Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 
-- [ ] Channel reorder (explicit sort position) — #3
-- [ ] Custom `tvg-id` override per channel
+- [x] Channel reorder (explicit sort position via Number Manager) — #3
+- [x] Custom `tvg-id` override per channel (lock-gated field in channel edit dialog)
 - [ ] Configurable refresh schedule in Settings UI
 - [ ] New channels inbox / review queue
 - [ ] Dynamic groups for rotating/event feeds

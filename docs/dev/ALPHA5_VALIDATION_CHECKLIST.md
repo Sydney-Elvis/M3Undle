@@ -4,8 +4,8 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 
 ## Core Lineup Management
 
-- [ ] Channel reorder (explicit sort position)
-- [ ] Custom `tvg-id` override per channel
+- [x] Channel reorder — Number Manager inline mode on Channels page; ▲ ▼ swap and direct number editing; bulk Apply All
+- [x] Custom `tvg-id` override per channel — lock-gated field in channel edit dialog; warning on unlock; stored as `tvg_id_override` in DB; applied at snapshot build time
 - [ ] Channel number pinning and stable reordering
 - [ ] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
 
