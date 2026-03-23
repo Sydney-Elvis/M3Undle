@@ -241,7 +241,7 @@
                     if (_pendingProviderSwitchNotification && evt.Succeeded)
                     {
                         _pendingProviderSwitchNotification = false;
-                        await InvokeAsync(() => DialogService.ShowMessageBox(
+                        await InvokeAsync(() => DialogService.ShowMessageBoxAsync(
                             "Active Provider Updated",
                             "The new snapshot is ready. Your Media Players (Jellyfin, Plex, Emby, etc.) need to refresh or re-scan their channel list to pick up the updated lineup.",
                             yesText: "Got It"));

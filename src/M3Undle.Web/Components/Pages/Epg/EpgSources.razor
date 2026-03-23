@@ -575,7 +575,7 @@ else
 
     private async Task DeleteSourceAsync(EpgSourceDto source)
     {
-        var confirmed = await DialogService.ShowMessageBox(
+        var confirmed = await DialogService.ShowMessageBoxAsync(
             "Delete EPG Source",
             $"Delete \"{source.Name}\"? All fetch history and channel mappings for this source will also be removed.",
             yesText: "Delete", cancelText: "Cancel");

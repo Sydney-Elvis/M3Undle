@@ -269,7 +269,7 @@
 
     private async Task DeleteAsync(ProviderDto provider)
     {
-        var confirmed = await DialogService.ShowMessageBox(
+        var confirmed = await DialogService.ShowMessageBoxAsync(
             "Delete Provider",
             $"Are you sure you want to delete \"{provider.Name}\"? This will permanently remove the provider and all associated data (fetch history, channel data, and profile links).",
             yesText: "Delete",

@@ -243,7 +243,7 @@
         _isSaving = true;
         try
         {
-            if (_form is not null) { await _form.Validate(); if (!_form.IsValid) return; }
+            if (_form is not null) { await _form.ValidateAsync(); if (!_form.IsValid) return; }
 
             var profileIds = string.IsNullOrWhiteSpace(_model.ProfileId) ? null : new List<string> { _model.ProfileId };
 

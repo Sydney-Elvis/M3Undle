@@ -487,7 +487,7 @@
 
             if (_activeTab == 0)
             {
-                if (_urlForm is not null) { await _urlForm.Validate(); if (!_urlForm.IsValid) return; }
+                if (_urlForm is not null) { await _urlForm.ValidateAsync(); if (!_urlForm.IsValid) return; }
                 result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
                 {
                     Name = _urlModel.Name.Trim(),
@@ -505,7 +505,7 @@
             }
             else if (_activeTab == 1)
             {
-                if (_fileForm is not null) { await _fileForm.Validate(); if (!_fileForm.IsValid) return; }
+                if (_fileForm is not null) { await _fileForm.ValidateAsync(); if (!_fileForm.IsValid) return; }
                 if (string.IsNullOrWhiteSpace(_fileModel.PlaylistUrl))
                 {
                     _error = "Please select a file using the Browse button.";
@@ -526,7 +526,7 @@
             }
             else
             {
-                if (_xtreamForm is not null) { await _xtreamForm.Validate(); if (!_xtreamForm.IsValid) return; }
+                if (_xtreamForm is not null) { await _xtreamForm.ValidateAsync(); if (!_xtreamForm.IsValid) return; }
                 result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
                 {
                     Name = _xtreamModel.Name.Trim(),

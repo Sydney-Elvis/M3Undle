@@ -297,7 +297,7 @@ else
             await _grid.ReloadServerData();
     }
 
-    private async Task<GridData<ChannelListItemDto>> LoadChannelsAsync(GridState<ChannelListItemDto> state)
+    private async Task<GridData<ChannelListItemDto>> LoadChannelsAsync(GridState<ChannelListItemDto> state, CancellationToken cancellationToken)
     {
         var page = state.Page + 1;
 
@@ -308,7 +308,7 @@ else
                 state.PageSize,
                 _search,
                 _groupFilter,
-                CancellationToken.None);
+                cancellationToken);
 
             if (result is null)
             {
@@ -402,7 +402,7 @@ else
 
     private async Task ConfirmRemoveAsync(ChannelListItemDto channel)
     {
-        var confirmed = await DialogService.ShowMessageBox(
+        var confirmed = await DialogService.ShowMessageBoxAsync(
             "Remove Channel",
             $"Remove \"{channel.DisplayName}\" from the output? This will take effect after the next Build Output.",
             yesText: "Remove",
