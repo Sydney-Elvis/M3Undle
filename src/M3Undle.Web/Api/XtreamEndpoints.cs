@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
@@ -36,6 +37,10 @@ public static class XtreamEndpoints
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         WriteIndented = false,
     };
+
+    // Matches "Show Name S01 E01", "Show Name S01E01", "Show Name - S01E01", etc.
+    private static readonly Regex SeriesNameRegex =
+        new(@"^(.*?)\s+[Ss](\d{1,2})[\s\-]*[Ee]?(\d+)", RegexOptions.Compiled);
 
     public static IEndpointRouteBuilder MapXtreamEndpoints(this IEndpointRouteBuilder app)
     {
@@ -91,7 +96,8 @@ public static class XtreamEndpoints
             "get_series_categories" => BuildCategoriesResult(lineup, "series"),
             "get_live_streams"      => BuildStreamsResult(context, lineup, "live"),
             "get_vod_streams"       => BuildStreamsResult(context, lineup, "vod"),
-            "get_series"            => BuildStreamsResult(context, lineup, "series"),
+            "get_series"            => BuildSeriesListResult(context, lineup),
+            "get_series_info"       => BuildSeriesInfoResult(context, lineup),
             _                       => Results.Json(Array.Empty<object>(), JsonOptions),
         };
     }
@@ -216,6 +222,138 @@ public static class XtreamEndpoints
             .ToArray();
 
         return Results.Json(streams, JsonOptions);
+    }
+
+    /// <summary>
+    /// Returns one entry per unique series title (grouped from individual episodes),
+    /// matching how the standard Xtream Codes API serves the series list.
+    /// </summary>
+    private static IResult BuildSeriesListResult(HttpContext context, RenderedLineup lineup)
+    {
+        var categoryFilter = context.Request.Query["category_id"].ToString();
+        var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
+
+        var seriesChannels = lineup.Channels
+            .Where(c => c.ContentType == "series");
+
+        if (!string.IsNullOrEmpty(categoryFilter))
+            seriesChannels = seriesChannels.Where(c =>
+                CategoryId(c.GroupTitle ?? "Uncategorized").ToString() == categoryFilter);
+
+        var seriesList = seriesChannels
+            .GroupBy(c => ExtractSeriesName(c.DisplayName))
+            .Select((g, i) =>
+            {
+                var first = g.First();
+                return (object)new
+                {
+                    num              = i + 1,
+                    name             = g.Key,
+                    series_id        = SeriesId(g.Key),
+                    cover            = first.LogoUrl ?? string.Empty,
+                    plot             = string.Empty,
+                    cast             = string.Empty,
+                    director         = string.Empty,
+                    genre            = first.GroupTitle ?? string.Empty,
+                    releaseDate      = string.Empty,
+                    last_modified    = added,
+                    rating           = string.Empty,
+                    rating_5based    = 0,
+                    backdrop_path    = Array.Empty<string>(),
+                    youtube_trailer  = string.Empty,
+                    episode_run_time = string.Empty,
+                    category_id      = CategoryId(first.GroupTitle ?? "Uncategorized").ToString(),
+                };
+            })
+            .ToArray();
+
+        return Results.Json(seriesList, JsonOptions);
+    }
+
+    /// <summary>
+    /// Returns full series info with episodes grouped by season for a given series_id,
+    /// matching the standard Xtream Codes get_series_info response shape.
+    /// </summary>
+    private static IResult BuildSeriesInfoResult(HttpContext context, RenderedLineup lineup)
+    {
+        var seriesIdParam = context.Request.Query["series_id"].ToString();
+        if (!int.TryParse(seriesIdParam, out var requestedSeriesId))
+            return Results.Json(new { }, JsonOptions);
+
+        var access   = context.GetResolvedClientAccess();
+        var baseUrl  = GetBaseUrl(context);
+        var username = access.Credential.Username;
+        var password = access.UrlCredential?.Password ?? string.Empty;
+        var added    = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
+
+        var match = lineup.Channels
+            .Where(c => c.ContentType == "series")
+            .GroupBy(c => ExtractSeriesName(c.DisplayName))
+            .FirstOrDefault(g => SeriesId(g.Key) == requestedSeriesId);
+
+        if (match is null)
+            return Results.Json(new { }, JsonOptions);
+
+        var seriesName = match.Key;
+        var first      = match.First();
+
+        var episodesBySeason = new Dictionary<string, List<object>>();
+        foreach (var ep in match.OrderBy(c => c.DisplayName))
+        {
+            var (season, epNum) = ExtractSeasonEpisode(ep.DisplayName);
+            var seasonKey = season.ToString();
+            if (!episodesBySeason.TryGetValue(seasonKey, out var list))
+            {
+                list = [];
+                episodesBySeason[seasonKey] = list;
+            }
+
+            var streamId = XtreamStreamIdCache.ToStreamId(ep.StreamKey);
+            list.Add(new
+            {
+                id                  = streamId.ToString(),
+                episode_num         = epNum,
+                title               = ep.DisplayName,
+                container_extension = "mkv",
+                added,
+                season,
+                direct_source       = $"{baseUrl}/series/{username}/{password}/{streamId}.mkv",
+            });
+        }
+
+        var seasons = episodesBySeason.Keys
+            .Select(k => new
+            {
+                season_number = int.Parse(k),
+                name          = $"Season {k}",
+                cover         = string.Empty,
+            })
+            .OrderBy(s => s.season_number)
+            .ToArray();
+
+        var response = new
+        {
+            info = new
+            {
+                name             = seriesName,
+                cover            = first.LogoUrl ?? string.Empty,
+                plot             = string.Empty,
+                cast             = string.Empty,
+                director         = string.Empty,
+                genre            = first.GroupTitle ?? string.Empty,
+                releaseDate      = string.Empty,
+                rating           = string.Empty,
+                rating_5based    = 0,
+                backdrop_path    = Array.Empty<string>(),
+                youtube_trailer  = string.Empty,
+                episode_run_time = string.Empty,
+                category_id      = CategoryId(first.GroupTitle ?? "Uncategorized").ToString(),
+            },
+            episodes = episodesBySeason,
+            seasons,
+        };
+
+        return Results.Json(response, JsonOptions);
     }
 
     // -------------------------------------------------------------------------
@@ -574,6 +712,42 @@ public static class XtreamEndpoints
         var hash = MD5.HashData(bytes);
         var value = BitConverter.ToUInt32(hash, 0);
         return (int)(value & 0x7FFF_FFFF);
+    }
+
+    /// <summary>Stable 31-bit numeric series ID derived from the series name.</summary>
+    private static int SeriesId(string seriesName)
+    {
+        var bytes = Encoding.UTF8.GetBytes("series:" + seriesName);
+        var hash = MD5.HashData(bytes);
+        var value = BitConverter.ToUInt32(hash, 0);
+        return (int)(value & 0x7FFF_FFFF);
+    }
+
+    /// <summary>
+    /// Extracts the series title from an episode display name by stripping the
+    /// season/episode marker (e.g. "Believers (2020) S01 E01" → "Believers (2020)").
+    /// Falls back to the full display name when no marker is found.
+    /// </summary>
+    private static string ExtractSeriesName(string displayName)
+    {
+        var m = SeriesNameRegex.Match(displayName);
+        return m.Success ? m.Groups[1].Value.Trim() : displayName;
+    }
+
+    /// <summary>
+    /// Extracts the season and episode numbers from a display name.
+    /// Returns (1, 1) when no pattern is found.
+    /// </summary>
+    private static (int Season, int Episode) ExtractSeasonEpisode(string displayName)
+    {
+        var m = SeriesNameRegex.Match(displayName);
+        if (m.Success
+            && int.TryParse(m.Groups[2].Value, out var season)
+            && int.TryParse(m.Groups[3].Value, out var episode))
+        {
+            return (season, episode);
+        }
+        return (1, 1);
     }
 
     private static string GetBaseUrl(HttpContext context) =>
