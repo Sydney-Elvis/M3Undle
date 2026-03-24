@@ -6,6 +6,8 @@
 @inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject IJsApiService JsApiService
+@inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
@@ -480,14 +482,8 @@
 
     private async Task CopyAsync(string text)
     {
-        try
-        {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
-        }
-        catch
-        {
-            // Clipboard access may be unavailable in non-secure or iframe contexts
-        }
+        await JsApiService.CopyToClipboardAsync(text);
+        Snackbar.Add("Copied to clipboard", Severity.Success);
     }
 
     // DTOs matching /status endpoint camelCase JSON
