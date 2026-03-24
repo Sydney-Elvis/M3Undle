@@ -6,8 +6,8 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 
 - [x] Channel reorder — Number Manager inline mode on Channels page; ▲ ▼ swap and direct number editing; bulk Apply All
 - [x] Custom `tvg-id` override per channel — lock-gated field in channel edit dialog; warning on unlock; stored as `tvg_id_override` in DB; applied at snapshot build time
-- [ ] Channel number pinning and stable reordering
-- [ ] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
+- [x] Channel number pinning and stable reordering
+- [x] Full channel numbering rules — conflict avoidance (global pin skip), skip-and-continue fill, overflow at 9000+, group evaluation order via `sort_override` (see `../design/NUMBERING_RULES.md`)
 
 ## Dynamic and Review Workflow
 

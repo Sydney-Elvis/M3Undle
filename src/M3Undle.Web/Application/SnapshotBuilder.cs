@@ -26,11 +26,8 @@ public sealed class SnapshotBuilder(
     IOptions<SnapshotOptions> snapshotOptions,
     ILogger<SnapshotBuilder> logger)
 {
-    private sealed record GroupFilterConfig(string ProfileGroupFilterId, string OutputName, int? AutoNumStart, int? AutoNumEnd);
-    private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber, string? TvgIdOverride);
-
-    // In-memory channel data used by BuildChannelIndex — sourced from DB provider_channels
-    private sealed record ChannelBuildData(
+    internal sealed record GroupFilterConfig(string ProfileGroupFilterId, string OutputName, int? AutoNumStart, int? AutoNumEnd, int? SortOverride);
+    internal sealed record ChannelBuildData(
         string ProviderChannelId,
         string? ProviderChannelKey,
         string DisplayName,
@@ -40,6 +37,7 @@ public sealed class SnapshotBuilder(
         string? TvgId,
         string? TvgName,
         string? LogoUrl);
+    internal sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber, string? TvgIdOverride);
 
     /// <summary>Full refresh: fetch from provider, sync to DB, then build snapshot.</summary>
     public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels)> RunAsync(CancellationToken cancellationToken)
@@ -277,7 +275,8 @@ public sealed class SnapshotBuilder(
                 f.ProfileGroupFilterId,
                 f.OutputName ?? f.ProviderGroup.RawName,
                 f.AutoNumStart,
-                f.AutoNumEnd),
+                f.AutoNumEnd,
+                f.SortOverride),
             StringComparer.Ordinal);
 
         // Load per-channel selections — always "select" mode now
@@ -366,7 +365,9 @@ public sealed class SnapshotBuilder(
         return (true, null);
     }
 
-    private static List<ChannelIndexEntry> BuildChannelIndex(
+    internal const int OverflowRangeStart = 9000;
+
+    internal static List<ChannelIndexEntry> BuildChannelIndex(
         IReadOnlyList<ChannelBuildData> channels,
         string profileId,
         IReadOnlyDictionary<string, GroupFilterConfig> includedGroups,
@@ -426,16 +427,40 @@ public sealed class SnapshotBuilder(
 
         var result = new List<ChannelIndexEntry>();
 
+        // Seed the globally-used set with every pinned number so auto-assignment
+        // skips them regardless of which group they belong to.
+        var assignedNumbers = new HashSet<int>(
+            pending
+                .Where(x => x.ExplicitNumber.HasValue)
+                .Select(x => x.ExplicitNumber!.Value));
+
+        int nextOverflow = OverflowRangeStart;
+
+        // Evaluate output groups in SortOverride order (nulls last), then alphabetical.
+        // This determines which group "wins" early numbers when ranges overlap.
         var byOutputGroup = pending
             .GroupBy(x => x.OutputGroup, StringComparer.Ordinal)
-            .OrderBy(g => g.Key, StringComparer.Ordinal);
+            .Select(g =>
+            {
+                var minSort = includedGroups.Values
+                    .Where(f => string.Equals(f.OutputName, g.Key, StringComparison.Ordinal))
+                    .Select(f => f.SortOverride)
+                    .Where(s => s.HasValue)
+                    .Select(s => s!.Value)
+                    .DefaultIfEmpty(int.MaxValue)
+                    .Min();
+                return (Group: g, SortKey: minSort);
+            })
+            .OrderBy(x => x.SortKey)
+            .ThenBy(x => x.Group.Key, StringComparer.Ordinal)
+            .Select(x => x.Group);
 
         foreach (var group in byOutputGroup)
         {
             var outputName = group.Key;
 
             var parentFilter = includedGroups.Values
-                .FirstOrDefault(f => f.OutputName == outputName);
+                .FirstOrDefault(f => string.Equals(f.OutputName, outputName, StringComparison.Ordinal));
 
             var withNum = group
                 .Where(x => x.ExplicitNumber.HasValue)
@@ -453,17 +478,46 @@ public sealed class SnapshotBuilder(
 
             int? nextNum = parentFilter?.AutoNumStart;
             int? maxNum = parentFilter?.AutoNumEnd;
+            bool hasRange = nextNum.HasValue;
 
             foreach (var (_, channel, _, tvgIdOverride) in withoutNum)
             {
                 int? assignedNum = null;
+
                 if (nextNum.HasValue)
                 {
-                    assignedNum = nextNum;
-                    nextNum++;
-                    if (maxNum.HasValue && nextNum > maxNum)
-                        nextNum = null;
+                    // Skip numbers already claimed by pinned channels or earlier auto-assignments.
+                    while (nextNum.HasValue && assignedNumbers.Contains(nextNum.Value))
+                    {
+                        nextNum++;
+                        if (maxNum.HasValue && nextNum > maxNum)
+                        {
+                            nextNum = null;
+                            break;
+                        }
+                    }
+
+                    if (nextNum.HasValue)
+                    {
+                        assignedNum = nextNum.Value;
+                        assignedNumbers.Add(nextNum.Value);
+                        nextNum++;
+                        if (maxNum.HasValue && nextNum > maxNum)
+                            nextNum = null;
+                    }
                 }
+
+                // Range was configured but is exhausted — place in overflow rather than
+                // silently dropping the channel number.
+                if (assignedNum is null && hasRange)
+                {
+                    while (assignedNumbers.Contains(nextOverflow))
+                        nextOverflow++;
+                    assignedNum = nextOverflow;
+                    assignedNumbers.Add(nextOverflow);
+                    nextOverflow++;
+                }
+
                 result.Add(BuildEntry(channel, outputName, assignedNum, profileId, tvgIdOverride));
             }
         }

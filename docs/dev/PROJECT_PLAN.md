@@ -173,7 +173,7 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 - [ ] New channels inbox / review queue
 - [ ] Dynamic groups for rotating/event feeds
 - [ ] Provider switch assistance
-- [ ] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
+- [x] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
 
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:
