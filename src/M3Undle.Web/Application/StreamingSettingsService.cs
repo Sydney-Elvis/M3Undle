@@ -22,7 +22,7 @@ public sealed class StreamingSettingsService(
 {
     public async Task<StreamingSettingsState> GetSettingsAsync(CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings.AsNoTracking().FirstOrDefaultAsync(ct)
+        var settings = await db.SiteSettings.AsNoTracking().OrderBy(x => x.Id).FirstOrDefaultAsync(ct)
             ?? new SiteSettings { Id = 1 };
 
         return new StreamingSettingsState(
@@ -43,7 +43,7 @@ public sealed class StreamingSettingsService(
 
     public async Task<StreamingSettingsUpdateResult> UpdateAsync(UpdateStreamingSettingsCommand command, CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+        var settings = await db.SiteSettings.OrderBy(x => x.Id).FirstOrDefaultAsync(ct);
         if (settings is null)
         {
             settings = new SiteSettings { Id = 1 };
@@ -99,7 +99,7 @@ public sealed class StreamingSettingsService(
 
     public async Task ClearRestartRequiredAsync(CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+        var settings = await db.SiteSettings.OrderBy(x => x.Id).FirstOrDefaultAsync(ct);
         if (settings is null || !settings.StreamingSettingsRestartRequired)
             return;
 
@@ -189,7 +189,7 @@ public sealed class StreamProxyDbOptionsConfigurator(IServiceScopeFactory scopeF
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+        var settings = db.SiteSettings.AsNoTracking().OrderBy(x => x.Id).FirstOrDefault();
         if (settings is null)
             return;
 
@@ -206,7 +206,7 @@ public sealed class BufferDbOptionsConfigurator(IServiceScopeFactory scopeFactor
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+        var settings = db.SiteSettings.AsNoTracking().OrderBy(x => x.Id).FirstOrDefault();
         if (settings is null)
             return;
 
@@ -222,7 +222,7 @@ public sealed class ReconnectDbOptionsConfigurator(IServiceScopeFactory scopeFac
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+        var settings = db.SiteSettings.AsNoTracking().OrderBy(x => x.Id).FirstOrDefault();
         if (settings is null)
             return;
 
