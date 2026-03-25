@@ -6,7 +6,7 @@ public sealed class HdHomeRunOptions
     public bool DiscoveryEnabled { get; set; }
     public bool SsdpEnabled { get; set; } = true;
     public bool SiliconDustDiscoveryEnabled { get; set; } = true;
-    public int TunerCount { get; set; } = 1;
+    public int TunerCount { get; set; } = 4;
     public string FriendlyName { get; set; } = "M3Undle HDHomeRun";
     public string ModelNumber { get; set; } = "HDHR3-US";
     public string FirmwareName { get; set; } = "hdhomerun_atsc";
