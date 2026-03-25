@@ -14,6 +14,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using M3Undle.Web.Tests.TestSupport;
 
 namespace M3Undle.Web.Tests.HdHomeRun;
 
@@ -266,7 +267,7 @@ public sealed class HdHomeRunEndpointTests
                 if (dbDescriptor != null)
                     services.Remove(dbDescriptor);
                 services.AddDbContext<ApplicationDbContext>(options =>
-                    options.UseSqlite($"Data Source={Path.Combine(_tempDataDir, "m3undle.db")}")
+                    options.UseSqlite(WebApplicationFactoryTestCleanup.CreateSqliteConnectionString(_tempDataDir))
                            .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning)));
 
                 services.RemoveAll<IAccessResolver>();
@@ -277,13 +278,10 @@ public sealed class HdHomeRunEndpointTests
             });
         }
 
-        public new async ValueTask DisposeAsync()
+        public override async ValueTask DisposeAsync()
         {
-            Dispose();
-            await Task.CompletedTask;
-
-            if (Directory.Exists(_tempDataDir))
-                Directory.Delete(_tempDataDir, recursive: true);
+            await base.DisposeAsync();
+            await WebApplicationFactoryTestCleanup.DeleteDirectoryWhenUnlockedAsync(_tempDataDir);
         }
     }
 

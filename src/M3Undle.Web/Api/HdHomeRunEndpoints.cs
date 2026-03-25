@@ -8,6 +8,8 @@ namespace M3Undle.Web.Api;
 
 public static class HdHomeRunEndpoints
 {
+    private const string HdhrEventType = "HDHR";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = null,
@@ -44,10 +46,14 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> ServeDiscoverAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
+
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
 
         var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
         var baseUrl = deviceService.ResolveBaseUrl(context).TrimEnd('/');
@@ -65,6 +71,14 @@ public static class HdHomeRunEndpoints
             LineupURL: $"{hdhrBaseUrl}/lineup.json".ApplyClientAccessQuery(context),
             TunerCount: device.TunerCount);
 
+        logger.LogInformation(
+            "HDHomeRun discover.json served to {Client}. path={Path} deviceId={DeviceId} tunerCount={TunerCount} baseUrl={BaseUrl}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/discover.json",
+            device.DeviceId,
+            device.TunerCount,
+            hdhrBaseUrl);
+
         return TypedResults.Json(payload, JsonOptions);
     }
 
@@ -73,10 +87,37 @@ public static class HdHomeRunEndpoints
         HdHomeRunDeviceService deviceService,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var lineupResult = await TryBuildLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
-        return lineupResult;
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
+
+        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
+        if (!lineupResult.Succeeded)
+        {
+            logger.LogWarning(
+                "HDHomeRun lineup.json unavailable for {Client}. path={Path}",
+                DescribeClient(context),
+                context.Request.Path.Value ?? "/hdhr/lineup.json");
+            return lineupResult.ErrorResult!;
+        }
+
+        var payload = lineupResult.Lineup!.Channels
+            .Select(x => new LineupChannelResponse(
+                GuideNumber: x.GuideNumber,
+                GuideName: x.GuideName,
+                URL: x.Url))
+            .ToList();
+
+        logger.LogInformation(
+            "HDHomeRun lineup.json served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/lineup.json",
+            lineupResult.Lineup.SnapshotId,
+            payload.Count);
+
+        return TypedResults.Json(payload, JsonOptions);
     }
 
     private static async Task<IResult> ServeLineupXmlAsync(
@@ -84,14 +125,24 @@ public static class HdHomeRunEndpoints
         HdHomeRunDeviceService deviceService,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
 
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
+
         var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
         if (!lineupResult.Succeeded)
+        {
+            logger.LogWarning(
+                "HDHomeRun lineup.xml unavailable for {Client}. path={Path}",
+                DescribeClient(context),
+                context.Request.Path.Value ?? "/hdhr/lineup.xml");
             return lineupResult.ErrorResult!;
+        }
 
         var lineup = lineupResult.Lineup!;
 
@@ -120,6 +171,13 @@ public static class HdHomeRunEndpoints
             writer.WriteEndDocument();
         }
 
+        logger.LogInformation(
+            "HDHomeRun lineup.xml served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/lineup.xml",
+            lineup.SnapshotId,
+            lineup.Channels.Count);
+
         return TypedResults.Bytes(ms.ToArray(), "application/xml; charset=utf-8");
     }
 
@@ -128,14 +186,24 @@ public static class HdHomeRunEndpoints
         HdHomeRunDeviceService deviceService,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
 
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
+
         var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
         if (!lineupResult.Succeeded)
+        {
+            logger.LogWarning(
+                "HDHomeRun lineup.m3u unavailable for {Client}. path={Path}",
+                DescribeClient(context),
+                context.Request.Path.Value ?? "/hdhr/lineup.m3u");
             return lineupResult.ErrorResult!;
+        }
 
         var lineup = lineupResult.Lineup!;
 
@@ -155,6 +223,13 @@ public static class HdHomeRunEndpoints
             sb.Append(channel.Url).Append('\n');
         }
 
+        logger.LogInformation(
+            "HDHomeRun lineup.m3u served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/lineup.m3u",
+            lineup.SnapshotId,
+            lineup.Channels.Count);
+
         return TypedResults.Text(sb.ToString(), "application/x-mpegurl; charset=utf-8");
     }
 
@@ -163,10 +238,14 @@ public static class HdHomeRunEndpoints
         HdHomeRunDeviceService deviceService,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
+
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
 
         var channelCount = 0;
         var status = "No active snapshot";
@@ -190,13 +269,31 @@ public static class HdHomeRunEndpoints
             Status: status,
             ChannelCount: channelCount);
 
+        logger.LogInformation(
+            "HDHomeRun lineup_status.json served to {Client}. path={Path} status={Status} channels={ChannelCount}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/lineup_status.json",
+            status,
+            channelCount);
+
         return TypedResults.Json(payload, JsonOptions);
     }
 
-    private static IResult ServeLineupPost(HdHomeRunDeviceService deviceService)
+    private static IResult ServeLineupPost(
+        HttpContext context,
+        HdHomeRunDeviceService deviceService,
+        ILoggerFactory loggerFactory)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
+
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
+        logger.LogInformation(
+            "HDHomeRun lineup.post acknowledged for {Client}. path={Path} method={Method}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/lineup.post",
+            context.Request.Method);
 
         return TypedResults.Text("OK", "text/plain; charset=utf-8");
     }
@@ -204,10 +301,14 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> ServeDeviceXmlAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
+
+        var logger = CreateLogger(loggerFactory);
+        using var scope = BeginHdhrScope(logger);
 
         var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
         var baseUrl = deviceService.ResolveBaseUrl(context).TrimEnd('/');
@@ -246,28 +347,13 @@ public static class HdHomeRunEndpoints
             writer.WriteEndDocument();
         }
 
+        logger.LogInformation(
+            "HDHomeRun device.xml served to {Client}. path={Path} deviceId={DeviceId}",
+            DescribeClient(context),
+            context.Request.Path.Value ?? "/hdhr/device.xml",
+            device.DeviceId);
+
         return TypedResults.Bytes(ms.ToArray(), "application/xml; charset=utf-8");
-    }
-
-    private static async Task<IResult> TryBuildLineupAsync(
-        HttpContext context,
-        HdHomeRunDeviceService deviceService,
-        ILineupRenderer lineupRenderer,
-        HdHomeRunLineupService lineupService,
-        CancellationToken cancellationToken)
-    {
-        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
-        if (!lineupResult.Succeeded)
-            return lineupResult.ErrorResult!;
-
-        var payload = lineupResult.Lineup!.Channels
-            .Select(x => new LineupChannelResponse(
-                GuideNumber: x.GuideNumber,
-                GuideName: x.GuideName,
-                URL: x.Url))
-            .ToList();
-
-        return TypedResults.Json(payload, JsonOptions);
     }
 
     private static async Task<LineupBuildResult> TryBuildHdhrLineupAsync(
@@ -340,4 +426,13 @@ public static class HdHomeRunEndpoints
 
         public static LineupBuildResult Failure(IResult error) => new(null, error);
     }
+
+    private static ILogger CreateLogger(ILoggerFactory loggerFactory)
+        => loggerFactory.CreateLogger($"{typeof(HdHomeRunEndpoints).FullName}.Access");
+
+    private static IDisposable? BeginHdhrScope(ILogger logger)
+        => logger.BeginScope(new Dictionary<string, object> { ["EventType"] = HdhrEventType });
+
+    private static string DescribeClient(HttpContext context)
+        => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 }
