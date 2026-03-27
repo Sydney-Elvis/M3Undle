@@ -68,7 +68,10 @@ public sealed class M3uSerializer : IM3USerializer
         string url;
         if (routeSegment == "live")
         {
-            url = $"{baseUrl}/{routeSegment}/{channel.StreamKey}";
+            var liveTail = BuildLivePlaybackTail(channel.StreamUrl);
+            url = string.IsNullOrWhiteSpace(liveTail)
+                ? $"{baseUrl}/{routeSegment}/{channel.StreamKey}"
+                : $"{baseUrl}/{routeSegment}/{channel.StreamKey}/{Uri.EscapeDataString(liveTail)}";
             return url.ApplyClientAccessQuery(context);
         }
 
@@ -96,6 +99,66 @@ public sealed class M3uSerializer : IM3USerializer
 
         var fallback = streamUrl.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
         return string.IsNullOrWhiteSpace(fallback) ? null : fallback;
+    }
+
+    private static string? BuildLivePlaybackTail(string? streamUrl)
+    {
+        var upstreamTail = GetUpstreamTailSegment(streamUrl);
+
+        // Preserve HLS-looking tails so browser clients can still negotiate HLS.
+        if (IsLikelyHlsStream(streamUrl))
+            return upstreamTail;
+
+        if (string.IsNullOrWhiteSpace(upstreamTail))
+            return "stream.ts";
+
+        if (upstreamTail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase))
+            return upstreamTail;
+
+        if (upstreamTail.Contains('.'))
+            return "stream.ts";
+
+        return upstreamTail + ".ts";
+    }
+
+    private static bool IsLikelyHlsStream(string? streamUrl)
+    {
+        if (string.IsNullOrWhiteSpace(streamUrl))
+            return false;
+
+        if (!Uri.TryCreate(streamUrl, UriKind.Absolute, out var uri))
+            return streamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+
+        if (uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(uri.Query))
+            return false;
+
+        var query = uri.Query.AsSpan().TrimStart('?').ToString();
+        foreach (var pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = pair.Split('=', 2);
+            if (kv.Length == 0)
+                continue;
+
+            var key = Uri.UnescapeDataString(kv[0]);
+            if (!string.Equals(key, "type", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(key, "output", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(key, "format", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : string.Empty;
+            if (value.Contains("m3u8", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("hls", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string GetBaseUrl(HttpContext context)
