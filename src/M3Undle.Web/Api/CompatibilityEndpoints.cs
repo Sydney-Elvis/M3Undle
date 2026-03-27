@@ -369,17 +369,19 @@ public static class CompatibilityEndpoints
 
         if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
-            // Only attempt HLS delivery when the client can consume it.
-            // A .ts tail from a non-browser client means a native app explicitly requesting raw TS bytes.
-            // HDHR/tune routes are NOT excluded — modern HDHR clients (NextPVR v5+, Plex, Channels DVR)
-            // support HLS natively. Forcing raw TS for HLS upstreams caused clients to receive manifest
-            // text instead of video. HLS detection runs for all routes; if unavailable, falls through
-            // to the raw TS session.
-            // Browser-based apps (IPTVnator, Electron) send Mozilla UA and need HLS.
+            // Skip HLS manifest delivery when the client needs raw TS bytes:
+            // 1. Native HDHR tuner paths (/tuner{n}/v{ch}, /tuner{n}/ch{ch}, etc.) — real HDHomeRun
+            //    devices always serve raw MPEG-TS. Returning an HLS manifest breaks clients like
+            //    NextPVR that expect the native tuner protocol contract.
+            // 2. A .ts tail from a non-browser client means a native app explicitly requesting raw TS.
+            // For all other routes (including /tune/ and /hdhr/tune/), HLS detection runs normally;
+            // browser-based apps (IPTVnator, Electron) send Mozilla UA and need HLS.
+            var isNativeTunerRoute = IsNativeHdhrTunerPath(context.Request.Path);
             var tail = context.Request.RouteValues.TryGetValue("tail", out var tailVal)
                 ? tailVal?.ToString() ?? string.Empty
                 : string.Empty;
-            var isNativeClientRoute = !IsBrowserClient(context) && tail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
+            var isNativeClientRoute = isNativeTunerRoute
+                || (!IsBrowserClient(context) && tail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase));
 
             if (!isNativeClientRoute)
             {

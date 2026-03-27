@@ -5,7 +5,8 @@ namespace M3Undle.Web.Security;
 
 internal sealed class ClientEndpointAccessFilter(
     IAccessResolver accessResolver,
-    IOptions<ClientEndpointAccessOptions> options)
+    IOptions<ClientEndpointAccessOptions> options,
+    ILogger<ClientEndpointAccessFilter> logger)
     : IEndpointFilter
 {
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
@@ -14,7 +15,15 @@ internal sealed class ClientEndpointAccessFilter(
         var resolved = await accessResolver.ResolveAsync(http, http.RequestAborted);
 
         if (!resolved.IsSuccess)
+        {
+            logger.LogWarning(
+                "Client endpoint access denied. path={Path} method={Method} reason={Reason} client={Client}",
+                http.Request.Path.Value,
+                http.Request.Method,
+                resolved.FailureReason,
+                http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
             return BuildFailureResult(http, resolved.FailureReason, options.Value.Realm);
+        }
 
         http.SetResolvedClientAccess(resolved.Access!);
         return await next(context);

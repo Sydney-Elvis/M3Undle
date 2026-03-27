@@ -282,7 +282,8 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 // Don't redirect API errors through Blazor's /not-found page — preserve the real status code.
 app.Use(static async (ctx, next) =>
 {
-    if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+    if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+        || IsClientDeliveryPath(ctx.Request.Path))
     {
         var feature = ctx.Features.Get<IStatusCodePagesFeature>();
         if (feature is not null) feature.Enabled = false;
@@ -349,6 +350,29 @@ static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptio
 
     context.Response.Redirect(context.RedirectUri);
     return Task.CompletedTask;
+}
+
+static bool IsClientDeliveryPath(PathString path)
+{
+    // Preserve original status codes for machine-facing client endpoints (HDHR, stream, playlist, guide).
+    return path.StartsWithSegments("/hdhr", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/tuner", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/stream", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/live", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/movie", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/vod", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/series", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/hls", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/m3u", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/xmltv", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/discover.json", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.json", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.xml", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.m3u", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup_status.json", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.post", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/device.xml", StringComparison.OrdinalIgnoreCase);
 }
 
 static void EnsureWebRootExists()
