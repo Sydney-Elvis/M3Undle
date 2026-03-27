@@ -1,3 +1,4 @@
+using M3Undle.Core;
 using M3Undle.Core.M3u;
 using Microsoft.AspNetCore.Diagnostics;
 using M3Undle.Web.Api;
@@ -248,6 +249,13 @@ builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSe
 builder.Services.AddMudServices();
 
 var app = builder.Build();
+var buildInfo = AppBuildInfo.ForEntryAssembly();
+
+app.Logger.LogInformation(
+    "Starting M3Undle {Version} (BuildDateUtc={BuildDateUtc}, BuildNumber={BuildNumber})",
+    buildInfo.Version,
+    buildInfo.BuildDateUtc ?? "unknown",
+    buildInfo.BuildNumber ?? "n/a");
 
 using (var scope = app.Services.CreateScope())
 {

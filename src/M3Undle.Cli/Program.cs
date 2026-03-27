@@ -1,12 +1,13 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 using M3Undle.Cli;
+using M3Undle.Core;
 
 // Check for --version or -v before running the app
 if (args.Length == 1 && (args[0] == "--version" || args[0] == "-v"))
 {
-    var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown";
-    Console.WriteLine($"bndl version {version}");
+    var buildInfo = AppBuildInfo.ForEntryAssembly();
+    Console.WriteLine($"bndl version {buildInfo.ToDisplayString()}");
     return 0;
 }
 
