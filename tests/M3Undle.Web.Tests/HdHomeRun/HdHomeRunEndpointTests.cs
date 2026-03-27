@@ -220,6 +220,29 @@ public sealed class HdHomeRunEndpointTests
     }
 
     [TestMethod]
+    public async Task Endpoint_NativeTunerRoutes_AreMapped()
+    {
+        await using var factory = new HdhrApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var routes = new[]
+        {
+            "/tuner0/v11",
+            "/tuner1/ch1000",
+            "/tuner0/auto/v11",
+        };
+
+        foreach (var route in routes)
+        {
+            using var response = await client.GetAsync(route);
+            Assert.AreNotEqual(HttpStatusCode.NotFound, response.StatusCode, $"Expected mapped route for {route}");
+        }
+    }
+
+    [TestMethod]
     public async Task Endpoint_LegacyAliases_ReturnSameStatusAsHdhrRoutes()
     {
         // Checklist: Legacy aliases behave the same as /hdhr/*.

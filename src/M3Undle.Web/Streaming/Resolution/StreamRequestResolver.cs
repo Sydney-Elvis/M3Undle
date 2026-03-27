@@ -113,12 +113,22 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
         if (path.StartsWithSegments("/live", StringComparison.OrdinalIgnoreCase)
             || path.StartsWithSegments("/stream", StringComparison.OrdinalIgnoreCase)
             || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
-            || path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase))
+            || path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase)
+            || IsNativeHdhrTunerPath(path))
         {
             return StreamRouteMode.SharedLiveSession;
         }
 
         return StreamRouteMode.DirectRelay;
+    }
+
+    private static bool IsNativeHdhrTunerPath(PathString path)
+    {
+        var value = path.Value;
+        return !string.IsNullOrWhiteSpace(value)
+               && value.StartsWith("/tuner", StringComparison.OrdinalIgnoreCase)
+               && value.Length > "/tuner".Length
+               && char.IsDigit(value["/tuner".Length]);
     }
 
     private sealed record ProviderChannelLookup(string ProviderId, string ProviderChannelId, string StreamUrl);

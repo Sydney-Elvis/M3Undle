@@ -25,6 +25,42 @@ public sealed class HdHomeRunLineupService
         CancellationToken cancellationToken)
     {
         var channels = new List<HdHomeRunLineupEntry>();
+        foreach (var resolved in EnumerateResolvedLiveChannels(lineup, cancellationToken))
+        {
+            channels.Add(new HdHomeRunLineupEntry(
+                ChannelId: resolved.Channel.StreamKey,
+                GuideNumber: resolved.GuideNumber,
+                GuideName: resolved.GuideName,
+                Url: $"{baseUrl}/hdhr/tune/{resolved.Channel.StreamKey}".ApplyClientAccessQuery(context),
+                TvgId: resolved.Channel.TvgId,
+                LogoUrl: resolved.Channel.LogoUrl));
+        }
+
+        return new HdHomeRunLineupResult(lineup.SnapshotId, lineup.SnapshotCreatedUtc, channels);
+    }
+
+    public string? TryResolveStreamKeyByGuideNumber(
+        RenderedLineup lineup,
+        string guideNumber,
+        CancellationToken cancellationToken)
+    {
+        var normalizedGuideNumber = guideNumber.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedGuideNumber))
+            return null;
+
+        foreach (var resolved in EnumerateResolvedLiveChannels(lineup, cancellationToken))
+        {
+            if (string.Equals(resolved.GuideNumber, normalizedGuideNumber, StringComparison.Ordinal))
+                return resolved.Channel.StreamKey;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<ResolvedLiveChannel> EnumerateResolvedLiveChannels(
+        RenderedLineup lineup,
+        CancellationToken cancellationToken)
+    {
         var fallbackGuideNumber = 1000;
 
         foreach (var channel in lineup.Channels)
@@ -42,15 +78,9 @@ public sealed class HdHomeRunLineupService
                 ? channel.DisplayName
                 : channel.TvgName;
 
-            channels.Add(new HdHomeRunLineupEntry(
-                ChannelId: channel.StreamKey,
-                GuideNumber: guideNumber,
-                GuideName: guideName,
-                Url: $"{baseUrl}/hdhr/tune/{channel.StreamKey}".ApplyClientAccessQuery(context),
-                TvgId: channel.TvgId,
-                LogoUrl: channel.LogoUrl));
+            yield return new ResolvedLiveChannel(channel, guideNumber, guideName);
         }
-
-        return new HdHomeRunLineupResult(lineup.SnapshotId, lineup.SnapshotCreatedUtc, channels);
     }
+
+    private sealed record ResolvedLiveChannel(RenderedLineupChannel Channel, string GuideNumber, string GuideName);
 }
