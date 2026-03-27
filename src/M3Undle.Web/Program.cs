@@ -1,3 +1,4 @@
+using M3Undle.Core;
 using M3Undle.Core.M3u;
 using Microsoft.AspNetCore.Diagnostics;
 using M3Undle.Web.Api;
@@ -248,10 +249,18 @@ builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSe
 builder.Services.AddMudServices();
 
 var app = builder.Build();
+var buildInfo = AppBuildInfo.ForEntryAssembly();
+
+app.Logger.LogInformation(
+    "Starting M3Undle {Version} (BuildDateUtc={BuildDateUtc}, BuildNumber={BuildNumber})",
+    buildInfo.Version,
+    buildInfo.BuildDateUtc ?? "unknown",
+    buildInfo.BuildNumber ?? "n/a");
 
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    await RepairAlpha4MigrationHistoryAsync(db);
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 
@@ -281,7 +290,8 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 // Don't redirect API errors through Blazor's /not-found page — preserve the real status code.
 app.Use(static async (ctx, next) =>
 {
-    if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+    if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase)
+        || IsClientDeliveryPath(ctx.Request.Path))
     {
         var feature = ctx.Features.Get<IStatusCodePagesFeature>();
         if (feature is not null) feature.Enabled = false;
@@ -350,6 +360,29 @@ static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptio
     return Task.CompletedTask;
 }
 
+static bool IsClientDeliveryPath(PathString path)
+{
+    // Preserve original status codes for machine-facing client endpoints (HDHR, stream, playlist, guide).
+    return path.StartsWithSegments("/hdhr", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/tuner", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/stream", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/live", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/movie", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/vod", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/series", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/hls", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/m3u", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/xmltv", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/discover.json", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.json", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.xml", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.m3u", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup_status.json", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/lineup.post", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/device.xml", StringComparison.OrdinalIgnoreCase);
+}
+
 static void EnsureWebRootExists()
 {
     var candidateRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -376,6 +409,60 @@ static void EnsureWebRootExists()
             // a real error if no usable web root can be established.
         }
     }
+}
+
+// Repairs __EFMigrationsHistory when upgrading from alpha.4 databases that had four individual
+// migrations before they were consolidated into a single Alpha4_Schema migration.
+static async Task RepairAlpha4MigrationHistoryAsync(ApplicationDbContext db)
+{
+    var conn = db.Database.GetDbConnection();
+    if (conn.State != System.Data.ConnectionState.Open)
+        await conn.OpenAsync();
+
+    await using var checkTable = conn.CreateCommand();
+    checkTable.CommandText =
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='__EFMigrationsHistory'";
+    if ((long)(await checkTable.ExecuteScalarAsync())! == 0)
+        return;
+
+    await using var check = conn.CreateCommand();
+    check.CommandText =
+        "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" IN (" +
+        "'20260314145015_Alpha4_StreamingSettings'," +
+        "'20260314152455_Alpha4_ProviderStreamLimits'," +
+        "'20260316121421_Alpha4_EpgSources'," +
+        "'20260317120000_Alpha4_StreamSettingsUi')";
+    if ((long)(await check.ExecuteScalarAsync())! == 0)
+        return;
+
+    await using var tx = await conn.BeginTransactionAsync();
+
+    await using var del = conn.CreateCommand();
+    del.Transaction = tx;
+    del.CommandText =
+        "DELETE FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" IN (" +
+        "'20260314145015_Alpha4_StreamingSettings'," +
+        "'20260314152455_Alpha4_ProviderStreamLimits'," +
+        "'20260316121421_Alpha4_EpgSources'," +
+        "'20260317120000_Alpha4_StreamSettingsUi')";
+    await del.ExecuteNonQueryAsync();
+
+    await using var ins = conn.CreateCommand();
+    ins.Transaction = tx;
+    ins.CommandText =
+        "INSERT OR IGNORE INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") " +
+        "VALUES (@id, @ver)";
+    var pId = ins.CreateParameter();
+    pId.ParameterName = "@id";
+    pId.Value = "20260314145015_Alpha4_Schema";
+    ins.Parameters.Add(pId);
+    var pVer = ins.CreateParameter();
+    pVer.ParameterName = "@ver";
+    pVer.Value = "10.0.0";
+    ins.Parameters.Add(pVer);
+    await ins.ExecuteNonQueryAsync();
+
+    await tx.CommitAsync();
 }
 
 sealed class SqliteConnectionInterceptor : DbConnectionInterceptor

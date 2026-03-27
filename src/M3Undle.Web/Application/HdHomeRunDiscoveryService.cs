@@ -11,6 +11,7 @@ public sealed class HdHomeRunDiscoveryService(
     ILogger<HdHomeRunDiscoveryService> logger)
     : BackgroundService
 {
+    private const string HdhrEventType = "HDHR";
     private const int SsdpPort = 1900;
     private const string SsdpMulticastAddress = "239.255.255.250";
     private const int DiscoverPort = 65001;
@@ -36,6 +37,8 @@ public sealed class HdHomeRunDiscoveryService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = HdhrEventType });
+
         if (!deviceService.IsEnabled)
         {
             logger.LogInformation("HDHomeRun discovery not started because HDHomeRun endpoints are disabled.");
@@ -92,9 +95,17 @@ public sealed class HdHomeRunDiscoveryService(
                     ? SsdpMediaServerType
                     : searchTarget;
 
-                var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, $"{baseUrl.TrimEnd('/')}/hdhr");
+                var hdhrBaseUrl = $"{baseUrl.TrimEnd('/')}/hdhr";
+                var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, hdhrBaseUrl);
                 var bytes = Encoding.ASCII.GetBytes(response);
                 await udp.SendAsync(bytes, result.RemoteEndPoint, cancellationToken);
+
+                logger.LogInformation(
+                    "HDHomeRun SSDP discovery response sent to {RemoteEndPoint}. st={SearchTarget} deviceId={DeviceId} location={Location}",
+                    result.RemoteEndPoint,
+                    effectiveSearchTarget,
+                    device.DeviceId,
+                    $"{hdhrBaseUrl}/device.xml");
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -143,6 +154,13 @@ public sealed class HdHomeRunDiscoveryService(
                     lineupUrl);
 
                 await udp.SendAsync(packet, result.RemoteEndPoint, cancellationToken);
+
+                logger.LogInformation(
+                    "HDHomeRun SiliconDust discovery response sent to {RemoteEndPoint}. deviceId={DeviceId} tunerCount={TunerCount} lineupUrl={LineupUrl}",
+                    result.RemoteEndPoint,
+                    device.DeviceId,
+                    device.TunerCount,
+                    lineupUrl);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
