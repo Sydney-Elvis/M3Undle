@@ -172,6 +172,54 @@ public sealed class HdHomeRunEndpointTests
     }
 
     [TestMethod]
+    public async Task Endpoint_AutoTuneRoutes_RedirectToTuneUrl()
+    {
+        // Checklist: /hdhr/auto routes resolve guide numbers and redirect to /hdhr/tune/{streamKey}.
+        await using var factory = new HdhrApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var routeCases = new (string RequestPath, string ExpectedTunePath)[]
+        {
+            ("/hdhr/auto/v11", "/hdhr/tune/live-1"),
+            ("/hdhr/auto/ch11", "/hdhr/tune/live-1"),
+            ("/hdhr/auto/11", "/hdhr/tune/live-1"),
+            ("/hdhr/auto/v1000", "/hdhr/tune/live-2"),
+            ("/hdhr/auto/ch1000", "/hdhr/tune/live-2"),
+            ("/auto/v11", "/hdhr/tune/live-1"),
+        };
+
+        foreach (var (requestPath, expectedTunePath) in routeCases)
+        {
+            using var response = await client.GetAsync(requestPath);
+
+            Assert.AreEqual(HttpStatusCode.Redirect, response.StatusCode, $"Unexpected status for {requestPath}");
+            Assert.IsNotNull(response.Headers.Location, $"Missing Location header for {requestPath}");
+
+            var location = response.Headers.Location!;
+            var locationValue = location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
+            Assert.IsTrue(
+                locationValue.StartsWith(expectedTunePath, StringComparison.Ordinal),
+                $"Unexpected redirect location for {requestPath}: {locationValue}");
+        }
+    }
+
+    [TestMethod]
+    public async Task Endpoint_AutoTuneRoute_UnknownGuideNumber_ReturnsNotFound()
+    {
+        await using var factory = new HdhrApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        using var response = await client.GetAsync("/hdhr/auto/v9999");
+        Assert.AreEqual(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [TestMethod]
     public async Task Endpoint_LegacyAliases_ReturnSameStatusAsHdhrRoutes()
     {
         // Checklist: Legacy aliases behave the same as /hdhr/*.
