@@ -233,6 +233,8 @@ public sealed class HdHomeRunEndpointTests
             "/tuner0/v11",
             "/tuner1/ch1000",
             "/tuner0/auto/v11",
+            "/tuner0/auto/ch11",
+            "/tuner0/auto/11",
         };
 
         foreach (var route in routes)

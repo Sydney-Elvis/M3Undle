@@ -49,6 +49,8 @@ public static class CompatibilityEndpoints
         client.MapGet("tuner{tuner:int}/v{vchannel}", ServeHdhrNativeTuneByVChannelAsync);
         client.MapGet("tuner{tuner:int}/ch{channel}", ServeHdhrNativeTuneByChannelAsync);
         client.MapGet("tuner{tuner:int}/auto/v{vchannel}", ServeHdhrNativeTuneByVChannelAsync);
+        client.MapGet("tuner{tuner:int}/auto/ch{channel}", ServeHdhrNativeTuneByChannelAsync);
+        client.MapGet("tuner{tuner:int}/auto/{channel}", ServeHdhrNativeTuneByChannelAsync);
         client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
@@ -219,8 +221,13 @@ public static class CompatibilityEndpoints
         IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
     {
+        var logger = loggerFactory.CreateLogger("M3Undle.Stream");
         if (tuner < 0)
         {
+            logger.LogWarning(
+                "HDHR native tuner request rejected: invalid tuner index. path={Path} tuner={Tuner}",
+                context.Request.Path.Value,
+                tuner);
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }
@@ -228,6 +235,10 @@ public static class CompatibilityEndpoints
         requestedGuideNumber = requestedGuideNumber.Trim();
         if (string.IsNullOrWhiteSpace(requestedGuideNumber))
         {
+            logger.LogWarning(
+                "HDHR native tuner request rejected: empty guide number. path={Path} tuner={Tuner}",
+                context.Request.Path.Value,
+                tuner);
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
         }
@@ -239,6 +250,12 @@ public static class CompatibilityEndpoints
             var renderedLineup = await lineupRenderer.TryRenderActiveLineupAsync(access.Binding.ActiveProfileId, cancellationToken);
             if (renderedLineup is null)
             {
+                logger.LogWarning(
+                    "HDHR native tuner request failed: no active snapshot. path={Path} tuner={Tuner} guide={GuideNumber} profile={ProfileId}",
+                    context.Request.Path.Value,
+                    tuner,
+                    requestedGuideNumber,
+                    access.Binding.ActiveProfileId);
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 context.Response.Headers.Append("Retry-After", "60");
                 await context.Response.WriteAsync("No active snapshot available. Waiting for first refresh.", cancellationToken);
@@ -248,14 +265,32 @@ public static class CompatibilityEndpoints
             var resolvedStreamKey = hdHomeRunLineupService.TryResolveStreamKeyByGuideNumber(renderedLineup, requestedGuideNumber, cancellationToken);
             if (string.IsNullOrWhiteSpace(resolvedStreamKey))
             {
+                logger.LogWarning(
+                    "HDHR native tuner request failed: guide number not found in active lineup. path={Path} tuner={Tuner} guide={GuideNumber} profile={ProfileId}",
+                    context.Request.Path.Value,
+                    tuner,
+                    requestedGuideNumber,
+                    access.Binding.ActiveProfileId);
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
 
             streamKey = resolvedStreamKey;
+            logger.LogInformation(
+                "HDHR native tuner request resolved. path={Path} tuner={Tuner} guide={GuideNumber} streamKey={StreamKey}",
+                context.Request.Path.Value,
+                tuner,
+                requestedGuideNumber,
+                streamKey);
         }
         catch (Exception ex) when (ex is IOException or JsonException)
         {
+            logger.LogWarning(
+                ex,
+                "HDHR native tuner request failed: active snapshot data unavailable. path={Path} tuner={Tuner} guide={GuideNumber}",
+                context.Request.Path.Value,
+                tuner,
+                requestedGuideNumber);
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             context.Response.Headers.Append("Retry-After", "30");
             await context.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
