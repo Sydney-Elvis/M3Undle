@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using M3Undle.Core.M3u;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
@@ -325,16 +326,18 @@ public sealed class SnapshotBuilder(
         await ChannelIndexStore.WriteAsync(channelIndexPath, channelIndexIdxPath, channelIndex, cancellationToken);
         await File.WriteAllTextAsync(xmltvPath, xmltvContent, Encoding.UTF8, cancellationToken);
 
-        int liveCount = 0, vodCount = 0, seriesCount = 0;
+        int liveCount = 0, vodCount = 0;
+        var seriesNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in channelIndex)
         {
             switch (LiveClassifier.ClassifyContent(e.StreamUrl))
             {
                 case "vod": vodCount++; break;
-                case "series": seriesCount++; break;
+                case "series": seriesNames.Add(ExtractSeriesName(e.DisplayName)); break;
                 default: liveCount++; break;
             }
         }
+        int seriesCount = seriesNames.Count;
 
         var snapshot = new Snapshot
         {
@@ -366,6 +369,15 @@ public sealed class SnapshotBuilder(
     }
 
     internal const int OverflowRangeStart = 9000;
+
+    private static readonly Regex SeriesNameRegex =
+        new(@"^(.*?)\s+[Ss](\d{1,2})[\s\-]*[Ee]?(\d+)", RegexOptions.Compiled);
+
+    private static string ExtractSeriesName(string displayName)
+    {
+        var m = SeriesNameRegex.Match(displayName);
+        return m.Success ? m.Groups[1].Value.Trim() : displayName;
+    }
 
     internal static List<ChannelIndexEntry> BuildChannelIndex(
         IReadOnlyList<ChannelBuildData> channels,
