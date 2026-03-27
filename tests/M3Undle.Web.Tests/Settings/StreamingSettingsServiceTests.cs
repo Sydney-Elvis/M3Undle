@@ -115,9 +115,13 @@ public sealed class StreamingSettingsServiceTests
 
         try
         {
-            var dbPath = Path.Combine(tempDir, "settings.db");
+            var connStr = new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(tempDir, "settings.db"),
+                Pooling = false,
+            }.ToString();
             var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-                .UseSqlite($"Data Source={dbPath}")
+                .UseSqlite(connStr)
                 .Options;
 
             await using (var setupDb = new ApplicationDbContext(options))

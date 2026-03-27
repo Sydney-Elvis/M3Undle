@@ -1,7 +1,6 @@
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Data;
 using M3Undle.Web.Streaming.Configuration;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using static M3Undle.Web.Streaming.Configuration.StreamingSettingsLimits;
@@ -23,118 +22,89 @@ public sealed class StreamingSettingsService(
 {
     public async Task<StreamingSettingsState> GetSettingsAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var settings = await db.SiteSettings.AsNoTracking().FirstOrDefaultAsync(ct)
-                ?? new SiteSettings { Id = 1 };
+        var settings = await db.SiteSettings.AsNoTracking().FirstOrDefaultAsync(ct)
+            ?? new SiteSettings { Id = 1 };
 
-            return new StreamingSettingsState(
-                Saved: Map(settings),
-                Applied: new StreamingSettingsSnapshot(
-                    StreamingEnabled: proxyOptions.Value.StreamingEnabled,
-                    MaxConcurrentSessions: proxyOptions.Value.MaxConcurrentSessions,
-                    IdleGraceSeconds: (int)Math.Round(proxyOptions.Value.IdleGrace.TotalSeconds),
-                    IdleGraceHardCapSeconds: (int)Math.Round(proxyOptions.Value.IdleGraceHardCap.TotalSeconds),
-                    BufferMaxBytesPerSession: bufferOptions.Value.MaxBytesPerSession,
-                    BufferMaxBytesHardCap: bufferOptions.Value.MaxBytesHardCap,
-                    BufferReadChunkSizeBytes: bufferOptions.Value.ReadChunkSizeBytes,
-                    ReconnectReadStallTimeoutSeconds: (int)Math.Round(reconnectOptions.Value.ReadStallTimeout.TotalSeconds),
-                    ReconnectOutageWindowSeconds: (int)Math.Round(reconnectOptions.Value.OutageWindow.TotalSeconds),
-                    ReconnectConnectTimeoutSeconds: (int)Math.Round(reconnectOptions.Value.ConnectTimeout.TotalSeconds)),
-                RestartRequired: settings.StreamingSettingsRestartRequired);
-        }
-        finally
-        {
-            ClearSqlitePool();
-        }
+        return new StreamingSettingsState(
+            Saved: Map(settings),
+            Applied: new StreamingSettingsSnapshot(
+                StreamingEnabled: proxyOptions.Value.StreamingEnabled,
+                MaxConcurrentSessions: proxyOptions.Value.MaxConcurrentSessions,
+                IdleGraceSeconds: (int)Math.Round(proxyOptions.Value.IdleGrace.TotalSeconds),
+                IdleGraceHardCapSeconds: (int)Math.Round(proxyOptions.Value.IdleGraceHardCap.TotalSeconds),
+                BufferMaxBytesPerSession: bufferOptions.Value.MaxBytesPerSession,
+                BufferMaxBytesHardCap: bufferOptions.Value.MaxBytesHardCap,
+                BufferReadChunkSizeBytes: bufferOptions.Value.ReadChunkSizeBytes,
+                ReconnectReadStallTimeoutSeconds: (int)Math.Round(reconnectOptions.Value.ReadStallTimeout.TotalSeconds),
+                ReconnectOutageWindowSeconds: (int)Math.Round(reconnectOptions.Value.OutageWindow.TotalSeconds),
+                ReconnectConnectTimeoutSeconds: (int)Math.Round(reconnectOptions.Value.ConnectTimeout.TotalSeconds)),
+            RestartRequired: settings.StreamingSettingsRestartRequired);
     }
 
     public async Task<StreamingSettingsUpdateResult> UpdateAsync(UpdateStreamingSettingsCommand command, CancellationToken ct = default)
     {
-        try
+        var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+        if (settings is null)
         {
-            var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
-            if (settings is null)
-            {
-                settings = new SiteSettings { Id = 1 };
-                db.SiteSettings.Add(settings);
-            }
+            settings = new SiteSettings { Id = 1 };
+            db.SiteSettings.Add(settings);
+        }
 
-            var errors = Validate(command).ToArray();
-            if (errors.Length > 0)
-            {
-                return new StreamingSettingsUpdateResult(
-                    Succeeded: false,
-                    Error: string.Join(" ", errors),
-                    Settings: Map(settings),
-                    RestartRequired: settings.StreamingSettingsRestartRequired,
-                    Changed: false);
-            }
-
-            var changed =
-                settings.StreamingEnabled != command.StreamingEnabled ||
-                settings.StreamMaxConcurrentSessions != command.MaxConcurrentSessions ||
-                settings.StreamIdleGraceSeconds != command.IdleGraceSeconds ||
-                settings.StreamIdleGraceHardCapSeconds != command.IdleGraceHardCapSeconds ||
-                settings.StreamBufferMaxBytesPerSession != command.BufferMaxBytesPerSession ||
-                settings.StreamBufferMaxBytesHardCap != command.BufferMaxBytesHardCap ||
-                settings.StreamBufferReadChunkSizeBytes != command.BufferReadChunkSizeBytes ||
-                settings.StreamReconnectReadStallTimeoutSeconds != command.ReconnectReadStallTimeoutSeconds ||
-                settings.StreamReconnectOutageWindowSeconds != command.ReconnectOutageWindowSeconds ||
-                settings.StreamReconnectConnectTimeoutSeconds != command.ReconnectConnectTimeoutSeconds;
-
-            settings.StreamingEnabled = command.StreamingEnabled;
-            settings.StreamMaxConcurrentSessions = command.MaxConcurrentSessions;
-            settings.StreamIdleGraceSeconds = command.IdleGraceSeconds;
-            settings.StreamIdleGraceHardCapSeconds = command.IdleGraceHardCapSeconds;
-            settings.StreamBufferMaxBytesPerSession = command.BufferMaxBytesPerSession;
-            settings.StreamBufferMaxBytesHardCap = command.BufferMaxBytesHardCap;
-            settings.StreamBufferReadChunkSizeBytes = command.BufferReadChunkSizeBytes;
-            settings.StreamReconnectReadStallTimeoutSeconds = command.ReconnectReadStallTimeoutSeconds;
-            settings.StreamReconnectOutageWindowSeconds = command.ReconnectOutageWindowSeconds;
-            settings.StreamReconnectConnectTimeoutSeconds = command.ReconnectConnectTimeoutSeconds;
-
-            if (changed)
-                settings.StreamingSettingsRestartRequired = true;
-
-            await db.SaveChangesAsync(ct);
-
+        var errors = Validate(command).ToArray();
+        if (errors.Length > 0)
+        {
             return new StreamingSettingsUpdateResult(
-                Succeeded: true,
-                Error: null,
+                Succeeded: false,
+                Error: string.Join(" ", errors),
                 Settings: Map(settings),
                 RestartRequired: settings.StreamingSettingsRestartRequired,
-                Changed: changed);
+                Changed: false);
         }
-        finally
-        {
-            ClearSqlitePool();
-        }
+
+        var changed =
+            settings.StreamingEnabled != command.StreamingEnabled ||
+            settings.StreamMaxConcurrentSessions != command.MaxConcurrentSessions ||
+            settings.StreamIdleGraceSeconds != command.IdleGraceSeconds ||
+            settings.StreamIdleGraceHardCapSeconds != command.IdleGraceHardCapSeconds ||
+            settings.StreamBufferMaxBytesPerSession != command.BufferMaxBytesPerSession ||
+            settings.StreamBufferMaxBytesHardCap != command.BufferMaxBytesHardCap ||
+            settings.StreamBufferReadChunkSizeBytes != command.BufferReadChunkSizeBytes ||
+            settings.StreamReconnectReadStallTimeoutSeconds != command.ReconnectReadStallTimeoutSeconds ||
+            settings.StreamReconnectOutageWindowSeconds != command.ReconnectOutageWindowSeconds ||
+            settings.StreamReconnectConnectTimeoutSeconds != command.ReconnectConnectTimeoutSeconds;
+
+        settings.StreamingEnabled = command.StreamingEnabled;
+        settings.StreamMaxConcurrentSessions = command.MaxConcurrentSessions;
+        settings.StreamIdleGraceSeconds = command.IdleGraceSeconds;
+        settings.StreamIdleGraceHardCapSeconds = command.IdleGraceHardCapSeconds;
+        settings.StreamBufferMaxBytesPerSession = command.BufferMaxBytesPerSession;
+        settings.StreamBufferMaxBytesHardCap = command.BufferMaxBytesHardCap;
+        settings.StreamBufferReadChunkSizeBytes = command.BufferReadChunkSizeBytes;
+        settings.StreamReconnectReadStallTimeoutSeconds = command.ReconnectReadStallTimeoutSeconds;
+        settings.StreamReconnectOutageWindowSeconds = command.ReconnectOutageWindowSeconds;
+        settings.StreamReconnectConnectTimeoutSeconds = command.ReconnectConnectTimeoutSeconds;
+
+        if (changed)
+            settings.StreamingSettingsRestartRequired = true;
+
+        await db.SaveChangesAsync(ct);
+
+        return new StreamingSettingsUpdateResult(
+            Succeeded: true,
+            Error: null,
+            Settings: Map(settings),
+            RestartRequired: settings.StreamingSettingsRestartRequired,
+            Changed: changed);
     }
 
     public async Task ClearRestartRequiredAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
-            if (settings is null || !settings.StreamingSettingsRestartRequired)
-                return;
+        var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+        if (settings is null || !settings.StreamingSettingsRestartRequired)
+            return;
 
-            settings.StreamingSettingsRestartRequired = false;
-            await db.SaveChangesAsync(ct);
-        }
-        finally
-        {
-            ClearSqlitePool();
-        }
-    }
-
-    private void ClearSqlitePool()
-    {
-        if (db.Database.GetDbConnection() is SqliteConnection sqlite)
-        {
-            SqliteConnection.ClearPool(sqlite);
-        }
+        settings.StreamingSettingsRestartRequired = false;
+        await db.SaveChangesAsync(ct);
     }
 
     private static IEnumerable<string> Validate(UpdateStreamingSettingsCommand command)
