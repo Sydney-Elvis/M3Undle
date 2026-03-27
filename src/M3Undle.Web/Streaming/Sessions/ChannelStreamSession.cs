@@ -37,6 +37,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private int _reconnectAttempts;
     private string? _lastFailureKind;
     private int _closeNotified;
+    private int _pendingSubscriberAttaches;
     private int _stopRequested;
     private CancellationTokenSource? _idleCts;
 
@@ -76,32 +77,40 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     public async Task<SubscriberConnection> AttachSubscriberAsync(HttpContext context, CancellationToken requestCt)
     {
-        EnsureStarted();
-        await _headersReadyTcs.Task.WaitAsync(requestCt);
+        BeginSubscriberAttach();
 
-        var subscriber = new SubscriberConnection(
-            sessionId: _sessionId,
-            requestedRoute: _source.RequestedRoute,
-            context: context,
-            queueCapacity: _bufferOptions.SubscriberQueueCapacity,
-            onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason));
+        try
+        {
+            EnsureStarted();
+            await _headersReadyTcs.Task.WaitAsync(requestCt);
 
-        _subscribers[subscriber.ClientId] = subscriber;
-        CancelIdleShutdown();
+            var subscriber = new SubscriberConnection(
+                sessionId: _sessionId,
+                requestedRoute: _source.RequestedRoute,
+                context: context,
+                queueCapacity: _bufferOptions.SubscriberQueueCapacity,
+                onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason));
 
-        subscriber.InitializeResponse(_contentType, _cacheControl);
-        var snapshot = _buffer.CreateSnapshot();
-        _ = subscriber.StartAsync(snapshot, _sessionCts.Token);
-        _registry.UpsertClient(subscriber.Snapshot());
-        PublishSnapshots();
+            _subscribers[subscriber.ClientId] = subscriber;
 
-        _logger.LogInformation(
-            "Client {RemoteIp} started watching '{DisplayName}' — {ViewerCount} viewer(s) on this stream.",
-            subscriber.RemoteIp ?? "unknown",
-            _source.DisplayName,
-            _subscribers.Count);
+            subscriber.InitializeResponse(_contentType, _cacheControl);
+            var snapshot = _buffer.CreateSnapshot();
+            _ = subscriber.StartAsync(snapshot, _sessionCts.Token);
+            _registry.UpsertClient(subscriber.Snapshot());
+            PublishSnapshots();
 
-        return subscriber;
+            _logger.LogInformation(
+                "Client {RemoteIp} started watching '{DisplayName}' — {ViewerCount} viewer(s) on this stream.",
+                subscriber.RemoteIp ?? "unknown",
+                _source.DisplayName,
+                _subscribers.Count);
+
+            return subscriber;
+        }
+        finally
+        {
+            EndSubscriberAttach();
+        }
     }
 
     public Task RemoveSubscriberAsync(SubscriberConnection subscriber, SubscriberDisconnectReason reason)
@@ -143,8 +152,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 remainingViewers);
         }
 
-        if (_subscribers.IsEmpty)
-            ScheduleIdleShutdown();
+        lock (_gate)
+        {
+            if (ShouldScheduleIdleShutdownNoLock())
+                ScheduleIdleShutdownNoLock();
+        }
 
         PublishSnapshots();
         return Task.CompletedTask;
@@ -202,7 +214,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         if (justStarted)
-            ScheduleIdleShutdown();
+        {
+            lock (_gate)
+            {
+                if (ShouldScheduleIdleShutdownNoLock())
+                    ScheduleIdleShutdownNoLock();
+            }
+        }
     }
 
     private async Task RunAsync()
@@ -402,38 +420,76 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
     }
 
+    private void BeginSubscriberAttach()
+    {
+        lock (_gate)
+        {
+            _pendingSubscriberAttaches++;
+            CancelIdleShutdownNoLock();
+        }
+    }
+
+    private void EndSubscriberAttach()
+    {
+        lock (_gate)
+        {
+            if (_pendingSubscriberAttaches > 0)
+                _pendingSubscriberAttaches--;
+
+            if (ShouldScheduleIdleShutdownNoLock())
+                ScheduleIdleShutdownNoLock();
+        }
+    }
+
     private void ScheduleIdleShutdown()
     {
+        lock (_gate)
+        {
+            if (ShouldScheduleIdleShutdownNoLock())
+                ScheduleIdleShutdownNoLock();
+        }
+    }
+
+    private void ScheduleIdleShutdownNoLock()
+    {
+        if (!ShouldScheduleIdleShutdownNoLock())
+            return;
+
         if (_idleGrace <= TimeSpan.Zero)
         {
             _ = StopSafelyAsync();
             return;
         }
 
-        lock (_gate)
-        {
-            _idleCts?.Cancel();
-            _idleCts?.Dispose();
-            _idleCts = new CancellationTokenSource();
-            var token = _idleCts.Token;
+        _idleCts?.Cancel();
+        _idleCts?.Dispose();
+        _idleCts = new CancellationTokenSource();
+        var idleCts = _idleCts;
+        var token = idleCts.Token;
 
-            _ = Task.Run(async () =>
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                try
+                await Task.Delay(_idleGrace, token);
+
+                lock (_gate)
                 {
-                    await Task.Delay(_idleGrace, token);
-                    await StopSafelyAsync();
+                    if (!ReferenceEquals(_idleCts, idleCts) || !ShouldScheduleIdleShutdownNoLock())
+                        return;
                 }
-                catch (OperationCanceledException)
-                {
-                    // no-op
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Idle shutdown task failed unexpectedly for session {SessionId}.", _sessionId);
-                }
-            }, token);
-        }
+
+                await StopSafelyAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                // no-op
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Idle shutdown task failed unexpectedly for session {SessionId}.", _sessionId);
+            }
+        }, token);
     }
 
     private async Task StopSafelyAsync()
@@ -452,11 +508,21 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         lock (_gate)
         {
-            _idleCts?.Cancel();
-            _idleCts?.Dispose();
-            _idleCts = null;
+            CancelIdleShutdownNoLock();
         }
     }
+
+    private void CancelIdleShutdownNoLock()
+    {
+        _idleCts?.Cancel();
+        _idleCts?.Dispose();
+        _idleCts = null;
+    }
+
+    private bool ShouldScheduleIdleShutdownNoLock()
+        => _subscribers.IsEmpty
+            && _pendingSubscriberAttaches == 0
+            && Volatile.Read(ref _stopRequested) == 0;
 
     private static TimeSpan ResolveIdleGrace(StreamProxyOptions options)
     {
