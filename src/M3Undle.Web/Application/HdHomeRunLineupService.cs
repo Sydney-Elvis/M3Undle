@@ -31,7 +31,7 @@ public sealed class HdHomeRunLineupService
                 ChannelId: resolved.Channel.StreamKey,
                 GuideNumber: resolved.GuideNumber,
                 GuideName: resolved.GuideName,
-                Url: $"{baseUrl}/hdhr/tune/{resolved.Channel.StreamKey}".ApplyClientAccessQuery(context),
+                Url: $"{baseUrl}/hdhr/auto/v{resolved.GuideNumber}".ApplyClientAccessQuery(context),
                 TvgId: resolved.Channel.TvgId,
                 LogoUrl: resolved.Channel.LogoUrl));
         }

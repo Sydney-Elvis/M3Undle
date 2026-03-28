@@ -71,7 +71,7 @@ public sealed class HdHomeRunEndpointTests
             Assert.IsFalse(string.IsNullOrWhiteSpace(channel.GetProperty("GuideNumber").GetString()));
             var url = channel.GetProperty("URL").GetString();
             Assert.IsFalse(string.IsNullOrWhiteSpace(url));
-            StringAssert.Contains(url!, "/hdhr/tune/");
+            StringAssert.Contains(url!, "/hdhr/auto/v");
         }
 
         var names = channels
