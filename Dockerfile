@@ -16,7 +16,13 @@ RUN dotnet restore src/M3Undle.Web/M3Undle.Web.csproj
 
 COPY src/ src/
 COPY branding/ branding/
-RUN dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -c Release -o /app/publish /p:UseAppHost=false /p:BuildNumber="${BUILD_NUMBER}" /p:BuildDateUtc="${BUILD_DATE_UTC}" /p:SourceRevisionId="${SOURCE_REVISION}"
+RUN BUILD_NUMBER_ARG=""; \
+    BUILD_DATE_ARG=""; \
+    SOURCE_REVISION_ARG=""; \
+    if [ -n "$BUILD_NUMBER" ]; then BUILD_NUMBER_ARG="/p:BuildNumber=$BUILD_NUMBER"; fi; \
+    if [ -n "$BUILD_DATE_UTC" ]; then BUILD_DATE_ARG="/p:BuildDateUtc=$BUILD_DATE_UTC"; fi; \
+    if [ -n "$SOURCE_REVISION" ]; then SOURCE_REVISION_ARG="/p:SourceRevisionId=$SOURCE_REVISION"; fi; \
+    dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -c Release -o /app/publish /p:UseAppHost=false $BUILD_NUMBER_ARG $BUILD_DATE_ARG $SOURCE_REVISION_ARG
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app

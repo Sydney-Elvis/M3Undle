@@ -47,4 +47,5 @@ jobs:
           tags: ghcr.io/sydney-elvis/m3undle:${{ steps.vars.outputs.tag }}
           build-args: |
             BUILD_NUMBER=${{ github.run_number }}
+            BUILD_DATE_UTC=${{ github.event.head_commit.timestamp }}
             SOURCE_REVISION=${{ github.sha }}
