@@ -167,6 +167,7 @@ On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created 
 ```bash
 docker run -d \
   --name m3undle \
+  -p 5004:5004 \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -v ./data:/data \
@@ -176,6 +177,8 @@ docker run -d \
 ```
 
 Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+
+If you use Docker Compose or `docker run` for HDHomeRun-compatible clients such as NextPVR, publish both `5004` and `8080`. `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints.
 
 See [`docs/DOCKER.md`](docs/DOCKER.md) for Compose example, volume layout, and all environment variables.
 

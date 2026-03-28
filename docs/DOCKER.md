@@ -26,6 +26,7 @@ services:
     container_name: m3undle
     user: "${PUID}:${PGID}"
     ports:
+      - "5004:5004"
       - "8080:8080"
     environment:
       TZ: America/New_York
@@ -58,6 +59,8 @@ uid=1000(jake) gid=1000(jake) groups=1000(jake),998(docker)
 
 Then open `http://<host>:8080`.
 
+If you use HDHomeRun-compatible clients such as NextPVR, keep `5004:5004` published. `5004` is the HDHomeRun HTTP tuning port, while `8080` serves the web UI and general compatibility endpoints.
+
 ### docker run
 
 ```bash
@@ -66,6 +69,7 @@ mkdir -p m3undle/config m3undle/data m3undle/m3u && cd m3undle
 docker run -d \
   --name m3undle \
   --user "$(id -u):$(id -g)" \
+  -p 5004:5004 \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -e M3UNDLE_ENCRYPTION_KEY="your-base64-32-byte-key" \
@@ -156,7 +160,7 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 
 | Variable | Default | Description |
 |---|---|---|
-| `ASPNETCORE_HTTP_PORTS` | `8080` | Port the app listens on inside the container |
+| `ASPNETCORE_HTTP_PORTS` | `5004;8080` | Ports the app listens on inside the container. `5004` is used for HDHomeRun-compatible tuning and `8080` for the web UI and general endpoints. |
 | `M3Undle__Refresh__IntervalHours` | `4` | How often the background refresh runs |
 | `M3Undle__Refresh__TimeoutMinutes` | `5` | Provider fetch timeout |
 | `M3Undle__Refresh__StartupDelaySeconds` | `30` | Delay before first refresh after startup |
