@@ -172,37 +172,29 @@ public sealed class HdHomeRunEndpointTests
     }
 
     [TestMethod]
-    public async Task Endpoint_AutoTuneRoutes_RedirectToTuneUrl()
+    public async Task Endpoint_AutoTuneRoutes_StreamDirectly()
     {
-        // Checklist: /hdhr/auto routes resolve guide numbers and redirect to /hdhr/tune/{streamKey}.
         await using var factory = new HdhrApiFactory();
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
         });
 
-        var routeCases = new (string RequestPath, string ExpectedTunePath)[]
+        var routes = new[]
         {
-            ("/hdhr/auto/v11", "/hdhr/tune/live-1"),
-            ("/hdhr/auto/ch11", "/hdhr/tune/live-1"),
-            ("/hdhr/auto/11", "/hdhr/tune/live-1"),
-            ("/hdhr/auto/v1000", "/hdhr/tune/live-2"),
-            ("/hdhr/auto/ch1000", "/hdhr/tune/live-2"),
-            ("/auto/v11", "/hdhr/tune/live-1"),
+            "/hdhr/auto/v11",
+            "/hdhr/auto/ch11",
+            "/hdhr/auto/11",
+            "/hdhr/auto/v1000",
+            "/hdhr/auto/ch1000",
+            "/auto/v11",
         };
 
-        foreach (var (requestPath, expectedTunePath) in routeCases)
+        foreach (var route in routes)
         {
-            using var response = await client.GetAsync(requestPath);
-
-            Assert.AreEqual(HttpStatusCode.Redirect, response.StatusCode, $"Unexpected status for {requestPath}");
-            Assert.IsNotNull(response.Headers.Location, $"Missing Location header for {requestPath}");
-
-            var location = response.Headers.Location!;
-            var locationValue = location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
-            Assert.IsTrue(
-                locationValue.StartsWith(expectedTunePath, StringComparison.Ordinal),
-                $"Unexpected redirect location for {requestPath}: {locationValue}");
+            using var response = await client.GetAsync(route);
+            Assert.AreNotEqual(HttpStatusCode.NotFound, response.StatusCode, $"Expected mapped route for {route}");
+            Assert.AreNotEqual(HttpStatusCode.Redirect, response.StatusCode, $"Auto tune should stream directly, not redirect for {route}");
         }
     }
 
@@ -235,6 +227,11 @@ public sealed class HdHomeRunEndpointTests
             "/tuner0/auto/v11",
             "/tuner0/auto/ch11",
             "/tuner0/auto/11",
+            "/hdhr/tuner0/v11",
+            "/hdhr/tuner1/ch1000",
+            "/hdhr/tuner0/auto/v11",
+            "/hdhr/tuner0/auto/ch11",
+            "/hdhr/tuner0/auto/11",
         };
 
         foreach (var route in routes)

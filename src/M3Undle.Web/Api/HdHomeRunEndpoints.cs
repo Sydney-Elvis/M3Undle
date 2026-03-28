@@ -29,9 +29,6 @@ public static class HdHomeRunEndpoints
         hdhr.MapGet("lineup.post", ServeLineupPost);
         hdhr.MapPost("lineup.post", ServeLineupPost);
         hdhr.MapGet("device.xml", ServeDeviceXmlAsync);
-        hdhr.MapGet("auto/v{vchannel}", ServeAutoTuneByVChannelAsync);
-        hdhr.MapGet("auto/ch{channel}", ServeAutoTuneByChannelAsync);
-        hdhr.MapGet("auto/{channel}", ServeAutoTuneByChannelAsync);
 
         // Legacy aliases kept for HDHR client compatibility.
         client.MapGet("discover.json", ServeDiscoverAsync);
@@ -42,9 +39,6 @@ public static class HdHomeRunEndpoints
         client.MapGet("lineup.post", ServeLineupPost);
         client.MapPost("lineup.post", ServeLineupPost);
         client.MapGet("device.xml", ServeDeviceXmlAsync);
-        client.MapGet("auto/v{vchannel}", ServeAutoTuneByVChannelAsync);
-        client.MapGet("auto/ch{channel}", ServeAutoTuneByChannelAsync);
-        client.MapGet("auto/{channel}", ServeAutoTuneByChannelAsync);
 
         return app;
     }
@@ -362,91 +356,6 @@ public static class HdHomeRunEndpoints
         return TypedResults.Bytes(ms.ToArray(), "application/xml; charset=utf-8");
     }
 
-    private static Task<IResult> ServeAutoTuneByVChannelAsync(
-        string vchannel,
-        HttpContext context,
-        HdHomeRunDeviceService deviceService,
-        ILineupRenderer lineupRenderer,
-        HdHomeRunLineupService lineupService,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken)
-        => ServeAutoTuneAsync(
-            requestedGuideNumber: vchannel,
-            context,
-            deviceService,
-            lineupRenderer,
-            lineupService,
-            loggerFactory,
-            cancellationToken);
-
-    private static Task<IResult> ServeAutoTuneByChannelAsync(
-        string channel,
-        HttpContext context,
-        HdHomeRunDeviceService deviceService,
-        ILineupRenderer lineupRenderer,
-        HdHomeRunLineupService lineupService,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken)
-        => ServeAutoTuneAsync(
-            requestedGuideNumber: NormalizeAutoGuideNumber(channel),
-            context,
-            deviceService,
-            lineupRenderer,
-            lineupService,
-            loggerFactory,
-            cancellationToken);
-
-    private static async Task<IResult> ServeAutoTuneAsync(
-        string requestedGuideNumber,
-        HttpContext context,
-        HdHomeRunDeviceService deviceService,
-        ILineupRenderer lineupRenderer,
-        HdHomeRunLineupService lineupService,
-        ILoggerFactory loggerFactory,
-        CancellationToken cancellationToken)
-    {
-        if (!deviceService.IsEnabled)
-            return TypedResults.NotFound();
-
-        var logger = CreateLogger(loggerFactory);
-        using var scope = BeginHdhrScope(logger);
-
-        if (string.IsNullOrWhiteSpace(requestedGuideNumber))
-            return TypedResults.NotFound();
-
-        var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
-        if (!lineupResult.Succeeded)
-        {
-            logger.LogWarning(
-                "HDHomeRun auto tune unavailable for {Client}. path={Path} guide={GuideNumber}",
-                DescribeClient(context),
-                context.Request.Path.Value ?? "/hdhr/auto",
-                requestedGuideNumber);
-            return lineupResult.ErrorResult!;
-        }
-
-        var channel = FindLineupChannelByGuideNumber(lineupResult.Lineup!.Channels, requestedGuideNumber);
-        if (channel is null)
-        {
-            logger.LogWarning(
-                "HDHomeRun auto tune channel not found for {Client}. path={Path} guide={GuideNumber}",
-                DescribeClient(context),
-                context.Request.Path.Value ?? "/hdhr/auto",
-                requestedGuideNumber);
-            return TypedResults.NotFound();
-        }
-
-        var tuneUrl = $"/hdhr/tune/{channel.ChannelId}".ApplyClientAccessQuery(context);
-        logger.LogInformation(
-            "HDHomeRun auto tune resolved for {Client}. path={Path} guide={GuideNumber} streamKey={StreamKey}",
-            DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/auto",
-            requestedGuideNumber,
-            channel.ChannelId);
-
-        return TypedResults.Redirect(tuneUrl);
-    }
-
     private static async Task<LineupBuildResult> TryBuildHdhrLineupAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
@@ -527,20 +436,4 @@ public static class HdHomeRunEndpoints
     private static string DescribeClient(HttpContext context)
         => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-    private static HdHomeRunLineupEntry? FindLineupChannelByGuideNumber(
-        IReadOnlyList<HdHomeRunLineupEntry> channels,
-        string guideNumber)
-        => channels.FirstOrDefault(x => string.Equals(x.GuideNumber, guideNumber, StringComparison.Ordinal));
-
-    private static string NormalizeAutoGuideNumber(string value)
-    {
-        var normalized = value.Trim();
-        if (normalized.StartsWith("ch", StringComparison.OrdinalIgnoreCase))
-            normalized = normalized[2..];
-
-        if (normalized.StartsWith("v", StringComparison.OrdinalIgnoreCase))
-            normalized = normalized[1..];
-
-        return normalized;
-    }
 }
