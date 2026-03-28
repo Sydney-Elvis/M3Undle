@@ -423,6 +423,16 @@ public static class CompatibilityEndpoints
                     var tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
                     if (!tunerAcquire.Succeeded || tunerAcquire.Reservation is null)
                     {
+                        var leases = hdHomeRunTunerManager.GetActiveLeases();
+                        logger.LogWarning(
+                            "HDHR tuner acquire rejected: path={Path} tunerId={TunerId} streamKey={StreamKey} client={Client} reason={Reason} activeLeaseCount={LeaseCount} activeLeases={Leases}",
+                            context.Request.Path.Value,
+                            tunerId,
+                            streamKey,
+                            context.Connection.RemoteIpAddress,
+                            tunerAcquire.Error ?? "unknown",
+                            leases.Count,
+                            string.Join(",", leases.Select(x => $"{x.VirtualTunerId}:{x.StreamKey}:{x.ClientId ?? "n/a"}")));
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                         context.Response.Headers["Retry-After"] = "30";
                         if (!string.IsNullOrWhiteSpace(tunerAcquire.Error))
@@ -431,6 +441,13 @@ public static class CompatibilityEndpoints
                     }
 
                     tunerReservation = tunerAcquire.Reservation;
+                    logger.LogInformation(
+                        "HDHR tuner acquired: path={Path} tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} priorSubscriber={HadPriorSubscriber}",
+                        context.Request.Path.Value,
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        streamKey,
+                        tunerAcquire.PriorSubscriber is not null);
                     if (tunerAcquire.PriorSubscriber is not null)
                         await tunerAcquire.PriorSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
                 }
@@ -444,6 +461,13 @@ public static class CompatibilityEndpoints
                         tunerReservation,
                         subscriber,
                         resolved.SourceDescriptor.DisplayName);
+                    logger.LogInformation(
+                        "HDHR tuner activated: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} channel={Channel} clientId={ClientId}",
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        tunerReservation.StreamKey,
+                        resolved.SourceDescriptor.DisplayName,
+                        subscriber.ClientId);
                 }
 
                 await subscriber.Completion;
@@ -494,7 +518,16 @@ public static class CompatibilityEndpoints
             finally
             {
                 if (tunerReservation is not null)
+                {
                     hdHomeRunTunerManager.Release(tunerReservation.ReservationId, subscriber?.ClientId);
+                    var leases = hdHomeRunTunerManager.GetActiveLeases();
+                    logger.LogInformation(
+                        "HDHR tuner released: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} remainingLeaseCount={LeaseCount}",
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        tunerReservation.StreamKey,
+                        leases.Count);
+                }
             }
         }
 

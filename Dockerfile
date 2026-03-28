@@ -5,6 +5,10 @@ ARG DOTNET_VERSION=10.0
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
 WORKDIR /src
 
+ARG BUILD_NUMBER=
+ARG BUILD_DATE_UTC=
+ARG SOURCE_REVISION=
+
 COPY global.json ./
 COPY src/M3Undle.Web/M3Undle.Web.csproj src/M3Undle.Web/
 COPY src/M3Undle.Core/M3Undle.Core.csproj src/M3Undle.Core/
@@ -12,7 +16,7 @@ RUN dotnet restore src/M3Undle.Web/M3Undle.Web.csproj
 
 COPY src/ src/
 COPY branding/ branding/
-RUN dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -c Release -o /app/publish /p:UseAppHost=false
+RUN dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -c Release -o /app/publish /p:UseAppHost=false /p:BuildNumber="${BUILD_NUMBER}" /p:BuildDateUtc="${BUILD_DATE_UTC}" /p:SourceRevisionId="${SOURCE_REVISION}"
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app

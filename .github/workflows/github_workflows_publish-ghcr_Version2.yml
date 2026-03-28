@@ -45,3 +45,6 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/sydney-elvis/m3undle:${{ steps.vars.outputs.tag }}
+          build-args: |
+            BUILD_NUMBER=${{ github.run_number }}
+            SOURCE_REVISION=${{ github.sha }}
