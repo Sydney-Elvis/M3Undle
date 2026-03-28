@@ -7,6 +7,7 @@
 @inject IStreamingSettingsService StreamingSettings
 @inject IApplicationRestartService ApplicationRestart
 @inject StreamingRegistry StreamingRegistry
+@inject IHdHomeRunSettingsService HdhrSettings
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -110,6 +111,181 @@
                         <MudChip T="string" Size="Size.Small" Color="Color.Warning">No credential configured</MudChip>
                     }
                 </MudStack>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">HDHomeRun Emulation</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                M3Undle emulates an HDHomeRun tuner so HDHR-compatible apps (NextPVR, Plex, Channels&nbsp;DVR, etc.) can discover and tune channels.
+                Changes require a restart.
+            </MudText>
+
+            @if (_loadingHdhrSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                @if (_hdhrDisabledByEnv)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        HDHomeRun emulation is disabled by the <code>M3UNDLE_HDHR_ENABLED=false</code> environment variable.
+                        Remove the variable and restart to manage HDHR settings here.
+                    </MudAlert>
+                }
+
+                @if (_hdhrRestartRequired)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        HDHR settings have been saved but are not active yet. Restart M3Undle to apply them.
+                    </MudAlert>
+                }
+
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="12" sm="6" md="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Effective Tuner Count</MudText>
+                        <MudText Typo="Typo.body2">@_hdhrEffectiveTunerCount</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Limit</MudText>
+                        <MudText Typo="Typo.body2">
+                            @if (_hdhrIsStreamLimitEnforced)
+                            {
+                                <span>Enforced</span>
+                            }
+                            else
+                            {
+                                <span>Unlimited (no provider limit or override set)</span>
+                            }
+                        </MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="6" md="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Provider Stream Limit</MudText>
+                        <MudText Typo="Typo.body2">@(_hdhrProviderLimit?.ToString() ?? "Not set")</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                <MudSwitch T="bool" Label="Enable HDHomeRun emulation" @bind-Value="_hdhrEnabled" Class="mb-3"
+                           Color="Color.Primary" Disabled="_hdhrDisabledByEnv" />
+
+                <MudGrid Spacing="2" Class="mb-4">
+                    <MudItem xs="12" sm="6">
+                        <div class="d-flex align-center gap-2">
+                            <MudNumericField T="int?" @bind-Value="_hdhrTunerCountOverride"
+                                             Label="Tuner Count Override"
+                                             Variant="Variant.Outlined" Margin="Margin.Dense"
+                                             Min="1" Max="32" Immediate="true" Clearable="true"
+                                             Disabled="_hdhrDisabledByEnv"
+                                             HelperText="@($"Blank = auto ({_hdhrEffectiveTunerCount} from {(_hdhrProviderLimit is not null ? "provider" : "default")})")"
+                                             Placeholder="Auto"
+                                             Class="flex-grow-1" />
+                            <MudTooltip Text="Number of virtual tuners reported to HDHomeRun clients. Leave blank to auto-detect from your provider's stream limit. This also controls stream limit enforcement when set."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <div class="d-flex align-center gap-2">
+                            <MudTextField @bind-Value="_hdhrAdvertisedBaseUrl"
+                                          Label="Advertised Base URL"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Placeholder="Auto-detect"
+                                          Disabled="_hdhrDisabledByEnv"
+                                          HelperText="@($"Resolved: {_hdhrResolvedBaseUrl}")"
+                                          Class="flex-grow-1" />
+                            <MudTooltip Text="The URL that HDHR clients use to reach M3Undle. Leave blank to auto-detect from the server's IP and port. Set this if M3Undle is behind a reverse proxy."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Discovery Protocols</MudText>
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="12" sm="4">
+                        <MudSwitch T="bool" Label="Discovery (master)" @bind-Value="_hdhrDiscoveryEnabled"
+                                   Color="Color.Primary" Disabled="_hdhrDisabledByEnv" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSwitch T="bool" Label="SSDP (UPnP)" @bind-Value="_hdhrSsdpEnabled"
+                                   Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSwitch T="bool" Label="SiliconDust broadcast" @bind-Value="_hdhrSiliconDustDiscoveryEnabled"
+                                   Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
+                    </MudItem>
+                </MudGrid>
+
+                @if (!string.IsNullOrWhiteSpace(_hdhrError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_hdhrError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_hdhrSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_hdhrSuccess
+                    </MudAlert>
+                }
+
+                <MudStack Row="true" Spacing="2" Class="mb-4">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="_savingHdhrSettings || _restartingApplication || _hdhrDisabledByEnv"
+                               OnClick="SaveHdhrSettingsAsync">
+                        @(_savingHdhrSettings ? "Saving..." : "Save HDHR Settings")
+                    </MudButton>
+
+                    @if (_hdhrRestartRequired)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                   Disabled="_restartingApplication"
+                                   OnClick="RestartApplicationAsync">
+                            @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
+                        </MudButton>
+                    }
+                </MudStack>
+
+                <MudDivider Class="mb-3" />
+
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
+                    Active configuration — requires restart to update
+                </MudText>
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">HDHR Emulation</MudText>
+                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.Enabled == true ? "Enabled" : "Disabled")</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Tuner Count</MudText>
+                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.EffectiveTunerCount</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Base URL</MudText>
+                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.ResolvedBaseUrl</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Discovery</MudText>
+                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.DiscoveryEnabled == true ? "On" : "Off")</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">SSDP</MudText>
+                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.SsdpEnabled == true ? "On" : "Off")</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">SiliconDust</MudText>
+                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.SiliconDustDiscoveryEnabled == true ? "On" : "Off")</MudText>
+                    </MudItem>
+                </MudGrid>
             }
         </MudPaper>
     </MudItem>
@@ -409,12 +585,30 @@
     private string? _streamingSuccess;
     private StreamingSettingsSnapshot? _appliedStreamingSettings;
 
+    private bool _loadingHdhrSettings;
+    private bool _savingHdhrSettings;
+    private bool _hdhrRestartRequired;
+    private bool _hdhrEnabled;
+    private int? _hdhrTunerCountOverride;
+    private string? _hdhrAdvertisedBaseUrl;
+    private bool _hdhrDiscoveryEnabled;
+    private bool _hdhrSsdpEnabled;
+    private bool _hdhrSiliconDustDiscoveryEnabled;
+    private int _hdhrEffectiveTunerCount;
+    private int? _hdhrProviderLimit;
+    private bool _hdhrIsStreamLimitEnforced;
+    private string _hdhrResolvedBaseUrl = string.Empty;
+    private string? _hdhrError;
+    private string? _hdhrSuccess;
+    private bool _hdhrDisabledByEnv;
+    private HdhrSettingsSnapshot? _appliedHdhrSettings;
+
     private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
 
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync());
+        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync());
     }
 
     private async Task LoadEndpointSecurityAsync()
@@ -577,6 +771,83 @@
         _reconnectReadStallTimeoutSeconds = settings.ReconnectReadStallTimeoutSeconds;
         _reconnectOutageWindowSeconds = settings.ReconnectOutageWindowSeconds;
         _reconnectConnectTimeoutSeconds = settings.ReconnectConnectTimeoutSeconds;
+    }
+
+    private async Task LoadHdhrSettingsAsync()
+    {
+        _loadingHdhrSettings = true;
+        _hdhrError = null;
+
+        try
+        {
+            var state = await HdhrSettings.GetSettingsAsync(CancellationToken.None);
+            ApplySavedHdhrSettings(state.Saved);
+            _appliedHdhrSettings = state.Applied;
+            _hdhrRestartRequired = state.RestartRequired;
+            _hdhrDisabledByEnv = state.DisabledByEnvironment;
+        }
+        catch (Exception ex)
+        {
+            _hdhrError = $"Failed to load HDHR settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingHdhrSettings = false;
+        }
+    }
+
+    private async Task SaveHdhrSettingsAsync()
+    {
+        _savingHdhrSettings = true;
+        _hdhrError = null;
+        _hdhrSuccess = null;
+
+        try
+        {
+            var result = await HdhrSettings.UpdateAsync(new UpdateHdhrSettingsCommand(
+                Enabled: _hdhrEnabled,
+                TunerCountOverride: _hdhrTunerCountOverride,
+                AdvertisedBaseUrl: string.IsNullOrWhiteSpace(_hdhrAdvertisedBaseUrl) ? null : _hdhrAdvertisedBaseUrl.Trim(),
+                DiscoveryEnabled: _hdhrDiscoveryEnabled,
+                SsdpEnabled: _hdhrSsdpEnabled,
+                SiliconDustDiscoveryEnabled: _hdhrSiliconDustDiscoveryEnabled), CancellationToken.None);
+
+            if (!result.Succeeded)
+            {
+                _hdhrError = result.Error ?? "Failed to save HDHR settings.";
+                return;
+            }
+
+            ApplySavedHdhrSettings(result.Settings);
+            _hdhrRestartRequired = result.RestartRequired;
+            _hdhrSuccess = result.Changed
+                ? "HDHR settings saved. Restart M3Undle to apply them."
+                : result.RestartRequired
+                    ? "No changes detected. A restart is still pending from a previous save."
+                    : "No HDHR setting changes were detected.";
+        }
+        catch (Exception ex)
+        {
+            _hdhrError = $"Failed to save HDHR settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingHdhrSettings = false;
+        }
+    }
+
+    private void ApplySavedHdhrSettings(HdhrSettingsSnapshot settings)
+    {
+        _hdhrEnabled = settings.Enabled;
+        _hdhrTunerCountOverride = settings.TunerCountOverride;
+        _hdhrAdvertisedBaseUrl = settings.AdvertisedBaseUrl;
+        _hdhrDiscoveryEnabled = settings.DiscoveryEnabled;
+        _hdhrSsdpEnabled = settings.SsdpEnabled;
+        _hdhrSiliconDustDiscoveryEnabled = settings.SiliconDustDiscoveryEnabled;
+        _hdhrEffectiveTunerCount = settings.EffectiveTunerCount;
+        _hdhrProviderLimit = settings.ProviderTunerLimit;
+        _hdhrIsStreamLimitEnforced = settings.IsStreamLimitEnforced;
+        _hdhrResolvedBaseUrl = settings.ResolvedBaseUrl;
     }
 
     private static string FormatMiB(int bytes)

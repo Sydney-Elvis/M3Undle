@@ -1,5 +1,4 @@
 using M3Undle.Web.Streaming.Subscribers;
-using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Application;
 
@@ -24,8 +23,7 @@ public sealed record HdHomeRunTunerLeaseSnapshot(
     DateTimeOffset? ActivatedUtc);
 
 public sealed class HdHomeRunTunerManager(
-    IOptions<HdHomeRunOptions> options,
-    EnvironmentVariableService env)
+    HdHomeRunTunerCountResolver tunerCountResolver)
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<string, TunerLease> _leases = new(StringComparer.Ordinal);
@@ -41,12 +39,12 @@ public sealed class HdHomeRunTunerManager(
             if (priorLease is not null)
                 _leases.Remove(virtualTunerId);
 
-            var tunerCount = ResolveTunerCount();
-            if (priorLease is null && _leases.Count >= tunerCount)
+            var streamLimit = ResolveStreamLimit();
+            if (streamLimit is not null && priorLease is null && _leases.Count >= streamLimit.Value)
             {
                 return new HdHomeRunTunerAcquireResult(
                     Succeeded: false,
-                    Error: $"All {tunerCount} HDHomeRun tuner slots are in use.",
+                    Error: $"All {streamLimit.Value} HDHomeRun tuner slots are in use.",
                     Reservation: null,
                     PriorSubscriber: null);
             }
@@ -119,14 +117,7 @@ public sealed class HdHomeRunTunerManager(
         }
     }
 
-    private int ResolveTunerCount()
-    {
-        var envValue = env.GetValue("M3UNDLE_HDHR_TUNER_COUNT");
-        if (int.TryParse(envValue, out var parsed))
-            return Math.Clamp(parsed, 1, 32);
-
-        return Math.Clamp(options.Value.TunerCount, 1, 32);
-    }
+    private int? ResolveStreamLimit() => tunerCountResolver.ResolveStreamLimit();
 
     private sealed record TunerLease(
         HdHomeRunTunerReservation Reservation,

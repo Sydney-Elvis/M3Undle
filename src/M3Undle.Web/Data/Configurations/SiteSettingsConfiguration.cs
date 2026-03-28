@@ -50,6 +50,25 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.StreamingSettingsRestartRequired)
             .HasColumnName("streaming_settings_restart_required")
             .HasDefaultValue(false);
+        builder.Property(s => s.HdhrEnabled)
+            .HasColumnName("hdhr_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.HdhrTunerCountOverride)
+            .HasColumnName("hdhr_tuner_count_override");
+        builder.Property(s => s.HdhrAdvertisedBaseUrl)
+            .HasColumnName("hdhr_advertised_base_url");
+        builder.Property(s => s.HdhrDiscoveryEnabled)
+            .HasColumnName("hdhr_discovery_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.HdhrSsdpEnabled)
+            .HasColumnName("hdhr_ssdp_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.HdhrSiliconDustDiscoveryEnabled)
+            .HasColumnName("hdhr_silicondust_discovery_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.HdhrSettingsRestartRequired)
+            .HasColumnName("hdhr_settings_restart_required")
+            .HasDefaultValue(false);
 
         builder.HasData(new SiteSettings
         {
@@ -67,6 +86,13 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             StreamReconnectOutageWindowSeconds = 75,
             StreamReconnectConnectTimeoutSeconds = 15,
             StreamingSettingsRestartRequired = false,
+            HdhrEnabled = true,
+            HdhrTunerCountOverride = null,
+            HdhrAdvertisedBaseUrl = null,
+            HdhrDiscoveryEnabled = true,
+            HdhrSsdpEnabled = true,
+            HdhrSiliconDustDiscoveryEnabled = true,
+            HdhrSettingsRestartRequired = false,
         });
     }
 }
