@@ -40,12 +40,18 @@ public sealed class HdHomeRunEndpointTests
         var firstDeviceId = firstJson.RootElement.GetProperty("DeviceID").GetString();
         var secondDeviceId = secondJson.RootElement.GetProperty("DeviceID").GetString();
         var tunerCount = firstJson.RootElement.GetProperty("TunerCount").GetInt32();
+        var baseUrl = firstJson.RootElement.GetProperty("BaseURL").GetString();
+        var lineupUrl = firstJson.RootElement.GetProperty("LineupURL").GetString();
 
         Assert.IsFalse(string.IsNullOrWhiteSpace(firstDeviceId));
         Assert.AreEqual(8, firstDeviceId!.Length);
         Assert.IsTrue(firstDeviceId.All(Uri.IsHexDigit));
         Assert.IsGreaterThan(0, tunerCount);
         Assert.AreEqual(firstDeviceId, secondDeviceId);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(baseUrl));
+        Assert.IsFalse(baseUrl!.EndsWith("/hdhr", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(string.IsNullOrWhiteSpace(lineupUrl));
+        StringAssert.Contains(lineupUrl!, "/hdhr/lineup.json");
     }
 
     [TestMethod]
@@ -165,10 +171,17 @@ public sealed class HdHomeRunEndpointTests
 
         var xmlText = await response.Content.ReadAsStringAsync();
         var document = XDocument.Parse(xmlText);
+        var urlBase = document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "URLBase")?.Value;
+        var presentationUrl = document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "presentationURL")?.Value;
 
         Assert.AreEqual("root", document.Root?.Name.LocalName);
         Assert.IsNotNull(document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "friendlyName"));
         Assert.IsNotNull(document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "serialNumber"));
+        Assert.IsFalse(string.IsNullOrWhiteSpace(urlBase));
+        Assert.IsFalse(urlBase!.Contains("/hdhr/", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(urlBase.EndsWith("/hdhr/", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(string.IsNullOrWhiteSpace(presentationUrl));
+        Assert.IsFalse(presentationUrl!.EndsWith("/hdhr", StringComparison.OrdinalIgnoreCase));
     }
 
     [TestMethod]

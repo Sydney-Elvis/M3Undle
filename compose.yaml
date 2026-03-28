@@ -7,6 +7,7 @@ services:
     container_name: m3undle
     user: "${PUID}:${PGID}"
     ports:
+      - "5004:5004"
       - "8080:8080"
     env_file:
       - .env

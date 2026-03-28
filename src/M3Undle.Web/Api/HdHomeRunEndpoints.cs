@@ -67,7 +67,7 @@ public static class HdHomeRunEndpoints
             FirmwareVersion: device.FirmwareVersion,
             DeviceID: device.DeviceId,
             DeviceAuth: device.DeviceAuth,
-            BaseURL: hdhrBaseUrl,
+            BaseURL: baseUrl,
             LineupURL: $"{hdhrBaseUrl}/lineup.json".ApplyClientAccessQuery(context),
             TunerCount: device.TunerCount);
 
@@ -77,7 +77,7 @@ public static class HdHomeRunEndpoints
             context.Request.Path.Value ?? "/hdhr/discover.json",
             device.DeviceId,
             device.TunerCount,
-            hdhrBaseUrl);
+            baseUrl);
 
         return TypedResults.Json(payload, JsonOptions);
     }
@@ -331,7 +331,7 @@ public static class HdHomeRunEndpoints
             writer.WriteElementString("minor", "0");
             writer.WriteEndElement();
 
-            writer.WriteElementString("URLBase", $"{hdhrBaseUrl}/");
+            writer.WriteElementString("URLBase", $"{baseUrl}/");
             writer.WriteStartElement("device");
             writer.WriteElementString("deviceType", "urn:schemas-upnp-org:device:MediaServer:1");
             writer.WriteElementString("friendlyName", device.FriendlyName);
@@ -341,7 +341,7 @@ public static class HdHomeRunEndpoints
             writer.WriteElementString("modelNumber", device.ModelNumber);
             writer.WriteElementString("serialNumber", device.DeviceId);
             writer.WriteElementString("UDN", $"uuid:{device.DeviceId}");
-            writer.WriteElementString("presentationURL", hdhrBaseUrl);
+            writer.WriteElementString("presentationURL", baseUrl);
             writer.WriteEndElement();
             writer.WriteEndElement();
             writer.WriteEndDocument();

@@ -35,8 +35,8 @@ COPY --from=build /app/publish ./
 
 RUN mkdir -p /data /config
 
-ENV ASPNETCORE_URLS=http://+:8080 \
-    ASPNETCORE_HTTP_PORTS=8080 \
+ENV ASPNETCORE_URLS=http://+:5004;http://+:8080 \
+    ASPNETCORE_HTTP_PORTS=5004;8080 \
     HOME=/data \
     ConnectionStrings__DefaultConnection="DataSource=/data/m3undle.db;Cache=Shared" \
     M3Undle__Logging__LogDirectory=/data/logs \
@@ -45,7 +45,7 @@ ENV ASPNETCORE_URLS=http://+:8080 \
     M3UNDLE_M3U_DIR=/m3u_data
 
 VOLUME ["/data", "/config"]
-EXPOSE 8080
+EXPOSE 5004 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl --fail --silent http://127.0.0.1:8080/health || exit 1
