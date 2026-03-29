@@ -324,7 +324,7 @@ public sealed class SnapshotBuilder(
         var xmltvPath = Path.Combine(snapshotDir, "guide.xml");
 
         await ChannelIndexStore.WriteAsync(channelIndexPath, channelIndexIdxPath, channelIndex, cancellationToken);
-        await File.WriteAllTextAsync(xmltvPath, xmltvContent, Encoding.UTF8, cancellationToken);
+        await File.WriteAllTextAsync(xmltvPath, xmltvContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
 
         int liveCount = 0, vodCount = 0, seriesCount = 0;
         foreach (var e in channelIndex)
