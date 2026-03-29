@@ -74,11 +74,7 @@ public sealed class HdHomeRunLineupService
                 ? channel.TvgChno.Value.ToString(CultureInfo.InvariantCulture)
                 : (fallbackGuideNumber++).ToString(CultureInfo.InvariantCulture);
 
-            var guideName = string.IsNullOrWhiteSpace(channel.TvgName)
-                ? channel.DisplayName
-                : channel.TvgName;
-
-            yield return new ResolvedLiveChannel(channel, guideNumber, guideName);
+            yield return new ResolvedLiveChannel(channel, guideNumber, channel.DisplayName);
         }
     }
 
