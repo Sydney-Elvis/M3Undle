@@ -14,11 +14,13 @@ public sealed class ChannelSessionManager
     private readonly ReconnectOptions _reconnectOptions;
     private readonly UpstreamStreamConnector _upstreamConnector;
     private readonly UpstreamFailureStrikeStore _strikeStore;
+    private readonly StreamAdmissionBackoffStore _admissionBackoffStore;
     private readonly StreamingRegistry _registry;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChannelSessionManager> _logger;
     private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
+    private const int DefaultAdmissionRetryAfterSeconds = 30;
 
     public ChannelSessionManager(
         IOptions<BufferOptions> bufferOptions,
@@ -26,6 +28,7 @@ public sealed class ChannelSessionManager
         IOptions<ReconnectOptions> reconnectOptions,
         UpstreamStreamConnector upstreamConnector,
         UpstreamFailureStrikeStore strikeStore,
+        StreamAdmissionBackoffStore admissionBackoffStore,
         StreamingRegistry registry,
         ILoggerFactory loggerFactory)
     {
@@ -34,6 +37,7 @@ public sealed class ChannelSessionManager
         _reconnectOptions = reconnectOptions.Value;
         _upstreamConnector = upstreamConnector;
         _strikeStore = strikeStore;
+        _admissionBackoffStore = admissionBackoffStore;
         _registry = registry;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
@@ -52,6 +56,7 @@ public sealed class ChannelSessionManager
                 cooldownRemaining.TotalSeconds);
             throw new StreamAdmissionException(
                 $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
+                StreamAdmissionFailureKind.Cooldown,
                 StatusCodes.Status503ServiceUnavailable,
                 retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
         }
@@ -71,14 +76,13 @@ public sealed class ChannelSessionManager
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
             if (_sessions.Count >= maxSessions)
             {
-                _logger.LogWarning(
-                    "Stream request rejected for '{DisplayName}' — server is at the maximum of {Max} concurrent stream(s).",
+                throw CreateAdmissionException(
+                    key,
                     source.DisplayName,
-                    maxSessions);
-                throw new StreamAdmissionException(
+                    StreamAdmissionFailureKind.MaxConcurrentSessions,
                     $"Max concurrent sessions ({maxSessions}) reached.",
-                    StatusCodes.Status503ServiceUnavailable,
-                    retryAfterSeconds: 30);
+                    "server is at the maximum of {Limit} concurrent stream(s).",
+                    maxSessions);
             }
 
             var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
@@ -87,14 +91,13 @@ public sealed class ChannelSessionManager
                 var providerSessionCount = _sessions.Keys.Count(x => x.ProviderId == key.ProviderId);
                 if (providerSessionCount >= providerCap)
                 {
-                    _logger.LogWarning(
-                        "Stream request rejected for '{DisplayName}' — provider has reached its upstream limit of {Cap} stream(s).",
+                    throw CreateAdmissionException(
+                        key,
                         source.DisplayName,
-                        providerCap);
-                    throw new StreamAdmissionException(
+                        StreamAdmissionFailureKind.ProviderLimit,
                         $"Provider upstream limit ({providerCap}) reached.",
-                        StatusCodes.Status503ServiceUnavailable,
-                        retryAfterSeconds: 30);
+                        "provider has reached its upstream limit of {Limit} stream(s).",
+                        providerCap);
                 }
             }
 
@@ -146,6 +149,42 @@ public sealed class ChannelSessionManager
 
         foreach (var session in sessions)
             await session.StopAsync();
+    }
+
+    private StreamAdmissionException CreateAdmissionException(
+        ChannelSessionKey key,
+        string displayName,
+        StreamAdmissionFailureKind failureKind,
+        string message,
+        string warningDetail,
+        int limit)
+    {
+        var observation = _admissionBackoffStore.Observe(
+            key,
+            failureKind,
+            TimeSpan.FromSeconds(DefaultAdmissionRetryAfterSeconds));
+
+        if (observation.IsRepeated)
+        {
+            _logger.LogDebug(
+                "Repeated stream request rejected for '{DisplayName}' — " + warningDetail + " Retry window remains active for {Seconds:F0}s.",
+                displayName,
+                limit,
+                observation.Remaining.TotalSeconds);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Stream request rejected for '{DisplayName}' — " + warningDetail,
+                displayName,
+                limit);
+        }
+
+        return new StreamAdmissionException(
+            message,
+            failureKind,
+            StatusCodes.Status503ServiceUnavailable,
+            retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(DefaultAdmissionRetryAfterSeconds, observation.Remaining.TotalSeconds))));
     }
 }
 

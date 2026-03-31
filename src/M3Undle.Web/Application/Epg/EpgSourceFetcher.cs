@@ -188,7 +188,7 @@ public sealed class EpgSourceFetcher(
             if (!string.IsNullOrWhiteSpace(dir))
                 Directory.CreateDirectory(dir);
 
-            await File.WriteAllTextAsync(path, xml, System.Text.Encoding.UTF8, cancellationToken);
+            await File.WriteAllTextAsync(path, xml, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
         }
         catch (OperationCanceledException)
         {

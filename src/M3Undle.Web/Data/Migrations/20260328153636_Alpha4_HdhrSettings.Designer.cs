@@ -3,6 +3,7 @@ using System;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260328153636_Alpha4_HdhrSettings")]
+    partial class Alpha4_HdhrSettings
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
@@ -809,10 +812,6 @@ namespace M3Undle.Web.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("provider_channel_id");
-
-                    b.Property<string>("TvgIdOverride")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("tvg_id_override");
 
                     b.HasKey("ProfileGroupChannelFilterId");
 

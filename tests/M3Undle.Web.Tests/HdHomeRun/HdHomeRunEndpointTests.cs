@@ -40,12 +40,18 @@ public sealed class HdHomeRunEndpointTests
         var firstDeviceId = firstJson.RootElement.GetProperty("DeviceID").GetString();
         var secondDeviceId = secondJson.RootElement.GetProperty("DeviceID").GetString();
         var tunerCount = firstJson.RootElement.GetProperty("TunerCount").GetInt32();
+        var baseUrl = firstJson.RootElement.GetProperty("BaseURL").GetString();
+        var lineupUrl = firstJson.RootElement.GetProperty("LineupURL").GetString();
 
         Assert.IsFalse(string.IsNullOrWhiteSpace(firstDeviceId));
         Assert.AreEqual(8, firstDeviceId!.Length);
         Assert.IsTrue(firstDeviceId.All(Uri.IsHexDigit));
         Assert.IsGreaterThan(0, tunerCount);
         Assert.AreEqual(firstDeviceId, secondDeviceId);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(baseUrl));
+        Assert.IsFalse(baseUrl!.EndsWith("/hdhr", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(string.IsNullOrWhiteSpace(lineupUrl));
+        StringAssert.Contains(lineupUrl!, "/hdhr/lineup.json");
     }
 
     [TestMethod]
@@ -71,7 +77,7 @@ public sealed class HdHomeRunEndpointTests
             Assert.IsFalse(string.IsNullOrWhiteSpace(channel.GetProperty("GuideNumber").GetString()));
             var url = channel.GetProperty("URL").GetString();
             Assert.IsFalse(string.IsNullOrWhiteSpace(url));
-            StringAssert.Contains(url!, "/hdhr/tune/");
+            StringAssert.Contains(url!, "/hdhr/auto/v");
         }
 
         var names = channels
@@ -165,44 +171,43 @@ public sealed class HdHomeRunEndpointTests
 
         var xmlText = await response.Content.ReadAsStringAsync();
         var document = XDocument.Parse(xmlText);
+        var urlBase = document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "URLBase")?.Value;
+        var presentationUrl = document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "presentationURL")?.Value;
 
         Assert.AreEqual("root", document.Root?.Name.LocalName);
         Assert.IsNotNull(document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "friendlyName"));
         Assert.IsNotNull(document.Root?.Descendants().FirstOrDefault(x => x.Name.LocalName == "serialNumber"));
+        Assert.IsFalse(string.IsNullOrWhiteSpace(urlBase));
+        Assert.IsFalse(urlBase!.Contains("/hdhr/", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(urlBase.EndsWith("/hdhr/", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(string.IsNullOrWhiteSpace(presentationUrl));
+        Assert.IsFalse(presentationUrl!.EndsWith("/hdhr", StringComparison.OrdinalIgnoreCase));
     }
 
     [TestMethod]
-    public async Task Endpoint_AutoTuneRoutes_RedirectToTuneUrl()
+    public async Task Endpoint_AutoTuneRoutes_StreamDirectly()
     {
-        // Checklist: /hdhr/auto routes resolve guide numbers and redirect to /hdhr/tune/{streamKey}.
         await using var factory = new HdhrApiFactory();
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
         });
 
-        var routeCases = new (string RequestPath, string ExpectedTunePath)[]
+        var routes = new[]
         {
-            ("/hdhr/auto/v11", "/hdhr/tune/live-1"),
-            ("/hdhr/auto/ch11", "/hdhr/tune/live-1"),
-            ("/hdhr/auto/11", "/hdhr/tune/live-1"),
-            ("/hdhr/auto/v1000", "/hdhr/tune/live-2"),
-            ("/hdhr/auto/ch1000", "/hdhr/tune/live-2"),
-            ("/auto/v11", "/hdhr/tune/live-1"),
+            "/hdhr/auto/v11",
+            "/hdhr/auto/ch11",
+            "/hdhr/auto/11",
+            "/hdhr/auto/v1000",
+            "/hdhr/auto/ch1000",
+            "/auto/v11",
         };
 
-        foreach (var (requestPath, expectedTunePath) in routeCases)
+        foreach (var route in routes)
         {
-            using var response = await client.GetAsync(requestPath);
-
-            Assert.AreEqual(HttpStatusCode.Redirect, response.StatusCode, $"Unexpected status for {requestPath}");
-            Assert.IsNotNull(response.Headers.Location, $"Missing Location header for {requestPath}");
-
-            var location = response.Headers.Location!;
-            var locationValue = location.IsAbsoluteUri ? location.PathAndQuery : location.OriginalString;
-            Assert.IsTrue(
-                locationValue.StartsWith(expectedTunePath, StringComparison.Ordinal),
-                $"Unexpected redirect location for {requestPath}: {locationValue}");
+            using var response = await client.GetAsync(route);
+            Assert.AreNotEqual(HttpStatusCode.NotFound, response.StatusCode, $"Expected mapped route for {route}");
+            Assert.AreNotEqual(HttpStatusCode.Redirect, response.StatusCode, $"Auto tune should stream directly, not redirect for {route}");
         }
     }
 
@@ -235,6 +240,11 @@ public sealed class HdHomeRunEndpointTests
             "/tuner0/auto/v11",
             "/tuner0/auto/ch11",
             "/tuner0/auto/11",
+            "/hdhr/tuner0/v11",
+            "/hdhr/tuner1/ch1000",
+            "/hdhr/tuner0/auto/v11",
+            "/hdhr/tuner0/auto/ch11",
+            "/hdhr/tuner0/auto/11",
         };
 
         foreach (var route in routes)

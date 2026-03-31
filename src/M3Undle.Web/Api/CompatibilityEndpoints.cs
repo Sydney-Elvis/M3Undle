@@ -51,6 +51,17 @@ public static class CompatibilityEndpoints
         client.MapGet("tuner{tuner:int}/auto/v{vchannel}", ServeHdhrNativeTuneByVChannelAsync);
         client.MapGet("tuner{tuner:int}/auto/ch{channel}", ServeHdhrNativeTuneByChannelAsync);
         client.MapGet("tuner{tuner:int}/auto/{channel}", ServeHdhrNativeTuneByChannelAsync);
+        client.MapGet("hdhr/tuner{tuner:int}/v{vchannel}", ServeHdhrNativeTuneByVChannelAsync);
+        client.MapGet("hdhr/tuner{tuner:int}/ch{channel}", ServeHdhrNativeTuneByChannelAsync);
+        client.MapGet("hdhr/tuner{tuner:int}/auto/v{vchannel}", ServeHdhrNativeTuneByVChannelAsync);
+        client.MapGet("hdhr/tuner{tuner:int}/auto/ch{channel}", ServeHdhrNativeTuneByChannelAsync);
+        client.MapGet("hdhr/tuner{tuner:int}/auto/{channel}", ServeHdhrNativeTuneByChannelAsync);
+        client.MapGet("hdhr/auto/v{vchannel}", ServeHdhrAutoTuneByVChannelAsync);
+        client.MapGet("hdhr/auto/ch{channel}", ServeHdhrAutoTuneByChannelAsync);
+        client.MapGet("hdhr/auto/{channel}", ServeHdhrAutoTuneByChannelAsync);
+        client.MapGet("auto/v{vchannel}", ServeHdhrAutoTuneByVChannelAsync);
+        client.MapGet("auto/ch{channel}", ServeHdhrAutoTuneByChannelAsync);
+        client.MapGet("auto/{channel}", ServeHdhrAutoTuneByChannelAsync);
         client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
@@ -151,6 +162,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -166,6 +178,7 @@ public static class CompatibilityEndpoints
             streamRequestResolver,
             channelSessionManager,
             hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
             lineupRenderer,
@@ -182,6 +195,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -197,6 +211,7 @@ public static class CompatibilityEndpoints
             streamRequestResolver,
             channelSessionManager,
             hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
             lineupRenderer,
@@ -205,14 +220,76 @@ public static class CompatibilityEndpoints
             streamProxyOptions,
             cancellationToken);
 
-    private static async Task ServeHdhrNativeTuneAsync(
-        int tuner,
+    private static Task ServeHdhrAutoTuneByVChannelAsync(
+        string vchannel,
+        HttpContext context,
+        ApplicationDbContext db,
+        StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
+        HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
+        IHttpClientFactory httpClientFactory,
+        HlsProxyService hlsProxyService,
+        ILineupRenderer lineupRenderer,
+        HdHomeRunLineupService hdHomeRunLineupService,
+        ILoggerFactory loggerFactory,
+        IOptions<StreamProxyOptions> streamProxyOptions,
+        CancellationToken cancellationToken)
+        => ServeHdhrAutoTuneAsync(
+            requestedGuideNumber: vchannel,
+            context,
+            db,
+            streamRequestResolver,
+            channelSessionManager,
+            hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
+            httpClientFactory,
+            hlsProxyService,
+            lineupRenderer,
+            hdHomeRunLineupService,
+            loggerFactory,
+            streamProxyOptions,
+            cancellationToken);
+
+    private static Task ServeHdhrAutoTuneByChannelAsync(
+        string channel,
+        HttpContext context,
+        ApplicationDbContext db,
+        StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
+        HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
+        IHttpClientFactory httpClientFactory,
+        HlsProxyService hlsProxyService,
+        ILineupRenderer lineupRenderer,
+        HdHomeRunLineupService hdHomeRunLineupService,
+        ILoggerFactory loggerFactory,
+        IOptions<StreamProxyOptions> streamProxyOptions,
+        CancellationToken cancellationToken)
+        => ServeHdhrAutoTuneAsync(
+            requestedGuideNumber: NormalizeHdhrGuideNumber(channel),
+            context,
+            db,
+            streamRequestResolver,
+            channelSessionManager,
+            hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
+            httpClientFactory,
+            hlsProxyService,
+            lineupRenderer,
+            hdHomeRunLineupService,
+            loggerFactory,
+            streamProxyOptions,
+            cancellationToken);
+
+    private static async Task ServeHdhrAutoTuneAsync(
         string requestedGuideNumber,
         HttpContext context,
         ApplicationDbContext db,
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -222,7 +299,113 @@ public static class CompatibilityEndpoints
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
-        if (tuner < 0)
+
+        if (!hdHomeRunDeviceService.IsEnabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        requestedGuideNumber = requestedGuideNumber.Trim();
+        if (string.IsNullOrWhiteSpace(requestedGuideNumber))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        string streamKey;
+        try
+        {
+            var access = context.GetResolvedClientAccess();
+            var renderedLineup = await lineupRenderer.TryRenderActiveLineupAsync(access.Binding.ActiveProfileId, cancellationToken);
+            if (renderedLineup is null)
+            {
+                logger.LogWarning(
+                    "HDHR auto tune failed: no active snapshot. path={Path} guide={GuideNumber} profile={ProfileId}",
+                    context.Request.Path.Value,
+                    requestedGuideNumber,
+                    access.Binding.ActiveProfileId);
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.Headers.Append("Retry-After", "60");
+                await context.Response.WriteAsync("No active snapshot available. Waiting for first refresh.", cancellationToken);
+                return;
+            }
+
+            var resolvedStreamKey = hdHomeRunLineupService.TryResolveStreamKeyByGuideNumber(renderedLineup, requestedGuideNumber, cancellationToken);
+            if (string.IsNullOrWhiteSpace(resolvedStreamKey))
+            {
+                logger.LogWarning(
+                    "HDHR auto tune failed: guide number not found in active lineup. path={Path} guide={GuideNumber} profile={ProfileId}",
+                    context.Request.Path.Value,
+                    requestedGuideNumber,
+                    access.Binding.ActiveProfileId);
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            streamKey = resolvedStreamKey;
+            logger.LogInformation(
+                "HDHR auto tune resolved. path={Path} guide={GuideNumber} streamKey={StreamKey}",
+                context.Request.Path.Value,
+                requestedGuideNumber,
+                streamKey);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            logger.LogWarning(
+                ex,
+                "HDHR auto tune failed: active snapshot data unavailable. path={Path} guide={GuideNumber}",
+                context.Request.Path.Value,
+                requestedGuideNumber);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.Append("Retry-After", "30");
+            await context.Response.WriteAsync("Active snapshot data is unavailable.", cancellationToken);
+            return;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        await ServeStreamAsync(
+            streamKey,
+            context,
+            db,
+            streamRequestResolver,
+            channelSessionManager,
+            hdHomeRunTunerManager,
+            httpClientFactory,
+            hlsProxyService,
+            loggerFactory,
+            streamProxyOptions,
+            cancellationToken);
+    }
+
+    private static async Task ServeHdhrNativeTuneAsync(
+        int tuner,
+        string requestedGuideNumber,
+        HttpContext context,
+        ApplicationDbContext db,
+        StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
+        HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
+        IHttpClientFactory httpClientFactory,
+        HlsProxyService hlsProxyService,
+        ILineupRenderer lineupRenderer,
+        HdHomeRunLineupService hdHomeRunLineupService,
+        ILoggerFactory loggerFactory,
+        IOptions<StreamProxyOptions> streamProxyOptions,
+        CancellationToken cancellationToken)
+    {
+        var logger = loggerFactory.CreateLogger("M3Undle.Stream");
+        if (!hdHomeRunDeviceService.IsEnabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (tuner < 0 || !hdHomeRunTunerManager.IsValidTunerIndex(tuner))
         {
             logger.LogWarning(
                 "HDHR native tuner request rejected: invalid tuner index. path={Path} tuner={Tuner}",
@@ -370,17 +553,17 @@ public static class CompatibilityEndpoints
         if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
             // Skip HLS manifest delivery when the client needs raw TS bytes:
-            // 1. Native HDHR tuner paths (/tuner{n}/v{ch}, /tuner{n}/ch{ch}, etc.) — real HDHomeRun
-            //    devices always serve raw MPEG-TS. Returning an HLS manifest breaks clients like
-            //    NextPVR that expect the native tuner protocol contract.
+            // 1. HDHR tune routes (/hdhr/tune/*, /tune/*, /tuner{n}/*) must behave like real HDHomeRun
+            //    devices and return MPEG-TS, not HLS manifests.
             // 2. A .ts tail from a non-browser client means a native app explicitly requesting raw TS.
-            // For all other routes (including /tune/ and /hdhr/tune/), HLS detection runs normally;
-            // browser-based apps (IPTVnator, Electron) send Mozilla UA and need HLS.
+            // Other non-HDHR routes can still negotiate HLS for browser-based clients.
             var isNativeTunerRoute = IsNativeHdhrTunerPath(context.Request.Path);
+            var isHdhrTuneRoute = IsHdHomeRunTuneRoute(context.Request.Path);
             var tail = context.Request.RouteValues.TryGetValue("tail", out var tailVal)
                 ? tailVal?.ToString() ?? string.Empty
                 : string.Empty;
-            var isNativeClientRoute = isNativeTunerRoute
+            var isNativeClientRoute = isHdhrTuneRoute
+                || isNativeTunerRoute
                 || (!IsBrowserClient(context) && tail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase));
 
             if (!isNativeClientRoute)
@@ -418,19 +601,56 @@ public static class CompatibilityEndpoints
             {
                 if (IsHdHomeRunTuneRoute(context.Request.Path))
                 {
-                    var tunerId = ResolveHdHomeRunVirtualTunerId(context);
+                    HdHomeRunTunerAcquireResult tunerAcquire;
 
-                    var tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
+                    if (TryGetHdHomeRunTunerIndex(context, out var tunerIdx))
+                    {
+                        if (!hdHomeRunTunerManager.IsValidTunerIndex(tunerIdx))
+                        {
+                            logger.LogWarning(
+                                "HDHR tuner request rejected: tuner index out of range. path={Path} tuner={Tuner} client={Client}",
+                                context.Request.Path.Value,
+                                tunerIdx,
+                                context.Connection.RemoteIpAddress);
+                            context.Response.StatusCode = StatusCodes.Status404NotFound;
+                            return;
+                        }
+
+                        var tunerId = HdHomeRunTunerManager.FormatTunerId(tunerIdx);
+                        tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
+                    }
+                    else
+                    {
+                        tunerAcquire = hdHomeRunTunerManager.AcquireAuto(streamKey);
+                    }
+
                     if (!tunerAcquire.Succeeded || tunerAcquire.Reservation is null)
                     {
+                        var leases = hdHomeRunTunerManager.GetActiveLeases();
+                        logger.LogWarning(
+                            "HDHR tuner acquire rejected: path={Path} streamKey={StreamKey} client={Client} reason={Reason} activeLeaseCount={LeaseCount} activeLeases={Leases}",
+                            context.Request.Path.Value,
+                            streamKey,
+                            context.Connection.RemoteIpAddress,
+                            tunerAcquire.Error ?? "unknown",
+                            leases.Count,
+                            string.Join(",", leases.Select(x => $"{x.VirtualTunerId}:{x.StreamKey}:{x.ClientId ?? "n/a"}")));
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                         context.Response.Headers["Retry-After"] = "30";
+                        context.Response.Headers["X-HDHomeRun-Error"] = "805";
                         if (!string.IsNullOrWhiteSpace(tunerAcquire.Error))
                             await context.Response.WriteAsync(tunerAcquire.Error, cancellationToken);
                         return;
                     }
 
                     tunerReservation = tunerAcquire.Reservation;
+                    logger.LogInformation(
+                        "HDHR tuner acquired: path={Path} tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} priorSubscriber={HadPriorSubscriber}",
+                        context.Request.Path.Value,
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        streamKey,
+                        tunerAcquire.PriorSubscriber is not null);
                     if (tunerAcquire.PriorSubscriber is not null)
                         await tunerAcquire.PriorSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
                 }
@@ -444,6 +664,13 @@ public static class CompatibilityEndpoints
                         tunerReservation,
                         subscriber,
                         resolved.SourceDescriptor.DisplayName);
+                    logger.LogInformation(
+                        "HDHR tuner activated: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} channel={Channel} clientId={ClientId}",
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        tunerReservation.StreamKey,
+                        resolved.SourceDescriptor.DisplayName,
+                        subscriber.ClientId);
                 }
 
                 await subscriber.Completion;
@@ -494,7 +721,16 @@ public static class CompatibilityEndpoints
             finally
             {
                 if (tunerReservation is not null)
+                {
                     hdHomeRunTunerManager.Release(tunerReservation.ReservationId, subscriber?.ClientId);
+                    var leases = hdHomeRunTunerManager.GetActiveLeases();
+                    logger.LogInformation(
+                        "HDHR tuner released: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} remainingLeaseCount={LeaseCount}",
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        tunerReservation.StreamKey,
+                        leases.Count);
+                }
             }
         }
 
@@ -805,31 +1041,36 @@ public static class CompatibilityEndpoints
 
     // `/tune/*` exists as the legacy HDHomeRun alias for `/hdhr/tune/*`.
     // `/tuner{n}/*` is the native HDHomeRun route shape used by LibHDHomeRun clients.
+    // `/auto/*` and `/hdhr/auto/*` are auto-tune routes that pick the first free tuner.
     private static bool IsHdHomeRunTuneRoute(PathString path)
         => path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/hdhr/auto", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/auto", StringComparison.OrdinalIgnoreCase)
            || IsNativeHdhrTunerPath(path);
 
     private static bool IsNativeHdhrTunerPath(PathString path)
     {
         var value = path.Value;
-        return !string.IsNullOrWhiteSpace(value)
-               && value.StartsWith("/tuner", StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        if (value.StartsWith("/hdhr/tuner", StringComparison.OrdinalIgnoreCase)
+            && value.Length > "/hdhr/tuner".Length
+            && char.IsDigit(value["/hdhr/tuner".Length]))
+            return true;
+
+        return value.StartsWith("/tuner", StringComparison.OrdinalIgnoreCase)
                && value.Length > "/tuner".Length
                && char.IsDigit(value["/tuner".Length]);
     }
 
     private static string ResolveHdHomeRunVirtualTunerId(HttpContext context)
     {
-        var access = context.GetResolvedClientAccess();
-        var baseTunerId = string.IsNullOrWhiteSpace(access.Binding.VirtualTunerId)
-            ? "hdhr-main"
-            : access.Binding.VirtualTunerId!;
-
         if (!TryGetHdHomeRunTunerIndex(context, out var tunerIndex))
-            return baseTunerId;
+            return "auto";
 
-        return $"{baseTunerId}/tuner{tunerIndex.ToString(CultureInfo.InvariantCulture)}";
+        return HdHomeRunTunerManager.FormatTunerId(tunerIndex);
     }
 
     private static bool TryGetHdHomeRunTunerIndex(HttpContext context, out int tunerIndex)

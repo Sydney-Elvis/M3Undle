@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Application;
@@ -23,6 +24,8 @@ public sealed class HdHomeRunDeviceService(
     IOptions<HdHomeRunOptions> options,
     IConfiguration configuration,
     EnvironmentVariableService env,
+    HdHomeRunTunerCountResolver tunerCountResolver,
+    IServiceScopeFactory scopeFactory,
     ILogger<HdHomeRunDeviceService> logger)
 {
     private const string IdentityDirectoryName = "hdhomerun";
@@ -40,14 +43,26 @@ public sealed class HdHomeRunDeviceService(
     private volatile HdHomeRunIdentityFile? _cachedIdentity;
     private volatile string? _cachedBaseUrl;
 
-    public bool IsEnabled => GetBoolSetting("M3UNDLE_HDHR_ENABLED", options.Value.Enabled);
+    public bool IsEnabled
+    {
+        get
+        {
+            var envValue = env.GetValue("M3UNDLE_HDHR_ENABLED");
+            if (bool.TryParse(envValue, out var parsed))
+                return parsed;
+            return GetDbBoolSetting(s => s.HdhrEnabled, options.Value.Enabled);
+        }
+    }
 
-    public bool IsDiscoveryEnabled => GetBoolSetting("M3UNDLE_HDHR_DISCOVERY_ENABLED", options.Value.DiscoveryEnabled);
+    public bool IsDisabledByEnvironment
+        => string.Equals(env.GetValue("M3UNDLE_HDHR_ENABLED"), "false", StringComparison.OrdinalIgnoreCase);
 
-    public bool IsSsdpEnabled => GetBoolSetting("M3UNDLE_HDHR_SSDP_ENABLED", options.Value.SsdpEnabled);
+    public bool IsDiscoveryEnabled => GetDbBoolSetting(s => s.HdhrDiscoveryEnabled, options.Value.DiscoveryEnabled);
 
-    public bool IsSiliconDustDiscoveryEnabled => GetBoolSetting(
-        "M3UNDLE_HDHR_SILICONDUST_DISCOVERY_ENABLED",
+    public bool IsSsdpEnabled => GetDbBoolSetting(s => s.HdhrSsdpEnabled, options.Value.SsdpEnabled);
+
+    public bool IsSiliconDustDiscoveryEnabled => GetDbBoolSetting(
+        s => s.HdhrSiliconDustDiscoveryEnabled,
         options.Value.SiliconDustDiscoveryEnabled);
 
     public string ResolveBaseUrl(HttpContext? httpContext = null)
@@ -147,22 +162,46 @@ public sealed class HdHomeRunDeviceService(
 
     private string? GetAdvertisedBaseUrlSetting()
     {
-        var envValue = env.GetValue("M3UNDLE_HDHR_ADVERTISED_BASE_URL");
-        return string.IsNullOrWhiteSpace(envValue) ? options.Value.AdvertisedBaseUrl : envValue;
+        var dbValue = QueryDbSetting(s => s.HdhrAdvertisedBaseUrl);
+        if (!string.IsNullOrWhiteSpace(dbValue))
+            return dbValue;
+
+        return options.Value.AdvertisedBaseUrl;
     }
 
-    private int ResolveTunerCount()
+    private int ResolveTunerCount() => tunerCountResolver.ResolveTunerCount();
+
+    private bool GetDbBoolSetting(Func<Data.Entities.SiteSettings, bool> dbSelector, bool defaultValue)
     {
-        var envValue = env.GetValue("M3UNDLE_HDHR_TUNER_COUNT");
-        if (int.TryParse(envValue, out var parsed))
-            return Math.Clamp(parsed, 1, 32);
-        return Math.Clamp(options.Value.TunerCount, 1, 32);
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
+            var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+            if (settings is not null)
+                return dbSelector(settings);
+        }
+        catch
+        {
+            // DB may not be ready during early startup; fall through to default.
+        }
+
+        return defaultValue;
     }
 
-    private bool GetBoolSetting(string envVarName, bool defaultValue)
+    private T? QueryDbSetting<T>(Func<Data.Entities.SiteSettings, T?> selector)
     {
-        var envValue = env.GetValue(envVarName);
-        return bool.TryParse(envValue, out var parsed) ? parsed : defaultValue;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
+            var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+            return settings is not null ? selector(settings) : default;
+        }
+        catch
+        {
+            return default;
+        }
     }
 
     private string GetIdentityPath()

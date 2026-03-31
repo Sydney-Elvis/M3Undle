@@ -144,8 +144,8 @@ public sealed class HdHomeRunDiscoveryService(
                 if (!ShouldRespondToDiscover(request, deviceId))
                     continue;
 
-                var baseUrl = $"{deviceService.ResolveBaseUrl().TrimEnd('/')}/hdhr";
-                var lineupUrl = $"{baseUrl}/lineup.json";
+                var baseUrl = deviceService.ResolveBaseUrl().TrimEnd('/');
+                var lineupUrl = $"{baseUrl}/hdhr/lineup.json";
                 var packet = BuildDiscoverResponsePacket(
                     deviceId,
                     (byte)Math.Clamp(device.TunerCount, 1, 255),

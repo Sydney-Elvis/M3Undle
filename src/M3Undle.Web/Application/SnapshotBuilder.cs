@@ -324,7 +324,7 @@ public sealed class SnapshotBuilder(
         var xmltvPath = Path.Combine(snapshotDir, "guide.xml");
 
         await ChannelIndexStore.WriteAsync(channelIndexPath, channelIndexIdxPath, channelIndex, cancellationToken);
-        await File.WriteAllTextAsync(xmltvPath, xmltvContent, Encoding.UTF8, cancellationToken);
+        await File.WriteAllTextAsync(xmltvPath, xmltvContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
 
         int liveCount = 0, vodCount = 0;
         var seriesNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -646,23 +646,53 @@ public sealed class SnapshotBuilder(
 
         var mappingLookup = mappings.ToLookup(m => m.ProviderChannelId, StringComparer.Ordinal);
 
-        // Build output channel list aligned to the profile's selected output channels where available.
-        var configuredChannelIds = await db.ProfileGroupChannelFilters
+        // Build output channel list aligned to the same select-mode stream URL rules used
+        // by BuildChannelIndex for live channel publishing.
+        var liveChannels = await db.ProviderChannels
             .AsNoTracking()
-            .Where(f => f.ProfileGroupFilter.ProfileId == profileId &&
-                        f.ProfileGroupFilter.Decision == "hold")
-            .Select(f => f.ProviderChannelId)
-            .Distinct()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "live")
             .ToListAsync(cancellationToken);
 
-        var dbChannelsQuery = db.ProviderChannels
+        var includedFilters = await db.ProfileGroupFilters
             .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "live");
+            .Include(x => x.ProviderGroup)
+            .Where(x => x.ProfileId == profileId
+                        && x.ProviderGroup.ProviderId == provider.ProviderId
+                        && x.Decision != "exclude")
+            .ToListAsync(cancellationToken);
 
-        if (configuredChannelIds.Count > 0)
-            dbChannelsQuery = dbChannelsQuery.Where(x => configuredChannelIds.Contains(x.ProviderChannelId));
+        var filterIdByGroupName = includedFilters
+            .ToDictionary(x => x.ProviderGroup.RawName, x => x.ProfileGroupFilterId, StringComparer.Ordinal);
 
-        var dbChannels = await dbChannelsQuery.ToListAsync(cancellationToken);
+        var selectedStreamUrlsByFilterId = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (includedFilters.Count > 0)
+        {
+            var includedFilterIds = includedFilters.Select(f => f.ProfileGroupFilterId).ToList();
+
+            var selections = await db.ProfileGroupChannelFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderChannel)
+                .Where(x => includedFilterIds.Contains(x.ProfileGroupFilterId))
+                .ToListAsync(cancellationToken);
+
+            selectedStreamUrlsByFilterId = selections
+                .GroupBy(x => x.ProfileGroupFilterId, StringComparer.Ordinal)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g
+                        .Select(x => x.ProviderChannel.StreamUrl)
+                        .Where(url => !string.IsNullOrWhiteSpace(url))
+                        .ToHashSet(StringComparer.Ordinal),
+                    StringComparer.Ordinal);
+        }
+
+        var dbChannels = liveChannels
+            .Where(ch => !string.IsNullOrWhiteSpace(ch.StreamUrl)
+                         && !string.IsNullOrWhiteSpace(ch.GroupTitle)
+                         && filterIdByGroupName.TryGetValue(ch.GroupTitle!, out var filterId)
+                         && selectedStreamUrlsByFilterId.TryGetValue(filterId, out var selectedUrls)
+                         && selectedUrls.Contains(ch.StreamUrl!))
+            .ToList();
 
         var outputChannels = dbChannels
             .Where(ch => !string.IsNullOrWhiteSpace(ch.TvgId))

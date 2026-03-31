@@ -365,6 +365,12 @@ public sealed class SnapshotHandlingTests
             Assert.AreEqual("active", snapshot.Status);
             Assert.IsTrue(File.Exists(snapshot.ChannelIndexPath));
             Assert.IsTrue(File.Exists(snapshot.XmltvPath));
+
+            var xmlBytes = await File.ReadAllBytesAsync(snapshot.XmltvPath);
+            Assert.IsNotEmpty(xmlBytes);
+            Assert.IsFalse(
+                xmlBytes.Length >= 3 && xmlBytes[0] == 0xEF && xmlBytes[1] == 0xBB && xmlBytes[2] == 0xBF,
+                "Snapshot XMLTV should be UTF-8 without BOM.");
         }
         finally
         {

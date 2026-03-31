@@ -1,6 +1,7 @@
 using M3Undle.Web.Application;
 using Microsoft.AspNetCore.Http;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System.Text;
 
 namespace M3Undle.Web.Tests.Application;
 
@@ -77,6 +78,43 @@ public sealed class M3uSerializerTests
 
         StringAssert.Contains(output, "http://proxy.test/live/live-key/20312");
         Assert.IsFalse(output.Contains("/20312.ts", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task WriteAsync_SetsContentLengthToUtf8ByteCount()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Scheme = "http";
+        context.Request.Host = new HostString("proxy.test");
+        context.Response.Body = new MemoryStream();
+
+        var lineup = new RenderedLineup(
+            SnapshotId: "snap-1",
+            ProfileId: "profile-1",
+            SnapshotCreatedUtc: DateTime.UtcNow,
+            ChannelIndexPath: "/tmp/channel_index.idx",
+            XmltvPath: "/tmp/m3undle.xml",
+            Channels:
+            [
+                new RenderedLineupChannel(
+                    StreamKey: "live-key",
+                    DisplayName: "Live One",
+                    TvgId: "chan-1",
+                    TvgName: "Live One",
+                    LogoUrl: "http://proxy.test/logo.png",
+                    GroupTitle: "News",
+                    TvgChno: 101,
+                    StreamUrl: "http://provider.test/live/user/pass/20312",
+                    ContentType: "live"),
+            ]);
+
+        await _serializer.WriteAsync(context, lineup, CancellationToken.None);
+
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        var output = await reader.ReadToEndAsync();
+
+        Assert.AreEqual(Encoding.UTF8.GetByteCount(output), context.Response.ContentLength);
     }
 
     private async Task<string> SerializeSingleChannelAsync(RenderedLineupChannel channel)

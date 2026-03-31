@@ -31,7 +31,7 @@ public sealed class HdHomeRunLineupService
                 ChannelId: resolved.Channel.StreamKey,
                 GuideNumber: resolved.GuideNumber,
                 GuideName: resolved.GuideName,
-                Url: $"{baseUrl}/hdhr/tune/{resolved.Channel.StreamKey}".ApplyClientAccessQuery(context),
+                Url: $"{baseUrl}/hdhr/auto/v{resolved.GuideNumber}".ApplyClientAccessQuery(context),
                 TvgId: resolved.Channel.TvgId,
                 LogoUrl: resolved.Channel.LogoUrl));
         }
@@ -74,11 +74,7 @@ public sealed class HdHomeRunLineupService
                 ? channel.TvgChno.Value.ToString(CultureInfo.InvariantCulture)
                 : (fallbackGuideNumber++).ToString(CultureInfo.InvariantCulture);
 
-            var guideName = string.IsNullOrWhiteSpace(channel.TvgName)
-                ? channel.DisplayName
-                : channel.TvgName;
-
-            yield return new ResolvedLiveChannel(channel, guideNumber, guideName);
+            yield return new ResolvedLiveChannel(channel, guideNumber, channel.DisplayName);
         }
     }
 

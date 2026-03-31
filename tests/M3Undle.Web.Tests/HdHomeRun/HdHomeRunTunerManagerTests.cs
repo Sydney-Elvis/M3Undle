@@ -1,7 +1,10 @@
 using M3Undle.Web.Application;
+using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Streaming.Subscribers;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -43,7 +46,7 @@ public sealed class HdHomeRunTunerManagerTests
     [TestMethod]
     public void Acquire_DistinctTunersBeyondConfiguredCount_Fails()
     {
-        var manager = CreateManager(tunerCount: 1);
+        var manager = CreateManager(tunerCount: 1, dbTunerCountOverride: 1);
 
         var first = manager.Acquire("tuner-a", "stream-1");
         Assert.IsTrue(first.Succeeded);
@@ -87,27 +90,6 @@ public sealed class HdHomeRunTunerManagerTests
     }
 
     [TestMethod]
-    public void Acquire_UsesEnvironmentOverride_ForTunerCount()
-    {
-        Environment.SetEnvironmentVariable("M3UNDLE_HDHR_TUNER_COUNT", "2");
-        try
-        {
-            var manager = CreateManager(tunerCount: 1);
-
-            var first = manager.Acquire("tuner-a", "stream-1");
-            var second = manager.Acquire("tuner-b", "stream-2");
-
-            Assert.IsTrue(first.Succeeded);
-            Assert.IsTrue(second.Succeeded);
-            Assert.HasCount(2, manager.GetActiveLeases());
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("M3UNDLE_HDHR_TUNER_COUNT", null);
-        }
-    }
-
-    [TestMethod]
     public void Release_TunerSlot_AllowsNewAcquisition()
     {
         // Checklist: Disconnecting playback releases the tuner slot.
@@ -131,7 +113,7 @@ public sealed class HdHomeRunTunerManagerTests
     public void Acquire_GenericStreamRoute_IsNotEnforcedByTunerManager()
     {
         // Checklist: Generic /stream/<streamKey> requests are not blocked by HDHomeRun tuner enforcement.
-        var manager = CreateManager(tunerCount: 2);
+        var manager = CreateManager(tunerCount: 2, dbTunerCountOverride: 2);
 
         var first = manager.Acquire("vt-1", "ch-1");
         var second = manager.Acquire("vt-2", "ch-2");
@@ -150,10 +132,146 @@ public sealed class HdHomeRunTunerManagerTests
         // This test confirms the manager is the sole enforcement point and state changes only if Acquire() is invoked.
     }
 
-    private static HdHomeRunTunerManager CreateManager(int tunerCount)
-        => new(
-            Options.Create(new HdHomeRunOptions { TunerCount = tunerCount }),
-            new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance));
+    [TestMethod]
+    public void AcquireAuto_AssignsFirstFreeTunerIndex()
+    {
+        var manager = CreateManager(tunerCount: 4);
+
+        var first = manager.AcquireAuto("ch-1");
+        var second = manager.AcquireAuto("ch-2");
+
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsTrue(second.Succeeded);
+        Assert.AreEqual("tuner0", first.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner1", second.Reservation!.VirtualTunerId);
+        Assert.HasCount(2, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
+    public void AcquireAuto_ReusesReleasedSlot()
+    {
+        var manager = CreateManager(tunerCount: 2);
+
+        var first = manager.AcquireAuto("ch-1");
+        var second = manager.AcquireAuto("ch-2");
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsTrue(second.Succeeded);
+
+        manager.Release(first.Reservation!.ReservationId);
+
+        var third = manager.AcquireAuto("ch-3");
+        Assert.IsTrue(third.Succeeded);
+        Assert.AreEqual("tuner0", third.Reservation!.VirtualTunerId);
+    }
+
+    [TestMethod]
+    public void AcquireAuto_RejectsWhenAllSlotsFull()
+    {
+        var manager = CreateManager(tunerCount: 2, dbTunerCountOverride: 2);
+
+        var first = manager.AcquireAuto("ch-1");
+        var second = manager.AcquireAuto("ch-2");
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsTrue(second.Succeeded);
+
+        var third = manager.AcquireAuto("ch-3");
+
+        Assert.IsFalse(third.Succeeded);
+        StringAssert.Contains(third.Error ?? string.Empty, "tuner slots");
+        Assert.HasCount(2, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
+    public void AcquireAuto_NoStreamLimit_AllowsUnlimited()
+    {
+        var manager = CreateManager(tunerCount: 2);
+
+        var first = manager.AcquireAuto("ch-1");
+        var second = manager.AcquireAuto("ch-2");
+        var third = manager.AcquireAuto("ch-3");
+        var fourth = manager.AcquireAuto("ch-4");
+
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsTrue(second.Succeeded);
+        Assert.IsTrue(third.Succeeded);
+        Assert.IsTrue(fourth.Succeeded);
+        Assert.AreEqual("tuner0", first.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner1", second.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner2", third.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner3", fourth.Reservation!.VirtualTunerId);
+        Assert.HasCount(4, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
+    public void AcquireAuto_DoesNotRetunePriorSubscriber()
+    {
+        var manager = CreateManager(tunerCount: 2);
+
+        var first = manager.AcquireAuto("ch-1");
+        var subscriber = CreateSubscriber();
+        manager.Activate(first.Reservation!, subscriber, "Channel One");
+
+        var second = manager.AcquireAuto("ch-2");
+
+        Assert.IsTrue(second.Succeeded);
+        Assert.IsNull(second.PriorSubscriber);
+        Assert.HasCount(2, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
+    public void Acquire_ExplicitTuner_RetuneSameSlot()
+    {
+        var manager = CreateManager(tunerCount: 2);
+
+        var first = manager.Acquire("tuner0", "ch-1");
+        var subscriber = CreateSubscriber();
+        manager.Activate(first.Reservation!, subscriber, "Channel One");
+
+        var second = manager.Acquire("tuner0", "ch-2");
+
+        Assert.IsTrue(second.Succeeded);
+        Assert.AreSame(subscriber, second.PriorSubscriber);
+        Assert.HasCount(1, manager.GetActiveLeases());
+        Assert.AreEqual("ch-2", manager.GetActiveLeases()[0].StreamKey);
+    }
+
+    [TestMethod]
+    public void IsValidTunerIndex_ReturnsCorrectResults()
+    {
+        var manager = CreateManager(tunerCount: 4);
+
+        Assert.IsTrue(manager.IsValidTunerIndex(0));
+        Assert.IsTrue(manager.IsValidTunerIndex(3));
+        Assert.IsFalse(manager.IsValidTunerIndex(4));
+        Assert.IsFalse(manager.IsValidTunerIndex(-1));
+        Assert.IsFalse(manager.IsValidTunerIndex(99));
+    }
+
+    [TestMethod]
+    public void FormatTunerId_ProducesExpectedIds()
+    {
+        Assert.AreEqual("tuner0", HdHomeRunTunerManager.FormatTunerId(0));
+        Assert.AreEqual("tuner1", HdHomeRunTunerManager.FormatTunerId(1));
+        Assert.AreEqual("tuner31", HdHomeRunTunerManager.FormatTunerId(31));
+    }
+
+    private static HdHomeRunTunerManager CreateManager(int tunerCount, int? dbTunerCountOverride = null)
+    {
+        var options = Options.Create(new HdHomeRunOptions { TunerCount = tunerCount });
+        var scopeFactory = TestServiceScopeFactory.Create();
+
+        if (dbTunerCountOverride is not null)
+        {
+            using var scope = scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var settings = db.SiteSettings.First();
+            settings.HdhrTunerCountOverride = dbTunerCountOverride;
+            db.SaveChanges();
+        }
+
+        var resolver = new HdHomeRunTunerCountResolver(options, scopeFactory);
+        return new HdHomeRunTunerManager(resolver);
+    }
 
     private static SubscriberConnection CreateSubscriber()
         => new(
