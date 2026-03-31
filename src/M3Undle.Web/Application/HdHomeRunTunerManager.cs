@@ -65,6 +65,55 @@ public sealed class HdHomeRunTunerManager(
         }
     }
 
+    public HdHomeRunTunerAcquireResult AcquireAuto(string streamKey)
+    {
+        lock (_lock)
+        {
+            var tunerCount = tunerCountResolver.ResolveTunerCount();
+
+            if (_leases.Count >= tunerCount)
+            {
+                return new HdHomeRunTunerAcquireResult(
+                    Succeeded: false,
+                    Error: $"All {tunerCount} HDHomeRun tuner slots are in use.",
+                    Reservation: null,
+                    PriorSubscriber: null);
+            }
+
+            for (var i = 0; i < tunerCount; i++)
+            {
+                var tunerId = FormatTunerId(i);
+                if (_leases.ContainsKey(tunerId))
+                    continue;
+
+                var reservation = new HdHomeRunTunerReservation(
+                    ReservationId: Guid.NewGuid().ToString("N"),
+                    VirtualTunerId: tunerId,
+                    StreamKey: streamKey,
+                    ReservedUtc: DateTimeOffset.UtcNow);
+
+                _leases[tunerId] = new TunerLease(reservation, ChannelName: null, ClientId: null, ActivatedUtc: null, Subscriber: null);
+
+                return new HdHomeRunTunerAcquireResult(
+                    Succeeded: true,
+                    Error: null,
+                    Reservation: reservation,
+                    PriorSubscriber: null);
+            }
+
+            return new HdHomeRunTunerAcquireResult(
+                Succeeded: false,
+                Error: $"All {tunerCount} HDHomeRun tuner slots are in use.",
+                Reservation: null,
+                PriorSubscriber: null);
+        }
+    }
+
+    public bool IsValidTunerIndex(int tunerIndex)
+        => tunerIndex >= 0 && tunerIndex < tunerCountResolver.ResolveTunerCount();
+
+    internal static string FormatTunerId(int tunerIndex) => $"tuner{tunerIndex}";
+
     public void Activate(HdHomeRunTunerReservation reservation, SubscriberConnection subscriber, string? channelName)
     {
         lock (_lock)

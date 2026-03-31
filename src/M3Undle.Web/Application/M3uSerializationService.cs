@@ -16,21 +16,33 @@ public sealed class M3uSerializer : IM3USerializer
         var xmltvUrl = $"{baseUrl}/xmltv/m3undle.xml";
         xmltvUrl = xmltvUrl.ApplyClientAccessQuery(context);
 
-        context.Response.ContentType = "application/x-mpegurl; charset=utf-8";
-        await context.Response.WriteAsync(
-            $"#EXTM3U url-tvg=\"{xmltvUrl}\" x-tvg-url=\"{xmltvUrl}\"\n",
-            cancellationToken);
+        var payload = BuildPlaylist(lineup, baseUrl, xmltvUrl, context);
 
-        var sb = new StringBuilder(512);
+        context.Response.ContentType = "application/x-mpegurl; charset=utf-8";
+        context.Response.ContentLength = Encoding.UTF8.GetByteCount(payload);
+        await context.Response.WriteAsync(payload, cancellationToken);
+    }
+
+    private static string BuildPlaylist(RenderedLineup lineup, string baseUrl, string xmltvUrl, HttpContext context)
+    {
+        // ASP.NET Core does not buffer response writes by default. Build the payload once so
+        // M3U clients receive a normal-length response instead of thousands of tiny flushed chunks.
+        var sb = new StringBuilder(Math.Max(512, lineup.Channels.Count * 160));
+        sb.Append("#EXTM3U url-tvg=\"")
+          .Append(xmltvUrl)
+          .Append("\" x-tvg-url=\"")
+          .Append(xmltvUrl)
+          .Append("\"\n");
+
         foreach (var channel in lineup.Channels)
         {
-            sb.Clear();
             sb.Append(BuildExtInf(channel));
             sb.Append('\n');
             sb.Append(BuildProxyStreamUrl(baseUrl, channel, context));
             sb.Append('\n');
-            await context.Response.WriteAsync(sb.ToString(), cancellationToken);
         }
+
+        return sb.ToString();
     }
 
     private static string BuildExtInf(RenderedLineupChannel channel)

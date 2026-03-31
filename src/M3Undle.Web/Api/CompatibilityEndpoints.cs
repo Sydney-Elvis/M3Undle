@@ -383,7 +383,7 @@ public static class CompatibilityEndpoints
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
-        if (tuner < 0)
+        if (tuner < 0 || !hdHomeRunTunerManager.IsValidTunerIndex(tuner))
         {
             logger.LogWarning(
                 "HDHR native tuner request rejected: invalid tuner index. path={Path} tuner={Tuner}",
@@ -579,16 +579,35 @@ public static class CompatibilityEndpoints
             {
                 if (IsHdHomeRunTuneRoute(context.Request.Path))
                 {
-                    var tunerId = ResolveHdHomeRunVirtualTunerId(context);
+                    HdHomeRunTunerAcquireResult tunerAcquire;
 
-                    var tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
+                    if (TryGetHdHomeRunTunerIndex(context, out var tunerIdx))
+                    {
+                        if (!hdHomeRunTunerManager.IsValidTunerIndex(tunerIdx))
+                        {
+                            logger.LogWarning(
+                                "HDHR tuner request rejected: tuner index out of range. path={Path} tuner={Tuner} client={Client}",
+                                context.Request.Path.Value,
+                                tunerIdx,
+                                context.Connection.RemoteIpAddress);
+                            context.Response.StatusCode = StatusCodes.Status404NotFound;
+                            return;
+                        }
+
+                        var tunerId = HdHomeRunTunerManager.FormatTunerId(tunerIdx);
+                        tunerAcquire = hdHomeRunTunerManager.Acquire(tunerId, streamKey);
+                    }
+                    else
+                    {
+                        tunerAcquire = hdHomeRunTunerManager.AcquireAuto(streamKey);
+                    }
+
                     if (!tunerAcquire.Succeeded || tunerAcquire.Reservation is null)
                     {
                         var leases = hdHomeRunTunerManager.GetActiveLeases();
                         logger.LogWarning(
-                            "HDHR tuner acquire rejected: path={Path} tunerId={TunerId} streamKey={StreamKey} client={Client} reason={Reason} activeLeaseCount={LeaseCount} activeLeases={Leases}",
+                            "HDHR tuner acquire rejected: path={Path} streamKey={StreamKey} client={Client} reason={Reason} activeLeaseCount={LeaseCount} activeLeases={Leases}",
                             context.Request.Path.Value,
-                            tunerId,
                             streamKey,
                             context.Connection.RemoteIpAddress,
                             tunerAcquire.Error ?? "unknown",
@@ -596,6 +615,7 @@ public static class CompatibilityEndpoints
                             string.Join(",", leases.Select(x => $"{x.VirtualTunerId}:{x.StreamKey}:{x.ClientId ?? "n/a"}")));
                         context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                         context.Response.Headers["Retry-After"] = "30";
+                        context.Response.Headers["X-HDHomeRun-Error"] = "805";
                         if (!string.IsNullOrWhiteSpace(tunerAcquire.Error))
                             await context.Response.WriteAsync(tunerAcquire.Error, cancellationToken);
                         return;
@@ -999,9 +1019,12 @@ public static class CompatibilityEndpoints
 
     // `/tune/*` exists as the legacy HDHomeRun alias for `/hdhr/tune/*`.
     // `/tuner{n}/*` is the native HDHomeRun route shape used by LibHDHomeRun clients.
+    // `/auto/*` and `/hdhr/auto/*` are auto-tune routes that pick the first free tuner.
     private static bool IsHdHomeRunTuneRoute(PathString path)
         => path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/hdhr/auto", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/auto", StringComparison.OrdinalIgnoreCase)
            || IsNativeHdhrTunerPath(path);
 
     private static bool IsNativeHdhrTunerPath(PathString path)
@@ -1022,15 +1045,10 @@ public static class CompatibilityEndpoints
 
     private static string ResolveHdHomeRunVirtualTunerId(HttpContext context)
     {
-        var access = context.GetResolvedClientAccess();
-        var baseTunerId = string.IsNullOrWhiteSpace(access.Binding.VirtualTunerId)
-            ? "hdhr-main"
-            : access.Binding.VirtualTunerId!;
-
         if (!TryGetHdHomeRunTunerIndex(context, out var tunerIndex))
-            return baseTunerId;
+            return "auto";
 
-        return $"{baseTunerId}/tuner{tunerIndex.ToString(CultureInfo.InvariantCulture)}";
+        return HdHomeRunTunerManager.FormatTunerId(tunerIndex);
     }
 
     private static bool TryGetHdHomeRunTunerIndex(HttpContext context, out int tunerIndex)
