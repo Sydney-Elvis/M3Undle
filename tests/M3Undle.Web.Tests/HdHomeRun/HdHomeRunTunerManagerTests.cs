@@ -182,6 +182,27 @@ public sealed class HdHomeRunTunerManagerTests
     }
 
     [TestMethod]
+    public void AcquireAuto_NoStreamLimit_AllowsUnlimited()
+    {
+        var manager = CreateManager(tunerCount: 2);
+
+        var first = manager.AcquireAuto("ch-1");
+        var second = manager.AcquireAuto("ch-2");
+        var third = manager.AcquireAuto("ch-3");
+        var fourth = manager.AcquireAuto("ch-4");
+
+        Assert.IsTrue(first.Succeeded);
+        Assert.IsTrue(second.Succeeded);
+        Assert.IsTrue(third.Succeeded);
+        Assert.IsTrue(fourth.Succeeded);
+        Assert.AreEqual("tuner0", first.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner1", second.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner2", third.Reservation!.VirtualTunerId);
+        Assert.AreEqual("tuner3", fourth.Reservation!.VirtualTunerId);
+        Assert.HasCount(4, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
     public void AcquireAuto_DoesNotRetunePriorSubscriber()
     {
         var manager = CreateManager(tunerCount: 2);

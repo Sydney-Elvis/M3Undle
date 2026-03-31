@@ -69,18 +69,20 @@ public sealed class HdHomeRunTunerManager(
     {
         lock (_lock)
         {
-            var tunerCount = tunerCountResolver.ResolveTunerCount();
+            var streamLimit = ResolveStreamLimit();
 
-            if (_leases.Count >= tunerCount)
+            if (streamLimit is not null && _leases.Count >= streamLimit.Value)
             {
                 return new HdHomeRunTunerAcquireResult(
                     Succeeded: false,
-                    Error: $"All {tunerCount} HDHomeRun tuner slots are in use.",
+                    Error: $"All {streamLimit.Value} HDHomeRun tuner slots are in use.",
                     Reservation: null,
                     PriorSubscriber: null);
             }
 
-            for (var i = 0; i < tunerCount; i++)
+            var searchRange = streamLimit ?? _leases.Count + 1;
+
+            for (var i = 0; i < searchRange; i++)
             {
                 var tunerId = FormatTunerId(i);
                 if (_leases.ContainsKey(tunerId))
@@ -103,7 +105,7 @@ public sealed class HdHomeRunTunerManager(
 
             return new HdHomeRunTunerAcquireResult(
                 Succeeded: false,
-                Error: $"All {tunerCount} HDHomeRun tuner slots are in use.",
+                Error: $"All {streamLimit ?? tunerCountResolver.ResolveTunerCount()} HDHomeRun tuner slots are in use.",
                 Reservation: null,
                 PriorSubscriber: null);
         }

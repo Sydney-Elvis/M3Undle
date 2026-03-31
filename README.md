@@ -178,9 +178,9 @@ docker run -d \
 
 Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
 
-If you use Docker Compose or `docker run` for HDHomeRun-compatible clients such as NextPVR, publish both `5004` and `8080`. `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints.
+Port `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints. Both are always needed.
 
-See [`docs/DOCKER.md`](docs/DOCKER.md) for Compose example, volume layout, and all environment variables.
+For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for full HDHR setup options, Docker networking guidance, and all environment variables.
 
 ---
 
@@ -210,7 +210,7 @@ Legacy HDHomeRun root aliases (`/discover.json`, `/lineup.json`, etc.) are still
 Automatic discovery support:
 - SSDP/UPnP (`UDP 1900`)
 - SiliconDust discovery (`UDP 65001`)
-- Discovery is disabled by default; manual add works without discovery
+- Discovery is disabled by default; manual add works without discovery — see [`docs/DOCKER.md`](docs/DOCKER.md) for setup steps
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 

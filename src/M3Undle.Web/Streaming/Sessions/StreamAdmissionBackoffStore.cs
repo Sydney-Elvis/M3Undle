@@ -7,6 +7,8 @@ public sealed class StreamAdmissionBackoffStore
 {
     private readonly ConcurrentDictionary<AdmissionBackoffKey, DateTimeOffset> _windows = new();
     private readonly TimeProvider _timeProvider;
+    private DateTimeOffset _lastSweep;
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(1);
 
     public StreamAdmissionBackoffStore()
         : this(TimeProvider.System)
@@ -23,11 +25,23 @@ public sealed class StreamAdmissionBackoffStore
         StreamAdmissionFailureKind failureKind,
         TimeSpan retryWindow)
     {
+        var scopedKey = failureKind switch
+        {
+            StreamAdmissionFailureKind.MaxConcurrentSessions => AdmissionBackoffKey.Global(failureKind),
+            StreamAdmissionFailureKind.ProviderLimit => AdmissionBackoffKey.Provider(key.ProviderId, failureKind),
+            _ => AdmissionBackoffKey.Channel(key, failureKind),
+        };
+
+        return ObserveCore(scopedKey, retryWindow);
+    }
+
+    private AdmissionBackoffObservation ObserveCore(AdmissionBackoffKey backoffKey, TimeSpan retryWindow)
+    {
         if (retryWindow <= TimeSpan.Zero)
             return new AdmissionBackoffObservation(IsRepeated: false, Remaining: TimeSpan.Zero);
 
-        var backoffKey = new AdmissionBackoffKey(key, failureKind);
         var now = _timeProvider.GetUtcNow();
+        SweepExpired(now);
 
         if (_windows.TryGetValue(backoffKey, out var activeUntil))
         {
@@ -41,11 +55,36 @@ public sealed class StreamAdmissionBackoffStore
         return new AdmissionBackoffObservation(IsRepeated: false, Remaining: retryWindow);
     }
 
+    private void SweepExpired(DateTimeOffset now)
+    {
+        if (_lastSweep != default && now - _lastSweep < SweepInterval)
+            return;
+
+        _lastSweep = now;
+
+        foreach (var kvp in _windows)
+        {
+            if (kvp.Value <= now)
+                _windows.TryRemove(kvp.Key, out _);
+        }
+    }
+
     internal void ClearAll() => _windows.Clear();
 
     internal readonly record struct AdmissionBackoffObservation(bool IsRepeated, TimeSpan Remaining);
 
     private readonly record struct AdmissionBackoffKey(
-        ChannelSessionKey SessionKey,
-        StreamAdmissionFailureKind FailureKind);
+        string Scope,
+        string ScopeId,
+        StreamAdmissionFailureKind FailureKind)
+    {
+        public static AdmissionBackoffKey Global(StreamAdmissionFailureKind failureKind)
+            => new("global", string.Empty, failureKind);
+
+        public static AdmissionBackoffKey Provider(string providerId, StreamAdmissionFailureKind failureKind)
+            => new("provider", providerId, failureKind);
+
+        public static AdmissionBackoffKey Channel(ChannelSessionKey sessionKey, StreamAdmissionFailureKind failureKind)
+            => new("channel", sessionKey.ToString(), failureKind);
+    }
 }

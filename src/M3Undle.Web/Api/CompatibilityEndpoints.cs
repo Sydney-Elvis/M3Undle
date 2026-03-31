@@ -162,6 +162,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -177,6 +178,7 @@ public static class CompatibilityEndpoints
             streamRequestResolver,
             channelSessionManager,
             hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
             lineupRenderer,
@@ -193,6 +195,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -208,6 +211,7 @@ public static class CompatibilityEndpoints
             streamRequestResolver,
             channelSessionManager,
             hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
             lineupRenderer,
@@ -223,6 +227,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -237,6 +242,7 @@ public static class CompatibilityEndpoints
             streamRequestResolver,
             channelSessionManager,
             hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
             lineupRenderer,
@@ -252,6 +258,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -266,6 +273,7 @@ public static class CompatibilityEndpoints
             streamRequestResolver,
             channelSessionManager,
             hdHomeRunTunerManager,
+            hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
             lineupRenderer,
@@ -281,6 +289,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -290,6 +299,12 @@ public static class CompatibilityEndpoints
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
+
+        if (!hdHomeRunDeviceService.IsEnabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
 
         requestedGuideNumber = requestedGuideNumber.Trim();
         if (string.IsNullOrWhiteSpace(requestedGuideNumber))
@@ -374,6 +389,7 @@ public static class CompatibilityEndpoints
         StreamRequestResolver streamRequestResolver,
         ChannelSessionManager channelSessionManager,
         HdHomeRunTunerManager hdHomeRunTunerManager,
+        HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
         ILineupRenderer lineupRenderer,
@@ -383,6 +399,12 @@ public static class CompatibilityEndpoints
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.Stream");
+        if (!hdHomeRunDeviceService.IsEnabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
         if (tuner < 0 || !hdHomeRunTunerManager.IsValidTunerIndex(tuner))
         {
             logger.LogWarning(

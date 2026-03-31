@@ -8,30 +8,62 @@ public sealed class HdHomeRunTunerCountResolver(
     IOptions<HdHomeRunOptions> options,
     IServiceScopeFactory scopeFactory)
 {
+    private readonly Lock _cacheLock = new();
+    private DateTimeOffset _cacheLastUpdated;
+    private int _cachedTunerCount;
+    private int? _cachedStreamLimit;
+
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(5);
+
     public int ResolveTunerCount()
     {
-        var dbOverride = QueryDbTunerCountOverride();
-        if (dbOverride is > 0)
-            return Math.Clamp(dbOverride.Value, 1, 32);
-
-        var providerLimit = QueryActiveProviderStreamLimit();
-        if (providerLimit is > 0)
-            return Math.Clamp(providerLimit.Value, 1, 32);
-
-        return Math.Clamp(options.Value.TunerCount, 1, 32);
+        EnsureCache();
+        return _cachedTunerCount;
     }
 
     public int? ResolveStreamLimit()
     {
-        var dbOverride = QueryDbTunerCountOverride();
-        if (dbOverride is > 0)
-            return Math.Clamp(dbOverride.Value, 1, 32);
+        EnsureCache();
+        return _cachedStreamLimit;
+    }
 
-        var providerLimit = QueryActiveProviderStreamLimit();
-        if (providerLimit is > 0)
-            return Math.Clamp(providerLimit.Value, 1, 32);
+    private void EnsureCache()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_cacheLastUpdated != default && now - _cacheLastUpdated < CacheDuration)
+            return;
 
-        return null;
+        lock (_cacheLock)
+        {
+            now = DateTimeOffset.UtcNow;
+            if (_cacheLastUpdated != default && now - _cacheLastUpdated < CacheDuration)
+                return;
+
+            var dbOverride = QueryDbTunerCountOverride();
+            if (dbOverride is > 0)
+            {
+                var clamped = Math.Clamp(dbOverride.Value, 1, 32);
+                _cachedTunerCount = clamped;
+                _cachedStreamLimit = clamped;
+            }
+            else
+            {
+                var providerLimit = QueryActiveProviderStreamLimit();
+                if (providerLimit is > 0)
+                {
+                    var clamped = Math.Clamp(providerLimit.Value, 1, 32);
+                    _cachedTunerCount = clamped;
+                    _cachedStreamLimit = clamped;
+                }
+                else
+                {
+                    _cachedTunerCount = Math.Clamp(options.Value.TunerCount, 1, 32);
+                    _cachedStreamLimit = null;
+                }
+            }
+
+            _cacheLastUpdated = now;
+        }
     }
 
     internal int? QueryActiveProviderStreamLimit()
