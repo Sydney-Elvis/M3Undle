@@ -167,6 +167,7 @@ On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created 
 ```bash
 docker run -d \
   --name m3undle \
+  -p 5004:5004 \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -v ./data:/data \
@@ -177,7 +178,9 @@ docker run -d \
 
 Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
 
-See [`docs/DOCKER.md`](docs/DOCKER.md) for Compose example, volume layout, and all environment variables.
+Port `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints. Both are always needed.
+
+For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for full HDHR setup options, Docker networking guidance, and all environment variables.
 
 ---
 
@@ -207,7 +210,7 @@ Legacy HDHomeRun root aliases (`/discover.json`, `/lineup.json`, etc.) are still
 Automatic discovery support:
 - SSDP/UPnP (`UDP 1900`)
 - SiliconDust discovery (`UDP 65001`)
-- Discovery is disabled by default; manual add works without discovery
+- Discovery is disabled by default; manual add works without discovery — see [`docs/DOCKER.md`](docs/DOCKER.md) for setup steps
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 

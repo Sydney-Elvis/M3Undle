@@ -41,7 +41,7 @@ public sealed class HdHomeRunLineupServiceTests
 
         Assert.AreEqual("live-2", second.ChannelId);
         Assert.AreEqual("1000", second.GuideNumber);
-        Assert.AreEqual("Bravo Name", second.GuideName);
+        Assert.AreEqual("Bravo", second.GuideName);
         Assert.AreEqual("http://test-host:8080/hdhr/auto/v1000", second.Url);
     }
 

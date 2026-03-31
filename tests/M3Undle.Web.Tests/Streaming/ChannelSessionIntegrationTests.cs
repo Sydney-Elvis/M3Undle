@@ -256,6 +256,46 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ProviderTunerLimit_ReusesRetryWindowAcrossRepeatedRejections()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 03, 31, 12, 00, 00, TimeSpan.Zero));
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            timeProvider: timeProvider);
+
+        var firstSession = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var blockedSource = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 1,
+        };
+
+        var firstReject = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(blockedSource, CancellationToken.None).AsTask());
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, firstReject.FailureKind);
+        Assert.AreEqual(30, firstReject.RetryAfterSeconds);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(12));
+
+        var secondReject = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(blockedSource, CancellationToken.None).AsTask());
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, secondReject.FailureKind);
+        Assert.AreEqual(18, secondReject.RetryAfterSeconds);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(18));
+
+        var thirdReject = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(blockedSource, CancellationToken.None).AsTask());
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, thirdReject.FailureKind);
+        Assert.AreEqual(30, thirdReject.RetryAfterSeconds);
+
+        await firstSession.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MaxConcurrentSessions_RejectsAdditionalSession()
     {
         // Checklist: Provider stream limits still reject new sessions correctly.
@@ -291,10 +331,18 @@ public sealed class ChannelSessionIntegrationTests
         }
     }
 
-    private static async Task AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
+    private static async Task<TException> AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
     {
-        try { await action(); Assert.Fail($"Expected {typeof(TException).Name} to be thrown."); }
-        catch (TException) { /* Expected */ }
+        try
+        {
+            await action();
+            Assert.Fail($"Expected {typeof(TException).Name} to be thrown.");
+            throw new InvalidOperationException("Assert.Fail should have thrown.");
+        }
+        catch (TException ex)
+        {
+            return ex;
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
@@ -302,6 +350,15 @@ public sealed class ChannelSessionIntegrationTests
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
             await Task.Delay(20);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration) => _utcNow = _utcNow.Add(duration);
     }
 
     // ---------------------------------------------------------------------------
@@ -426,7 +483,8 @@ public sealed class ChannelSessionIntegrationTests
             FakeStreamingHandler handler,
             BufferOptions? bufferOptions = null,
             StreamProxyOptions? proxyOptions = null,
-            ReconnectOptions? reconnectOptions = null)
+            ReconnectOptions? reconnectOptions = null,
+            TimeProvider? timeProvider = null)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -502,9 +560,12 @@ public sealed class ChannelSessionIntegrationTests
                 httpClientFactory, scopeFactory, reconnectOpts,
                 NullLogger<UpstreamStreamConnector>.Instance);
             var strikeStore = new UpstreamFailureStrikeStore();
+            var admissionBackoffStore = timeProvider is null
+                ? new StreamAdmissionBackoffStore()
+                : new StreamAdmissionBackoffStore(timeProvider);
             var registry = new StreamingRegistry(proxyOpts);
             var manager = new ChannelSessionManager(
-                bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, registry,
+                bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
                 NullLoggerFactory.Instance);
 
             var source = new StreamSourceDescriptor(

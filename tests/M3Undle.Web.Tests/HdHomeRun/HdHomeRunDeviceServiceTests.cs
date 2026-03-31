@@ -32,12 +32,16 @@ public sealed class HdHomeRunDeviceServiceTests
             });
             var configuration = new ConfigurationBuilder().Build();
             var env = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
+            var scopeFactory = TestServiceScopeFactory.Create();
+            var tunerCountResolver = new HdHomeRunTunerCountResolver(options, scopeFactory);
 
             var firstService = new HdHomeRunDeviceService(
                 runtimePaths,
                 options,
                 configuration,
                 env,
+                tunerCountResolver,
+                scopeFactory,
                 NullLogger<HdHomeRunDeviceService>.Instance);
 
             var firstDevice = await firstService.GetDeviceDescriptorAsync(CancellationToken.None);
@@ -48,6 +52,8 @@ public sealed class HdHomeRunDeviceServiceTests
                 options,
                 configuration,
                 env,
+                tunerCountResolver,
+                scopeFactory,
                 NullLogger<HdHomeRunDeviceService>.Instance);
             var thirdDevice = await restartedService.GetDeviceDescriptorAsync(CancellationToken.None);
 
@@ -86,11 +92,17 @@ public sealed class HdHomeRunDeviceServiceTests
                 AdvertisedBaseUrl = "https://tv.example.com/hdhr/",
             });
 
+            var env = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
+            var scopeFactory = TestServiceScopeFactory.Create();
+            var tunerCountResolver = new HdHomeRunTunerCountResolver(options, scopeFactory);
+
             var service = new HdHomeRunDeviceService(
                 runtimePaths,
                 options,
                 new ConfigurationBuilder().Build(),
-                new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance),
+                env,
+                tunerCountResolver,
+                scopeFactory,
                 NullLogger<HdHomeRunDeviceService>.Instance);
 
             var context = new DefaultHttpContext();
