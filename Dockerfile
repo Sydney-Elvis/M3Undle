@@ -28,12 +28,12 @@ FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish ./
 
-RUN mkdir -p /data /config
+RUN mkdir -p /data /config /data/hls-work /hls-work
 
 ENV ASPNETCORE_URLS=http://+:5004;http://+:8080 \
     ASPNETCORE_HTTP_PORTS=5004;8080 \
@@ -41,10 +41,11 @@ ENV ASPNETCORE_URLS=http://+:5004;http://+:8080 \
     ConnectionStrings__DefaultConnection="DataSource=/data/m3undle.db;Cache=Shared" \
     M3Undle__Logging__LogDirectory=/data/logs \
     M3Undle__Snapshot__Directory=/data/snapshots \
+    M3Undle__Streaming__GeneratedHls__Directory=/data/hls-work \
     M3UNDLE_CONFIG_DIR=/config \
     M3UNDLE_M3U_DIR=/m3u_data
 
-VOLUME ["/data", "/config"]
+VOLUME ["/data", "/config", "/hls-work"]
 EXPOSE 5004 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

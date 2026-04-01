@@ -132,4 +132,85 @@ public sealed class StreamingOptionsValidatorTests
         var result = new ReconnectOptionsValidator().Validate(null, options);
         Assert.IsFalse(result.Succeeded);
     }
+
+    // ── GeneratedHlsOptionsValidator ──────────────────────────────────────────
+
+    [TestMethod]
+    public void GeneratedHlsOptions_ValidDefaults_Passes()
+    {
+        var result = new GeneratedHlsOptionsValidator().Validate(null, new GeneratedHlsOptions());
+        Assert.IsTrue(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_EmptyDirectory_Fails()
+    {
+        var options = new GeneratedHlsOptions { Directory = string.Empty };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_NonPositiveSegmentDuration_Fails()
+    {
+        var options = new GeneratedHlsOptions { SegmentDurationSeconds = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_EmptyFfmpegPath_Fails()
+    {
+        var options = new GeneratedHlsOptions { FfmpegPath = string.Empty };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_NonPositivePlaylistSize_Fails()
+    {
+        var options = new GeneratedHlsOptions { PlaylistSize = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_DeleteThresholdBelowOne_Fails()
+    {
+        var options = new GeneratedHlsOptions { DeleteThreshold = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_NonPositiveStartupTimeout_Fails()
+    {
+        var options = new GeneratedHlsOptions { StartupTimeoutSeconds = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_NonPositiveInactivityTimeout_Fails()
+    {
+        var options = new GeneratedHlsOptions { InactivityTimeoutSeconds = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_NonPositiveCleanupInterval_Fails()
+    {
+        var options = new GeneratedHlsOptions { CleanupIntervalSeconds = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void GeneratedHlsOptions_NonPositiveStartupStaleAge_Fails()
+    {
+        var options = new GeneratedHlsOptions { StartupStaleAgeHours = 0 };
+        var result = new GeneratedHlsOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
 }

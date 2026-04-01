@@ -69,6 +69,14 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.HdhrSettingsRestartRequired)
             .HasColumnName("hdhr_settings_restart_required")
             .HasDefaultValue(false);
+        builder.Property(s => s.GeneratedHlsEnabled)
+            .HasColumnName("generated_hls_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.GeneratedHlsFfmpegPath)
+            .HasColumnName("generated_hls_ffmpeg_path");
+        builder.Property(s => s.GeneratedHlsSettingsRestartRequired)
+            .HasColumnName("generated_hls_settings_restart_required")
+            .HasDefaultValue(false);
 
         builder.HasData(new SiteSettings
         {
@@ -93,6 +101,9 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             HdhrSsdpEnabled = true,
             HdhrSiliconDustDiscoveryEnabled = true,
             HdhrSettingsRestartRequired = false,
+            GeneratedHlsEnabled = true,
+            GeneratedHlsFfmpegPath = null,
+            GeneratedHlsSettingsRestartRequired = false,
         });
     }
 }

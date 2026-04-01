@@ -31,7 +31,7 @@ public sealed class StreamRequestResolverTests
     }
 
     [TestMethod]
-    public async Task ResolveAsync_MovieRoute_StaysDirectRelay()
+    public async Task ResolveAsync_MovieRoute_StaysDirectRelay_AndStillProvidesSourceDescriptor()
     {
         await using var fixture = await TestFixture.CreateAsync();
         var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
@@ -41,7 +41,9 @@ public sealed class StreamRequestResolverTests
 
         Assert.IsTrue(result.IsSuccess);
         Assert.IsFalse(result.UseSharedSession);
-        Assert.IsNull(result.SourceDescriptor);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
         Assert.IsNotNull(result.Entry);
     }
 
@@ -51,6 +53,22 @@ public sealed class StreamRequestResolverTests
         await using var fixture = await TestFixture.CreateAsync();
         var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
         var context = CreateHttpContext("/tuner0/v101", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_HdhrPrefixedNativeTunerRoute_ReturnsSharedSessionDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/hdhr/tuner0/v101", "profile-1");
 
         var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
 

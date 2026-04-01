@@ -12,6 +12,8 @@ public static class SiteSettingsApiEndpoints
 
         group.MapGet("/endpoint-security", GetEndpointSecurityAsync);
         group.MapPut("/endpoint-security", UpdateEndpointSecurityAsync);
+        group.MapGet("/generated-hls", GetGeneratedHlsSettingsAsync);
+        group.MapPut("/generated-hls", UpdateGeneratedHlsSettingsAsync);
 
         return app;
     }
@@ -70,4 +72,60 @@ public static class SiteSettingsApiEndpoints
         bool HasCredential,
         string? ActiveProfileId,
         string? VirtualTunerId);
+
+    private static async Task<IResult> GetGeneratedHlsSettingsAsync(
+        IGeneratedHlsSettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var state = await settingsService.GetSettingsAsync(cancellationToken);
+        return TypedResults.Ok(new GeneratedHlsSettingsResponse(
+            Enabled: state.Saved.Enabled,
+            FfmpegPath: state.Saved.FfmpegPath,
+            FfmpegAvailable: state.FfmpegAvailable,
+            FfmpegUnavailableReason: state.FfmpegUnavailableReason,
+            EffectivelyEnabled: state.EffectivelyEnabled,
+            ConfiguredFfmpegPath: state.ConfiguredFfmpegPath,
+            RestartRequired: state.RestartRequired));
+    }
+
+    private static async Task<IResult> UpdateGeneratedHlsSettingsAsync(
+        GeneratedHlsSettingsUpdateRequest request,
+        IGeneratedHlsSettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var result = await settingsService.UpdateAsync(new UpdateGeneratedHlsSettingsCommand(
+            Enabled: request.Enabled,
+            FfmpegPath: request.FfmpegPath), cancellationToken);
+
+        if (!result.Succeeded)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["generatedHls"] = [result.Error ?? "Generated HLS settings update failed."],
+            });
+        }
+
+        var state = await settingsService.GetSettingsAsync(cancellationToken);
+        return TypedResults.Ok(new GeneratedHlsSettingsResponse(
+            Enabled: state.Saved.Enabled,
+            FfmpegPath: state.Saved.FfmpegPath,
+            FfmpegAvailable: state.FfmpegAvailable,
+            FfmpegUnavailableReason: state.FfmpegUnavailableReason,
+            EffectivelyEnabled: state.EffectivelyEnabled,
+            ConfiguredFfmpegPath: state.ConfiguredFfmpegPath,
+            RestartRequired: state.RestartRequired));
+    }
+
+    private sealed record GeneratedHlsSettingsUpdateRequest(
+        bool Enabled,
+        string? FfmpegPath);
+
+    private sealed record GeneratedHlsSettingsResponse(
+        bool Enabled,
+        string? FfmpegPath,
+        bool FfmpegAvailable,
+        string? FfmpegUnavailableReason,
+        bool EffectivelyEnabled,
+        string ConfiguredFfmpegPath,
+        bool RestartRequired);
 }

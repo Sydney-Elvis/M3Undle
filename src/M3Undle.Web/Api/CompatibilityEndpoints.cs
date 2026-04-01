@@ -7,6 +7,7 @@ using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Resolution;
@@ -63,6 +64,7 @@ public static class CompatibilityEndpoints
         client.MapGet("auto/ch{channel}", ServeHdhrAutoTuneByChannelAsync);
         client.MapGet("auto/{channel}", ServeHdhrAutoTuneByChannelAsync);
         client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
+        client.MapGet("hls/generated/{sessionId}/{*asset}", ServeGeneratedHlsAssetAsync);
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
         app.MapGet("/health/ready", ServeReadinessAsync).AllowAnonymous();
@@ -165,6 +167,7 @@ public static class CompatibilityEndpoints
         HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService hdHomeRunLineupService,
         ILoggerFactory loggerFactory,
@@ -181,6 +184,7 @@ public static class CompatibilityEndpoints
             hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
+            generatedHlsSessionManager,
             lineupRenderer,
             hdHomeRunLineupService,
             loggerFactory,
@@ -198,6 +202,7 @@ public static class CompatibilityEndpoints
         HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService hdHomeRunLineupService,
         ILoggerFactory loggerFactory,
@@ -214,6 +219,7 @@ public static class CompatibilityEndpoints
             hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
+            generatedHlsSessionManager,
             lineupRenderer,
             hdHomeRunLineupService,
             loggerFactory,
@@ -230,6 +236,7 @@ public static class CompatibilityEndpoints
         HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService hdHomeRunLineupService,
         ILoggerFactory loggerFactory,
@@ -245,6 +252,7 @@ public static class CompatibilityEndpoints
             hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
+            generatedHlsSessionManager,
             lineupRenderer,
             hdHomeRunLineupService,
             loggerFactory,
@@ -261,6 +269,7 @@ public static class CompatibilityEndpoints
         HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService hdHomeRunLineupService,
         ILoggerFactory loggerFactory,
@@ -276,6 +285,7 @@ public static class CompatibilityEndpoints
             hdHomeRunDeviceService,
             httpClientFactory,
             hlsProxyService,
+            generatedHlsSessionManager,
             lineupRenderer,
             hdHomeRunLineupService,
             loggerFactory,
@@ -292,6 +302,7 @@ public static class CompatibilityEndpoints
         HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService hdHomeRunLineupService,
         ILoggerFactory loggerFactory,
@@ -376,6 +387,7 @@ public static class CompatibilityEndpoints
             hdHomeRunTunerManager,
             httpClientFactory,
             hlsProxyService,
+            generatedHlsSessionManager,
             loggerFactory,
             streamProxyOptions,
             cancellationToken);
@@ -392,6 +404,7 @@ public static class CompatibilityEndpoints
         HdHomeRunDeviceService hdHomeRunDeviceService,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService hdHomeRunLineupService,
         ILoggerFactory loggerFactory,
@@ -493,6 +506,7 @@ public static class CompatibilityEndpoints
             hdHomeRunTunerManager,
             httpClientFactory,
             hlsProxyService,
+            generatedHlsSessionManager,
             loggerFactory,
             streamProxyOptions,
             cancellationToken);
@@ -507,6 +521,7 @@ public static class CompatibilityEndpoints
         HdHomeRunTunerManager hdHomeRunTunerManager,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILoggerFactory loggerFactory,
         IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
@@ -550,51 +565,79 @@ public static class CompatibilityEndpoints
         logger.LogInformation("Stream tune-in: channel={Channel} key={StreamKey} client={Client}",
             entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
 
-        if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        var forceTs = IsHdHomeRunTuneRoute(context.Request.Path);
+        var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs);
+
+        if (requiresHls)
         {
-            // Skip HLS manifest delivery when the client needs raw TS bytes:
-            // 1. HDHR tune routes (/hdhr/tune/*, /tune/*, /tuner{n}/*) must behave like real HDHomeRun
-            //    devices and return MPEG-TS, not HLS manifests.
-            // 2. A .ts tail from a non-browser client means a native app explicitly requesting raw TS.
-            // Other non-HDHR routes can still negotiate HLS for browser-based clients.
-            var isNativeTunerRoute = IsNativeHdhrTunerPath(context.Request.Path);
-            var isHdhrTuneRoute = IsHdHomeRunTuneRoute(context.Request.Path);
-            var tail = context.Request.RouteValues.TryGetValue("tail", out var tailVal)
-                ? tailVal?.ToString() ?? string.Empty
-                : string.Empty;
-            var isNativeClientRoute = isHdhrTuneRoute
-                || isNativeTunerRoute
-                || (!IsBrowserClient(context) && tail.EndsWith(".ts", StringComparison.OrdinalIgnoreCase));
-
-            if (!isNativeClientRoute)
+            if (resolved.SourceDescriptor is null)
             {
-                var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
-                if (hlsCandidates.Count > 0)
+                logger.LogWarning(
+                    "HLS request could not be fulfilled for key={StreamKey}: provider stream metadata unavailable.",
+                    streamKey);
+                await StreamErrorResponse.WriteHtmlErrorAsync(
+                    context.Response, StatusCodes.Status503ServiceUnavailable,
+                    "HLS delivery is unavailable for this stream.", cancellationToken);
+                return;
+            }
+
+            var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
+            if (hlsCandidates.Count > 0)
+            {
+                var baseUrl = GetBaseUrl(context);
+                var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
+                segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
+
+                var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                    hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                if (manifest is not null)
                 {
-                    var baseUrl = GetBaseUrl(context);
-                    var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
-                    segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
-
-                    var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
-                        hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
-
-                    if (manifest is not null)
-                    {
-                        logger.LogInformation(
-                            "HLS delivery: channel={Channel} key={StreamKey}",
-                            entry.DisplayName, streamKey);
-                        context.Response.ContentType = "application/vnd.apple.mpegurl";
-                        context.Response.Headers.CacheControl = "no-cache";
-                        await context.Response.WriteAsync(manifest, cancellationToken);
-                        return;
-                    }
-
                     logger.LogInformation(
-                        "HLS not available for '{Channel}', falling back to TS session.",
-                        entry.DisplayName);
+                        "Native upstream HLS delivery: channel={Channel} key={StreamKey}",
+                        entry.DisplayName,
+                        streamKey);
+                    context.Response.ContentType = "application/vnd.apple.mpegurl";
+                    context.Response.Headers.CacheControl = "no-cache";
+                    await context.Response.WriteAsync(manifest, cancellationToken);
+                    return;
                 }
             }
 
+            var generatedSession = await generatedHlsSessionManager.CreateSessionAsync(
+                new GeneratedHlsSessionRequest(
+                    StreamUrl: resolved.SourceDescriptor.StreamUrl,
+                    DisplayName: resolved.SourceDescriptor.DisplayName,
+                    ProviderId: resolved.SourceDescriptor.ProviderId),
+                cancellationToken);
+
+            if (generatedSession is null)
+            {
+                logger.LogWarning(
+                    "Generated HLS startup failed for key={StreamKey}.",
+                    streamKey);
+                await StreamErrorResponse.WriteHtmlErrorAsync(
+                    context.Response, StatusCodes.Status503ServiceUnavailable,
+                    "Generated HLS is unavailable for this stream.", cancellationToken);
+                return;
+            }
+
+            var generatedManifestUrl =
+                $"{GetBaseUrl(context)}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
+            generatedManifestUrl = generatedManifestUrl.ApplyClientAccessQuery(context);
+
+            logger.LogInformation(
+                "Generated HLS delivery: channel={Channel} key={StreamKey} session={SessionId}",
+                entry.DisplayName,
+                streamKey,
+                generatedSession.SessionId);
+
+            context.Response.Redirect(generatedManifestUrl, permanent: false);
+            return;
+        }
+
+        if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        {
             HdHomeRunTunerReservation? tunerReservation = null;
             SubscriberConnection? subscriber = null;
             try
@@ -810,6 +853,60 @@ public static class CompatibilityEndpoints
         await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }
 
+    private static async Task ServeGeneratedHlsAssetAsync(
+        string sessionId,
+        string asset,
+        HttpContext context,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
+        HlsManifestRewriter hlsManifestRewriter,
+        CancellationToken cancellationToken)
+    {
+        if (!generatedHlsSessionManager.TryResolveAssetPath(sessionId, asset, out var filePath, out var contentType))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
+        {
+            string manifest;
+            try
+            {
+                manifest = await File.ReadAllTextAsync(filePath, cancellationToken);
+            }
+            catch
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            var manifestUrl = new Uri($"{GetBaseUrl(context)}{context.Request.Path}");
+            var generatedAssetBase = $"{GetBaseUrl(context)}/hls/generated/{Uri.EscapeDataString(sessionId)}";
+
+            var rewritten = hlsManifestRewriter.Rewrite(
+                manifest,
+                manifestUrl,
+                uri =>
+                {
+                    var fileName = Path.GetFileName(uri.AbsolutePath);
+                    if (string.IsNullOrWhiteSpace(fileName))
+                        return uri.ToString();
+
+                    var generatedAssetUrl = $"{generatedAssetBase}/{Uri.EscapeDataString(fileName)}";
+                    return generatedAssetUrl.ApplyClientAccessQuery(context);
+                });
+
+            context.Response.ContentType = contentType;
+            context.Response.Headers.CacheControl = "no-cache";
+            await context.Response.WriteAsync(rewritten, cancellationToken);
+            return;
+        }
+
+        context.Response.ContentType = contentType;
+        context.Response.Headers.CacheControl = "no-cache";
+        await context.Response.SendFileAsync(filePath, cancellationToken);
+    }
+
     private static string GetBaseUrl(HttpContext context)
     {
         var pathBase = context.Request.PathBase.HasValue
@@ -820,15 +917,6 @@ public static class CompatibilityEndpoints
             ? $"{context.Request.Scheme}://{context.Request.Host}"
             : $"{context.Request.Scheme}://{context.Request.Host}{pathBase}";
     }
-
-    /// <summary>
-    /// Returns true when the request originates from a browser or Electron-based app.
-    /// These clients cannot decode raw MPEG-TS and require HLS delivery.
-    /// Native IPTV apps (TiviMate, IPTVator, Smarters) use non-browser User-Agent strings.
-    /// </summary>
-    private static bool IsBrowserClient(HttpContext context) =>
-        context.Request.Headers.UserAgent.ToString()
-            .Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
 
     private static async Task ServeDirectRelayAsync(
         HttpContext context,

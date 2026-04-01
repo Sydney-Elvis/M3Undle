@@ -73,7 +73,12 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             RemoteIp: context.Connection.RemoteIpAddress?.ToString(),
             TunerLimit: tunerLimit.HasValue && tunerLimit.Value > 0 ? tunerLimit : null);
 
-        return StreamResolveResult.SuccessShared(entry, descriptor);
+        return routeMode switch
+        {
+            StreamRouteMode.SharedLiveSession => StreamResolveResult.SuccessShared(entry, descriptor),
+            StreamRouteMode.DirectRelayWithDescriptor => StreamResolveResult.SuccessDirect(entry, descriptor),
+            _ => StreamResolveResult.SuccessDirect(entry),
+        };
     }
 
     private async Task<ProviderChannelLookup?> ResolveProviderChannelAsync(ChannelIndexEntry entry, CancellationToken ct)
@@ -82,7 +87,7 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
         {
             var byId = await db.ProviderChannels
                 .AsNoTracking()
-                .Where(x => x.ProviderChannelId == entry.ProviderChannelId && x.Active && x.ContentType == "live")
+                .Where(x => x.ProviderChannelId == entry.ProviderChannelId && x.Active)
                 .Select(x => new ProviderChannelLookup(x.ProviderId, x.ProviderChannelId, x.StreamUrl))
                 .FirstOrDefaultAsync(ct);
 
@@ -95,7 +100,7 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
 
         return await db.ProviderChannels
             .AsNoTracking()
-            .Where(x => x.StreamUrl == entry.StreamUrl && x.Active && x.ContentType == "live")
+            .Where(x => x.StreamUrl == entry.StreamUrl && x.Active)
             .OrderByDescending(x => x.LastSeenUtc)
             .Select(x => new ProviderChannelLookup(x.ProviderId, x.ProviderChannelId, x.StreamUrl))
             .FirstOrDefaultAsync(ct);
@@ -107,7 +112,7 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             || path.StartsWithSegments("/vod", StringComparison.OrdinalIgnoreCase)
             || path.StartsWithSegments("/series", StringComparison.OrdinalIgnoreCase))
         {
-            return StreamRouteMode.DirectRelay;
+            return StreamRouteMode.DirectRelayWithDescriptor;
         }
 
         if (path.StartsWithSegments("/live", StringComparison.OrdinalIgnoreCase)
@@ -125,8 +130,17 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
     private static bool IsNativeHdhrTunerPath(PathString path)
     {
         var value = path.Value;
-        return !string.IsNullOrWhiteSpace(value)
-               && value.StartsWith("/tuner", StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        if (value.StartsWith("/hdhr/tuner", StringComparison.OrdinalIgnoreCase)
+            && value.Length > "/hdhr/tuner".Length
+            && char.IsDigit(value["/hdhr/tuner".Length]))
+        {
+            return true;
+        }
+
+        return value.StartsWith("/tuner", StringComparison.OrdinalIgnoreCase)
                && value.Length > "/tuner".Length
                && char.IsDigit(value["/tuner".Length]);
     }
@@ -138,6 +152,7 @@ public enum StreamRouteMode
 {
     DirectRelay = 0,
     SharedLiveSession = 1,
+    DirectRelayWithDescriptor = 2,
 }
 
 public sealed record StreamResolveResult(
@@ -151,8 +166,8 @@ public sealed record StreamResolveResult(
     public static StreamResolveResult Fail(int statusCode, string message)
         => new(false, false, statusCode, message, null, null);
 
-    public static StreamResolveResult SuccessDirect(ChannelIndexEntry entry)
-        => new(true, false, null, null, entry, null);
+    public static StreamResolveResult SuccessDirect(ChannelIndexEntry entry, StreamSourceDescriptor? descriptor = null)
+        => new(true, false, null, null, entry, descriptor);
 
     public static StreamResolveResult SuccessShared(ChannelIndexEntry entry, StreamSourceDescriptor descriptor)
         => new(true, true, null, null, entry, descriptor);

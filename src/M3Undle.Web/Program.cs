@@ -9,6 +9,7 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Logging;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
@@ -37,6 +38,8 @@ EnsureWebRootExists();
 
 var builder = WebApplication.CreateBuilder(args);
 var runtimePaths = RuntimePaths.Resolve(builder.Configuration, builder.Environment);
+const string MediaSurfaceCorsPolicy = "MediaSurfaceCors";
+const string ApplicationSurfaceCorsPolicy = "ApplicationSurfaceCors";
 
 if (Path.GetDirectoryName(runtimePaths.DatabasePath) is { Length: > 0 } dbDir)
     Directory.CreateDirectory(dbDir);
@@ -109,6 +112,17 @@ builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
 builder.Services.AddValidation();
 builder.Services.AddHttpClient();
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(MediaSurfaceCorsPolicy, policy =>
+        policy.AllowAnyOrigin()
+            .WithMethods(HttpMethods.Get));
+
+    options.AddPolicy(ApplicationSurfaceCorsPolicy, policy =>
+        policy.SetIsOriginAllowed(origin => IsConfiguredApplicationOrigin(origin, builder.Configuration))
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
 builder.Services.AddScoped(sp =>
 {
     var navigation = sp.GetRequiredService<NavigationManager>();
@@ -141,21 +155,32 @@ builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.Ge
 builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection("M3Undle:Streaming"));
 builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
 builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
+builder.Services.Configure<GeneratedHlsOptions>(builder.Configuration.GetSection("M3Undle:Streaming:GeneratedHls"));
 builder.Services.AddSingleton<IConfigureOptions<StreamProxyOptions>, StreamProxyDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<BufferOptions>, BufferDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<ReconnectOptions>, ReconnectDbOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<GeneratedHlsOptions>, GeneratedHlsDbOptionsConfigurator>();
 builder.Services.AddSingleton<IValidateOptions<StreamProxyOptions>, StreamProxyOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<BufferOptions>, BufferOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<ReconnectOptions>, ReconnectOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<GeneratedHlsOptions>, GeneratedHlsOptionsValidator>();
 builder.Services.AddOptions<StreamProxyOptions>().ValidateOnStart();
 builder.Services.AddOptions<BufferOptions>().ValidateOnStart();
 builder.Services.AddOptions<ReconnectOptions>().ValidateOnStart();
+builder.Services.AddOptions<GeneratedHlsOptions>().ValidateOnStart();
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
         configuredPath: options.Directory,
         dataDirectory: runtimePaths.DataDirectory,
         defaultRelativePath: "snapshots");
+});
+builder.Services.PostConfigure<GeneratedHlsOptions>(options =>
+{
+    options.Directory = RuntimePaths.ResolveDirectory(
+        configuredPath: options.Directory,
+        dataDirectory: runtimePaths.DataDirectory,
+        defaultRelativePath: "hls-work");
 });
 builder.Services.Configure<ReverseProxyOptions>(builder.Configuration.GetSection("M3Undle:ReverseProxy"));
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -206,6 +231,7 @@ builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
 builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
 builder.Services.AddScoped<IHdHomeRunSettingsService, HdHomeRunSettingsService>();
+builder.Services.AddScoped<IGeneratedHlsSettingsService, GeneratedHlsSettingsService>();
 builder.Services.AddSingleton<IApplicationRestartService, ApplicationRestartService>();
 builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
@@ -226,6 +252,8 @@ builder.Services.AddSingleton<StreamingRegistry>();
 builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
 builder.Services.AddSingleton<StreamAdmissionBackoffStore>();
 builder.Services.AddSingleton<UpstreamStreamConnector>();
+builder.Services.AddSingleton<GeneratedHlsSessionManager>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<GeneratedHlsSessionManager>());
 builder.Services.AddSingleton<ChannelSessionManager>();
 builder.Services.AddScoped<StreamRequestResolver>();
 builder.Services.AddSingleton<HlsManifestRewriter>();
@@ -302,6 +330,14 @@ app.Use(static async (ctx, next) =>
     await next(ctx);
 });
 
+app.UseRouting();
+app.UseWhen(
+    context => IsMediaSurfacePath(context.Request.Path),
+    branch => branch.UseCors(MediaSurfaceCorsPolicy));
+app.UseWhen(
+    context => IsApplicationSurfacePath(context.Request.Path),
+    branch => branch.UseCors(ApplicationSurfaceCorsPolicy));
+
 app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -364,11 +400,14 @@ static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptio
 }
 
 static bool IsClientDeliveryPath(PathString path)
+    => IsMediaSurfacePath(path);
+
+static bool IsMediaSurfacePath(PathString path)
 {
-    // Preserve original status codes for machine-facing client endpoints (HDHR, stream, playlist, guide).
     return path.StartsWithSegments("/hdhr", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/tuner", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/auto", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/stream", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/live", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/movie", StringComparison.OrdinalIgnoreCase)
@@ -377,6 +416,8 @@ static bool IsClientDeliveryPath(PathString path)
            || path.StartsWithSegments("/hls", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/m3u", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/xmltv", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/player_api.php", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/get.php", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/discover.json", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/lineup.json", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/lineup.xml", StringComparison.OrdinalIgnoreCase)
@@ -384,6 +425,41 @@ static bool IsClientDeliveryPath(PathString path)
            || path.Equals("/lineup_status.json", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/lineup.post", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/device.xml", StringComparison.OrdinalIgnoreCase);
+}
+
+static bool IsApplicationSurfacePath(PathString path)
+    => !IsMediaSurfacePath(path);
+
+static bool IsConfiguredApplicationOrigin(string origin, IConfiguration configuration)
+{
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var requestOrigin))
+        return false;
+
+    var allowedOrigins = configuration
+        .GetSection("M3Undle:Cors:ApplicationAllowedOrigins")
+        .Get<string[]>() ?? [];
+
+    var requestAuthority = requestOrigin.GetLeftPart(UriPartial.Authority);
+    foreach (var candidateGroup in allowedOrigins)
+    {
+        var candidates = (candidateGroup ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var candidate in candidates)
+        {
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var configuredOrigin))
+                continue;
+
+            if (string.Equals(
+                requestAuthority,
+                configuredOrigin.GetLeftPart(UriPartial.Authority),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 static void EnsureWebRootExists()
