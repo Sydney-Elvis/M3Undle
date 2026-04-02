@@ -33,7 +33,7 @@ The UI shows:
 - Last refresh time
 - Success/failure status
 - Channel count seen
-- Associated profile and snapshot status
+- Associated profile and published version status
 
 Provider configuration covers the playlist source and provider identity. Guide-source management is handled separately in the EPG section.
 
@@ -56,30 +56,31 @@ The published `/xmltv/m3undle.xml` output is compiled from the enabled sources, 
 
 ---
 
-### 3. Groups (Preview)
+### 3. Profiles
 
-The Groups view shows a read-only preview of your provider's catalog.
+The Profiles page lists all configured profiles — the named lineups you publish for clients.
 
-For each group, the UI displays:
+Each profile shows:
 
-- Group name
-- Channel count
-- Sample channels
+- Display name and output name
+- Enabled/disabled state
+- Linked providers
+- Last published time and health status
+- Live, movie, and series counts
 
-This view is read-only. Instead of manually inspecting thousands of channels, you can see exactly what the provider is delivering and what groups exist before deciding what to do with them.
+Clicking a profile opens its detail page, which shows provider membership, published history, and pending review items.
 
 ---
 
-### 4. Snapshots & Status
+### 4. Published Version & Status
 
-The Snapshots view shows:
+The dashboard shows:
 
 - Last refresh run
-- Active snapshot version
-- Staged snapshot (if pending)
+- Current published version
 - Success/failure history
 
-If a refresh fails, the system continues serving the last active snapshot.
+If a refresh fails, the system continues serving the last known-good version.
 
 The UI makes this behavior visible so you always know what clients are receiving.
 
@@ -160,13 +161,13 @@ Within a group you can select individual channels and set per-channel overrides:
 
 **Build Output**
 
-After making changes, use **Build Output** to regenerate the active snapshot. Changes to channel settings are pending until the next build.
+After making changes, use **Build Output** to update the published lineup. Changes to channel settings are pending until the next build.
 
 ---
 
 ### 8. Channels
 
-The Channels page shows the live channels currently in the active output snapshot.
+The Channels page shows the live channels currently in the published lineup.
 
 You can search by channel name, group, or EPG ID, and filter by group. Each row shows the channel number, logo, display name, group, and EPG ID.
 
@@ -216,7 +217,7 @@ The CLI is a file-oriented filtering tool.
 The Web UI builds on those same concepts but adds:
 
 - Database-backed configuration
-- Snapshot lifecycle management
+- Published lineup management
 - HTTP endpoint publishing
 - Visual lineup control
 

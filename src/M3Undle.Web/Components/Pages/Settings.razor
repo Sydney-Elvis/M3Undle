@@ -1,5 +1,6 @@
 @page "/settings"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Contracts.Providers
 @using M3Undle.Web.Streaming.Configuration
 @using M3Undle.Web.Streaming.Observability
 @inject ISiteSettingsService SiteSettings
@@ -9,6 +10,7 @@
 @inject StreamingRegistry StreamingRegistry
 @inject IHdHomeRunSettingsService HdhrSettings
 @inject IGeneratedHlsSettingsService GeneratedHlsSettings
+@inject ProviderPageService ProviderPageService
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -77,7 +79,7 @@
                 @if (!string.IsNullOrWhiteSpace(_activeProfileId))
                 {
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
-                        Bound profile: @_activeProfileId
+                        Bound profile: @(_activeProfileName ?? _activeProfileId)
                     </MudText>
                 }
 
@@ -665,6 +667,8 @@
     private string _endpointPassword = string.Empty;
     private string _virtualTunerId = "hdhr-main";
     private string? _activeProfileId;
+    private string? _activeProfileName;
+    private List<ProfileListItemDto> _profiles = [];
     private string? _endpointError;
     private string? _endpointSuccess;
 
@@ -722,7 +726,28 @@
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync());
+        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync());
+    }
+
+    private async Task LoadProfilesAsync()
+    {
+        try
+        {
+            var data = await ProviderPageService.GetPageDataAsync(CancellationToken.None);
+            _profiles = data.Profiles;
+            ResolveActiveProfileName();
+        }
+        catch { }
+    }
+
+    private void ResolveActiveProfileName()
+    {
+        if (string.IsNullOrWhiteSpace(_activeProfileId))
+        {
+            _activeProfileName = null;
+            return;
+        }
+        _activeProfileName = _profiles.FirstOrDefault(p => p.ProfileId == _activeProfileId)?.Name;
     }
 
     private async Task LoadEndpointSecurityAsync()

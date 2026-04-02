@@ -231,6 +231,8 @@ public sealed class ImportConfigProviderRequest
 
     [Range(1, 100)]
     public int? MaxConcurrentStreams { get; set; }
+
+    public List<string>? AssociateToProfileIds { get; set; }
 }
 
 public sealed class CreateProfileRequest

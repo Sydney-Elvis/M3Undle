@@ -42,7 +42,7 @@
             {
                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
                     <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
-                    <MudText Typo="Typo.caption" Color="Color.Primary">Building snapshot…</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
                 </MudStack>
             }
             <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
@@ -314,13 +314,13 @@
                         _pendingProviderSwitchNotification = false;
                         await InvokeAsync(() => DialogService.ShowMessageBoxAsync(
                             "Active Provider Updated",
-                            "The new snapshot is ready. Your Media Players (Jellyfin, Plex, Emby, etc.) need to refresh or re-scan their channel list to pick up the updated lineup.",
+                            "The updated lineup is ready. Your media players (Jellyfin, Plex, Emby, etc.) need to refresh or re-scan their channel list to pick up the changes.",
                             yesText: "Got It"));
                     }
                     else if (!evt.Succeeded && evt.ErrorSummary is not null)
                     {
                         await InvokeAsync(() => Snackbar.Add(
-                            $"Snapshot refresh failed: {evt.ErrorSummary}",
+                            $"Lineup refresh failed: {evt.ErrorSummary}",
                             Severity.Error,
                             options => { options.VisibleStateDuration = 8000; }));
                     }

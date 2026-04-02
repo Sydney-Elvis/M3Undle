@@ -805,19 +805,28 @@ public static class ProviderApiEndpoints
 
         db.Providers.Add(provider);
 
-        var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
-        var profile = new Profile
+        var profileIdsToApply = request.AssociateToProfileIds
+            ?.Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+
+        if (profileIdsToApply is null or { Count: 0 })
         {
-            ProfileId = Guid.NewGuid().ToString(),
-            Name = profileName,
-            OutputName = "m3undle",
-            MergeMode = "replace",
-            Enabled = true,
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
-        db.Profiles.Add(profile);
-        ApplyProviderProfiles(db, provider.ProviderId, [profile.ProfileId]);
+            var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
+            var profile = new Profile
+            {
+                ProfileId = Guid.NewGuid().ToString(),
+                Name = profileName,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                Enabled = true,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+            db.Profiles.Add(profile);
+            profileIdsToApply = [profile.ProfileId];
+        }
+
+        ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
 
         await db.SaveChangesAsync(cancellationToken);
 

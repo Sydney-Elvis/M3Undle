@@ -19,7 +19,7 @@ At a high level, the service:
 
 - Ingests a provider playlist (M3U) and guide data (XMLTV)
 - Supports multiple provider-linked EPG sources, source-priority merge rules, and per-channel guide mapping
-- Builds **snapshots** and serves **last-known-good** output
+- Builds versioned output and serves the **last-known-good** version
 - Publishes compatibility endpoints for clients:
   - M3U — `/m3u/m3undle.m3u`
   - XMLTV — `/xmltv/m3undle.xml`
@@ -52,9 +52,10 @@ The published channel set, served at:
 - `/m3u/m3undle.m3u`
 - `/xmltv/m3undle.xml`
 
-### Snapshot
-A published, atomic "version" of a lineup output (playlist + guide mapping + stream keys).
-Snapshots allow last-known-good behavior: if a refresh fails, clients keep working.
+### Published Version / Snapshot
+An atomic version of a lineup output (playlist + guide mapping + stream keys).
+Published versions allow last-known-good behavior: if a refresh fails, clients keep working.
+`Snapshot` is the internal/technical term for this concept. User-facing UI uses "last published" or "published version".
 
 ### Stream Key
 A stable identifier used by published stream URLs.
@@ -62,19 +63,19 @@ Clients receive a URL like `/stream/<streamKey>` instead of a raw provider URL.
 
 ---
 
-## Snapshot Lifecycle
+## Refresh Lifecycle
 
 A refresh run follows this pattern:
 
 1. Fetch provider inputs (M3U + XMLTV) from the active provider
-2. Parse and upsert provider groups and channels into the DB
-3. Generate a **staged snapshot** (M3U + XMLTV files written to disk)
-4. Validate snapshot (basic integrity checks)
-5. Promote staged snapshot to **active**
-6. Serve active snapshot to clients
+2. Parse provider groups and channels into memory
+3. Build snapshot output (M3U + XMLTV files written to disk)
+4. Validate output (basic integrity checks)
+5. Promote to active — clients immediately receive the new lineup
+6. Serve active output to clients
 
 If refresh fails:
-- The service continues serving the last active snapshot (last-known-good).
+- The service continues serving the last successfully published version (last-known-good).
 
 ---
 
@@ -109,16 +110,17 @@ The Web UI is intended to make large catalogs manageable.
 
 Views:
 
+- **Overview**: see system health, published output, active profiles, and action items
 - **Provider**: configure providers, preview catalogs, and manage the active provider
   - Import providers from config.yaml (read-only, credentials secure)
   - Add/edit providers directly in the GUI (for testing or one-off providers)
   - Check provider health (credentials defined, last successful fetch, etc.)
 - **EPG Sources**: manage provider-linked XMLTV sources, test guide fetches, and tune channel mappings
-- **Groups**: browse the provider's groups and channel counts (read-only preview)
-- **Snapshots / Status**: see refresh history and the current active snapshot
+- **Profiles**: list all configured profiles (named published lineups); click through to the profile detail page for provider membership, published history, and pending review items
+- **Channel Mapping**: build your output lineup from the provider's channel catalog; manage group inclusion/exclusion, output group names, auto-numbering ranges, and per-channel overrides
+- **Channels**: browse the live channels currently in the published lineup; edit channel numbers, output groups, and EPG IDs
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
-- **Settings**: configure stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button; changes are persisted to the database and applied on the next startup
-- **Settings**: configure endpoint security credentials and the HDHomeRun `Virtual Tuner ID` used for tuner ownership
+- **Settings**: configure endpoint security credentials, the HDHomeRun `Virtual Tuner ID`, and stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button
 
 Design goals:
 - configuration should be explicit and understandable
@@ -140,13 +142,17 @@ See: `docs/spec/config_spec.md`
 
 ---
 
-## Lineup Shaping (Planned)
+## Lineup Shaping
 
-A future release will introduce lineup shaping controls:
+The following lineup shaping features are implemented:
 
-- Group inclusion rules (select which groups appear in your lineup)
-- Channel numbering (start ranges, pinned numbers, overflow handling)
-- New channels inbox (review and approve newly discovered channels)
+- Group inclusion/exclusion rules (select which groups appear in your lineup)
+- Channel numbering (start ranges, pinned numbers, overflow handling, sort position via Number Manager)
+- Custom `tvg-id` override per channel (lock-gated field in the channel edit dialog)
+
+Planned for a future release:
+
+- New channels inbox (review and approve newly discovered channels before they appear in output)
 - Dynamic groups for rotating sports or event feeds
 
 ---
@@ -157,7 +163,7 @@ The CLI is a file-oriented tool for filtering large playlists.
 The service builds on the same foundational ideas but adds:
 
 - DB-backed configuration
-- snapshot publishing
+- lineup publishing
 - HTTP endpoints
 - web-based management and visibility
 

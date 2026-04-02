@@ -9,14 +9,17 @@ public sealed class ChannelListPageService(
     IServiceScopeFactory scopeFactory,
     AppEventBus eventBus)
 {
-    public async Task<List<string>> GetMappedGroupsAsync(CancellationToken cancellationToken)
+    public async Task<string?> GetDefaultProfileIdAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await GetActiveProfileIdAsync(db, cancellationToken);
+    }
 
-        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
-        if (profileId is null)
-            return [];
+    public async Task<List<string>> GetMappedGroupsAsync(string profileId, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
         return await db.ProfileGroupFilters
             .AsNoTracking()
@@ -29,6 +32,7 @@ public sealed class ChannelListPageService(
     }
 
     public async Task<ChannelListResponse?> GetChannelsAsync(
+        string profileId,
         int page,
         int pageSize,
         string? search,
@@ -41,25 +45,9 @@ public sealed class ChannelListPageService(
         pageSize = Math.Clamp(pageSize, 10, 200);
         page = Math.Max(1, page);
 
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
-            return null;
-
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (profileLink is null)
-            return null;
-
         var snapshot = await db.Snapshots
             .AsNoTracking()
-            .Where(x => x.ProfileId == profileLink.ProfileId && x.Status == "active")
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
             .OrderByDescending(x => x.CreatedUtc)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -134,16 +122,13 @@ public sealed class ChannelListPageService(
     }
 
     public async Task<bool?> UpdateOutputChannelAsync(
+        string profileId,
         string providerChannelId,
         UpdateOutputChannelRequest request,
         CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
-        if (profileId is null)
-            return null;
 
         var channelFilter = await db.ProfileGroupChannelFilters
             .Include(x => x.ProfileGroupFilter)
@@ -179,14 +164,12 @@ public sealed class ChannelListPageService(
         return true;
     }
 
-    public async Task<List<NumberManagerChannelDto>> GetNumberManagerChannelsAsync(CancellationToken cancellationToken)
+    public async Task<List<NumberManagerChannelDto>> GetNumberManagerChannelsAsync(
+        string profileId,
+        CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
-        if (profileId is null)
-            return [];
 
         var rows = await db.ProfileGroupChannelFilters
             .AsNoTracking()
@@ -219,14 +202,13 @@ public sealed class ChannelListPageService(
         return rows;
     }
 
-    public async Task<bool> BulkUpdateChannelNumbersAsync(BulkChannelNumbersRequest request, CancellationToken cancellationToken)
+    public async Task<bool> BulkUpdateChannelNumbersAsync(
+        string profileId,
+        BulkChannelNumbersRequest request,
+        CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
-        if (profileId is null)
-            return false;
 
         if (request.Channels is not { Count: > 0 })
             return true;
@@ -253,14 +235,13 @@ public sealed class ChannelListPageService(
         return true;
     }
 
-    public async Task<bool?> RemoveOutputChannelAsync(string providerChannelId, CancellationToken cancellationToken)
+    public async Task<bool?> RemoveOutputChannelAsync(
+        string profileId,
+        string providerChannelId,
+        CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
-        if (profileId is null)
-            return null;
 
         var channelFilter = await db.ProfileGroupChannelFilters
             .Include(x => x.ProfileGroupFilter)
@@ -278,14 +259,13 @@ public sealed class ChannelListPageService(
         return true;
     }
 
-    public async Task<string?> GetTvgIdOverrideAsync(string providerChannelId, CancellationToken cancellationToken)
+    public async Task<string?> GetTvgIdOverrideAsync(
+        string profileId,
+        string providerChannelId,
+        CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var profileId = await GetActiveProfileIdAsync(db, cancellationToken);
-        if (profileId is null)
-            return null;
 
         return await db.ProfileGroupChannelFilters
             .AsNoTracking()

@@ -244,6 +244,8 @@ builder.Services.AddScoped<ChannelMappingPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
 builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
+builder.Services.AddSingleton<DashboardStatsService>();
+builder.Services.AddSingleton<ProfilesPageService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshService>());
@@ -357,6 +359,7 @@ app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
 app.MapXtreamEndpoints();
 app.MapEpgApiEndpoints();
+app.MapDashboardApiEndpoints();
 app.MapHealthChecks("/health");
 
 app.Run();

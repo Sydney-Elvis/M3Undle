@@ -14,7 +14,7 @@ A single unified process (`M3Undle.Web`) provides:
 ## Core Concepts
 - Provider: upstream source of channels. Multiple providers can be configured and browsed; one is active at a time.
 - Canonical Channel: stable identity representing a channel concept, independent of provider churn. Forms the basis for lineup shaping in a future release. **Not used in V1 snapshot builds.**
-- Profile: scopes a set of providers, snapshots, and stream keys to a named output. Currently a single default profile. Multiple profiles with named output endpoints are a future feature.
+- Profile: scopes a set of providers, published versions, and stream keys to a named output (display name + output name). User-facing profile management via `/profiles` and profile detail pages. Multiple named profiles with distinct output endpoints are a future feature.
 - StreamKey: stable token used in published `/stream/<streamKey>` URLs. **In V1**, derived from stable channel properties (tvg-id when present, otherwise `displayName + "\u001f" + streamUrl`), SHA-256 hashed with profileId, truncated to 16 base64url chars. Keys are stable across refreshes as long as the channel identity is stable.
 - Snapshot: atomic published output for a profile (M3U + XMLTV + channel index JSON). Staged then promoted to active.
 
@@ -36,5 +36,5 @@ These constraints held for Alpha 1 (pass-through) and continue to apply in curre
 - Clients do not consume raw provider URLs.
 - The output endpoint is always `/m3u/m3undle.m3u` — clients should be pointed here.
 
-Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Full lineup shaping (channel reorder, custom tvg-id, new-channel inbox, dynamic groups) is planned for Alpha 5.
+Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Alpha 5 added channel reorder, custom tvg-id, HLS compatibility, CORS, dashboard redesign, and profile UX. New-channel inbox and dynamic groups remain planned.
 

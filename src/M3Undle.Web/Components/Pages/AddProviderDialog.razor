@@ -39,6 +39,7 @@
                                              HelperText="Leave blank to use the global setting" />
                             @RenderContentToggles(_urlModel)
                             <MudSwitch @bind-Value="_urlModel.Enabled" Color="Color.Success" Label="Enabled" />
+                            @RenderProfileSection(_urlModel)
                         </MudStack>
                     </MudForm>
                 </div>
@@ -124,6 +125,7 @@
                                              HelperText="Leave blank to use the global setting" />
                             @RenderContentToggles(_fileModel)
                             <MudSwitch @bind-Value="_fileModel.Enabled" Color="Color.Success" Label="Enabled" />
+                            @RenderProfileSection(_fileModel)
                         </MudStack>
                     </MudForm>
                 </div>
@@ -176,6 +178,7 @@
                             @RenderContentToggles(_xtreamModel)
                             <MudSwitch @bind-Value="_xtreamModel.Enabled" Color="Color.Success" Label="Enabled"
                                        Disabled="!_encryptionAvailable" />
+                            @RenderProfileSection(_xtreamModel)
                         </MudStack>
                     </MudForm>
                 </div>
@@ -188,97 +191,118 @@
             {
                 <MudTabPanel Text="Import" Icon="@Icons.Material.Filled.FileDownload">
                     <div class="pt-3">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
-                            Providers discovered in M3UNDLE_CONFIG_DIR/config.yaml
-                        </MudText>
-
                         @if (!string.IsNullOrWhiteSpace(_importError))
                         {
-                            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-2">@_importError</MudAlert>
+                            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_importError</MudAlert>
                         }
 
-                        @if (_importLoading)
-                        {
-                            <MudProgressCircular Indeterminate="true" />
-                        }
-                        else if (_configProviders.Count == 0)
+                        @if (_configProviders.Count == 0)
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
                         }
                         else
                         {
-                            <MudTable Items="_configProviders" Hover="true" Dense="true">
-                                <HeaderContent>
-                                    <MudTh>Name</MudTh>
-                                    <MudTh>Playlist URL</MudTh>
-                                    <MudTh>Status</MudTh>
-                                    <MudTh></MudTh>
-                                </HeaderContent>
-                                <RowTemplate>
-                                    <MudTd>@context.Name</MudTd>
-                                    <MudTd Style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@context.PlaylistUrl</MudTd>
-                                    <MudTd>
-                                        @if (context.MissingEnvVars.Count > 0)
-                                        {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Error">Missing: @string.Join(", ", context.MissingEnvVars)</MudChip>
-                                        }
-                                        else if (IsAlreadyImported(context.Name))
-                                        {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Imported</MudChip>
-                                        }
-                                        else if (_probeStates.TryGetValue(context.Name, out var probe))
-                                        {
-                                            if (probe.IsProbing)
+                            var selProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
+                            var selOpts = string.IsNullOrEmpty(_importSelectedName) ? null : GetImportOptions(_importSelectedName);
+                            var selImported = !string.IsNullOrEmpty(_importSelectedName) && IsAlreadyImported(_importSelectedName);
+                            var selMissing = selProvider?.MissingEnvVars.Count > 0;
+
+                            <MudStack Spacing="3">
+                                <MudSelect T="string"
+                                           Label="Provider"
+                                           @bind-Value="_importSelectedName"
+                                           HelperText="Providers discovered in M3UNDLE_CONFIG_DIR/config.yaml">
+                                    <MudSelectItem T="string" Value="@string.Empty">— select a provider —</MudSelectItem>
+                                    @foreach (var cp in _configProviders)
+                                    {
+                                        <MudSelectItem T="string" Value="@cp.Name">
+                                            @cp.Name
+                                            @if (IsAlreadyImported(cp.Name)) { <text> (already imported)</text> }
+                                            else if (cp.MissingEnvVars.Count > 0) { <text> (missing env vars)</text> }
+                                        </MudSelectItem>
+                                    }
+                                </MudSelect>
+
+                                @if (selProvider is not null)
+                                {
+                                    <MudTextField Label="Playlist URL" Value="@selProvider.PlaylistUrl"
+                                                  ReadOnly="true" Variant="Variant.Text"
+                                                  Style="font-family:monospace; font-size:0.8rem;" />
+
+                                    @if (!string.IsNullOrWhiteSpace(selProvider.XmltvUrl))
+                                    {
+                                        <MudTextField Label="XMLTV URL" Value="@selProvider.XmltvUrl"
+                                                      ReadOnly="true" Variant="Variant.Text"
+                                                      Style="font-family:monospace; font-size:0.8rem;" />
+                                    }
+
+                                    @if (selMissing)
+                                    {
+                                        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
+                                            Missing environment variables: @string.Join(", ", selProvider.MissingEnvVars)
+                                        </MudAlert>
+                                    }
+                                    else if (selImported)
+                                    {
+                                        <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
+                                            This provider has already been imported.
+                                        </MudAlert>
+                                    }
+                                    else
+                                    {
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                            @if (_probeStates.TryGetValue(selProvider.Name, out var probe))
                                             {
-                                                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                                            }
-                                            else if (probe.Ok == true)
-                                            {
-                                                <MudChip T="string" Size="Size.Small" Color="Color.Success">@($"{probe.ChannelCount:N0} channels")</MudChip>
+                                                if (probe.IsProbing)
+                                                {
+                                                    <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Testing…</MudText>
+                                                }
+                                                else if (probe.Ok == true)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Success">@($"{probe.ChannelCount:N0} channels found")</MudChip>
+                                                }
+                                                else
+                                                {
+                                                    <MudTooltip Text="@probe.Error">
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Error">Test failed</MudChip>
+                                                    </MudTooltip>
+                                                }
                                             }
                                             else
                                             {
-                                                <MudTooltip Text="@probe.Error">
-                                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Failed</MudChip>
-                                                </MudTooltip>
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Ready</MudChip>
                                             }
-                                        }
-                                        else
-                                        {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Ready</MudChip>
-                                        }
-                                    </MudTd>
-                                    <MudTd>
-                                        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
-                                            @if (!IsAlreadyImported(context.Name) && context.MissingEnvVars.Count == 0)
-                                            {
-                                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
-                                                           Disabled="@IsProbing(context.Name)"
-                                                           OnClick="() => ProbeAsync(context.Name)">Test</MudButton>
-                                                var opts = GetImportOptions(context.Name);
-                                                <MudCheckBox T="bool" @bind-Value="opts.IncludeVod" Size="Size.Small" Label="VOD"
-                                                             Disabled="@(_importingName == context.Name)" />
-                                                <MudCheckBox T="bool" @bind-Value="opts.IncludeSeries" Size="Size.Small" Label="Series"
-                                                             Disabled="@(_importingName == context.Name)" />
-                                                @if (!_importedProviders.Any(p => p.IsActive))
-                                                {
-                                                    <MudCheckBox T="bool" @bind-Value="opts.SetAsActive" Size="Size.Small" Label="Set active"
-                                                                 Disabled="@(_importingName == context.Name)" />
-                                                }
-                                                <MudNumericField T="int?" @bind-Value="opts.MaxConcurrentStreams"
-                                                                 Placeholder="Max streams" Min="1" Max="100"
-                                                                 Style="width:110px" Margin="Margin.Dense"
-                                                                 Disabled="@(_importingName == context.Name)" />
-                                            }
-                                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                                                       Disabled="@(IsAlreadyImported(context.Name) || context.MissingEnvVars.Count > 0 || _importingName == context.Name)"
-                                                       OnClick="() => ImportConfigAsync(context.Name)">
-                                                @(_importingName == context.Name ? "Importing..." : "Import")
-                                            </MudButton>
+                                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                                                       Disabled="@IsProbing(selProvider.Name)"
+                                                       OnClick="() => ProbeAsync(selProvider.Name)">Test connection</MudButton>
                                         </MudStack>
-                                    </MudTd>
-                                </RowTemplate>
-                            </MudTable>
+
+                                        <MudNumericField T="int?" Label="Max concurrent streams (optional)"
+                                                         @bind-Value="selOpts!.MaxConcurrentStreams" Min="1" Max="100"
+                                                         HelperText="Leave blank to use the global setting" />
+
+                                        <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center">
+                                            <MudCheckBox T="bool" @bind-Value="selOpts!.IncludeVod" Label="Include VOD" />
+                                            <MudCheckBox T="bool" @bind-Value="selOpts!.IncludeSeries" Label="Include Series" />
+                                            @if (!_importedProviders.Any(p => p.IsActive))
+                                            {
+                                                <MudCheckBox T="bool" @bind-Value="selOpts!.SetAsActive" Label="Set as active" />
+                                            }
+                                        </MudStack>
+
+                                        <MudSelect T="string" Label="Associated Profile"
+                                                   @bind-Value="selOpts!.ProfileId"
+                                                   ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(Auto-create from name)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
+                                            <MudSelectItem T="string" Value="@string.Empty">(Auto-create from name)</MudSelectItem>
+                                            @foreach (var p in AvailableProfiles)
+                                            {
+                                                <MudSelectItem T="string" Value="@p.ProfileId">@p.Name</MudSelectItem>
+                                            }
+                                        </MudSelect>
+                                    }
+                                }
+                            </MudStack>
                         }
                     </div>
                 </MudTabPanel>
@@ -289,7 +313,24 @@
     <DialogActions>
         <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
         <MudSpacer />
-        @if (_activeTab != ImportTabIndex)
+        @{
+            var canImport = _activeTab == ImportTabIndex
+                && !string.IsNullOrEmpty(_importSelectedName)
+                && !IsAlreadyImported(_importSelectedName)
+                && (_configProviders.FirstOrDefault(p => p.Name == _importSelectedName)?.MissingEnvVars.Count ?? 1) == 0;
+        }
+        @if (_activeTab == ImportTabIndex)
+        {
+            @if (canImport)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="@(_importingName is not null)"
+                           OnClick="@(() => ImportConfigAsync(_importSelectedName))">
+                    @(_importingName is not null ? "Importing…" : "Import")
+                </MudButton>
+            }
+        }
+        else
         {
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        Disabled="@(IsSaveDisabled())"
@@ -333,9 +374,9 @@
     private readonly XtreamFormModel _xtreamModel = new() { TimeoutSeconds = 120, Enabled = true };
 
     // Import tab
-    private bool _importLoading;
     private string? _importError;
     private string? _importingName;
+    private string _importSelectedName = string.Empty;
     private readonly List<ConfigYamlProviderDto> _configProviders = [];
     private readonly List<ProviderDto> _importedProviders = [];
     private readonly Dictionary<string, ProbeState> _probeStates = new();
@@ -603,12 +644,18 @@
     {
         _importError = null;
         _importingName = name;
-        _importLoading = true;
         try
         {
             var opts = GetImportOptions(name);
             var import = await ProviderPageService.ImportConfigProviderAsync(
-                new ImportConfigProviderRequest { Name = name, IncludeVod = opts.IncludeVod, IncludeSeries = opts.IncludeSeries, MaxConcurrentStreams = opts.MaxConcurrentStreams },
+                new ImportConfigProviderRequest
+                {
+                    Name = name,
+                    IncludeVod = opts.IncludeVod,
+                    IncludeSeries = opts.IncludeSeries,
+                    MaxConcurrentStreams = opts.MaxConcurrentStreams,
+                    AssociateToProfileIds = ProfileIdList(opts.ProfileId),
+                },
                 CancellationToken.None);
             if (!string.IsNullOrWhiteSpace(import.Error)) { _importError = import.Error; return; }
             var dto = import.Provider;
@@ -622,7 +669,7 @@
             MudDialog.Close(DialogResult.Ok(true));
         }
         catch (Exception ex) { _importError = $"Import failed: {ex.Message}"; }
-        finally { _importingName = null; _importLoading = false; StateHasChanged(); }
+        finally { _importingName = null; StateHasChanged(); }
     }
 
     // ------------------------------------------------------------------
@@ -681,5 +728,6 @@
         public bool IncludeSeries { get; set; } = true;
         public bool SetAsActive { get; set; }
         public int? MaxConcurrentStreams { get; set; }
+        public string ProfileId { get; set; } = string.Empty;
     }
 }

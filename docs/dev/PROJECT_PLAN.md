@@ -169,11 +169,16 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 
 - [x] Channel reorder (explicit sort position via Number Manager) — #3
 - [x] Custom `tvg-id` override per channel (lock-gated field in channel edit dialog)
+- [x] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
+- [x] Dashboard redesign — health dashboard with Published Output, Published Profiles, Action Items, Output URLs sections
+- [x] Profiles UX — `/profiles` list page and profile detail page (display name, output name, provider membership, published history)
+- [x] Terminology cleanup — snapshot language scrubbed from user-facing UI; lineup/published-version language throughout
+- [x] HLS playback for JavaScript/browser clients (GeneratedHls compatibility layer)
+- [x] CORS support for external network access
 - [ ] Configurable refresh schedule in Settings UI
 - [ ] New channels inbox / review queue
 - [ ] Dynamic groups for rotating/event feeds
 - [ ] Provider switch assistance
-- [x] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
 
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:

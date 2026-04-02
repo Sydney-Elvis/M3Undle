@@ -2,6 +2,7 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
 @inject ChannelListPageService ChannelListPageService
+@inject ProfilesPageService ProfilesService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
@@ -11,9 +12,25 @@
     <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
         <MudStack Spacing="0">
             <MudText Typo="Typo.h5">Channels</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary">Live channels in the active output snapshot.</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Live channels in the published lineup.</MudText>
         </MudStack>
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            @if (_allProfiles.Count > 0)
+            {
+                <MudSelect T="string"
+                           Value="_profileId"
+                           ValueChanged="OnProfileChangedAsync"
+                           Label="Profile"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="min-width:160px;"
+                           AnchorOrigin="Origin.BottomLeft">
+                    @foreach (var p in _allProfiles)
+                    {
+                        <MudSelectItem Value="@p.ProfileId">@p.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
             @if (_total.HasValue && !_numberManagerMode)
             {
                 <MudChip T="string" Color="Color.Primary" Size="Size.Small" Variant="Variant.Outlined">
@@ -159,7 +176,7 @@
 else if (_noSnapshot)
 {
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-        No active snapshot found. <MudLink Href="channels/mapping">Build your output</MudLink> first.
+        No published lineup found. <MudLink Href="channels/mapping">Build your output</MudLink> first.
     </MudAlert>
 }
 else
@@ -414,6 +431,9 @@ else
     private bool _pendingRebuild;
     private List<string> _availableGroups = [];
 
+    private List<ProfileStubDto> _allProfiles = [];
+    private string? _profileId;
+
     // -------------------------------------------------------------------------
     // Edit dialog state
     // -------------------------------------------------------------------------
@@ -445,14 +465,31 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _allProfiles = await ProfilesService.GetProfileStubsAsync(CancellationToken.None);
+        _profileId = await ChannelListPageService.GetDefaultProfileIdAsync(CancellationToken.None);
+        if (_profileId is null && _allProfiles.Count > 0)
+            _profileId = _allProfiles[0].ProfileId;
         await LoadAvailableGroupsAsync();
+    }
+
+    private async Task OnProfileChangedAsync(string profileId)
+    {
+        _profileId = profileId;
+        _groupFilter = string.Empty;
+        _search = string.Empty;
+        _total = null;
+        _noSnapshot = false;
+        await LoadAvailableGroupsAsync();
+        if (_grid is not null)
+            await _grid.ReloadServerData();
     }
 
     private async Task LoadAvailableGroupsAsync()
     {
+        if (_profileId is null) return;
         try
         {
-            _availableGroups = await ChannelListPageService.GetMappedGroupsAsync(CancellationToken.None);
+            _availableGroups = await ChannelListPageService.GetMappedGroupsAsync(_profileId, CancellationToken.None);
         }
         catch
         {
@@ -490,7 +527,11 @@ else
 
         try
         {
+            if (_profileId is null)
+                return new GridData<ChannelListItemDto> { Items = [], TotalItems = 0 };
+
             var result = await ChannelListPageService.GetChannelsAsync(
+                _profileId,
                 page,
                 state.PageSize,
                 _search,
@@ -533,8 +574,10 @@ else
 
         try
         {
-            _editTvgIdOverride = await ChannelListPageService.GetTvgIdOverrideAsync(
-                channel.ProviderChannelId, CancellationToken.None);
+            _editTvgIdOverride = _profileId is not null
+                ? await ChannelListPageService.GetTvgIdOverrideAsync(
+                    _profileId, channel.ProviderChannelId, CancellationToken.None)
+                : null;
         }
         catch { /* non-fatal */ }
 
@@ -578,6 +621,8 @@ else
         _isSaving = true;
         try
         {
+            if (_profileId is null) return;
+
             var request = new UpdateOutputChannelRequest
             {
                 ChannelNumber = _editChannelNumber,
@@ -589,6 +634,7 @@ else
             };
 
             var updated = await ChannelListPageService.UpdateOutputChannelAsync(
+                _profileId,
                 _editChannel.ProviderChannelId,
                 request,
                 CancellationToken.None);
@@ -632,10 +678,11 @@ else
             cancelText: "Cancel");
 
         if (confirmed != true) return;
+        if (_profileId is null) return;
 
         try
         {
-            var removed = await ChannelListPageService.RemoveOutputChannelAsync(channel.ProviderChannelId, CancellationToken.None);
+            var removed = await ChannelListPageService.RemoveOutputChannelAsync(_profileId, channel.ProviderChannelId, CancellationToken.None);
 
             if (removed == true)
             {
@@ -672,7 +719,9 @@ else
 
         try
         {
-            _nmChannels = await ChannelListPageService.GetNumberManagerChannelsAsync(CancellationToken.None);
+            _nmChannels = _profileId is not null
+                ? await ChannelListPageService.GetNumberManagerChannelsAsync(_profileId, CancellationToken.None)
+                : [];
         }
         catch (Exception ex)
         {
@@ -753,7 +802,8 @@ else
                     .ToList(),
             };
 
-            var ok = await ChannelListPageService.BulkUpdateChannelNumbersAsync(request, CancellationToken.None);
+            if (_profileId is null) return;
+            var ok = await ChannelListPageService.BulkUpdateChannelNumbersAsync(_profileId, request, CancellationToken.None);
 
             if (ok)
             {

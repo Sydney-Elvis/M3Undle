@@ -29,13 +29,13 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 
 ## Compatibility and Behavior
 
-- [ ] HLS playback for JavaScript/browser clients
-- [ ] CORS support for external network access
+- [x] HLS playback for JavaScript/browser clients (GeneratedHls compatibility layer + HlsManifestRewriter)
+- [x] CORS support for external network access
 - [ ] VOD / Series counts match UI & exported stats
 - [ ] IPTVnavtor groups and MacOS behavior validated
 
 ## Documentation
 
-- [ ] Update roadmap & user docs with Alpha 5 scope and status
+- [x] Update roadmap & user docs with Alpha 5 scope and status (dashboard redesign, profiles UX, terminology, HLS/CORS)
 - [ ] Add release notes for Alpha 5 features
 - [ ] Mark Beta transition criteria (after all Alpha checkboxes complete)

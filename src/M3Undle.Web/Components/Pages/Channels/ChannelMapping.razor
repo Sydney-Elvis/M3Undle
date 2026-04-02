@@ -4,6 +4,7 @@
 @using System
 @using System.Text.RegularExpressions
 @inject ChannelMappingPageService ChannelMappingPageService
+@inject ProfilesPageService ProfilesService
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject ISnackbar Snackbar
@@ -19,6 +20,22 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary">Select channels from provider groups to add to your M3U output.</MudText>
         </MudStack>
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            @if (_allProfiles.Count > 0)
+            {
+                <MudSelect T="string"
+                           Value="_profileId"
+                           ValueChanged="OnProfileChangedAsync"
+                           Label="Profile"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="min-width:160px;"
+                           AnchorOrigin="Origin.BottomLeft">
+                    @foreach (var p in _allProfiles)
+                    {
+                        <MudSelectItem Value="@p.ProfileId">@p.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
             <MudNumericField T="int"
                              @bind-Value="_defaultStartNum"
                              Label="Start at #"
@@ -752,6 +769,7 @@ else
 
 @code {
     private string? _profileId;
+    private List<ProfileStubDto> _allProfiles = [];
     private List<GroupFilterDto> _allFilters = [];
     private bool _isLoading;
     private bool _isRefreshing;
@@ -968,9 +986,16 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _allProfiles = await ProfilesService.GetProfileStubsAsync(_cts.Token);
         _isRefreshing = RefreshTrigger.IsRefreshing;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
+        await LoadAsync();
+    }
+
+    private async Task OnProfileChangedAsync(string newProfileId)
+    {
+        _profileId = newProfileId;
         await LoadAsync();
     }
 
@@ -1124,14 +1149,22 @@ else
 
         try
         {
-            var profile = await ChannelMappingPageService.GetActiveProfileAsync(_cts.Token);
-            if (profile is null)
+            string? newProfileId;
+            if (_profileId is not null)
             {
-                _profileId = null;
-                return;
+                newProfileId = _profileId;
+            }
+            else
+            {
+                var profile = await ChannelMappingPageService.GetActiveProfileAsync(_cts.Token);
+                if (profile is null)
+                {
+                    _profileId = null;
+                    return;
+                }
+                newProfileId = profile.ProfileId;
             }
 
-            var newProfileId = profile.ProfileId;
             if (_startNumProfileId is not null && _startNumProfileId != newProfileId)
             {
                 _defaultStartNum = 100;

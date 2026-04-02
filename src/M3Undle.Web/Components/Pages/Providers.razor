@@ -25,7 +25,7 @@
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
             <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-            <span>Snapshot refresh in progress — Delete, Set Active, and Preview are disabled until it completes.</span>
+            <span>Lineup refresh in progress — Delete, Set Active, and Preview are disabled until it completes.</span>
         </MudStack>
     </MudAlert>
 }
@@ -54,14 +54,29 @@
         <MudTable Items="_providers" Hover="true" Dense="true">
             <HeaderContent>
                 <MudTh>Name</MudTh>
+                <MudTh>Profile</MudTh>
                 <MudTh>Enabled</MudTh>
                 <MudTh>Last Refresh</MudTh>
-                <MudTh>Snapshots</MudTh>
+                <MudTh>Published</MudTh>
                 <MudTh>Active</MudTh>
                 <MudTh>Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd>@context.Name</MudTd>
+                <MudTd>
+                    @if (context.AssociatedProfileIds.Count == 0)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">None</MudText>
+                    }
+                    else
+                    {
+                        @foreach (var id in context.AssociatedProfileIds)
+                        {
+                            var profileName = _profiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id;
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">@profileName</MudChip>
+                        }
+                    }
+                </MudTd>
                 <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
                 <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
                 <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
@@ -386,7 +401,7 @@
     private static string FormatSnapshots(List<ProviderLatestSnapshotDto> snapshots)
     {
         if (snapshots.Count == 0) return "None";
-        return string.Join(" | ", snapshots.Select(x => $"{x.ProfileId}:{x.Status}:{x.CreatedUtc:u}"));
+        return string.Join(" | ", snapshots.Select(x => $"{x.Status} @ {x.CreatedUtc:u}"));
     }
 
 }
