@@ -176,7 +176,7 @@
 else if (_noSnapshot)
 {
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-        No published lineup found. <MudLink Href="channels/mapping">Build your output</MudLink> first.
+        No published lineup found. <MudLink Href="@($"channels/mapping{(_profileId is not null ? $"?profile={_profileId}" : "")}")">Build your output</MudLink> first.
     </MudAlert>
 }
 else
@@ -431,6 +431,9 @@ else
     private bool _pendingRebuild;
     private List<string> _availableGroups = [];
 
+    [SupplyParameterFromQuery(Name = "profile")]
+    public string? InitialProfile { get; set; }
+
     private List<ProfileStubDto> _allProfiles = [];
     private string? _profileId;
 
@@ -466,9 +469,14 @@ else
     protected override async Task OnInitializedAsync()
     {
         _allProfiles = await ProfilesService.GetProfileStubsAsync(CancellationToken.None);
-        _profileId = await ChannelListPageService.GetDefaultProfileIdAsync(CancellationToken.None);
-        if (_profileId is null && _allProfiles.Count > 0)
-            _profileId = _allProfiles[0].ProfileId;
+        if (!string.IsNullOrEmpty(InitialProfile) && _allProfiles.Any(p => p.ProfileId == InitialProfile))
+            _profileId = InitialProfile;
+        else
+        {
+            _profileId = await ChannelListPageService.GetDefaultProfileIdAsync(CancellationToken.None);
+            if (_profileId is null && _allProfiles.Count > 0)
+                _profileId = _allProfiles[0].ProfileId;
+        }
         await LoadAvailableGroupsAsync();
     }
 

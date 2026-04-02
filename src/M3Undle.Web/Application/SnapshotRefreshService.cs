@@ -24,8 +24,9 @@ public sealed class SnapshotRefreshService(
     private readonly Channel<RefreshMode> _triggerChannel = Channel.CreateBounded<RefreshMode>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
 
-    // Channels from the last full refresh — reused by build-only so VOD/series are included without re-fetching
-    private IReadOnlyList<ParsedProviderChannel> _cachedChannels = [];
+    // Channels from the last full refresh, keyed by providerId — reused by build-only so VOD/series are included without re-fetching
+    private IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> _cachedChannels =
+        new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
 
     // Current run CTS — cancelled by CancelRefresh(); null when no run is active
     private volatile CancellationTokenSource? _currentRunCts;
@@ -172,10 +173,10 @@ public sealed class SnapshotRefreshService(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            var (s, e, channels) = await builder.RunAsync(runCts.Token);
+            var (s, e, channelsByProvider) = await builder.RunAsync(runCts.Token);
             (succeeded, errorSummary) = (s, e);
-            if (channels.Count > 0)
-                _cachedChannels = channels;
+            if (channelsByProvider.Count > 0)
+                _cachedChannels = channelsByProvider;
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}).", succeeded);
         }
         catch (OperationCanceledException) when (_cancelledByUser && !stoppingToken.IsCancellationRequested)

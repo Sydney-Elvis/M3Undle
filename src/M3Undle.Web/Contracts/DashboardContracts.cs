@@ -13,6 +13,7 @@ public sealed class DashboardProfileSummary
     public string DisplayName { get; set; } = string.Empty;
     public string OutputName { get; set; } = string.Empty;
     public bool IsEnabled { get; set; }
+    public bool IsActive { get; set; }
     public DateTime? LastPublishedUtc { get; set; }
     public int LiveCount { get; set; }
     public ProfileHealthStatus HealthStatus { get; set; }

@@ -3,6 +3,8 @@
 @using M3Undle.Web.Contracts
 @inject ProfilesPageService ProfilesService
 @inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 
 <PageTitle>M3Undle — Profile</PageTitle>
 
@@ -24,7 +26,7 @@ else
 {
     var profile = _detail.Profile;
 
-    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-4" Wrap="Wrap.Wrap">
         <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
                        Size="Size.Small"
                        OnClick="@(() => Nav.NavigateTo("profiles"))" />
@@ -41,6 +43,26 @@ else
         {
             <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
         }
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.FilterList"
+                   Size="Size.Small"
+                   Href="@($"channels/mapping?profile={ProfileId}")">
+            Map Channels
+        </MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.LiveTv"
+                   Size="Size.Small"
+                   Href="@($"channels?profile={ProfileId}")">
+            View Channels
+        </MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.Delete"
+                   Color="Color.Error"
+                   Size="Size.Small"
+                   OnClick="ConfirmDeleteAsync">
+            Delete
+        </MudButton>
     </MudStack>
 
     <MudGrid Spacing="3">
@@ -105,7 +127,7 @@ else
                 {
                     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
                         @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review —
-                        <MudLink Href="channels/mapping">review now</MudLink>
+                        <MudLink Href="@($"channels/mapping?profile={ProfileId}")">review now</MudLink>
                     </MudAlert>
                 }
             </MudPaper>
@@ -231,6 +253,30 @@ else
     private ProfileDetailDto? _detail;
     private bool _isLoading;
     private string? _loadError;
+
+    private async Task ConfirmDeleteAsync()
+    {
+        var name = _detail?.Profile.Name ?? ProfileId;
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Profile",
+            $"Delete \"{name}\"? This will permanently remove the profile, its channel mapping, and all published snapshots. Provider data is not affected.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var error = await ProfilesService.DeleteProfileAsync(ProfileId, CancellationToken.None);
+            if (error is not null) { Snackbar.Add(error, Severity.Error); return; }
+            Snackbar.Add($"Profile \"{name}\" deleted.", Severity.Success);
+            Nav.NavigateTo("profiles");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete profile: {ex.Message}", Severity.Error);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {

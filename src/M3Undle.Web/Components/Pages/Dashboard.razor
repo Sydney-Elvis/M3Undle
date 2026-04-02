@@ -236,7 +236,7 @@
         <MudItem xs="12">
             <MudPaper Class="pa-4" Elevation="1">
                 <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
-                    <MudText Typo="Typo.h6">Published Profiles</MudText>
+                    <MudText Typo="Typo.h6">Profiles</MudText>
                     <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="profiles">
                         All Profiles
                     </MudButton>
@@ -247,16 +247,22 @@
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap">
                         @foreach (var profile in _dashboardStats.ProfileSummaries)
                         {
-                            <MudChip T="string"
-                                     Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
-                                              : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
-                                              : Color.Default)"
-                                     Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
-                                              : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
-                                              : Icons.Material.Filled.RadioButtonUnchecked)"
-                                     OnClick="@(() => Nav.NavigateTo($"profiles/{profile.ProfileId}"))">
-                                @profile.DisplayName — @profile.LiveCount live
-                            </MudChip>
+                            var chipColor = profile.IsActive
+                                ? (profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning : Color.Success)
+                                : (profile.HealthStatus == ProfileHealthStatus.NoOutput ? Color.Default : Color.Info);
+                            var chipVariant = profile.IsActive ? Variant.Filled : Variant.Outlined;
+                            var chipIcon = profile.IsActive
+                                ? (profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning : Icons.Material.Filled.CheckCircle)
+                                : (profile.HealthStatus == ProfileHealthStatus.NoOutput ? Icons.Material.Filled.RadioButtonUnchecked : Icons.Material.Filled.Inventory2);
+                            <MudTooltip Text="@(profile.IsActive ? "Serving at output URLs" : profile.HealthStatus == ProfileHealthStatus.NoOutput ? "No published output" : "Published — standby")" Arrow="true" Placement="Placement.Top">
+                                <MudChip T="string"
+                                         Color="@chipColor"
+                                         Variant="@chipVariant"
+                                         Icon="@chipIcon"
+                                         OnClick="@(() => Nav.NavigateTo($"profiles/{profile.ProfileId}"))">
+                                    @profile.DisplayName — @if (profile.IsActive) { <text>@profile.LiveCount live</text> } else if (profile.HealthStatus != ProfileHealthStatus.NoOutput) { <text>@profile.LiveCount ch</text> } else { <text>no output</text> }
+                                </MudChip>
+                            </MudTooltip>
                         }
                     </MudStack>
                 }

@@ -40,48 +40,101 @@ public sealed class SnapshotBuilder(
         string? LogoUrl);
     internal sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber, string? TvgIdOverride);
 
-    /// <summary>Full refresh: fetch from provider, sync to DB, then build snapshot.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels)> RunAsync(CancellationToken cancellationToken)
+    /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
+    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider)> RunAsync(CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
-        // 1. Find active + enabled provider
-        var provider = await db.Providers
+        var providers = await db.Providers
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            .Where(x => x.Enabled)
+            .ToListAsync(cancellationToken);
 
-        if (provider is null)
+        if (providers.Count == 0)
         {
-            logger.LogInformation("Snapshot refresh skipped — no active+enabled provider found.");
-            return (false, null, []);
+            logger.LogInformation("Snapshot refresh skipped — no enabled providers found.");
+            return (false, null, new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>());
         }
 
-        // 2. Find associated profile (first enabled, lowest priority number)
-        var profileLink = await db.ProfileProviders
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+        var channelsByProvider = new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
+
+        foreach (var provider in providers)
+        {
+            var (s, e, channels) = await RunForProviderAsync(provider, cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+            if (channels.Count > 0) channelsByProvider[provider.ProviderId] = channels;
+        }
+
+        return (anySucceeded, lastErrorSummary, channelsByProvider);
+    }
+
+    /// <summary>Build snapshots from cached channels for all enabled providers — no re-fetch.</summary>
+    public async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyAsync(
+        IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> channelsByProvider,
+        CancellationToken cancellationToken)
+    {
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
+
+        var providers = await db.Providers
+            .AsNoTracking()
+            .Where(x => x.Enabled)
+            .ToListAsync(cancellationToken);
+
+        if (providers.Count == 0)
+        {
+            logger.LogInformation("Snapshot build skipped — no enabled providers found.");
+            return (false, null);
+        }
+
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+
+        foreach (var provider in providers)
+        {
+            channelsByProvider.TryGetValue(provider.ProviderId, out var cachedChannels);
+            var (s, e) = await BuildOnlyForProviderAsync(provider, cachedChannels ?? [], cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+        }
+
+        return (anySucceeded, lastErrorSummary);
+    }
+
+    private async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels)> RunForProviderAsync(
+        Provider provider, CancellationToken cancellationToken)
+    {
+        // 1. Find all enabled profiles linked to this provider, ordered by priority
+        var allProfileLinks = await db.ProfileProviders
             .AsNoTracking()
             .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
             .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (profileLink is null)
+        if (allProfileLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot refresh skipped — active provider {ProviderId} is not linked to any enabled profile.", provider.ProviderId);
+            logger.LogInformation("Snapshot refresh skipped — provider {ProviderId} is not linked to any enabled profile.", provider.ProviderId);
             return (false, null, []);
         }
 
-        var profileExists = await db.Profiles
+        var enabledProfileIds = await db.Profiles
             .AsNoTracking()
-            .AnyAsync(x => x.ProfileId == profileLink.ProfileId && x.Enabled, cancellationToken);
+            .Where(x => allProfileLinks.Select(l => l.ProfileId).Contains(x.ProfileId) && x.Enabled)
+            .Select(x => x.ProfileId)
+            .ToHashSetAsync(cancellationToken);
 
-        if (!profileExists)
+        var activeLinks = allProfileLinks.Where(l => enabledProfileIds.Contains(l.ProfileId)).ToList();
+        if (activeLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot refresh skipped — profile {ProfileId} is not enabled.", profileLink.ProfileId);
+            logger.LogInformation("Snapshot refresh skipped — no enabled profiles linked to provider {ProviderId}.", provider.ProviderId);
             return (false, null, []);
         }
 
-        var profileId = profileLink.ProfileId;
+        var profileId = activeLinks[0].ProfileId;
 
-        // 3. Create FetchRun pre-saved as "running" (crash leaves it as "running", not "fail")
+        // 2. Create FetchRun pre-saved as "running" (crash leaves it as "running", not "fail")
         var now = DateTime.UtcNow;
         var fetchRun = new FetchRun
         {
@@ -94,9 +147,9 @@ public sealed class SnapshotBuilder(
         db.FetchRuns.Add(fetchRun);
         await db.SaveChangesAsync(cancellationToken);
 
-        logger.LogInformation("Starting snapshot refresh for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, profileId);
+        logger.LogInformation("Starting snapshot refresh for provider {ProviderId}, {ProfileCount} profile(s).", provider.ProviderId, activeLinks.Count);
 
-        // 4. Fetch playlist — failure is fatal (preserve last-known-good)
+        // 3. Fetch playlist — failure is fatal (preserve last-known-good)
         PlaylistFetchResult playlistResult;
         var sw = Stopwatch.StartNew();
         try
@@ -114,9 +167,7 @@ public sealed class SnapshotBuilder(
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
         sw.Restart();
 
-        // 5 + 5b. EPG fetch (multi-source) + DB sync.
-        // Individual source failures are soft — we continue with whatever sources succeed.
-        // If the run CT fires it is surfaced after EPG fetch via ThrowIfCancellationRequested.
+        // 4. EPG fetch + DB sync
         string xmltvContent;
         long xmltvBytes = 0;
         var stage = "xmltv";
@@ -124,20 +175,18 @@ public sealed class SnapshotBuilder(
         {
             xmltvContent = await FetchAndCompileEpgAsync(provider, profileId, sw, cancellationToken);
             xmltvBytes = Encoding.UTF8.GetByteCount(xmltvContent);
-
-            // If the run CT fired during EPG fetch, surface it now before touching the DB.
             cancellationToken.ThrowIfCancellationRequested();
             sw.Restart();
 
-            // 5b. Sync provider groups to DB (ALL content types), sync live channels only to DB, then create hold+new filter rows for new groups.
             stage = "groups";
             var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
             logger.LogInformation("Groups synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
             sw.Restart();
 
             stage = "group-filters";
-            await SyncGroupFiltersAsync(profileId, provider.ProviderId, cancellationToken);
-            logger.LogInformation("Group filters synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            foreach (var link in activeLinks)
+                await SyncGroupFiltersAsync(link.ProfileId, provider.ProviderId, cancellationToken);
+            logger.LogInformation("Group filters synced in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
 
             stage = "channels";
@@ -151,72 +200,77 @@ public sealed class SnapshotBuilder(
             throw;
         }
 
-        // 11. Mark FetchRun as ok
         fetchRun.FinishedUtc = DateTime.UtcNow;
         fetchRun.Status = "ok";
         fetchRun.ChannelCountSeen = playlistResult.Channels.Count;
         fetchRun.PlaylistBytes = (int)Math.Min(playlistResult.Bytes, int.MaxValue);
-        fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue); // compiled guide size
+        fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
         await db.SaveChangesAsync(cancellationToken);
 
-        // 6-10. Build snapshot from synced DB data (live) + in-memory VOD/series
-        var (succeeded, errorSummary) = await BuildSnapshotFromDbAsync(provider, profileId, xmltvContent, playlistResult.Channels, cancellationToken);
-
-        return (succeeded, errorSummary, playlistResult.Channels);
-    }
-
-    /// <summary>Build snapshot from already-synced DB data — no provider re-fetch.
-    /// Pass the channels from the last full refresh so VOD/series can be included without re-fetching.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyAsync(IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
-    {
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
-
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
+        // 5. Build snapshot for each linked profile
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+        foreach (var link in activeLinks)
         {
-            logger.LogInformation("Snapshot build skipped — no active+enabled provider found.");
-            return (false, null);
+            var (s, e) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, playlistResult.Channels, cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
         }
 
-        var profileLink = await db.ProfileProviders
+        return (anySucceeded, lastErrorSummary, playlistResult.Channels);
+    }
+
+    private async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyForProviderAsync(
+        Provider provider, IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
+    {
+        var allProfileLinks = await db.ProfileProviders
             .AsNoTracking()
             .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
             .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (profileLink is null)
+        if (allProfileLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot build skipped — active provider {ProviderId} has no enabled profile.", provider.ProviderId);
+            logger.LogInformation("Snapshot build skipped — provider {ProviderId} has no enabled profile link.", provider.ProviderId);
             return (false, null);
         }
 
-        var profileExists = await db.Profiles
+        var enabledProfileIds = await db.Profiles
             .AsNoTracking()
-            .AnyAsync(x => x.ProfileId == profileLink.ProfileId && x.Enabled, cancellationToken);
+            .Where(x => allProfileLinks.Select(l => l.ProfileId).Contains(x.ProfileId) && x.Enabled)
+            .Select(x => x.ProfileId)
+            .ToHashSetAsync(cancellationToken);
 
-        if (!profileExists)
+        var activeLinks = allProfileLinks.Where(l => enabledProfileIds.Contains(l.ProfileId)).ToList();
+        if (activeLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot build skipped — profile {ProfileId} is not enabled.", profileLink.ProfileId);
+            logger.LogInformation("Snapshot build skipped — no enabled profiles linked to provider {ProviderId}.", provider.ProviderId);
             return (false, null);
         }
 
-        // Load latest XMLTV from most recent active snapshot (reuse guide; a full refresh will update it)
-        var existingXmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
-        var latestSnapshot = await db.Snapshots
-            .AsNoTracking()
-            .Where(x => x.ProfileId == profileLink.ProfileId && x.Status == "active")
-            .OrderByDescending(x => x.CreatedUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
 
-        if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
-            existingXmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
+        foreach (var link in activeLinks)
+        {
+            var xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+            var latestSnapshot = await db.Snapshots
+                .AsNoTracking()
+                .Where(x => x.ProfileId == link.ProfileId && x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstOrDefaultAsync(cancellationToken);
 
-        logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, profileLink.ProfileId);
+            if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
+                xmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
 
-        return await BuildSnapshotFromDbAsync(provider, profileLink.ProfileId, existingXmltvContent, providerChannels, cancellationToken);
+            logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
+
+            var (s, e) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, providerChannels, cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+        }
+
+        return (anySucceeded, lastErrorSummary);
     }
 
     // -------------------------------------------------------------------------

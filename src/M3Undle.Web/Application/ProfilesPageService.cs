@@ -49,6 +49,38 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
         return (true, null, new ProfileStubDto { ProfileId = profile.ProfileId, Name = profile.Name });
     }
 
+    public async Task<string?> DeleteProfileAsync(string profileId, CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var profile = await db.Profiles.SingleOrDefaultAsync(x => x.ProfileId == profileId, ct);
+        if (profile is null)
+            return "Profile not found.";
+
+        // Cascade delete all profile-scoped data
+        await db.EpgChannelMaps.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+        await db.ChannelMatchRules.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+        await db.CanonicalChannels.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+        await db.StreamKeys.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+
+        var filterIds = await db.ProfileGroupFilters
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => x.ProfileGroupFilterId)
+            .ToListAsync(ct);
+        if (filterIds.Count > 0)
+            await db.ProfileGroupChannelFilters.Where(x => filterIds.Contains(x.ProfileGroupFilterId)).ExecuteDeleteAsync(ct);
+        await db.ProfileGroupFilters.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+
+        await db.Snapshots.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+        await db.ProfileProviders.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
+
+        db.Profiles.Remove(profile);
+        await db.SaveChangesAsync(ct);
+
+        return null;
+    }
+
     public async Task<List<ProfilePageItemDto>> GetProfilesAsync(CancellationToken ct)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
