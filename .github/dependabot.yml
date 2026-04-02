@@ -1,0 +1,20 @@
+version: 2
+
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+    # Optional but recommended
+    open-pull-requests-limit: 5
+
+    # Only care about real issues (keeps noise down)
+    allow:
+      - dependency-type: "direct"
+
+    # Group updates (prevents PR spam)
+    groups:
+      dotnet-dependencies:
+        patterns:
+          - "*"
