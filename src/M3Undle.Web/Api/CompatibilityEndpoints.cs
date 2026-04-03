@@ -568,10 +568,32 @@ public static class CompatibilityEndpoints
         var forceTs = IsHdHomeRunTuneRoute(context.Request.Path);
         var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs);
 
+        ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
+        if (requiresHls && resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        {
+            try
+            {
+                hlsSlotReservation = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
+            }
+            catch (StreamAdmissionException ex)
+            {
+                logger.LogWarning(
+                    "HLS live stream admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
+                    resolved.SourceDescriptor.ProviderId,
+                    resolved.SourceDescriptor.ProviderChannelId,
+                    ex.Message);
+                if (ex.RetryAfterSeconds is { } retry)
+                    context.Response.Headers["Retry-After"] = retry.ToString();
+                context.Response.StatusCode = ex.StatusCode;
+                return;
+            }
+        }
+
         if (requiresHls)
         {
             if (resolved.SourceDescriptor is null)
             {
+                hlsSlotReservation?.Dispose();
                 logger.LogWarning(
                     "HLS request could not be fulfilled for key={StreamKey}: provider stream metadata unavailable.",
                     streamKey);
@@ -608,11 +630,13 @@ public static class CompatibilityEndpoints
                 new GeneratedHlsSessionRequest(
                     StreamUrl: resolved.SourceDescriptor.StreamUrl,
                     DisplayName: resolved.SourceDescriptor.DisplayName,
-                    ProviderId: resolved.SourceDescriptor.ProviderId),
+                    ProviderId: resolved.SourceDescriptor.ProviderId,
+                    AdmissionKey: resolved.SourceDescriptor.SessionKey),
                 cancellationToken);
 
             if (generatedSession is null)
             {
+                hlsSlotReservation?.Dispose();
                 logger.LogWarning(
                     "Generated HLS startup failed for key={StreamKey}.",
                     streamKey);
@@ -792,6 +816,7 @@ public static class CompatibilityEndpoints
         HttpContext context,
         HlsProxyService hlsProxyService,
         StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
         string? u,
         CancellationToken cancellationToken)
     {
@@ -827,6 +852,7 @@ public static class CompatibilityEndpoints
         segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
 
         string providerId;
+        ChannelSessionKey? admissionKey = null;
         try
         {
             var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
@@ -838,6 +864,7 @@ public static class CompatibilityEndpoints
             }
 
             providerId = resolved.SourceDescriptor.ProviderId;
+            admissionKey = resolved.SourceDescriptor.SessionKey;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -849,6 +876,9 @@ public static class CompatibilityEndpoints
             await context.Response.WriteAsync("Unknown stream key.", cancellationToken);
             return;
         }
+
+        if (admissionKey is { } slotKey)
+            channelSessionManager.TouchHlsSlot(slotKey);
 
         await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }

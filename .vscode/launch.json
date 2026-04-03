@@ -67,7 +67,7 @@
       "name": "Debug CLI - Run Command",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build",
+      "preLaunchTask": "build-cli",
       "program": "${workspaceFolder}/src/M3Undle.Cli/bin/Debug/net10.0/bndl.dll",
       "args": [
         "run",
@@ -85,7 +85,7 @@
       "name": "Debug CLI - Groups Command",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build",
+      "preLaunchTask": "build-cli",
       "program": "${workspaceFolder}/src/M3Undle.Cli/bin/Debug/net10.0/bndl.dll",
       "args": [
         "groups",
@@ -103,7 +103,7 @@
       "name": "Debug CLI - Version",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "build",
+      "preLaunchTask": "build-cli",
       "program": "${workspaceFolder}/src/M3Undle.Cli/bin/Debug/net10.0/bndl.dll",
       "args": ["--version"],
       "cwd": "${workspaceFolder}",

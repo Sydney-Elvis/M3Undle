@@ -472,10 +472,33 @@ public static class XtreamEndpoints
             entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
 
         var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs: false);
+
+        ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
+        if (requiresHls && resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        {
+            try
+            {
+                hlsSlotReservation = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
+            }
+            catch (StreamAdmissionException ex)
+            {
+                logger.LogWarning(
+                    "Xtream HLS live stream admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
+                    resolved.SourceDescriptor.ProviderId,
+                    resolved.SourceDescriptor.ProviderChannelId,
+                    ex.Message);
+                if (ex.RetryAfterSeconds is { } retry)
+                    context.Response.Headers["Retry-After"] = retry.ToString();
+                context.Response.StatusCode = ex.StatusCode;
+                return;
+            }
+        }
+
         if (requiresHls)
         {
             if (resolved.SourceDescriptor is null)
             {
+                hlsSlotReservation?.Dispose();
                 await StreamErrorResponse.WriteHtmlErrorAsync(
                     context.Response, StatusCodes.Status503ServiceUnavailable,
                     "HLS delivery is unavailable for this stream.", cancellationToken);
@@ -509,11 +532,13 @@ public static class XtreamEndpoints
                 new GeneratedHlsSessionRequest(
                     StreamUrl: resolved.SourceDescriptor.StreamUrl,
                     DisplayName: resolved.SourceDescriptor.DisplayName,
-                    ProviderId: resolved.SourceDescriptor.ProviderId),
+                    ProviderId: resolved.SourceDescriptor.ProviderId,
+                    AdmissionKey: resolved.SourceDescriptor.SessionKey),
                 cancellationToken);
 
             if (generatedSession is null)
             {
+                hlsSlotReservation?.Dispose();
                 await StreamErrorResponse.WriteHtmlErrorAsync(
                     context.Response, StatusCodes.Status503ServiceUnavailable,
                     "Generated HLS is unavailable for this stream.", cancellationToken);
@@ -584,6 +609,7 @@ public static class XtreamEndpoints
         HttpContext context,
         HlsProxyService hlsProxyService,
         StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
         ILoggerFactory loggerFactory,
         string? u,
         CancellationToken cancellationToken)
@@ -632,6 +658,7 @@ public static class XtreamEndpoints
             }
 
             providerId = resolved.SourceDescriptor.ProviderId;
+            channelSessionManager.TouchHlsSlot(resolved.SourceDescriptor.SessionKey);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

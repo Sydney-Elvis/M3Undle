@@ -20,7 +20,9 @@ public sealed class ChannelSessionManager
     private readonly ILogger<ChannelSessionManager> _logger;
     private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
+    private readonly ConcurrentDictionary<ChannelSessionKey, HlsAdmissionSlot> _hlsSlots = new();
     private const int DefaultAdmissionRetryAfterSeconds = 30;
+    private static readonly TimeSpan DefaultHlsSlotTtl = TimeSpan.FromSeconds(60);
 
     public ChannelSessionManager(
         IOptions<BufferOptions> bufferOptions,
@@ -73,8 +75,11 @@ public sealed class ChannelSessionManager
                 return ValueTask.FromResult(existing);
             }
 
+            EvictExpiredHlsSlotsLocked();
+            var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
-            if (_sessions.Count >= maxSessions)
+            if (totalUpstreams >= maxSessions)
             {
                 throw CreateAdmissionException(
                     key,
@@ -88,8 +93,8 @@ public sealed class ChannelSessionManager
             var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
             if (effectiveProviderCap is { } providerCap and > 0)
             {
-                var providerSessionCount = _sessions.Keys.Count(x => x.ProviderId == key.ProviderId);
-                if (providerSessionCount >= providerCap)
+                var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                if (providerUpstreams >= providerCap)
                 {
                     throw CreateAdmissionException(
                         key,
@@ -122,6 +127,122 @@ public sealed class ChannelSessionManager
         }
     }
 
+    public void CheckAdmission(StreamSourceDescriptor source)
+    {
+        var key = source.SessionKey;
+
+        if (_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
+            throw new StreamAdmissionException(
+                $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
+                StreamAdmissionFailureKind.Cooldown,
+                StatusCodes.Status503ServiceUnavailable,
+                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
+
+        lock (_admissionGate)
+        {
+            if (_sessions.ContainsKey(key) || _hlsSlots.ContainsKey(key))
+                return;
+
+            EvictExpiredHlsSlotsLocked();
+            var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+
+            var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
+            if (totalUpstreams >= maxSessions)
+                throw CreateAdmissionException(
+                    key,
+                    source.DisplayName,
+                    StreamAdmissionFailureKind.MaxConcurrentSessions,
+                    $"Max concurrent sessions ({maxSessions}) reached.",
+                    "server is at the maximum of {Limit} concurrent stream(s).",
+                    maxSessions);
+
+            var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
+            if (effectiveProviderCap is { } providerCap and > 0)
+            {
+                var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                if (providerUpstreams >= providerCap)
+                    throw CreateAdmissionException(
+                        key,
+                        source.DisplayName,
+                        StreamAdmissionFailureKind.ProviderLimit,
+                        $"Provider upstream limit ({providerCap}) reached.",
+                        "provider has reached its upstream limit of {Limit} stream(s).",
+                        providerCap);
+            }
+        }
+    }
+
+    public HlsSlotReservation ReserveHlsSlot(StreamSourceDescriptor source, TimeSpan? ttl = null)
+    {
+        var key = source.SessionKey;
+        var effectiveTtl = ttl ?? DefaultHlsSlotTtl;
+
+        if (_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
+            throw new StreamAdmissionException(
+                $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
+                StreamAdmissionFailureKind.Cooldown,
+                StatusCodes.Status503ServiceUnavailable,
+                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
+
+        lock (_admissionGate)
+        {
+            if (_sessions.ContainsKey(key) || _hlsSlots.ContainsKey(key))
+            {
+                if (_hlsSlots.TryGetValue(key, out var existingSlot))
+                    existingSlot.Touch(effectiveTtl);
+
+                return new HlsSlotReservation(this, key);
+            }
+
+            EvictExpiredHlsSlotsLocked();
+            var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+
+            var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
+            if (totalUpstreams >= maxSessions)
+                throw CreateAdmissionException(
+                    key,
+                    source.DisplayName,
+                    StreamAdmissionFailureKind.MaxConcurrentSessions,
+                    $"Max concurrent sessions ({maxSessions}) reached.",
+                    "server is at the maximum of {Limit} concurrent stream(s).",
+                    maxSessions);
+
+            var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
+            if (effectiveProviderCap is { } providerCap and > 0)
+            {
+                var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                if (providerUpstreams >= providerCap)
+                    throw CreateAdmissionException(
+                        key,
+                        source.DisplayName,
+                        StreamAdmissionFailureKind.ProviderLimit,
+                        $"Provider upstream limit ({providerCap}) reached.",
+                        "provider has reached its upstream limit of {Limit} stream(s).",
+                        providerCap);
+            }
+
+            _hlsSlots[key] = new HlsAdmissionSlot(key, effectiveTtl);
+            _logger.LogInformation(
+                "Reserved HLS admission slot for '{DisplayName}' ({TotalUpstreams} upstream(s) now tracked).",
+                source.DisplayName,
+                totalUpstreams + 1);
+
+            return new HlsSlotReservation(this, key);
+        }
+    }
+
+    public void TouchHlsSlot(ChannelSessionKey key, TimeSpan? ttl = null)
+    {
+        if (_hlsSlots.TryGetValue(key, out var slot))
+            slot.Touch(ttl ?? DefaultHlsSlotTtl);
+    }
+
+    public void ReleaseHlsSlot(ChannelSessionKey key)
+    {
+        if (_hlsSlots.TryRemove(key, out _))
+            _logger.LogInformation("Released HLS admission slot for {Key}.", key);
+    }
+
     public bool TryGet(ChannelSessionKey key, out ChannelStreamSession? session)
         => _sessions.TryGetValue(key, out session);
 
@@ -142,6 +263,7 @@ public sealed class ChannelSessionManager
         {
             sessions = _sessions.Values.ToArray();
             _sessions.Clear();
+            _hlsSlots.Clear();
         }
 
         if (sessions.Length > 0)
@@ -185,6 +307,52 @@ public sealed class ChannelSessionManager
             failureKind,
             StatusCodes.Status503ServiceUnavailable,
             retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(DefaultAdmissionRetryAfterSeconds, observation.Remaining.TotalSeconds))));
+    }
+
+    private int CountProviderUpstreamsLocked(string providerId)
+    {
+        var tsCount = _sessions.Keys.Count(x => x.ProviderId == providerId);
+        var hlsCount = _hlsSlots.Keys.Count(x => x.ProviderId == providerId && !_sessions.ContainsKey(x));
+        return tsCount + hlsCount;
+    }
+
+    private int CountUniqueHlsUpstreamsLocked()
+        => _hlsSlots.Keys.Count(k => !_sessions.ContainsKey(k));
+
+    private void EvictExpiredHlsSlotsLocked()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var expired = _hlsSlots.Where(x => x.Value.ExpiresUtc <= now).Select(x => x.Key).ToArray();
+        foreach (var key in expired)
+            _hlsSlots.TryRemove(key, out _);
+    }
+
+    internal sealed class HlsAdmissionSlot(ChannelSessionKey key, TimeSpan ttl)
+    {
+        private long _expiresUnixMs = DateTimeOffset.UtcNow.Add(ttl).ToUnixTimeMilliseconds();
+
+        public ChannelSessionKey Key { get; } = key;
+
+        public DateTimeOffset ExpiresUtc
+            => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _expiresUnixMs));
+
+        public void Touch(TimeSpan newTtl)
+            => Interlocked.Exchange(ref _expiresUnixMs, DateTimeOffset.UtcNow.Add(newTtl).ToUnixTimeMilliseconds());
+    }
+
+    public sealed class HlsSlotReservation(ChannelSessionManager manager, ChannelSessionKey key) : IDisposable
+    {
+        private int _disposed;
+
+        public ChannelSessionKey Key { get; } = key;
+
+        public void Touch(TimeSpan? ttl = null) => manager.TouchHlsSlot(Key, ttl);
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                manager.ReleaseHlsSlot(Key);
+        }
     }
 }
 

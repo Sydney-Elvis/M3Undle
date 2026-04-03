@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using M3Undle.Web.Data;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Sessions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -14,7 +16,8 @@ public sealed record GeneratedHlsSessionRequest(
     string DisplayName,
     string? ProviderId = null,
     string? ProviderUserAgent = null,
-    string? ProviderHeadersJson = null);
+    string? ProviderHeadersJson = null,
+    ChannelSessionKey? AdmissionKey = null);
 
 public sealed record GeneratedHlsSessionHandle(
     string SessionId,
@@ -23,6 +26,7 @@ public sealed record GeneratedHlsSessionHandle(
 public sealed class GeneratedHlsSessionManager(
     IOptions<GeneratedHlsOptions> options,
     IServiceScopeFactory scopeFactory,
+    ChannelSessionManager channelSessionManager,
     ILogger<GeneratedHlsSessionManager> logger) : IHostedService, IAsyncDisposable
 {
     private readonly GeneratedHlsOptions _options = options.Value;
@@ -83,7 +87,8 @@ public sealed class GeneratedHlsSessionManager(
             request.DisplayName,
             sessionDir,
             manifestPath,
-            process);
+            process,
+            request.AdmissionKey);
 
         if (!_sessions.TryAdd(sessionId, session))
         {
@@ -113,6 +118,9 @@ public sealed class GeneratedHlsSessionManager(
             return null;
 
         session.Touch();
+        if (session.AdmissionKey is { } key)
+            channelSessionManager.TouchHlsSlot(key);
+
         if (!File.Exists(session.ManifestPath))
             return null;
 
@@ -153,6 +161,9 @@ public sealed class GeneratedHlsSessionManager(
             return false;
 
         session.Touch();
+        if (session.AdmissionKey is { } admKey)
+            channelSessionManager.TouchHlsSlot(admKey);
+
         filePath = candidate;
         return true;
     }
@@ -423,6 +434,9 @@ public sealed class GeneratedHlsSessionManager(
         if (!_sessions.TryRemove(sessionId, out var session))
             return;
 
+        if (session.AdmissionKey is { } key)
+            channelSessionManager.ReleaseHlsSlot(key);
+
         try
         {
             TryStopProcess(session.Process);
@@ -614,7 +628,8 @@ public sealed class GeneratedHlsSessionManager(
         string displayName,
         string workDirectory,
         string manifestPath,
-        Process process)
+        Process process,
+        ChannelSessionKey? admissionKey = null)
     {
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -627,6 +642,8 @@ public sealed class GeneratedHlsSessionManager(
         public string ManifestPath { get; } = manifestPath;
 
         public Process Process { get; } = process;
+
+        public ChannelSessionKey? AdmissionKey { get; } = admissionKey;
 
         public DateTimeOffset LastAccessUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _lastAccessUnixMs));
