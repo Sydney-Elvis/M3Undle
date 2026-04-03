@@ -176,7 +176,7 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 - [x] HLS playback for JavaScript/browser clients (GeneratedHls compatibility layer)
 - [x] CORS support for external network access
 - [ ] Configurable refresh schedule in Settings UI
-- [ ] New channels inbox / review queue
+- [x] New channels inbox / review queue
 - [ ] Dynamic groups for rotating/event feeds
 - [ ] Provider switch assistance
 

@@ -1,0 +1,372 @@
+@page "/channels/review"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject ChannelMappingPageService ChannelMappingService
+@inject ProfilesPageService ProfilesService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+
+<PageTitle>M3Undle — Channel Review Queue</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap" Spacing="2">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Channel Review Queue</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Pending channels from manual-review groups.</MudText>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            @if (_profiles.Count > 0)
+            {
+                <MudSelect T="string"
+                           Value="_profileId"
+                           ValueChanged="OnProfileChangedAsync"
+                           Label="Profile"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="min-width:180px;">
+                    @foreach (var p in _profiles)
+                    {
+                        <MudSelectItem Value="@p.ProfileId">@p.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            <MudButton Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.FilterList"
+                       Href="@($"channels/mapping{(_profileId is not null ? $"?profile={_profileId}" : "")}")">
+                Group Review
+            </MudButton>
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadQueueAsync" Disabled="_isLoading || _profileId is null" />
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+}
+
+@if (_profileId is null)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No profile available. Configure profiles and providers first.
+    </MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-3 mb-3" Elevation="1">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+            <MudChip T="string" Size="Size.Small" Color="Color.Info">@_queue.PendingTotal pending</MudChip>
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning">@_queue.PendingNotified notify-enabled</MudChip>
+            <MudDivider Vertical="true" FlexItem="true" />
+            <MudTextField T="string"
+                          Value="_search"
+                          ValueChanged="OnSearchChangedAsync"
+                          Placeholder="Search channel name…"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(!string.IsNullOrWhiteSpace(_search) ? Icons.Material.Filled.Clear : Icons.Material.Filled.Search)"
+                          OnAdornmentClick="ClearSearchAsync"
+                          Immediate="true"
+                          Style="min-width:240px;" />
+            <MudSelect T="string"
+                       Value="_groupFilter"
+                       ValueChanged="OnGroupFilterChangedAsync"
+                       Label="Group"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Clearable="true"
+                       Style="min-width:220px;">
+                @foreach (var group in _groups)
+                {
+                    <MudSelectItem Value="@group.ProviderGroupId">@group.ProviderGroupRawName</MudSelectItem>
+                }
+            </MudSelect>
+            <MudSwitch T="bool"
+                       Value="_notifyOnly"
+                       ValueChanged="OnNotifyOnlyChangedAsync"
+                       Label="Notify only"
+                       Size="Size.Small"
+                       Color="Color.Primary" />
+        </MudStack>
+
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mt-2">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Success"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Check"
+                       Disabled="@(_busy || _selectedChannelIds.Count == 0)"
+                       OnClick="@(() => SetSelectedStateAsync(LineupReviewSemantics.ChannelStateIncluded))">
+                Include selected (@_selectedChannelIds.Count)
+            </MudButton>
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Error"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Block"
+                       Disabled="@(_busy || _selectedChannelIds.Count == 0)"
+                       OnClick="@(() => SetSelectedStateAsync(LineupReviewSemantics.ChannelStateExcluded))">
+                Exclude selected (@_selectedChannelIds.Count)
+            </MudButton>
+            @if (!string.IsNullOrWhiteSpace(_groupFilter))
+            {
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Success"
+                           Size="Size.Small"
+                           Disabled="_busy"
+                           OnClick="@(() => SetGroupStateAsync(_groupFilter!, LineupReviewSemantics.ChannelStateIncluded))">
+                    Include group
+                </MudButton>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Error"
+                           Size="Size.Small"
+                           Disabled="_busy"
+                           OnClick="@(() => SetGroupStateAsync(_groupFilter!, LineupReviewSemantics.ChannelStateExcluded))">
+                    Exclude group
+                </MudButton>
+            }
+        </MudStack>
+    </MudPaper>
+
+    @if (_isLoading)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (_queue.Items.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined">
+            No pending channels for this profile/filter.
+        </MudAlert>
+    }
+    else
+    {
+        <MudTable Items="_queue.Items" Dense="true" Hover="true" Bordered="true">
+            <HeaderContent>
+                <MudTh><MudCheckBox T="bool" Value="@AllRowsSelected" ValueChanged="SetAllRowsSelected" Size="Size.Small" /></MudTh>
+                <MudTh>Channel</MudTh>
+                <MudTh>Group</MudTh>
+                <MudTh>Last Seen</MudTh>
+                <MudTh>Notify</MudTh>
+                <MudTh>Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudCheckBox T="bool"
+                                 Value="@_selectedChannelIds.Contains(context.ProviderChannelId)"
+                                 ValueChanged="@(v => ToggleSelection(context.ProviderChannelId, v))"
+                                 Size="Size.Small" />
+                </MudTd>
+                <MudTd>
+                    <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                    @if (!string.IsNullOrWhiteSpace(context.TvgId))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@context.TvgId</MudText>
+                    }
+                </MudTd>
+                <MudTd>@context.ProviderGroupRawName</MudTd>
+                <MudTd>@context.LastSeenUtc.ToString("u")</MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Color="@(context.NotifyOnPending ? Color.Warning : Color.Default)">
+                        @(context.NotifyOnPending ? "notify" : "mute")
+                    </MudChip>
+                </MudTd>
+                <MudTd>
+                    <MudStack Row="true" Spacing="1">
+                        <MudIconButton Icon="@Icons.Material.Filled.Check"
+                                       Size="Size.Small"
+                                       Color="Color.Success"
+                                       Disabled="_busy"
+                                       OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateIncluded))" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                       Size="Size.Small"
+                                       Color="Color.Error"
+                                       Disabled="_busy"
+                                       OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateExcluded))" />
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "profile")]
+    public string? InitialProfile { get; set; }
+
+    private List<ProfileStubDto> _profiles = [];
+    private ReviewQueueListResponse _queue = new();
+    private List<ReviewQueueItemDto> _groups = [];
+    private HashSet<string> _selectedChannelIds = [];
+    private string? _profileId;
+    private string? _groupFilter;
+    private string _search = string.Empty;
+    private bool _notifyOnly;
+    private bool _isLoading;
+    private bool _busy;
+    private string? _error;
+
+    private bool AllRowsSelected => _queue.Items.Count > 0 && _queue.Items.All(x => _selectedChannelIds.Contains(x.ProviderChannelId));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _profiles = await ProfilesService.GetProfileStubsAsync(CancellationToken.None);
+
+        if (_profiles.Count > 0)
+        {
+            if (!string.IsNullOrWhiteSpace(InitialProfile)
+                && _profiles.Any(x => x.ProfileId == InitialProfile))
+            {
+                _profileId = InitialProfile;
+            }
+            else
+            {
+                var active = await ChannelMappingService.GetActiveProfileAsync(CancellationToken.None);
+                _profileId = active?.ProfileId ?? _profiles[0].ProfileId;
+            }
+            await LoadQueueAsync();
+        }
+    }
+
+    private async Task OnProfileChangedAsync(string profileId)
+    {
+        _profileId = profileId;
+        _selectedChannelIds.Clear();
+        await LoadQueueAsync();
+    }
+
+    private async Task OnSearchChangedAsync(string value)
+    {
+        _search = value;
+        await LoadQueueAsync();
+    }
+
+    private async Task ClearSearchAsync()
+    {
+        _search = string.Empty;
+        await LoadQueueAsync();
+    }
+
+    private async Task OnGroupFilterChangedAsync(string? value)
+    {
+        _groupFilter = value;
+        await LoadQueueAsync();
+    }
+
+    private async Task OnNotifyOnlyChangedAsync(bool value)
+    {
+        _notifyOnly = value;
+        await LoadQueueAsync();
+    }
+
+    private async Task LoadQueueAsync()
+    {
+        if (_profileId is null)
+            return;
+
+        _isLoading = true;
+        _error = null;
+        try
+        {
+            _queue = await ChannelMappingService.ListReviewQueueAsync(
+                _profileId!, _groupFilter, _search, _notifyOnly, 1, 500, CancellationToken.None);
+            _groups = _queue.Items
+                .GroupBy(x => x.ProviderGroupId, StringComparer.Ordinal)
+                .Select(g => g.First())
+                .OrderBy(x => x.ProviderGroupRawName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _selectedChannelIds.RemoveWhere(id => _queue.Items.All(x => x.ProviderChannelId != id));
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load review queue: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void ToggleSelection(string providerChannelId, bool selected)
+    {
+        if (selected) _selectedChannelIds.Add(providerChannelId);
+        else _selectedChannelIds.Remove(providerChannelId);
+    }
+
+    private void SetAllRowsSelected(bool selected)
+    {
+        if (selected)
+            _selectedChannelIds = _queue.Items.Select(x => x.ProviderChannelId).ToHashSet(StringComparer.Ordinal);
+        else
+            _selectedChannelIds.Clear();
+    }
+
+    private Task SetSingleStateAsync(string providerChannelId, string state)
+        => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = [providerChannelId], State = state });
+
+    private async Task SetSelectedStateAsync(string state)
+    {
+        var count = _selectedChannelIds.Count;
+        if (count > 1)
+        {
+            var verb = state == LineupReviewSemantics.ChannelStateIncluded ? "include" : "exclude";
+            var confirmed = await ConfirmBulkActionAsync($"{char.ToUpper(verb[0])}{verb[1..]} {count} channels?",
+                $"This will {verb} {count} selected channel(s).");
+            if (!confirmed) return;
+        }
+        await SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = _selectedChannelIds.ToList(), State = state });
+    }
+
+    private async Task SetGroupStateAsync(string providerGroupId, string state)
+    {
+        var verb = state == LineupReviewSemantics.ChannelStateIncluded ? "include" : "exclude";
+        var groupName = _groups.FirstOrDefault(g => g.ProviderGroupId == providerGroupId)?.ProviderGroupRawName ?? "this group";
+        var confirmed = await ConfirmBulkActionAsync($"{char.ToUpper(verb[0])}{verb[1..]} entire group?",
+            $"This will {verb} all pending channels in '{groupName}'.");
+        if (!confirmed) return;
+        await SetStateAsync(new BulkReviewQueueStateRequest { ProviderGroupIds = [providerGroupId], State = state });
+    }
+
+    private async Task<bool> ConfirmBulkActionAsync(string title, string message)
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, message },
+            { x => x.ButtonText, "Confirm" },
+            { x => x.Color, Color.Primary }
+        };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>(title, parameters, new DialogOptions { MaxWidth = MaxWidth.Small });
+        var result = await dialog.Result;
+        return result is not null && !result.Canceled;
+    }
+
+    private async Task SetStateAsync(BulkReviewQueueStateRequest request)
+    {
+        if (_profileId is null || _busy)
+            return;
+
+        _busy = true;
+        try
+        {
+            var ok = await ChannelMappingService.BulkSetReviewQueueStateAsync(_profileId!, request, CancellationToken.None);
+            if (!ok)
+            {
+                Snackbar.Add("Failed to update queue state.", Severity.Error);
+                return;
+            }
+
+            _selectedChannelIds.Clear();
+            await LoadQueueAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to update queue state: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

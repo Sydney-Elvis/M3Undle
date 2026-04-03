@@ -103,6 +103,33 @@ public sealed class ProviderValidationTests
     }
 
     [TestMethod]
+    public void ParseEntry_DataUriLogoWithComma_DoesNotCorruptDisplayName()
+    {
+        var entry = new M3uEntry(
+            ["#EXTINF:-1 tvg-id=\"10.comedy\" tvg-logo=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUg\" group-title=\"Australia | Locals (Test)\",10 Comedy"],
+            "http://example.com/stream/10comedy");
+
+        var result = ProviderFetcher.ParseEntry(entry);
+
+        Assert.AreEqual("10 Comedy", result.DisplayName);
+        Assert.AreEqual("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg", result.LogoUrl);
+        Assert.AreEqual("Australia | Locals (Test)", result.GroupTitle);
+    }
+
+    [TestMethod]
+    public void ParseEntry_MalformedDuplicatedMetadata_PicksCleanTitle()
+    {
+        var entry = new M3uEntry(
+            ["#EXTINF:-1 xui-id=\"{XUI_ID}\" tvg-id=\"C1353.300.ersatztv.org\" tvg-name=\"M.E.\" tvg-logo=\"https://i.imgur.com/9I4Sa2K.png\" group-title=\"Action & Crime\",Quincy, M.E.\" tvg-logo=\"https://i.imgur.com/9I4Sa2K.png\" group-title=\"24/7 | N-R\",M.E.\" tvg-logo=\"https://i.imgur.com/9I4Sa2K.png\" group-title=\"Action & Crime\",Quincy, M.E."],
+            "http://example.com/stream/quincy");
+
+        var result = ProviderFetcher.ParseEntry(entry);
+
+        Assert.AreEqual("Quincy, M.E.", result.DisplayName);
+        Assert.AreEqual("Action & Crime", result.GroupTitle);
+    }
+
+    [TestMethod]
     public void ParseEntry_StreamUrlIsPreservedExact()
     {
         var url = "http://provider.example.com/live/stream?user=abc&pass=xyz&type=ts";

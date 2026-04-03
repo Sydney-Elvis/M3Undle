@@ -16,6 +16,26 @@ public sealed class ChannelNumberingTests
     private static SnapshotBuilder.ChannelBuildData LiveChannel(string displayName, string groupTitle, string streamUrl = "")
         => new(string.Empty, null, displayName, streamUrl.Length > 0 ? streamUrl : $"http://stream/{displayName}", "live", groupTitle, null, null, null);
 
+    private static SnapshotBuilder.ChannelBuildData LiveEventChannel(
+        string displayName,
+        string groupTitle,
+        bool isPlaceholder = false,
+        string? eventContentKey = null,
+        string streamUrl = "")
+        => new(
+            string.Empty,
+            null,
+            displayName,
+            streamUrl.Length > 0 ? streamUrl : $"http://stream/{displayName}",
+            "live",
+            groupTitle,
+            null,
+            null,
+            null,
+            IsEvent: true,
+            IsPlaceholder: isPlaceholder,
+            EventContentKey: eventContentKey);
+
     private static Dictionary<string, SnapshotBuilder.GroupFilterConfig> OneGroup(
         string rawName,
         string outputName,
@@ -344,5 +364,81 @@ public sealed class ChannelNumberingTests
         Assert.AreEqual(100, byName["A-Ch"].TvgChno);
         Assert.IsGreaterThanOrEqualTo(byName["Z-Ch"].TvgChno!.Value, SnapshotBuilder.OverflowRangeStart,
             $"Zebra should overflow, got {byName["Z-Ch"].TvgChno}");
+    }
+
+    [TestMethod]
+    public void AutoUpdate_ReviewPolicy_DoesNotAutoAddEventChannels()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyReview,
+                TrackingKeywords: null),
+        };
+
+        var eventChannel = LiveEventChannel(
+            "Sky Sports+ | Event 1: Team A vs Team B",
+            "Events",
+            eventContentKey: "EVENTS::TEAM A VS TEAM B");
+        var normalChannel = LiveChannel("Main Feed", "Events");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [eventChannel, normalChannel],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual("Main Feed", result[0].DisplayName);
+    }
+
+    [TestMethod]
+    public void AutoUpdate_AutoAddMatching_IncludesMatches_AndSkipsPlaceholders()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddMatching,
+                TrackingKeywords: "Eagles|Bills"),
+        };
+
+        var matching = LiveEventChannel(
+            "Sky Sports+ | Event 10: Eagles vs Giants",
+            "Events",
+            eventContentKey: "EVENTS::EAGLES VS GIANTS");
+        var nonMatching = LiveEventChannel(
+            "Sky Sports+ | Event 11: Dolphins vs Jets",
+            "Events",
+            eventContentKey: "EVENTS::DOLPHINS VS JETS");
+        var placeholder = LiveEventChannel(
+            "Sky Sports+ | Event 12:",
+            "Events",
+            isPlaceholder: true);
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [matching, nonMatching, placeholder],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual("Sky Sports+ | Event 10: Eagles vs Giants", result[0].DisplayName);
+        Assert.AreEqual(3000, result[0].TvgChno);
     }
 }

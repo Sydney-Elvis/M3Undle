@@ -1,16 +1,14 @@
 namespace M3Undle.Web.Data.Entities;
 
-public sealed class ProfileGroupFilter
+public sealed class ProfileCustomGroup
 {
-    public string ProfileGroupFilterId { get; set; } = string.Empty;
+    public string CustomGroupId { get; set; } = string.Empty;
     public string ProfileId { get; set; } = string.Empty;
-    public string ProviderGroupId { get; set; } = string.Empty;
-    public string Decision { get; set; } = "pending"; // pending | include | exclude (legacy: hold)
-    public bool IsNew { get; set; } = true;
+    public string Name { get; set; } = string.Empty;
+    public string Decision { get; set; } = "include"; // pending | include | exclude
     public string ChannelMode { get; set; } = "select"; // select (manual_review) | all (auto_update)
     public string TrackingPolicy { get; set; } = "review"; // review | notify | auto_add_all | auto_add_matching
-    public string? TrackingKeywords { get; set; } // team/league/fighter/race keyword lines for auto_add_matching
-    public string? OutputName { get; set; }
+    public string? TrackingKeywords { get; set; }
     public int? AutoNumStart { get; set; }
     public int? AutoNumEnd { get; set; }
     public bool TrackNewChannels { get; set; } // notify (true) | mute (false)
@@ -19,6 +17,6 @@ public sealed class ProfileGroupFilter
     public DateTime UpdatedUtc { get; set; }
 
     public Profile Profile { get; set; } = null!;
-    public ProviderGroup ProviderGroup { get; set; } = null!;
-    public ICollection<ProfileGroupChannelFilter> ChannelFilters { get; set; } = new List<ProfileGroupChannelFilter>();
+    public ICollection<ProfileCustomGroupChannel> Channels { get; set; } = new List<ProfileCustomGroupChannel>();
+    public ICollection<ProfileCustomGroupProviderLink> ProviderLinks { get; set; } = new List<ProfileCustomGroupProviderLink>();
 }

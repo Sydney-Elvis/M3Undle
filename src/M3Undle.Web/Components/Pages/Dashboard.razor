@@ -294,7 +294,7 @@
                     {
                         <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
                             @_dashboardStats.ChannelsPendingReview new channel@(_dashboardStats.ChannelsPendingReview == 1 ? "" : "s") to review —
-                            <MudLink Href="channels/mapping">review now</MudLink>
+                            <MudLink Href="channels/review">review now</MudLink>
                         </MudAlert>
                     }
                     @if (_dashboardStats!.RefreshFailed)

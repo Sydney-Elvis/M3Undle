@@ -1,0 +1,143 @@
+@page "/channels/whats-on"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject ChannelMappingPageService ChannelMappingPageService
+@inject ProfilesPageService ProfilesService
+@inject ISnackbar Snackbar
+
+<PageTitle>M3Undle — What's On This Week</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap" Spacing="2">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">What's On This Week</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Events matched by your tracking keywords across all groups.</MudText>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            @if (_profiles.Count > 0)
+            {
+                <MudSelect T="string"
+                           Value="_profileId"
+                           ValueChanged="OnProfileChangedAsync"
+                           Label="Profile"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="min-width:220px;">
+                    @foreach (var p in _profiles)
+                    {
+                        <MudSelectItem Value="@p.ProfileId">@p.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                           OnClick="LoadDataAsync"
+                           Disabled="_loading"
+                           Size="Size.Medium"
+                           Color="Color.Primary" />
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@if (_loading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (_data is null || _data.TotalEvents == 0)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No matched events found. Set groups to <strong>Auto-add all events</strong>, <strong>Auto-add populated</strong>, or <strong>Auto-add matching events</strong> with keywords to see results here.
+    </MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-3 mb-3" Elevation="0" Outlined="true">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudIcon Icon="@Icons.Material.Filled.Event" Color="Color.Primary" />
+            <MudText Typo="Typo.subtitle1">
+                @_data.TotalEvents event(s) across @_data.Groups.Count group(s)
+            </MudText>
+            <MudSpacer />
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Generated @_data.GeneratedUtc.ToString("u")
+            </MudText>
+        </MudStack>
+    </MudPaper>
+
+    @foreach (var group in _data.Groups)
+    {
+        <MudPaper Class="pa-3 mb-3" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                <MudIcon Icon="@Icons.Material.Filled.Folder" Size="Size.Small" Color="Color.Secondary" />
+                <MudText Typo="Typo.subtitle2">@group.GroupName</MudText>
+                <MudChip T="string" Size="Size.Small" Color="Color.Info">@group.TrackingPolicy</MudChip>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@group.Events.Count event(s)</MudText>
+            </MudStack>
+            <MudTable Items="group.Events" Dense="true" Hover="true" Bordered="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh Style="width:60px;"><MudTooltip Text="User-assigned channel number override (auto-numbers are assigned at publish time)">Override #</MudTooltip></MudTh>
+                    <MudTh>Event</MudTh>
+                    <MudTh>Content Key</MudTh>
+                    <MudTh>Matched</MudTh>
+                    <MudTh>Start</MudTh>
+                    <MudTh>End</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@(context.ChannelNumber?.ToString() ?? "—")</MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.EventContentKey ?? "—")</MudText>
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">@context.MatchedKeyword</MudChip>
+                    </MudTd>
+                    <MudTd>@(context.EventStartUtc?.ToString("g") ?? "—")</MudTd>
+                    <MudTd>@(context.EventEndUtc?.ToString("g") ?? "—")</MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    }
+}
+
+@code {
+    private List<ProfileStubDto> _profiles = [];
+    private string? _profileId;
+    private WhatsOnThisWeekResponse? _data;
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _profiles = await ProfilesService.GetProfileStubsAsync(CancellationToken.None);
+        if (_profiles.Count > 0)
+        {
+            var active = await ChannelMappingPageService.GetActiveProfileAsync(CancellationToken.None);
+            _profileId = active?.ProfileId ?? _profiles[0].ProfileId;
+            await LoadDataAsync();
+        }
+    }
+
+    private async Task OnProfileChangedAsync(string profileId)
+    {
+        _profileId = profileId;
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        if (_profileId is null) return;
+        _loading = true;
+        try
+        {
+            _data = await ChannelMappingPageService.GetWhatsOnThisWeekAsync(_profileId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+}

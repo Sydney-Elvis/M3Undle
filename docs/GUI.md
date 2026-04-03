@@ -136,28 +136,45 @@ The Channel Mapping page is where you build your output lineup from the provider
 
 **Group decisions**
 
-Every provider group arrives in a "hold" state. You explicitly include or exclude each group:
+Every provider group arrives in **pending** state. You explicitly include or exclude each group:
 
 - **Include** — channels from this group appear in your output
 - **Exclude** — group is ignored entirely
-- **Hold** — parked; not yet decided
+- **Pending** — parked; not yet approved for output
 
 Groups marked as new (never seen before) are highlighted so you can review and decide without losing track of them. A "Dismiss new" action clears the flag once you have reviewed.
 
-**Group settings**
+**Group mode**
+
+For each included group, choose mode:
+
+- **Manual review** (`select`) — only channels you explicitly include are published
+- **Auto-update** (`all`) — active channels publish automatically unless explicitly excluded
+
+**Group settings and notifications**
 
 For each included group you can:
 
 - Set a custom **output name** (renames the group in the published M3U)
 - Set an **auto-numbering range** (start–end numbers assigned automatically to unnumbered channels)
-- Track or ignore new channels as they appear in the group
+- Set **Notify** on/off for pending items from that group:
+  - notify on: contributes to nav/footer/dashboard review counts
+  - notify off: pending items remain reviewable but do not create global badge noise
 
-**Per-channel control**
+**Per-channel control (manual-review groups)**
 
 Within a group you can select individual channels and set per-channel overrides:
 
 - **Channel number** — explicit `tvg-chno` that takes precedence over auto-numbering
 - **Output group** — move a channel to a different output group without changing its source group
+
+**Channel Review Queue**
+
+The dedicated review page (`/channels/review`) lists pending channels across the selected profile and supports:
+
+- Include/exclude selected channels
+- Include/exclude all pending channels for a selected provider group
+- Search, group filtering, and notify-only filtering
 
 **Build Output**
 

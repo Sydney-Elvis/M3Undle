@@ -58,7 +58,7 @@ public sealed class ChannelMappingPageService(
             .ToListAsync(cancellationToken);
 
         return filters
-            .OrderBy(f => f.Decision == "hold" ? 0 : 1)
+            .OrderBy(f => LineupReviewSemantics.IsGroupPending(f.Decision, f.IsNew) ? 0 : 1)
             .ThenByDescending(f => f.IsNew)
             .ThenBy(f => f.ProviderGroup.RawName, StringComparer.OrdinalIgnoreCase)
             .Select(ToDto)
@@ -88,12 +88,34 @@ public sealed class ChannelMappingPageService(
 
         if (request.Decision is not null)
         {
-            filter.Decision = request.Decision;
-            filter.IsNew = false;
+            var normalized = NormalizeRequestedDecision(request.Decision);
+            if (normalized is not null)
+            {
+                filter.Decision = normalized;
+                filter.IsNew = normalized == LineupReviewSemantics.GroupDecisionPending;
+            }
         }
 
+        if (request.ChannelMode is not null)
+            filter.ChannelMode = LineupReviewSemantics.NormalizeGroupMode(request.ChannelMode);
+
+        if (request.TrackingPolicy is not null)
+            filter.TrackingPolicy = LineupReviewSemantics.NormalizeTrackingPolicy(request.TrackingPolicy);
+
+        if (request.ClearTrackingKeywords)
+            filter.TrackingKeywords = null;
+        else if (request.TrackingKeywords is not null)
+            filter.TrackingKeywords = string.IsNullOrWhiteSpace(request.TrackingKeywords) ? null : request.TrackingKeywords.Trim();
+
         if (request.ClearIsNew)
+        {
             filter.IsNew = false;
+            if (request.Decision is null
+                && LineupReviewSemantics.NormalizeGroupDecision(filter.Decision, true) == LineupReviewSemantics.GroupDecisionPending)
+            {
+                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+            }
+        }
 
         if (request.ClearOutputName)
             filter.OutputName = null;
@@ -131,7 +153,7 @@ public sealed class ChannelMappingPageService(
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Active, false), cancellationToken);
         }
 
-        if (request.Decision is not null)
+        if (request.Decision is not null || request.ChannelMode is not null || request.TrackingPolicy is not null)
             eventBus.Publish(AppEventKind.GroupFiltersChanged);
 
         return true;
@@ -144,7 +166,10 @@ public sealed class ChannelMappingPageService(
 
         return await db.ProfileGroupFilters
             .Where(x => x.ProfileId == profileId && x.IsNew)
-            .ExecuteUpdateAsync(s => s.SetProperty(x => x.IsNew, false), cancellationToken);
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.IsNew, false)
+                .SetProperty(x => x.Decision, LineupReviewSemantics.GroupDecisionInclude)
+                .SetProperty(x => x.UpdatedUtc, DateTime.UtcNow), cancellationToken);
     }
 
     public async Task<int> BulkDecideAsync(
@@ -153,7 +178,8 @@ public sealed class ChannelMappingPageService(
         List<string> providerGroupIds,
         CancellationToken cancellationToken)
     {
-        if (decision is not ("exclude" or "hold"))
+        var normalizedDecision = NormalizeRequestedDecision(decision);
+        if (normalizedDecision is null)
             return 0;
 
         if (providerGroupIds.Count == 0)
@@ -175,8 +201,8 @@ public sealed class ChannelMappingPageService(
         {
             if (existingByGroupId.TryGetValue(groupId, out var filter))
             {
-                filter.Decision = decision;
-                filter.IsNew = false;
+                filter.Decision = normalizedDecision;
+                filter.IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending;
                 filter.UpdatedUtc = now;
             }
             else
@@ -186,9 +212,10 @@ public sealed class ChannelMappingPageService(
                     ProfileGroupFilterId = Guid.NewGuid().ToString(),
                     ProfileId = profileId,
                     ProviderGroupId = groupId,
-                    Decision = decision,
-                    IsNew = false,
-                    ChannelMode = "select",
+                    Decision = normalizedDecision,
+                    IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending,
+                    ChannelMode = LineupReviewSemantics.GroupModeManualReview,
+                    TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
                     TrackNewChannels = false,
                     CreatedUtc = now,
                     UpdatedUtc = now,
@@ -199,7 +226,7 @@ public sealed class ChannelMappingPageService(
 
         await db.SaveChangesAsync(cancellationToken);
 
-        if (decision == "exclude")
+        if (normalizedDecision == LineupReviewSemantics.GroupDecisionExclude)
         {
             var groupIds = providerGroupIds;
             await db.ProviderChannels
@@ -280,13 +307,18 @@ public sealed class ChannelMappingPageService(
         var channels = allChannels.Select(ch =>
         {
             selectionByChannelId.TryGetValue(ch.ProviderChannelId, out var sel);
+            var state = LineupReviewSemantics.NormalizeChannelState(sel?.State);
             return new ProviderChannelSelectDto
             {
                 ProviderChannelId = ch.ProviderChannelId,
                 DisplayName = ch.DisplayName,
                 TvgId = ch.TvgId,
+                GroupTitle = ch.GroupTitle,
+                EventContentKey = ch.EventContentKey,
                 Active = ch.Active,
-                IsSelected = sel is not null,
+                IsSelected = sel is not null && state == LineupReviewSemantics.ChannelStateIncluded,
+                State = state,
+                DisplayNameOverride = sel?.DisplayNameOverride,
                 OutputGroupName = sel?.OutputGroupName,
                 ChannelNumber = sel?.ChannelNumber,
             };
@@ -331,9 +363,12 @@ public sealed class ChannelMappingPageService(
                     ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                     ProfileGroupFilterId = filterId,
                     ProviderChannelId = item.ProviderChannelId,
+                    State = LineupReviewSemantics.NormalizeChannelState(item.State),
+                    DisplayNameOverride = string.IsNullOrWhiteSpace(item.DisplayNameOverride) ? null : item.DisplayNameOverride.Trim(),
                     OutputGroupName = string.IsNullOrWhiteSpace(item.OutputGroupName) ? null : item.OutputGroupName.Trim(),
                     ChannelNumber = item.ChannelNumber,
                     CreatedUtc = now,
+                    UpdatedUtc = now,
                 });
             }
         }
@@ -357,16 +392,361 @@ public sealed class ChannelMappingPageService(
             ProviderGroupLastSeen = f.ProviderGroup.LastSeenUtc,
             ProviderGroupActive = f.ProviderGroup.Active,
             ProviderName = f.ProviderGroup.Provider?.Name ?? string.Empty,
-            Decision = f.Decision,
+            Decision = LineupReviewSemantics.NormalizeGroupDecision(f.Decision, f.IsNew),
             IsNew = f.IsNew,
             OutputName = f.OutputName,
             AutoNumStart = f.AutoNumStart,
             AutoNumEnd = f.AutoNumEnd,
             ChannelMode = f.ChannelMode,
+            TrackingPolicy = LineupReviewSemantics.NormalizeTrackingPolicy(f.TrackingPolicy),
+            TrackingKeywords = f.TrackingKeywords,
             TrackNewChannels = f.TrackNewChannels,
             SortOverride = f.SortOverride,
             SelectedChannelCount = selectedCount,
             ChannelCount = f.ProviderGroup.ChannelCount,
+        };
+    }
+
+    private static string? NormalizeRequestedDecision(string decision)
+    {
+        if (string.IsNullOrWhiteSpace(decision))
+            return null;
+
+        var value = decision.Trim().ToLowerInvariant();
+        return value switch
+        {
+            LineupReviewSemantics.GroupDecisionExclude => LineupReviewSemantics.GroupDecisionExclude,
+            LineupReviewSemantics.GroupDecisionInclude => LineupReviewSemantics.GroupDecisionInclude,
+            LineupReviewSemantics.GroupDecisionPending => LineupReviewSemantics.GroupDecisionPending,
+            LineupReviewSemantics.GroupDecisionLegacyHold => LineupReviewSemantics.GroupDecisionInclude,
+            _ => null,
+        };
+    }
+
+    public async Task<ReviewQueueListResponse> ListReviewQueueAsync(
+        string profileId,
+        string? providerGroupId,
+        string? q,
+        bool notifyOnly,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 500);
+
+        var pendingBase = db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
+            .Include(x => x.ProviderChannel)
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                        && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                        && x.ProviderChannel.ContentType == "live"
+                        && x.ProviderChannel.Active
+                        && !x.ProviderChannel.IsPlaceholder
+                        && x.State == LineupReviewSemantics.ChannelStatePending);
+
+        var pendingTotal = await pendingBase.CountAsync(cancellationToken);
+        var pendingNotified = await pendingBase
+            .CountAsync(x => x.ProfileGroupFilter.TrackNewChannels, cancellationToken);
+
+        var query = pendingBase;
+
+        if (!string.IsNullOrWhiteSpace(providerGroupId))
+            query = query.Where(x => x.ProfileGroupFilter.ProviderGroupId == providerGroupId.Trim());
+
+        if (notifyOnly)
+            query = query.Where(x => x.ProfileGroupFilter.TrackNewChannels);
+
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var term = q.Trim().ToUpperInvariant();
+            query = query.Where(x => EF.Functions.Like(x.ProviderChannel.DisplayName.ToUpper(), $"%{term}%"));
+        }
+
+        var total = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(x => x.ProfileGroupFilter.TrackNewChannels)
+            .ThenBy(x => x.ProfileGroupFilter.ProviderGroup.RawName)
+            .ThenBy(x => x.ProviderChannel.DisplayName)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(x => new ReviewQueueItemDto
+            {
+                ProviderChannelId = x.ProviderChannelId,
+                ProfileGroupFilterId = x.ProfileGroupFilterId,
+                ProviderGroupId = x.ProfileGroupFilter.ProviderGroupId,
+                ProviderGroupRawName = x.ProfileGroupFilter.ProviderGroup.RawName,
+                DisplayName = x.DisplayNameOverride ?? x.ProviderChannel.DisplayName,
+                TvgId = x.TvgIdOverride ?? x.ProviderChannel.TvgId,
+                FirstSeenUtc = x.ProviderChannel.FirstSeenUtc,
+                LastSeenUtc = x.ProviderChannel.LastSeenUtc,
+                Active = x.ProviderChannel.Active,
+                NotifyOnPending = x.ProfileGroupFilter.TrackNewChannels,
+                State = LineupReviewSemantics.NormalizeChannelState(x.State),
+            })
+            .ToListAsync(cancellationToken);
+
+        return new ReviewQueueListResponse
+        {
+            Total = total,
+            PendingTotal = pendingTotal,
+            PendingNotified = pendingNotified,
+            Items = items,
+        };
+    }
+
+    public async Task<bool> BulkSetReviewQueueStateAsync(
+        string profileId,
+        BulkReviewQueueStateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var targetState = NormalizeRequestedChannelState(request.State);
+        if (targetState is null)
+            return false;
+
+        var channelIds = request.ProviderChannelIds
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var groupIds = request.ProviderGroupIds
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (channelIds.Count == 0 && groupIds.Count == 0)
+            return true;
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var now = DateTime.UtcNow;
+
+        var query = db.ProfileGroupChannelFilters
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                        && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                        && x.ProviderChannel.ContentType == "live"
+                        && x.ProviderChannel.Active
+                        && !x.ProviderChannel.IsPlaceholder
+                        && x.State == LineupReviewSemantics.ChannelStatePending);
+
+        if (channelIds.Count > 0 && groupIds.Count > 0)
+            query = query.Where(x => channelIds.Contains(x.ProviderChannelId) || groupIds.Contains(x.ProfileGroupFilter.ProviderGroupId));
+        else if (channelIds.Count > 0)
+            query = query.Where(x => channelIds.Contains(x.ProviderChannelId));
+        else
+            query = query.Where(x => groupIds.Contains(x.ProfileGroupFilter.ProviderGroupId));
+
+        var updated = await query.ExecuteUpdateAsync(s => s
+            .SetProperty(x => x.State, targetState)
+            .SetProperty(x => x.UpdatedUtc, now), cancellationToken);
+
+        if (updated > 0)
+            eventBus.Publish(AppEventKind.GroupFiltersChanged);
+
+        return true;
+    }
+
+    private static string? NormalizeRequestedChannelState(string state)
+    {
+        if (string.IsNullOrWhiteSpace(state))
+            return null;
+
+        var value = state.Trim().ToLowerInvariant();
+        return value switch
+        {
+            LineupReviewSemantics.ChannelStatePending => LineupReviewSemantics.ChannelStatePending,
+            LineupReviewSemantics.ChannelStateIncluded => LineupReviewSemantics.ChannelStateIncluded,
+            LineupReviewSemantics.ChannelStateExcluded => LineupReviewSemantics.ChannelStateExcluded,
+            _ => null,
+        };
+    }
+
+    public async Task<WhatsOnThisWeekResponse> GetWhatsOnThisWeekAsync(string profileId, CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var profile = await db.Profiles.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ProfileId == profileId, ct);
+
+        if (profile is null)
+            return new WhatsOnThisWeekResponse { ProfileId = profileId, GeneratedUtc = DateTime.UtcNow };
+
+        var filters = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Include(x => x.ProviderGroup)
+            .Where(x => x.ProfileId == profileId
+                         && x.ProviderGroup.ContentType == "live"
+                         && x.ProviderGroup.Active
+                         && (x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyAutoAddAll
+                             || x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyAutoAddMatching
+                             || x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyAutoAddPopulated)
+                         && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
+                             || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew)))
+            .ToListAsync(ct);
+
+        var channelNumbers = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId && x.ChannelNumber != null)
+            .ToDictionaryAsync(x => x.ProviderChannelId, x => x.ChannelNumber!.Value, ct);
+
+        var groups = new List<WhatsOnGroupDto>();
+
+        foreach (var filter in filters)
+        {
+            var channels = await db.ProviderChannels
+                .AsNoTracking()
+                .Where(x => x.ProviderGroupId == filter.ProviderGroupId
+                             && x.Active
+                             && x.ContentType == "live"
+                             && !x.IsPlaceholder
+                             && x.IsEvent)
+                .OrderBy(x => x.DisplayName)
+                .ToListAsync(ct);
+
+            if (channels.Count == 0) continue;
+
+            var terms = LineupReviewSemantics.ParseTrackingKeywords(filter.TrackingKeywords);
+            var isAutoAll = LineupReviewSemantics.ShouldAutoAddAll(filter.TrackingPolicy);
+            var isAutoPopulated = LineupReviewSemantics.ShouldAutoAddPopulated(filter.TrackingPolicy);
+            var events = new List<WhatsOnEventDto>();
+
+            foreach (var ch in channels)
+            {
+                string matchedKeyword;
+                if (isAutoAll)
+                {
+                    matchedKeyword = "(all events)";
+                }
+                else if (isAutoPopulated)
+                {
+                    if (string.IsNullOrWhiteSpace(ch.EventContentKey)) continue;
+                    matchedKeyword = "(populated)";
+                }
+                else
+                {
+                    var matched = terms.FirstOrDefault(t =>
+                        (ch.DisplayName?.ToUpperInvariant().Contains(t, StringComparison.Ordinal) ?? false)
+                        || (ch.EventContentKey?.ToUpperInvariant().Contains(t, StringComparison.Ordinal) ?? false)
+                        || (ch.GroupTitle?.ToUpperInvariant().Contains(t, StringComparison.Ordinal) ?? false));
+                    if (matched is null) continue;
+                    matchedKeyword = matched;
+                }
+
+                channelNumbers.TryGetValue(ch.ProviderChannelId, out var chNum);
+
+                events.Add(new WhatsOnEventDto
+                {
+                    DisplayName = ch.DisplayName,
+                    GroupName = filter.ProviderGroup.RawName,
+                    EventContentKey = ch.EventContentKey,
+                    EventStartUtc = ch.EventStartUtc,
+                    EventEndUtc = ch.EventEndUtc,
+                    ChannelNumber = chNum == 0 ? null : chNum,
+                    MatchedKeyword = matchedKeyword,
+                });
+            }
+
+            if (events.Count > 0)
+            {
+                groups.Add(new WhatsOnGroupDto
+                {
+                    GroupName = filter.ProviderGroup.RawName,
+                    TrackingPolicy = LineupReviewSemantics.NormalizeTrackingPolicy(filter.TrackingPolicy),
+                    Events = events,
+                });
+            }
+        }
+
+        // Include custom groups with auto-add tracking policies
+        var customGroups = await db.ProfileCustomGroups
+            .AsNoTracking()
+            .Include(x => x.Channels).ThenInclude(c => c.ProviderChannel)
+            .Where(x => x.ProfileId == profileId
+                        && x.Decision == LineupReviewSemantics.GroupDecisionInclude
+                        && (x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyAutoAddAll
+                            || x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyAutoAddMatching
+                            || x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyAutoAddPopulated))
+            .ToListAsync(ct);
+
+        foreach (var cg in customGroups)
+        {
+            var eventChannels = cg.Channels
+                .Where(c => c.ProviderChannel.Active
+                            && c.ProviderChannel.ContentType == "live"
+                            && !c.ProviderChannel.IsPlaceholder
+                            && c.ProviderChannel.IsEvent)
+                .OrderBy(c => c.ProviderChannel.DisplayName)
+                .ToList();
+
+            if (eventChannels.Count == 0) continue;
+
+            var cgTerms = LineupReviewSemantics.ParseTrackingKeywords(cg.TrackingKeywords);
+            var cgIsAutoAll = LineupReviewSemantics.ShouldAutoAddAll(cg.TrackingPolicy);
+            var cgIsAutoPopulated = LineupReviewSemantics.ShouldAutoAddPopulated(cg.TrackingPolicy);
+            var cgEvents = new List<WhatsOnEventDto>();
+
+            foreach (var row in eventChannels)
+            {
+                var ch = row.ProviderChannel;
+                string matchedKeyword;
+                if (cgIsAutoAll)
+                {
+                    matchedKeyword = "(all events)";
+                }
+                else if (cgIsAutoPopulated)
+                {
+                    if (string.IsNullOrWhiteSpace(ch.EventContentKey)) continue;
+                    matchedKeyword = "(populated)";
+                }
+                else
+                {
+                    var matched = cgTerms.FirstOrDefault(t =>
+                        (ch.DisplayName?.ToUpperInvariant().Contains(t, StringComparison.Ordinal) ?? false)
+                        || (ch.EventContentKey?.ToUpperInvariant().Contains(t, StringComparison.Ordinal) ?? false)
+                        || (ch.GroupTitle?.ToUpperInvariant().Contains(t, StringComparison.Ordinal) ?? false));
+                    if (matched is null) continue;
+                    matchedKeyword = matched;
+                }
+
+                cgEvents.Add(new WhatsOnEventDto
+                {
+                    DisplayName = ch.DisplayName,
+                    GroupName = cg.Name,
+                    EventContentKey = ch.EventContentKey,
+                    EventStartUtc = ch.EventStartUtc,
+                    EventEndUtc = ch.EventEndUtc,
+                    ChannelNumber = row.ChannelNumber == 0 ? null : row.ChannelNumber,
+                    MatchedKeyword = matchedKeyword,
+                });
+            }
+
+            if (cgEvents.Count > 0)
+            {
+                groups.Add(new WhatsOnGroupDto
+                {
+                    GroupName = cg.Name + " (custom)",
+                    TrackingPolicy = LineupReviewSemantics.NormalizeTrackingPolicy(cg.TrackingPolicy),
+                    Events = cgEvents,
+                });
+            }
+        }
+
+        return new WhatsOnThisWeekResponse
+        {
+            ProfileId = profileId,
+            ProfileName = profile.Name,
+            GeneratedUtc = DateTime.UtcNow,
+            TotalEvents = groups.Sum(g => g.Events.Count),
+            Groups = groups,
         };
     }
 }

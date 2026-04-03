@@ -6,6 +6,7 @@ using M3Undle.Web.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -451,7 +452,8 @@ public sealed class SnapshotHandlingTests
                 var newsFilter = await edit.ProfileGroupFilters
                     .Include(x => x.ProviderGroup)
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "News");
-                newsFilter.Decision = "hold";
+                newsFilter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                newsFilter.IsNew = false;
                 newsFilter.UpdatedUtc = DateTime.UtcNow;
 
                 var moviesFilter = await edit.ProfileGroupFilters
@@ -476,7 +478,9 @@ public sealed class SnapshotHandlingTests
                         ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                         ProfileGroupFilterId = newsFilter.ProfileGroupFilterId,
                         ProviderChannelId = ch.ProviderChannelId,
+                        State = LineupReviewSemantics.ChannelStateIncluded,
                         CreatedUtc = DateTime.UtcNow,
+                        UpdatedUtc = DateTime.UtcNow,
                     });
                 }
 
@@ -562,7 +566,8 @@ public sealed class SnapshotHandlingTests
                 var filter = await edit.ProfileGroupFilters
                     .Include(x => x.ProviderGroup)
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "USA FOX");
-                filter.Decision = "hold";
+                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                filter.IsNew = false;
                 filter.UpdatedUtc = DateTime.UtcNow;
 
                 var foxChannels = await edit.ProviderChannels
@@ -575,7 +580,9 @@ public sealed class SnapshotHandlingTests
                         ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                         ProfileGroupFilterId = filter.ProfileGroupFilterId,
                         ProviderChannelId = ch.ProviderChannelId,
+                        State = LineupReviewSemantics.ChannelStateIncluded,
                         CreatedUtc = DateTime.UtcNow,
+                        UpdatedUtc = DateTime.UtcNow,
                     });
                 }
 
@@ -631,7 +638,8 @@ public sealed class SnapshotHandlingTests
                     .ToListAsync();
                 foreach (var filter in filters)
                 {
-                    filter.Decision = "hold";
+                    filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                    filter.IsNew = false;
                     filter.UpdatedUtc = DateTime.UtcNow;
 
                     var groupName = filter.ProviderGroup.RawName;
@@ -645,7 +653,9 @@ public sealed class SnapshotHandlingTests
                             ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                             ProfileGroupFilterId = filter.ProfileGroupFilterId,
                             ProviderChannelId = ch.ProviderChannelId,
+                            State = LineupReviewSemantics.ChannelStateIncluded,
                             CreatedUtc = DateTime.UtcNow,
+                            UpdatedUtc = DateTime.UtcNow,
                         });
                     }
                 }
@@ -751,9 +761,14 @@ public sealed class SnapshotHandlingTests
             NullLogger<M3Undle.Web.Application.Epg.EpgChannelMapper>.Instance);
         var epgCompiler = new M3Undle.Web.Application.Epg.EpgCompiler(
             NullLogger<M3Undle.Web.Application.Epg.EpgCompiler>.Instance);
+        var services = new ServiceCollection();
+        services.AddDbContext<ApplicationDbContext>(o => o.UseSqlite(db.Database.GetDbConnection()));
+        var sp = services.BuildServiceProvider();
+        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+        var customGroupService = new CustomGroupPageService(scopeFactory, new AppEventBus());
         return new SnapshotBuilder(
             db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
-            runtimePaths, env, Options.Create(new SnapshotOptions()), NullLogger<SnapshotBuilder>.Instance);
+            runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService, NullLogger<SnapshotBuilder>.Instance);
     }
 
     private static async Task<TestFixture> CreateFixtureAsync()

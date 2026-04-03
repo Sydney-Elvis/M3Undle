@@ -27,6 +27,9 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<EpgSourceChannel> EpgSourceChannels => Set<EpgSourceChannel>();
     public DbSet<EpgChannelMapping> EpgChannelMappings => Set<EpgChannelMapping>();
     public DbSet<EpgFetchRun> EpgFetchRuns => Set<EpgFetchRun>();
+    public DbSet<ProfileCustomGroup> ProfileCustomGroups => Set<ProfileCustomGroup>();
+    public DbSet<ProfileCustomGroupChannel> ProfileCustomGroupChannels => Set<ProfileCustomGroupChannel>();
+    public DbSet<ProfileCustomGroupProviderLink> ProfileCustomGroupProviderLinks => Set<ProfileCustomGroupProviderLink>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

@@ -76,7 +76,13 @@
                 @if (_channelStats.GroupsNew > 0)
                 {
                     <MudLink Href="channels/mapping" Style="font-size:0.70rem;" Color="Color.Info">
-                        @_channelStats.GroupsNew new
+                        @_channelStats.GroupsNew pending groups
+                    </MudLink>
+                }
+                @if (_channelStats.PendingChannelsNotified > 0)
+                {
+                    <MudLink Href="channels/review" Style="font-size:0.70rem;" Color="Color.Warning">
+                        @_channelStats.PendingChannelsNotified pending channels
                     </MudLink>
                 }
                 @if (_channelStats.ChannelsInOutput > 0)

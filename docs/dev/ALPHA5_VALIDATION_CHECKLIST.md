@@ -12,7 +12,7 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 ## Dynamic and Review Workflow
 
 - [ ] Dynamic groups for rotating/event feeds
-- [ ] New channels inbox / review queue
+- [x] New channels inbox / review queue
 - [ ] Provider switch assistance (migrations, delta preview)
 
 ## Refresh / Source Control

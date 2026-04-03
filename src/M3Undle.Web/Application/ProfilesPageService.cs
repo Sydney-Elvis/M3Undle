@@ -24,19 +24,26 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
         if (string.IsNullOrWhiteSpace(name))
             return (false, "Name is required.", null);
 
+        var trimmed = name.Trim();
+        if (trimmed.Length > 200)
+            return (false, "Name must be 200 characters or fewer.", null);
+
+        if (trimmed.Any(c => char.IsControl(c)))
+            return (false, "Name must not contain control characters.", null);
+
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
         var duplicate = await db.Profiles.AsNoTracking()
-            .AnyAsync(x => x.Name == name.Trim(), ct);
+            .AnyAsync(x => x.Name == trimmed, ct);
         if (duplicate)
-            return (false, $"A profile named '{name.Trim()}' already exists.", null);
+            return (false, $"A profile named '{trimmed}' already exists.", null);
 
         var now = DateTime.UtcNow;
         var profile = new Profile
         {
             ProfileId = Guid.NewGuid().ToString(),
-            Name = name.Trim(),
+            Name = trimmed,
             OutputName = "m3undle",
             MergeMode = "replace",
             Enabled = true,
@@ -44,7 +51,15 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
             UpdatedUtc = now,
         };
         db.Profiles.Add(profile);
-        await db.SaveChangesAsync(ct);
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            return (false, $"A profile named '{trimmed}' already exists.", null);
+        }
 
         return (true, null, new ProfileStubDto { ProfileId = profile.ProfileId, Name = profile.Name });
     }
@@ -158,8 +173,26 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
         var groupsPendingByProfile = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .Where(x => profileIds.Contains(x.ProfileId) && x.ProviderGroup.ContentType == "live" && x.IsNew)
+            .Where(x => profileIds.Contains(x.ProfileId)
+                        && x.ProviderGroup.ContentType == "live"
+                        && (x.Decision == LineupReviewSemantics.GroupDecisionPending
+                            || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew)))
             .GroupBy(x => x.ProfileId)
+            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var channelsPendingByProfile = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
+            .Include(x => x.ProviderChannel)
+            .Where(x => profileIds.Contains(x.ProfileGroupFilter.ProfileId)
+                        && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                        && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                        && x.ProviderChannel.ContentType == "live"
+                        && x.ProviderChannel.Active
+                        && !x.ProviderChannel.IsPlaceholder
+                        && x.State == LineupReviewSemantics.ChannelStatePending)
+            .GroupBy(x => x.ProfileGroupFilter.ProfileId)
             .Select(g => new { ProfileId = g.Key, Count = g.Count() })
             .ToListAsync(ct);
 
@@ -170,6 +203,7 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
             .FirstOrDefaultAsync(ct);
 
         var pendingByProfile = groupsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
+        var pendingChannelsByProfileMap = channelsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
 
         var result = new List<ProfilePageItemDto>();
 
@@ -213,6 +247,7 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
                 SeriesCount = snapshot?.SeriesChannelCount ?? 0,
                 HealthStatus = health,
                 GroupsPendingReview = pendingByProfile.GetValueOrDefault(profile.ProfileId, 0),
+                ChannelsPendingReview = pendingChannelsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),
             });
         }
 

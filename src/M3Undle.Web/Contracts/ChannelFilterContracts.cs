@@ -12,19 +12,25 @@ public sealed class GroupFilterDto
     public int? ChannelCount { get; set; }
     public int SelectedChannelCount { get; set; }
     public string ProviderName { get; set; } = string.Empty;
-    public string Decision { get; set; } = "hold";
+    public string Decision { get; set; } = "pending";
     public bool IsNew { get; set; }
     public string ChannelMode { get; set; } = "select";
+    public string TrackingPolicy { get; set; } = "review"; // review | notify | auto_add_all | auto_add_matching
+    public string? TrackingKeywords { get; set; }
     public string? OutputName { get; set; }
     public int? AutoNumStart { get; set; }
     public int? AutoNumEnd { get; set; }
-    public bool TrackNewChannels { get; set; }
+    public bool TrackNewChannels { get; set; } // notify (true) | mute (false)
     public int? SortOverride { get; set; }
 }
 
 public sealed class UpdateGroupFilterRequest
 {
     public string? Decision { get; set; }
+    public string? ChannelMode { get; set; } // select (manual review) | all (auto-update)
+    public string? TrackingPolicy { get; set; }
+    public string? TrackingKeywords { get; set; }
+    public bool ClearTrackingKeywords { get; set; }
     public bool ClearIsNew { get; set; }
     public string? OutputName { get; set; }
     public bool ClearOutputName { get; set; }
@@ -46,8 +52,11 @@ public sealed class ChannelMappingStatsDto
 {
     public string? ProfileId { get; set; }
     public int GroupsIncluded { get; set; }
-    public int GroupsHold { get; set; }
+    public int GroupsHold { get; set; } // legacy field kept for existing UI consumers
+    public int GroupsPending { get; set; }
     public int GroupsNew { get; set; }
+    public int PendingChannelsTotal { get; set; }
+    public int PendingChannelsNotified { get; set; }
     public int ChannelsInOutput { get; set; } // Live channels in output
     public int VodItemsInOutput { get; set; }
     public int SeriesItemsInOutput { get; set; }
@@ -56,33 +65,6 @@ public sealed class ChannelMappingStatsDto
     public int? ChannelsInProvider { get; set; }
     public int VodGroupsInProvider { get; set; }
     public int SeriesGroupsInProvider { get; set; }
-}
-
-public sealed class ContentTypeCountDto
-{
-    public int Total { get; set; }
-    public int Live { get; set; }
-    public int Vod { get; set; }
-    public int Series { get; set; }
-}
-
-public sealed class ParseVerificationDto
-{
-    public string ProviderId { get; set; } = string.Empty;
-    public string ProviderName { get; set; } = string.Empty;
-    public string SourcePath { get; set; } = string.Empty;
-    public string? ProfileId { get; set; }
-    public bool VodEnabled { get; set; }
-    public bool SeriesEnabled { get; set; }
-    public ContentTypeCountDto RawFile { get; set; } = new();
-    public ContentTypeCountDto ProviderDbActive { get; set; } = new();
-    public ContentTypeCountDto SnapshotOutput { get; set; } = new();
-    public bool RawEqualsProviderDbActive { get; set; }
-    public bool RawEqualsSnapshotOutput { get; set; }
-    public int LiveGroupsIncluded { get; set; }
-    public int LiveGroupsPending { get; set; }
-    public int LiveGroupsExcluded { get; set; }
-    public List<string> Notes { get; set; } = [];
 }
 
 public sealed class ActiveProfileDto
@@ -109,8 +91,12 @@ public sealed class ProviderChannelSelectDto
     public string ProviderChannelId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? TvgId { get; set; }
+    public string? GroupTitle { get; set; }
+    public string? EventContentKey { get; set; }
     public bool Active { get; set; }
     public bool IsSelected { get; set; }
+    public string State { get; set; } = "included";
+    public string? DisplayNameOverride { get; set; }
     public string? OutputGroupName { get; set; }
     public int? ChannelNumber { get; set; }
 }
@@ -124,6 +110,8 @@ public sealed class ChannelSelectionsDto
 public sealed class ChannelSelectionItem
 {
     public string ProviderChannelId { get; set; } = string.Empty;
+    public string? State { get; set; }
+    public string? DisplayNameOverride { get; set; }
     public string? OutputGroupName { get; set; }
     public int? ChannelNumber { get; set; }
 }
@@ -193,4 +181,61 @@ public sealed class ChannelListResponse
     public int Page { get; set; }
     public int PageSize { get; set; }
     public List<ChannelListItemDto> Items { get; set; } = [];
+}
+
+public sealed class ReviewQueueItemDto
+{
+    public string ProviderChannelId { get; set; } = string.Empty;
+    public string ProfileGroupFilterId { get; set; } = string.Empty;
+    public string ProviderGroupId { get; set; } = string.Empty;
+    public string ProviderGroupRawName { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? TvgId { get; set; }
+    public DateTime FirstSeenUtc { get; set; }
+    public DateTime LastSeenUtc { get; set; }
+    public bool Active { get; set; }
+    public bool NotifyOnPending { get; set; }
+    public string State { get; set; } = "pending";
+}
+
+public sealed class ReviewQueueListResponse
+{
+    public int Total { get; set; }
+    public int PendingNotified { get; set; }
+    public int PendingTotal { get; set; }
+    public List<ReviewQueueItemDto> Items { get; set; } = [];
+}
+
+public sealed class BulkReviewQueueStateRequest
+{
+    public List<string> ProviderChannelIds { get; set; } = [];
+    public List<string> ProviderGroupIds { get; set; } = [];
+    public string State { get; set; } = string.Empty;
+}
+
+public sealed class WhatsOnEventDto
+{
+    public string DisplayName { get; set; } = string.Empty;
+    public string GroupName { get; set; } = string.Empty;
+    public string? EventContentKey { get; set; }
+    public DateTime? EventStartUtc { get; set; }
+    public DateTime? EventEndUtc { get; set; }
+    public int? ChannelNumber { get; set; }
+    public string MatchedKeyword { get; set; } = string.Empty;
+}
+
+public sealed class WhatsOnGroupDto
+{
+    public string GroupName { get; set; } = string.Empty;
+    public string TrackingPolicy { get; set; } = string.Empty;
+    public List<WhatsOnEventDto> Events { get; set; } = [];
+}
+
+public sealed class WhatsOnThisWeekResponse
+{
+    public string ProfileId { get; set; } = string.Empty;
+    public string ProfileName { get; set; } = string.Empty;
+    public DateTime GeneratedUtc { get; set; }
+    public int TotalEvents { get; set; }
+    public List<WhatsOnGroupDto> Groups { get; set; } = [];
 }

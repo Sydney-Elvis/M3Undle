@@ -3,6 +3,7 @@ using System;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260403105906_20260403110000_Alpha5_ReviewQueueState")]
+    partial class _20260403110000_Alpha5_ReviewQueueState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
@@ -782,173 +785,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("profiles", (string)null);
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroup", b =>
-                {
-                    b.Property<string>("CustomGroupId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("custom_group_id");
-
-                    b.Property<int?>("AutoNumEnd")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("auto_num_end");
-
-                    b.Property<int?>("AutoNumStart")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("auto_num_start");
-
-                    b.Property<string>("ChannelMode")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("select")
-                        .HasColumnName("channel_mode");
-
-                    b.Property<DateTime>("CreatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("created_utc");
-
-                    b.Property<string>("Decision")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("include")
-                        .HasColumnName("decision");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("name");
-
-                    b.Property<string>("ProfileId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("profile_id");
-
-                    b.Property<int?>("SortOverride")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("sort_override");
-
-                    b.Property<bool>("TrackNewChannels")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(false)
-                        .HasColumnName("track_new_channels");
-
-                    b.Property<string>("TrackingKeywords")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("tracking_keywords");
-
-                    b.Property<string>("TrackingPolicy")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("review")
-                        .HasColumnName("tracking_policy");
-
-                    b.Property<DateTime>("UpdatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("updated_utc");
-
-                    b.HasKey("CustomGroupId");
-
-                    b.HasIndex("ProfileId")
-                        .HasDatabaseName("idx_pcg_profile_id");
-
-                    b.HasIndex("ProfileId", "Name")
-                        .IsUnique()
-                        .HasDatabaseName("idx_pcg_profile_name_unique");
-
-                    b.ToTable("profile_custom_groups", (string)null);
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroupChannel", b =>
-                {
-                    b.Property<string>("CustomGroupChannelId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("custom_group_channel_id");
-
-                    b.Property<int?>("ChannelNumber")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("channel_number");
-
-                    b.Property<DateTime>("CreatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("created_utc");
-
-                    b.Property<string>("CustomGroupId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("custom_group_id");
-
-                    b.Property<string>("DisplayNameOverride")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("display_name_override");
-
-                    b.Property<string>("ProviderChannelId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_channel_id");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("included")
-                        .HasColumnName("state");
-
-                    b.Property<string>("TvgIdOverride")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("tvg_id_override");
-
-                    b.Property<DateTime>("UpdatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("updated_utc");
-
-                    b.HasKey("CustomGroupChannelId");
-
-                    b.HasIndex("ProviderChannelId");
-
-                    b.HasIndex("CustomGroupId", "ProviderChannelId")
-                        .IsUnique()
-                        .HasDatabaseName("idx_pcgc_group_channel_unique");
-
-                    b.HasIndex("CustomGroupId", "State")
-                        .HasDatabaseName("idx_pcgc_group_state");
-
-                    b.ToTable("profile_custom_group_channels", (string)null);
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroupProviderLink", b =>
-                {
-                    b.Property<string>("LinkId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("link_id");
-
-                    b.Property<DateTime>("CreatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("created_utc");
-
-                    b.Property<string>("CustomGroupId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("custom_group_id");
-
-                    b.Property<string>("ProviderGroupId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_group_id");
-
-                    b.HasKey("LinkId");
-
-                    b.HasIndex("ProviderGroupId");
-
-                    b.HasIndex("CustomGroupId", "ProviderGroupId")
-                        .IsUnique()
-                        .HasDatabaseName("idx_pcgpl_group_provider_unique");
-
-                    b.ToTable("profile_custom_group_provider_links", (string)null);
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupChannelFilter", b =>
                 {
                     b.Property<string>("ProfileGroupChannelFilterId")
@@ -1069,17 +905,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("track_new_channels");
 
-                    b.Property<string>("TrackingKeywords")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("tracking_keywords");
-
-                    b.Property<string>("TrackingPolicy")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("review")
-                        .HasColumnName("tracking_policy");
-
                     b.Property<DateTime>("UpdatedUtc")
                         .HasColumnType("TEXT")
                         .HasColumnName("updated_utc");
@@ -1094,9 +919,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.HasIndex("ProfileId", "ProviderGroupId")
                         .IsUnique()
                         .HasDatabaseName("idx_pgf_profile_group_unique");
-
-                    b.HasIndex("ProfileId", "TrackingPolicy")
-                        .HasDatabaseName("idx_pgf_profile_tracking_policy");
 
                     b.ToTable("profile_group_filters", (string)null);
                 });
@@ -1261,17 +1083,9 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("display_name");
 
-                    b.Property<string>("EventContentKey")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("event_content_key");
-
                     b.Property<DateTime?>("EventEndUtc")
                         .HasColumnType("TEXT")
                         .HasColumnName("event_end_utc");
-
-                    b.Property<string>("EventSlotKey")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("event_slot_key");
 
                     b.Property<DateTime?>("EventStartUtc")
                         .HasColumnType("TEXT")
@@ -1288,12 +1102,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Property<bool>("IsEvent")
                         .HasColumnType("INTEGER")
                         .HasColumnName("is_event");
-
-                    b.Property<bool>("IsPlaceholder")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(false)
-                        .HasColumnName("is_placeholder");
 
                     b.Property<string>("LastFetchRunId")
                         .IsRequired()
@@ -1343,10 +1151,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.HasIndex("ProviderId", "Active")
                         .HasDatabaseName("idx_provider_channels_provider_active");
 
-                    b.HasIndex("ProviderId", "EventContentKey")
-                        .HasDatabaseName("idx_provider_channels_event_content")
-                        .HasFilter("event_content_key IS NOT NULL");
-
                     b.HasIndex("ProviderId", "LastSeenUtc")
                         .IsDescending(false, true)
                         .HasDatabaseName("idx_provider_channels_seen");
@@ -1357,9 +1161,6 @@ namespace M3Undle.Web.Data.Migrations
 
                     b.HasIndex("ProviderId", "IsEvent", "EventStartUtc")
                         .HasDatabaseName("idx_provider_channels_is_event");
-
-                    b.HasIndex("ProviderId", "IsPlaceholder", "Active")
-                        .HasDatabaseName("idx_provider_channels_placeholder_active");
 
                     b.ToTable("provider_channels", (string)null);
                 });
@@ -2017,55 +1818,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Provider");
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroup", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.Profile", "Profile")
-                        .WithMany("CustomGroups")
-                        .HasForeignKey("ProfileId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Profile");
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroupChannel", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.ProfileCustomGroup", "CustomGroup")
-                        .WithMany("Channels")
-                        .HasForeignKey("CustomGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("M3Undle.Web.Data.Entities.ProviderChannel", "ProviderChannel")
-                        .WithMany("CustomGroupChannels")
-                        .HasForeignKey("ProviderChannelId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("CustomGroup");
-
-                    b.Navigation("ProviderChannel");
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroupProviderLink", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.ProfileCustomGroup", "CustomGroup")
-                        .WithMany("ProviderLinks")
-                        .HasForeignKey("CustomGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("M3Undle.Web.Data.Entities.ProviderGroup", "ProviderGroup")
-                        .WithMany("CustomGroupProviderLinks")
-                        .HasForeignKey("ProviderGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("CustomGroup");
-
-                    b.Navigation("ProviderGroup");
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupChannelFilter", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.ProfileGroupFilter", "ProfileGroupFilter")
@@ -2330,8 +2082,6 @@ namespace M3Undle.Web.Data.Migrations
 
                     b.Navigation("ChannelMatchRules");
 
-                    b.Navigation("CustomGroups");
-
                     b.Navigation("DefaultEndpointAccessBindings");
 
                     b.Navigation("EpgChannelMaps");
@@ -2343,13 +2093,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Snapshots");
 
                     b.Navigation("StreamKeys");
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCustomGroup", b =>
-                {
-                    b.Navigation("Channels");
-
-                    b.Navigation("ProviderLinks");
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileGroupFilter", b =>
@@ -2375,14 +2118,10 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("ChannelFilters");
 
                     b.Navigation("ChannelSources");
-
-                    b.Navigation("CustomGroupChannels");
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProviderGroup", b =>
                 {
-                    b.Navigation("CustomGroupProviderLinks");
-
                     b.Navigation("ProfileGroupFilters");
 
                     b.Navigation("ProviderChannels");

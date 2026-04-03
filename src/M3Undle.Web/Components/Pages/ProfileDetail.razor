@@ -35,7 +35,7 @@ else
                  Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
                           : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
                           : Color.Default)">
-            @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Active"
+            @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
               : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
               : "No output")
         </MudChip>
@@ -128,6 +128,13 @@ else
                     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
                         @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review —
                         <MudLink Href="@($"channels/mapping?profile={ProfileId}")">review now</MudLink>
+                    </MudAlert>
+                }
+                @if (profile.ChannelsPendingReview > 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                        @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review —
+                        <MudLink Href="@($"channels/review?profile={ProfileId}")">review now</MudLink>
                     </MudAlert>
                 }
             </MudPaper>

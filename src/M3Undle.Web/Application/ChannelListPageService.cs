@@ -24,7 +24,10 @@ public sealed class ChannelListPageService(
         return await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .Where(x => x.ProfileId == profileId && x.Decision != "exclude" && x.ChannelFilters.Any())
+            .Where(x => x.ProfileId == profileId
+                        && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
+                            || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew))
+                        && x.ChannelFilters.Any())
             .Select(x => x.OutputName ?? x.ProviderGroup.RawName)
             .Distinct()
             .OrderBy(x => x)
@@ -159,6 +162,9 @@ public sealed class ChannelListPageService(
                 ? null
                 : request.TvgIdOverride.Trim();
 
+        channelFilter.State = LineupReviewSemantics.ChannelStateIncluded;
+        channelFilter.UpdatedUtc = DateTime.UtcNow;
+
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
         return true;
@@ -177,7 +183,9 @@ public sealed class ChannelListPageService(
             .ThenInclude(f => f.ProviderGroup)
             .Include(x => x.ProviderChannel)
             .Where(x => x.ProfileGroupFilter.ProfileId == profileId
-                        && x.ProfileGroupFilter.Decision != "exclude"
+                        && (x.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionInclude
+                            || (x.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.ProfileGroupFilter.IsNew))
+                        && x.State == LineupReviewSemantics.ChannelStateIncluded
                         && x.ProviderChannel.Active
                         && x.ProviderChannel.ContentType == "live")
             .Select(x => new NumberManagerChannelDto
@@ -228,6 +236,8 @@ public sealed class ChannelListPageService(
             if (!lookup.TryGetValue(item.ProviderChannelId, out var f))
                 continue;
             f.ChannelNumber = item.ChannelNumber;
+            f.State = LineupReviewSemantics.ChannelStateIncluded;
+            f.UpdatedUtc = DateTime.UtcNow;
         }
 
         await db.SaveChangesAsync(cancellationToken);

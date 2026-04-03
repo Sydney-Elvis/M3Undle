@@ -32,17 +32,52 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
         var groupsIncluded = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision != "exclude" && x.ChannelFilters.Any(), ct);
+            .CountAsync(x => x.ProfileId == profileId
+                             && x.ProviderGroup.ContentType == "live"
+                             && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
+                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew)), ct);
 
         var groupsHold = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.Decision == "hold" && !x.ChannelFilters.Any(), ct);
+            .CountAsync(x => x.ProfileId == profileId
+                             && x.ProviderGroup.ContentType == "live"
+                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
+                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew)), ct);
 
         var groupsNew = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live" && x.IsNew, ct);
+            .CountAsync(x => x.ProfileId == profileId
+                             && x.ProviderGroup.ContentType == "live"
+                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
+                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew))
+                             && x.TrackNewChannels, ct);
+
+        var pendingChannelsTotal = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
+            .Include(x => x.ProviderChannel)
+            .CountAsync(x => x.ProfileGroupFilter.ProfileId == profileId
+                             && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                             && x.State == LineupReviewSemantics.ChannelStatePending
+                             && x.ProviderChannel.Active
+                             && x.ProviderChannel.ContentType == "live"
+                             && !x.ProviderChannel.IsPlaceholder
+                             && x.ProfileGroupFilter.ProviderGroup.ContentType == "live", ct);
+
+        var pendingChannelsNotified = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
+            .Include(x => x.ProviderChannel)
+            .CountAsync(x => x.ProfileGroupFilter.ProfileId == profileId
+                             && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                             && x.State == LineupReviewSemantics.ChannelStatePending
+                             && x.ProviderChannel.Active
+                             && x.ProviderChannel.ContentType == "live"
+                             && !x.ProviderChannel.IsPlaceholder
+                             && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                             && x.ProfileGroupFilter.TrackNewChannels, ct);
 
         var activeSnapshot = await db.Snapshots
             .AsNoTracking()
@@ -69,7 +104,10 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
             ProfileId = profileId,
             GroupsIncluded = groupsIncluded,
             GroupsHold = groupsHold,
+            GroupsPending = groupsHold,
             GroupsNew = groupsNew,
+            PendingChannelsTotal = pendingChannelsTotal,
+            PendingChannelsNotified = pendingChannelsNotified,
             ChannelsInOutput = activeSnapshot?.LiveChannelCount ?? 0,
             VodItemsInOutput = activeSnapshot?.VodChannelCount ?? 0,
             SeriesItemsInOutput = activeSnapshot?.SeriesChannelCount ?? 0,

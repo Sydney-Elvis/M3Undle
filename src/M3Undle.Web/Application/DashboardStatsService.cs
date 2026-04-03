@@ -28,7 +28,22 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
         var groupsPendingReview = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProviderGroup.ContentType == "live" && x.IsNew, ct);
+            .CountAsync(x => x.ProviderGroup.ContentType == "live"
+                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
+                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew))
+                             && x.TrackNewChannels, ct);
+
+        var channelsPendingReview = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
+            .Include(x => x.ProviderChannel)
+            .CountAsync(x => x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                             && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                             && x.ProviderChannel.ContentType == "live"
+                             && x.ProviderChannel.Active
+                             && !x.ProviderChannel.IsPlaceholder
+                             && x.State == LineupReviewSemantics.ChannelStatePending
+                             && x.ProfileGroupFilter.TrackNewChannels, ct);
 
         // Counts shown next to the Output URLs reflect only the active provider's linked profile —
         // that's what the compatibility endpoints actually serve.
@@ -97,7 +112,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             PublishedLiveCount = publishedLive,
             PublishedMovieCount = publishedMovie,
             PublishedSeriesCount = publishedSeries,
-            ChannelsPendingReview = 0,
+            ChannelsPendingReview = channelsPendingReview,
             GroupsPendingReview = groupsPendingReview,
             ProfileSummaries = summaries,
             LastPublishedUtc = lastPublishedUtc,

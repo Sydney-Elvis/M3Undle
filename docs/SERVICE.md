@@ -117,7 +117,8 @@ Views:
   - Check provider health (credentials defined, last successful fetch, etc.)
 - **EPG Sources**: manage provider-linked XMLTV sources, test guide fetches, and tune channel mappings
 - **Profiles**: list all configured profiles (named published lineups); click through to the profile detail page for provider membership, published history, and pending review items
-- **Channel Mapping**: build your output lineup from the provider's channel catalog; manage group inclusion/exclusion, output group names, auto-numbering ranges, and per-channel overrides
+- **Channel Mapping**: build your output lineup from the provider's channel catalog; manage group pending/include/exclude decisions, manual-review vs auto-update mode, output group names, auto-numbering ranges, and per-channel overrides
+- **Channel Review Queue**: review pending channels in `/channels/review`; include/exclude selected channels or bulk-action pending channels by provider group
 - **Channels**: browse the live channels currently in the published lineup; edit channel numbers, output groups, and EPG IDs
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
 - **Settings**: configure endpoint security credentials, the HDHomeRun `Virtual Tuner ID`, and stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button
@@ -147,12 +148,14 @@ See: `docs/spec/config_spec.md`
 The following lineup shaping features are implemented:
 
 - Group inclusion/exclusion rules (select which groups appear in your lineup)
+- Group mode rules (`manual review` vs `auto-update`)
+- Pending channel review queue with profile-scoped include/exclude decisions
+- Notify/mute controls for pending-review alert noise on high-churn groups
 - Channel numbering (start ranges, pinned numbers, overflow handling, sort position via Number Manager)
 - Custom `tvg-id` override per channel (lock-gated field in the channel edit dialog)
 
 Planned for a future release:
 
-- New channels inbox (review and approve newly discovered channels before they appear in output)
 - Dynamic groups for rotating sports or event feeds
 
 ---

@@ -98,7 +98,7 @@ else
                                      Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
                                               : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
                                               : Icons.Material.Filled.RadioButtonUnchecked)">
-                                @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Active"
+                                @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
                                   : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
                                   : "No output")
                             </MudChip>
@@ -167,6 +167,12 @@ else
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
                                 @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review
+                            </MudAlert>
+                        }
+                        @if (profile.ChannelsPendingReview > 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                                @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review
                             </MudAlert>
                         }
 

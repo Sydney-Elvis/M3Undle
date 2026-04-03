@@ -241,6 +241,7 @@ builder.Services.AddScoped<XtreamPathCredentialFilter>();
 builder.Services.AddSingleton<XtreamStreamIdCache>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
+builder.Services.AddScoped<CustomGroupPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
 builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
@@ -353,6 +354,7 @@ app.MapRazorComponents<App>()
 app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
 app.MapChannelFilterApiEndpoints();
+app.MapCustomGroupApiEndpoints();
 app.MapChannelListApiEndpoints();
 app.MapSiteSettingsApiEndpoints();
 app.MapHdHomeRunEndpoints();

@@ -385,11 +385,14 @@ public sealed class EpgPageService(
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
         // Only show channels that are selected for output in this profile:
-        // ProfileGroupChannelFilter → ProfileGroupFilter where Decision == "hold" and ProfileId == profileId
+        // ProfileGroupChannelFilter → ProfileGroupFilter where group is included for this profile.
         var configuredChannelIds = await db.ProfileGroupChannelFilters
             .AsNoTracking()
             .Where(f => f.ProfileGroupFilter.ProfileId == profileId &&
-                        f.ProfileGroupFilter.Decision == "hold")
+                        f.State == LineupReviewSemantics.ChannelStateIncluded &&
+                        (f.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionInclude
+                         || (f.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionLegacyHold
+                             && !f.ProfileGroupFilter.IsNew)))
             .Select(f => f.ProviderChannelId)
             .Distinct()
             .ToListAsync(cancellationToken);

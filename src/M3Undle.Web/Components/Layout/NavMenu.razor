@@ -14,15 +14,17 @@
     <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns" OnClick="HandleNavClick">Providers</MudNavLink>
     <MudNavLink Href="channels" Icon="@Icons.Material.Filled.LiveTv" OnClick="HandleNavClick">Channels</MudNavLink>
     <MudNavLink Href="profiles" Icon="@Icons.Material.Filled.AccountTree" OnClick="HandleNavClick">Profiles</MudNavLink>
-    <MudNavLink Href="channels/mapping" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">
+    <MudNavLink Href="channels/mapping" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">Mapping</MudNavLink>
+    <MudNavLink Href="channels/review" Icon="@Icons.Material.Filled.PlaylistAddCheck" OnClick="HandleNavClick">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-            <span>Mapping</span>
-            @if (_pendingGroupCount > 0)
+            <span>Review Queue</span>
+            @if (_pendingReviewCount > 0)
             {
-                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ms-1">@_pendingGroupCount</MudChip>
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ms-1">@_pendingReviewCount</MudChip>
             }
         </MudStack>
     </MudNavLink>
+    <MudNavLink Href="channels/whats-on" Icon="@Icons.Material.Filled.Event" OnClick="HandleNavClick">What's On</MudNavLink>
     <MudNavLink Href="epg" Icon="@Icons.Material.Filled.Tv" OnClick="HandleNavClick">EPG</MudNavLink>
     <MudNavLink Href="streams" Icon="@Icons.Material.Filled.Sensors" OnClick="HandleNavClick">Streams</MudNavLink>
     <MudNavLink Href="settings" Icon="@Icons.Material.Filled.Settings" OnClick="HandleNavClick">Settings</MudNavLink>
@@ -72,7 +74,7 @@
     private string _currentPath = string.Empty;
     private bool _isRefreshing;
     private bool _authEnabled;
-    private int _pendingGroupCount;
+    private int _pendingReviewCount;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
 
@@ -119,7 +121,7 @@
         try
         {
             var stats = await StatsService.GetStatsAsync(_cts.Token);
-            _pendingGroupCount = stats?.GroupsNew ?? 0;
+            _pendingReviewCount = (stats?.GroupsNew ?? 0) + (stats?.PendingChannelsNotified ?? 0);
             StateHasChanged();
         }
         catch (OperationCanceledException) { }

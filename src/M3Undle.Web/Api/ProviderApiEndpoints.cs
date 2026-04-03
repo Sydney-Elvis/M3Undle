@@ -143,7 +143,9 @@ public static class ProviderApiEndpoints
             return TypedResults.NotFound();
 
         var groupFilters = await db.ProfileGroupFilters
-            .Where(x => x.ProfileId == profileId && x.Decision != "exclude")
+            .Where(x => x.ProfileId == profileId
+                        && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
+                            || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew)))
             .ToListAsync(cancellationToken);
 
         if (groupFilters.Count == 0)
@@ -178,9 +180,11 @@ public static class ProviderApiEndpoints
                 ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                 ProfileGroupFilterId = filter.ProfileGroupFilterId,
                 ProviderChannelId = channel.ProviderChannelId,
+                State = LineupReviewSemantics.ChannelStateIncluded,
                 OutputGroupName = null,
                 ChannelNumber = null,
                 CreatedUtc = now,
+                UpdatedUtc = now,
             });
             channelsSelected++;
         }
@@ -1182,6 +1186,7 @@ public static class ProviderApiEndpoints
             var providerGroupId = entry.GroupTitle is not null && groupLookup.TryGetValue(entry.GroupTitle, out var foundGroupId)
                 ? foundGroupId
                 : null;
+            var eventClassification = EventChannelClassifier.Classify(entry.DisplayName, entry.GroupTitle);
 
             ProviderChannel channel;
             if (item.NormalizedKey is not null)
@@ -1226,7 +1231,10 @@ public static class ProviderApiEndpoints
             channel.StreamUrl = entry.StreamUrl;
             channel.GroupTitle = entry.GroupTitle;
             channel.ProviderGroupId = providerGroupId;
-            channel.IsEvent = false;
+            channel.IsEvent = eventClassification.IsEvent;
+            channel.IsPlaceholder = eventClassification.IsPlaceholder;
+            channel.EventSlotKey = eventClassification.EventSlotKey;
+            channel.EventContentKey = eventClassification.EventContentKey;
             channel.EventStartUtc = null;
             channel.EventEndUtc = null;
             channel.LastSeenUtc = now;

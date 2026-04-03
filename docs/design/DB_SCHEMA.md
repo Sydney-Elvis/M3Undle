@@ -217,13 +217,13 @@ V1 per-group inclusion decisions for a profile. Drives what channels appear in t
 - profile_group_filter_id (PK, TEXT, uuid)
 - profile_id (FK profiles)
 - provider_group_id (FK provider_groups)
-- decision (TEXT) — `'hold'` | `'exclude'`; included = not excluded and has channel selections
-- is_new (INTEGER, 0/1) — flagged when first discovered, cleared on dismiss
-- channel_mode (TEXT) — always `'select'` in V1
+- decision (TEXT) — `'pending'` | `'include'` | `'exclude'`
+- is_new (INTEGER, 0/1) — compatibility flag; in current behavior `pending` groups are treated as new
+- channel_mode (TEXT) — `'select'` (manual review) | `'all'` (auto-update)
 - output_name (TEXT, nullable) — renames the group in the published output; defaults to provider raw_name
 - auto_num_start (INTEGER, nullable) — first channel number for auto-numbering within this group
 - auto_num_end (INTEGER, nullable) — last channel number before auto-numbering stops
-- track_new_channels (INTEGER, 0/1)
+- track_new_channels (INTEGER, 0/1) — notification preference for pending review noise (notify/mute)
 - sort_override (INTEGER, nullable)
 - created_utc (TEXT)
 - updated_utc (TEXT)
@@ -238,10 +238,13 @@ V1 per-channel selections and overrides within a group filter.
 - profile_group_channel_filter_id (PK, TEXT, uuid)
 - profile_group_filter_id (FK profile_group_filters)
 - provider_channel_id (FK provider_channels)
+- state (TEXT) — `'pending'` | `'included'` | `'excluded'`
+- display_name_override (TEXT, nullable)
 - output_group_name (TEXT, nullable) — moves channel to a different output group
 - channel_number (INTEGER, nullable) — explicit `tvg-chno`; takes precedence over auto-numbering
 - tvg_id_override (TEXT, nullable) — replaces the provider's `tvg-id` in the snapshot output; lock-gated in UI to prevent accidental EPG breakage
 - created_utc (TEXT)
+- updated_utc (TEXT)
 
 Unique:
 - (profile_group_filter_id, provider_channel_id)
@@ -359,7 +362,7 @@ Several schema fields and tables are present for forward-compatibility but are n
 - **Future:** Group catalog extended for group-ordering and dynamic group rules.
 
 ### `profile_group_filters` and `profile_group_channel_filters`
-- **Current:** Active V1 per-group and per-channel override tables. Store group decisions (include/exclude/hold), output name overrides, auto-numbering ranges, channel number pins, and `tvg_id_override`.
+- **Current:** Active per-group and per-channel review tables. Store group decision/mode/notify behavior plus per-channel pending/included/excluded state and overrides (name/output group/channel number/`tvg_id_override`).
 - **Future:** These tables are the V1 bridge until `canonical_channels` and `channel_sources` are fully activated.
 
 ## Tables reserved for future use
