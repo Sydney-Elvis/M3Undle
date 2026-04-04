@@ -5,6 +5,7 @@ using System.Text.Json;
 using M3Undle.Web.Data;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Sessions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -27,6 +28,7 @@ public sealed class GeneratedHlsSessionManager(
     IOptions<GeneratedHlsOptions> options,
     IServiceScopeFactory scopeFactory,
     ChannelSessionManager channelSessionManager,
+    StreamingRegistry registry,
     ILogger<GeneratedHlsSessionManager> logger) : IHostedService, IAsyncDisposable
 {
     private readonly GeneratedHlsOptions _options = options.Value;
@@ -109,6 +111,7 @@ public sealed class GeneratedHlsSessionManager(
         }
 
         session.Touch();
+        registry.UpsertSession(session.ToSnapshot());
         return new GeneratedHlsSessionHandle(sessionId, manifestPath);
     }
 
@@ -118,6 +121,7 @@ public sealed class GeneratedHlsSessionManager(
             return null;
 
         session.Touch();
+        registry.UpsertSession(session.ToSnapshot());
         if (session.AdmissionKey is { } key)
             channelSessionManager.TouchHlsSlot(key);
 
@@ -161,6 +165,7 @@ public sealed class GeneratedHlsSessionManager(
             return false;
 
         session.Touch();
+        registry.UpsertSession(session.ToSnapshot());
         if (session.AdmissionKey is { } admKey)
             channelSessionManager.TouchHlsSlot(admKey);
 
@@ -434,6 +439,8 @@ public sealed class GeneratedHlsSessionManager(
         if (!_sessions.TryRemove(sessionId, out var session))
             return;
 
+        registry.RemoveSession(sessionId);
+
         if (session.AdmissionKey is { } key)
             channelSessionManager.ReleaseHlsSlot(key);
 
@@ -645,10 +652,27 @@ public sealed class GeneratedHlsSessionManager(
 
         public ChannelSessionKey? AdmissionKey { get; } = admissionKey;
 
+        public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
+
         public DateTimeOffset LastAccessUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _lastAccessUnixMs));
 
         public void Touch()
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        public StreamSessionSnapshot ToSnapshot() => new(
+            SessionId: SessionId,
+            ProviderId: AdmissionKey?.ProviderId ?? string.Empty,
+            ProviderChannelId: AdmissionKey?.ProviderChannelId ?? string.Empty,
+            DisplayName: DisplayName,
+            State: Process.HasExited ? SessionState.Faulted : SessionState.Live,
+            SubscriberCount: 0,
+            IsShared: false,
+            BufferUsedBytes: 0,
+            BufferMaxBytes: 0,
+            StartedUtc: StartedUtc,
+            LastUpstreamByteUtc: LastAccessUtc,
+            ReconnectAttempts: 0,
+            LastFailureKind: null);
     }
 }
