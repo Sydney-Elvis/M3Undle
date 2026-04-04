@@ -139,7 +139,6 @@ public sealed class StreamRequestResolverTests
                 ProviderId = "provider-1",
                 Name = "Provider 1",
                 Enabled = true,
-                IsActive = true,
                 PlaylistUrl = "http://provider.test/playlist.m3u",
                 TimeoutSeconds = 30,
                 CreatedUtc = DateTime.UtcNow,

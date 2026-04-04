@@ -107,6 +107,18 @@ else
                         <MudDivider />
 
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.FlexEnd">
+                            @if (profile.IsActive)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
+                                         Icon="@Icons.Material.Filled.Star">Active</MudChip>
+                            }
+                            else
+                            {
+                                <div @onclick:stopPropagation="true">
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                               OnClick="@(() => SetActiveAsync(profile))">Set Active</MudButton>
+                                </div>
+                            }
                             <div @onclick:stopPropagation="true">
                                 <MudIconButton Icon="@Icons.Material.Filled.Delete"
                                                Size="Size.Small"
@@ -150,9 +162,6 @@ else
                                 @foreach (var p in profile.Providers)
                                 {
                                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                        <MudIcon Icon="@(p.IsActive ? Icons.Material.Filled.FiberManualRecord : Icons.Material.Outlined.FiberManualRecord)"
-                                                 Size="Size.Small"
-                                                 Color="@(p.IsActive ? Color.Success : Color.Default)" />
                                         <MudText Typo="Typo.body2">@p.Name</MudText>
                                         @if (!p.Enabled)
                                         {
@@ -276,6 +285,25 @@ else
         finally
         {
             _isCreating = false;
+        }
+    }
+
+    private async Task SetActiveAsync(ProfilePageItemDto profile)
+    {
+        try
+        {
+            var error = await ProfilesService.SetProfileActiveAsync(profile.ProfileId, CancellationToken.None);
+            if (error is not null)
+            {
+                Snackbar.Add(error, Severity.Error);
+                return;
+            }
+            Snackbar.Add($"Profile \"{profile.Name}\" is now active.", Severity.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to set profile active: {ex.Message}", Severity.Error);
         }
     }
 

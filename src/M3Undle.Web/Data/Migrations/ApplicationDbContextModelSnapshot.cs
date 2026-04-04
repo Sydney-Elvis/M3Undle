@@ -755,6 +755,12 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("enabled");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_active");
+
                     b.Property<string>("MergeMode")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -775,6 +781,11 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnName("updated_utc");
 
                     b.HasKey("ProfileId");
+
+                    b.HasIndex("IsActive")
+                        .IsUnique()
+                        .HasDatabaseName("idx_profiles_is_active")
+                        .HasFilter("is_active = 1");
 
                     b.HasIndex("Name")
                         .IsUnique();
@@ -1163,12 +1174,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("include_vod");
 
-                    b.Property<bool>("IsActive")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(false)
-                        .HasColumnName("is_active");
-
                     b.Property<int?>("MaxConcurrentStreams")
                         .HasColumnType("INTEGER")
                         .HasColumnName("max_concurrent_streams");
@@ -1227,11 +1232,6 @@ namespace M3Undle.Web.Data.Migrations
 
                     b.HasIndex("Enabled")
                         .HasDatabaseName("idx_providers_enabled");
-
-                    b.HasIndex("IsActive")
-                        .IsUnique()
-                        .HasDatabaseName("idx_providers_is_active")
-                        .HasFilter("is_active = 1");
 
                     b.HasIndex("Name")
                         .IsUnique();

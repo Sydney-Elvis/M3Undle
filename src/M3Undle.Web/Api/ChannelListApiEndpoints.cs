@@ -32,25 +32,13 @@ public static class ChannelListApiEndpoints
         pageSize = Math.Clamp(pageSize, 10, 200);
         page = Math.Max(1, page);
 
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
-            return TypedResults.NotFound();
-
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (profileLink is null)
+        var activeProfileId = await GetActiveProfileIdAsync(db, cancellationToken);
+        if (activeProfileId is null)
             return TypedResults.NotFound();
 
         var snapshot = await db.Snapshots
             .AsNoTracking()
-            .Where(x => x.ProfileId == profileLink.ProfileId && x.Status == "active")
+            .Where(x => x.ProfileId == activeProfileId && x.Status == "active")
             .OrderByDescending(x => x.CreatedUtc)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -334,23 +322,14 @@ public static class ChannelListApiEndpoints
     // Helpers
     // -------------------------------------------------------------------------
 
-    private static async Task<string?> GetActiveProfileIdAsync(
+    private static Task<string?> GetActiveProfileIdAsync(
         ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
-        var provider = await db.Providers
+        return db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
-            return null;
-
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
+            .Where(x => x.IsActive)
+            .Select(x => (string?)x.ProfileId)
             .FirstOrDefaultAsync(cancellationToken);
-
-        return profileLink?.ProfileId;
     }
 }

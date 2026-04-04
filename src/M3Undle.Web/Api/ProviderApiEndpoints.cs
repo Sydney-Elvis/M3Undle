@@ -1,5 +1,6 @@
 using M3Undle.Web.Application;
 using M3Undle.Web.Security;
+using M3Undle.Web.Contracts;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -20,6 +21,7 @@ public static class ProviderApiEndpoints
         profiles.MapGet("/", ListProfilesAsync);
         profiles.MapPost("/", CreateProfileAsync);
         profiles.MapPost("/{profileId}/select-all-channels", SelectAllChannelsAsync);
+        profiles.MapPut("/{profileId}/active", SetProfileActiveAsync);
 
         var providers = app.MapGroup("/api/v1/providers");
         providers.RequireAuthorization(UiAccessPolicy.Name);
@@ -30,7 +32,6 @@ public static class ProviderApiEndpoints
         providers.MapPut("/{providerId}", UpdateProviderAsync);
         providers.MapDelete("/{providerId}", DeleteProviderAsync);
         providers.MapPatch("/{providerId}/enabled", SetProviderEnabledAsync);
-        providers.MapPatch("/{providerId}/active", SetProviderActiveAsync);
         providers.MapGet("/{providerId}/preview", GetPreviewAsync);
         providers.MapPost("/{providerId}/refresh-preview", RefreshPreviewAsync);
         providers.MapGet("/{providerId}/status", GetProviderStatusAsync);
@@ -204,6 +205,48 @@ public static class ProviderApiEndpoints
         {
             GroupsUpdated = groupFilters.Count,
             ChannelsSelected = channelsSelected,
+        });
+    }
+
+    private static async Task<Results<Ok<ProfileActiveResponse>, NotFound, Conflict<string>>> SetProfileActiveAsync(
+        string profileId,
+        ApplicationDbContext db,
+        IRefreshTrigger refreshTrigger,
+        AppEventBus eventBus,
+        ILogger<ProviderApiLog> logger,
+        CancellationToken cancellationToken)
+    {
+        if (refreshTrigger.IsRefreshing)
+            return TypedResults.Conflict("A snapshot refresh is currently in progress. Please wait for it to finish.");
+
+        var exists = await db.Profiles.AnyAsync(x => x.ProfileId == profileId, cancellationToken);
+        if (!exists)
+            return TypedResults.NotFound();
+
+        var now = DateTime.UtcNow;
+
+        await db.Profiles
+            .Where(x => x.IsActive && x.ProfileId != profileId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, false)
+                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
+
+        await db.Profiles
+            .Where(x => x.ProfileId == profileId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, true)
+                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
+
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Profile" });
+        logger.LogInformation("Profile {ProfileId} set active.", profileId);
+        eventBus.Publish(AppEventKind.ProviderActivated);
+        refreshTrigger.TriggerRefresh();
+
+        return TypedResults.Ok(new ProfileActiveResponse
+        {
+            ProfileId = profileId,
+            IsActive = true,
+            UpdatedUtc = now,
         });
     }
 
@@ -583,66 +626,6 @@ public static class ProviderApiEndpoints
         });
     }
 
-    private static async Task<Results<Ok<ProviderActiveResponse>, NotFound, Conflict<string>>> SetProviderActiveAsync(
-        string providerId,
-        SetProviderActiveRequest request,
-        ApplicationDbContext db,
-        IRefreshTrigger refreshTrigger,
-        AppEventBus eventBus,
-        ILogger<ProviderApiLog> logger,
-        CancellationToken cancellationToken)
-    {
-        if (refreshTrigger.IsRefreshing)
-        {
-            return TypedResults.Conflict("A snapshot refresh is currently in progress. Please wait for it to finish.");
-        }
-
-        var exists = await db.Providers.AnyAsync(x => x.ProviderId == providerId, cancellationToken);
-        if (!exists)
-        {
-            return TypedResults.NotFound();
-        }
-
-        var now = DateTime.UtcNow;
-
-        if (request.IsActive)
-        {
-            // Clear the current active provider first. SQLite evaluates the partial unique
-            // index (is_active = 1) per-statement rather than at commit, so this must be a
-            // separate SQL statement that completes before the activation below.
-            await db.Providers
-                .Where(x => x.IsActive && x.ProviderId != providerId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(p => p.IsActive, false)
-                    .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
-        }
-
-        // Activate (or deactivate) the target provider using a direct SQL UPDATE —
-        // no SaveChangesAsync, no change-tracker ordering issues, no write-lock contention.
-        await db.Providers
-            .Where(x => x.ProviderId == providerId)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.IsActive, request.IsActive)
-                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
-
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
-        logger.LogInformation("Provider {ProviderId} set active={IsActive}.", providerId, request.IsActive);
-        eventBus.Publish(AppEventKind.ProviderChanged);
-
-        if (request.IsActive)
-        {
-            eventBus.Publish(AppEventKind.ProviderActivated);
-            refreshTrigger.TriggerRefresh();
-        }
-
-        return TypedResults.Ok(new ProviderActiveResponse
-        {
-            ProviderId = providerId,
-            IsActive = request.IsActive,
-            UpdatedUtc = now,
-        });
-    }
-
     private static async Task<Results<Ok<ProviderStatusDto>, NotFound>> GetProviderStatusAsync(
         string providerId,
         ApplicationDbContext db,
@@ -798,7 +781,6 @@ public static class ProviderApiEndpoints
             UserAgent = configProvider.UserAgent,
             TimeoutSeconds = configProvider.TimeoutSeconds,
             Enabled = configProvider.Enabled,
-            IsActive = false,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             ConfigSourcePath = configProvider.SourcePath,
@@ -1333,7 +1315,6 @@ public static class ProviderApiEndpoints
                     HeadersJson = provider.HeadersJson,
                     UserAgent = provider.UserAgent,
                     Enabled = provider.Enabled,
-                    IsActive = provider.IsActive,
                     TimeoutSeconds = provider.TimeoutSeconds,
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,

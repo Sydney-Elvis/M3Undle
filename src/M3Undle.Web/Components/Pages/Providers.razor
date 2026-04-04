@@ -58,7 +58,7 @@
                 <MudTh>Enabled</MudTh>
                 <MudTh>Last Refresh</MudTh>
                 <MudTh>Published</MudTh>
-                <MudTh>Active</MudTh>
+                <MudTh>Status</MudTh>
                 <MudTh>Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
@@ -81,27 +81,20 @@
                 <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
                 <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
                 <MudTd>
-                    @if (context.IsActive)
+                    @if (context.LastRefresh?.Status == "fail")
                     {
-                        @if (context.LastRefresh?.Status == "fail")
+                        @if (context.LatestSnapshots.Any(s => s.Status == "active"))
                         {
-                            @if (context.LatestSnapshots.Any(s => s.Status == "active"))
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
-                            }
-                            else
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
-                            }
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
                         }
                         else
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">Active</MudChip>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
                         }
                     }
-                    else
+                    else if (context.LatestSnapshots.Any(s => s.Status == "active"))
                     {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" OnClick="() => SetActiveAsync(context)" Disabled="@_isRefreshing">Set Active</MudButton>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip>
                     }
                 </MudTd>
                 <MudTd>
@@ -332,27 +325,6 @@
         catch (Exception ex)
         {
             _error = $"Failed to toggle provider enabled: {ex.Message}";
-        }
-    }
-
-    private async Task SetActiveAsync(ProviderDto provider)
-    {
-        _error = null;
-
-        try
-        {
-            var error = await ProviderPageService.SetProviderActiveAsync(provider.ProviderId, true, _cts.Token);
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                _error = error;
-                return;
-            }
-
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = $"Failed to set provider active: {ex.Message}";
         }
     }
 

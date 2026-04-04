@@ -45,22 +45,12 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                              && x.State == LineupReviewSemantics.ChannelStatePending
                              && x.ProfileGroupFilter.TrackNewChannels, ct);
 
-        // Counts shown next to the Output URLs reflect only the active provider's linked profile —
-        // that's what the compatibility endpoints actually serve.
-        var activeProvider = await db.Providers
+        // Counts shown next to the Output URLs reflect only the active profile's snapshot.
+        var activeProfileId = await db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, ct);
-
-        string? activeProfileId = null;
-        if (activeProvider is not null)
-        {
-            var activeLink = await db.ProfileProviders
-                .AsNoTracking()
-                .Where(x => x.ProviderId == activeProvider.ProviderId && x.Enabled)
-                .OrderBy(x => x.Priority)
-                .FirstOrDefaultAsync(ct);
-            activeProfileId = activeLink?.ProfileId;
-        }
+            .Where(x => x.IsActive)
+            .Select(x => (string?)x.ProfileId)
+            .FirstOrDefaultAsync(ct);
 
         int publishedLive = 0, publishedMovie = 0, publishedSeries = 0;
         DateTime? lastPublishedUtc = null;
@@ -98,7 +88,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 DisplayName = profile.Name,
                 OutputName = profile.OutputName,
                 IsEnabled = profile.Enabled,
-                IsActive = profile.ProfileId == activeProfileId,
+                IsActive = profile.IsActive,
                 LastPublishedUtc = snapshot?.CreatedUtc,
                 LiveCount = snapshot?.LiveChannelCount ?? 0,
                 HealthStatus = health,

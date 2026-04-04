@@ -40,25 +40,9 @@ public static class ChannelFilterApiEndpoints
         ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
-            return TypedResults.NotFound();
-
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (profileLink is null)
-            return TypedResults.NotFound();
-
         var profile = await db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.ProfileId == profileLink.ProfileId && x.Enabled, cancellationToken);
+            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
 
         if (profile is null)
             return TypedResults.NotFound();
@@ -723,23 +707,21 @@ public static class ChannelFilterApiEndpoints
         ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
-        var provider = await db.Providers
+        var activeProfile = await db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            .Include(x => x.ProfileProviders)
+                .ThenInclude(pp => pp.Provider)
+            .FirstOrDefaultAsync(x => x.IsActive, cancellationToken);
 
-        if (provider is null)
+        if (activeProfile is null)
             return TypedResults.Ok(new ChannelMappingStatsDto());
 
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (profileLink is null)
-            return TypedResults.Ok(new ChannelMappingStatsDto());
-
-        var profileId = profileLink.ProfileId;
+        var profileId = activeProfile.ProfileId;
+        var provider = activeProfile.ProfileProviders
+            .Where(pp => pp.Enabled)
+            .OrderBy(pp => pp.Priority)
+            .Select(pp => pp.Provider)
+            .FirstOrDefault(p => p.Enabled);
 
         var groupsIncluded = await db.ProfileGroupFilters
             .AsNoTracking()
@@ -799,23 +781,28 @@ public static class ChannelFilterApiEndpoints
             .OrderByDescending(x => x.CreatedUtc)
             .FirstOrDefaultAsync(cancellationToken);
 
-        var lastFetchRun = await db.FetchRuns
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Status == "ok")
-            .OrderByDescending(x => x.StartedUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+        int? channelsInProvider = null;
+        int vodGroups = 0;
+        int seriesGroups = 0;
 
-        var vodGroups = await db.ProviderGroups
-            .AsNoTracking()
-            .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", cancellationToken);
+        if (provider is not null)
+        {
+            var lastFetchRun = await db.FetchRuns
+                .AsNoTracking()
+                .Where(x => x.ProviderId == provider.ProviderId && x.Status == "ok")
+                .OrderByDescending(x => x.StartedUtc)
+                .FirstOrDefaultAsync(cancellationToken);
 
-        var seriesGroups = await db.ProviderGroups
-            .AsNoTracking()
-            .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", cancellationToken);
+            channelsInProvider = lastFetchRun?.ChannelCountSeen;
 
-        var liveInOutput = activeSnapshot?.LiveChannelCount ?? 0;
-        var vodInOutput = activeSnapshot?.VodChannelCount ?? 0;
-        var seriesInOutput = activeSnapshot?.SeriesChannelCount ?? 0;
+            vodGroups = await db.ProviderGroups
+                .AsNoTracking()
+                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", cancellationToken);
+
+            seriesGroups = await db.ProviderGroups
+                .AsNoTracking()
+                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", cancellationToken);
+        }
 
         return TypedResults.Ok(new ChannelMappingStatsDto
         {
@@ -826,12 +813,12 @@ public static class ChannelFilterApiEndpoints
             GroupsNew = groupsNew,
             PendingChannelsTotal = pendingChannelsTotal,
             PendingChannelsNotified = pendingChannelsNotified,
-            ChannelsInOutput = liveInOutput,
-            VodItemsInOutput = vodInOutput,
-            SeriesItemsInOutput = seriesInOutput,
-            VodEnabled = provider.IncludeVod,
-            SeriesEnabled = provider.IncludeSeries,
-            ChannelsInProvider = lastFetchRun?.ChannelCountSeen,
+            ChannelsInOutput = activeSnapshot?.LiveChannelCount ?? 0,
+            VodItemsInOutput = activeSnapshot?.VodChannelCount ?? 0,
+            SeriesItemsInOutput = activeSnapshot?.SeriesChannelCount ?? 0,
+            VodEnabled = provider?.IncludeVod ?? false,
+            SeriesEnabled = provider?.IncludeSeries ?? false,
+            ChannelsInProvider = channelsInProvider,
             VodGroupsInProvider = vodGroups,
             SeriesGroupsInProvider = seriesGroups,
         });

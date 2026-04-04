@@ -26,18 +26,35 @@ public sealed class EpgPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        return await db.Providers
+        var activeProfileId = await db.Profiles
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .Select(x => x.ProfileId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var query = db.Providers
             .AsNoTracking()
             .Where(x => x.Enabled)
-            .OrderByDescending(x => x.IsActive)  // active provider first
-            .ThenBy(x => x.Name)
+            .GroupJoin(
+                db.ProfileProviders.AsNoTracking()
+                    .Where(pp => pp.Enabled && pp.ProfileId == activeProfileId),
+                p => p.ProviderId,
+                pp => pp.ProviderId,
+                (p, links) => new
+                {
+                    Provider = p,
+                    Link = links.OrderBy(l => l.Priority).FirstOrDefault(),
+                })
+            .OrderBy(x => x.Link == null ? 1 : 0)
+            .ThenBy(x => x.Link!.Priority)
+            .ThenBy(x => x.Provider.Name)
             .Select(x => new ProviderListItemDto
             {
-                ProviderId = x.ProviderId,
-                Name = x.Name,
-                IsActive = x.IsActive,
-            })
-            .ToListAsync(cancellationToken);
+                ProviderId = x.Provider.ProviderId,
+                Name = x.Provider.Name,
+            });
+
+        return await query.ToListAsync(cancellationToken);
     }
 
     public async Task<List<EpgSourceDto>> GetSourcesAsync(string? providerId, CancellationToken cancellationToken)

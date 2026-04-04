@@ -746,8 +746,7 @@ public static class XtreamEndpoints
         var provider = profileProvider is not null
             ? await db.Providers.AsNoTracking()
                 .FirstOrDefaultAsync(x => x.ProviderId == profileProvider.ProviderId && x.Enabled, cancellationToken)
-            : await db.Providers.AsNoTracking()
-                .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            : null;
 
         try
         {

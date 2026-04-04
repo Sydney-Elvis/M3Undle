@@ -64,14 +64,14 @@
                     @if (lineup?.ActiveProvider is not null)
                     {
                         <MudStack Spacing="0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Active Provider</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Serving Provider</MudText>
                             <MudText Typo="Typo.body1">@lineup.ActiveProvider.Name</MudText>
                         </MudStack>
                     }
                     else
                     {
                         <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            No active provider — go to <MudLink Href="providers">Providers</MudLink> to set one active.
+                            No active profile — <MudLink Href="providers">add a provider</MudLink> or go to <MudLink Href="profiles">Profiles</MudLink> to set one active.
                         </MudAlert>
                     }
 

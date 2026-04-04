@@ -234,7 +234,6 @@ public sealed class EpgMappingPersistenceTests
                 ProviderId = fixture.ProviderId,
                 Name = "Test Provider",
                 Enabled = true,
-                IsActive = true,
                 PlaylistUrl = "http://fake/playlist.m3u",
                 TimeoutSeconds = 30,
                 CreatedUtc = now,

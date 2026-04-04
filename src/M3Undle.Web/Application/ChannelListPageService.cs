@@ -297,21 +297,12 @@ public sealed class ChannelListPageService(
         ProviderChannelId = e.ProviderChannelId,
     };
 
-    private static async Task<string?> GetActiveProfileIdAsync(ApplicationDbContext db, CancellationToken cancellationToken)
+    private static Task<string?> GetActiveProfileIdAsync(ApplicationDbContext db, CancellationToken cancellationToken)
     {
-        var provider = await db.Providers
+        return db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
-            return null;
-
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
+            .Where(x => x.IsActive)
+            .Select(x => (string?)x.ProfileId)
             .FirstOrDefaultAsync(cancellationToken);
-
-        return profileLink?.ProfileId;
     }
 }

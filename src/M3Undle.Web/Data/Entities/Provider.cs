@@ -5,7 +5,6 @@ public sealed class Provider
     public string ProviderId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public bool Enabled { get; set; }
-    public bool IsActive { get; set; }
     public string PlaylistUrl { get; set; } = string.Empty;
     public string? XmltvUrl { get; set; }
     public string? HeadersJson { get; set; }

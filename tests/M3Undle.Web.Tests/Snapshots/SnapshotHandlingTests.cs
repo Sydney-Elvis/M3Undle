@@ -313,7 +313,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -345,7 +345,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -387,7 +387,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -425,7 +425,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            var provider = NewProvider("provider-1", active: true);
+            var provider = NewProvider("provider-1");
             provider.IncludeVod = true;
             provider.IncludeSeries = true;
             setup.Providers.Add(provider);
@@ -513,7 +513,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            var provider = NewProvider("provider-1", active: true);
+            var provider = NewProvider("provider-1");
             provider.IncludeVod = true;
             setup.Providers.Add(provider);
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
@@ -546,7 +546,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -616,7 +616,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -796,12 +796,11 @@ public sealed class SnapshotHandlingTests
         UpdatedUtc = DateTime.UtcNow,
     };
 
-    private static Provider NewProvider(string id, bool active = false) => new()
+    private static Provider NewProvider(string id) => new()
     {
         ProviderId = id,
         Name = id,
         Enabled = true,
-        IsActive = active,
         PlaylistUrl = "http://example.com/playlist.m3u",
         XmltvUrl = "http://example.com/xmltv.xml",
         TimeoutSeconds = 20,

@@ -15,25 +15,9 @@ public sealed class ChannelMappingPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
-            return null;
-
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (profileLink is null)
-            return null;
-
         var profile = await db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.ProfileId == profileLink.ProfileId && x.Enabled, cancellationToken);
+            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
 
         if (profile is null)
             return null;
@@ -347,35 +331,76 @@ public sealed class ChannelMappingPageService(
             return false;
 
         filter.ChannelMode = request.ChannelMode is "all" or "select" ? request.ChannelMode : "all";
-        filter.UpdatedUtc = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
 
-        await db.ProfileGroupChannelFilters
+        var requestedItems = request.Channels
+            .Where(x => !string.IsNullOrWhiteSpace(x.ProviderChannelId))
+            .GroupBy(x => x.ProviderChannelId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+
+        var existingRows = await db.ProfileGroupChannelFilters
             .Where(x => x.ProfileGroupFilterId == filterId)
-            .ExecuteDeleteAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (filter.ChannelMode == "select" && request.Channels.Count > 0)
+        foreach (var row in existingRows)
         {
-            var now = DateTime.UtcNow;
-            foreach (var item in request.Channels)
+            if (requestedItems.TryGetValue(row.ProviderChannelId, out var item))
             {
-                db.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                {
-                    ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                    ProfileGroupFilterId = filterId,
-                    ProviderChannelId = item.ProviderChannelId,
-                    State = LineupReviewSemantics.NormalizeChannelState(item.State),
-                    DisplayNameOverride = string.IsNullOrWhiteSpace(item.DisplayNameOverride) ? null : item.DisplayNameOverride.Trim(),
-                    OutputGroupName = string.IsNullOrWhiteSpace(item.OutputGroupName) ? null : item.OutputGroupName.Trim(),
-                    ChannelNumber = item.ChannelNumber,
-                    CreatedUtc = now,
-                    UpdatedUtc = now,
-                });
+                ApplySelectionItem(row, item, now);
+                requestedItems.Remove(row.ProviderChannelId);
+                continue;
             }
+
+            // Preserve review queue state rows when the inline manual-selection UI saves.
+            var state = LineupReviewSemantics.NormalizeChannelState(row.State);
+            var preserveManualReviewState = filter.ChannelMode == LineupReviewSemantics.GroupModeManualReview
+                && (state == LineupReviewSemantics.ChannelStatePending
+                    || state == LineupReviewSemantics.ChannelStateExcluded);
+
+            if (!preserveManualReviewState)
+                db.ProfileGroupChannelFilters.Remove(row);
         }
 
+        foreach (var item in requestedItems.Values)
+        {
+            var row = new ProfileGroupChannelFilter
+            {
+                ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                ProfileGroupFilterId = filterId,
+                ProviderChannelId = item.ProviderChannelId,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+
+            ApplySelectionItem(row, item, now);
+            db.ProfileGroupChannelFilters.Add(row);
+        }
+
+        var hasExplicitInclude = request.Channels.Any(x =>
+            LineupReviewSemantics.NormalizeChannelState(x.State) == LineupReviewSemantics.ChannelStateIncluded);
+
+        // Selecting a channel in a pending manual-review group should make that group publishable.
+        if (filter.ChannelMode == LineupReviewSemantics.GroupModeManualReview
+            && hasExplicitInclude
+            && LineupReviewSemantics.IsGroupPending(filter.Decision, filter.IsNew))
+        {
+            filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+            filter.IsNew = false;
+        }
+
+        filter.UpdatedUtc = now;
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
         return true;
+    }
+
+    private static void ApplySelectionItem(ProfileGroupChannelFilter row, ChannelSelectionItem item, DateTime updatedUtc)
+    {
+        row.State = LineupReviewSemantics.NormalizeChannelState(item.State);
+        row.DisplayNameOverride = string.IsNullOrWhiteSpace(item.DisplayNameOverride) ? null : item.DisplayNameOverride.Trim();
+        row.OutputGroupName = string.IsNullOrWhiteSpace(item.OutputGroupName) ? null : item.OutputGroupName.Trim();
+        row.ChannelNumber = item.ChannelNumber;
+        row.UpdatedUtc = updatedUtc;
     }
 
     private static GroupFilterDto ToDto(ProfileGroupFilter f)

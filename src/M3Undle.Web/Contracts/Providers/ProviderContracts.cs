@@ -6,7 +6,6 @@ public sealed class ProviderListItemDto
 {
     public string ProviderId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
 }
 
 public sealed class ProfileListItemDto
@@ -44,7 +43,6 @@ public sealed class ProviderDto
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public bool Enabled { get; set; }
-    public bool IsActive { get; set; }
     public int TimeoutSeconds { get; set; }
     public int? MaxConcurrentStreams { get; set; }
     public bool IncludeVod { get; set; }
@@ -199,18 +197,6 @@ public sealed class RefreshPreviewRequest
 {
     public int? SampleSize { get; set; }
     public string? GroupContains { get; set; }
-}
-
-public sealed class SetProviderActiveRequest
-{
-    public bool IsActive { get; set; }
-}
-
-public sealed class ProviderActiveResponse
-{
-    public string ProviderId { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
-    public DateTime UpdatedUtc { get; set; }
 }
 
 public sealed class ConfigYamlProviderDto

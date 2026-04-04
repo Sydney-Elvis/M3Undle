@@ -5,6 +5,7 @@ public sealed class Profile
     public string ProfileId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public bool Enabled { get; set; }
+    public bool IsActive { get; set; }
     public string OutputName { get; set; } = string.Empty;
     public string MergeMode { get; set; } = string.Empty;
     public DateTime CreatedUtc { get; set; }

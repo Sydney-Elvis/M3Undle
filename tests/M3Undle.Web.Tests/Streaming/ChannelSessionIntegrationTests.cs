@@ -733,7 +733,6 @@ public sealed class ChannelSessionIntegrationTests
                 ProviderId = "provider-1",
                 Name = "Test Provider",
                 Enabled = true,
-                IsActive = true,
                 PlaylistUrl = "http://fake/playlist.m3u",
                 TimeoutSeconds = 30,
                 CreatedUtc = DateTime.UtcNow,

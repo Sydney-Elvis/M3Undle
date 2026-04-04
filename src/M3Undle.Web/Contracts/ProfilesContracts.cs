@@ -12,7 +12,6 @@ public sealed class ProfileProviderInfoDto
     public string Name { get; set; } = string.Empty;
     public int Priority { get; set; }
     public bool Enabled { get; set; }
-    public bool IsActive { get; set; }
 }
 
 public sealed class ProfilePageItemDto
@@ -22,6 +21,7 @@ public sealed class ProfilePageItemDto
     public string OutputName { get; set; } = string.Empty;
     public string MergeMode { get; set; } = string.Empty;
     public bool Enabled { get; set; }
+    public bool IsActive { get; set; }
     public DateTime CreatedUtc { get; set; }
     public List<ProfileProviderInfoDto> Providers { get; set; } = [];
     public DateTime? LastPublishedUtc { get; set; }
@@ -49,4 +49,11 @@ public sealed class ProfileDetailDto
 {
     public ProfilePageItemDto Profile { get; set; } = new();
     public List<ProfileSnapshotHistoryDto> History { get; set; } = [];
+}
+
+public sealed class ProfileActiveResponse
+{
+    public string ProfileId { get; set; } = string.Empty;
+    public bool IsActive { get; set; }
+    public DateTime UpdatedUtc { get; set; }
 }

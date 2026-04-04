@@ -39,11 +39,25 @@ else
               : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
               : "No output")
         </MudChip>
+        @if (profile.IsActive)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
+                     Icon="@Icons.Material.Filled.Star">Active</MudChip>
+        }
         @if (!profile.Enabled)
         {
             <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
         }
         <MudSpacer />
+        @if (!profile.IsActive)
+        {
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Success"
+                       Size="Size.Small"
+                       OnClick="SetActiveAsync">
+                Set Active
+            </MudButton>
+        }
         <MudButton Variant="Variant.Outlined"
                    StartIcon="@Icons.Material.Filled.FilterList"
                    Size="Size.Small"
@@ -173,17 +187,13 @@ else
                                     <td>@p.Name</td>
                                     <td>@p.Priority</td>
                                     <td>
-                                        @if (p.IsActive)
-                                        {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Active</MudChip>
-                                        }
-                                        else if (!p.Enabled)
+                                        @if (!p.Enabled)
                                         {
                                             <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
                                         }
                                         else
                                         {
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Standby</MudChip>
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Enabled</MudChip>
                                         }
                                     </td>
                                 </tr>
@@ -260,6 +270,22 @@ else
     private ProfileDetailDto? _detail;
     private bool _isLoading;
     private string? _loadError;
+
+    private async Task SetActiveAsync()
+    {
+        var name = _detail?.Profile.Name ?? ProfileId;
+        try
+        {
+            var error = await ProfilesService.SetProfileActiveAsync(ProfileId, CancellationToken.None);
+            if (error is not null) { Snackbar.Add(error, Severity.Error); return; }
+            Snackbar.Add($"Profile \"{name}\" is now active.", Severity.Success);
+            _detail = await ProfilesService.GetProfileDetailAsync(ProfileId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to set profile active: {ex.Message}", Severity.Error);
+        }
+    }
 
     private async Task ConfirmDeleteAsync()
     {

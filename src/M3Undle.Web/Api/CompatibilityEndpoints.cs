@@ -1028,9 +1028,16 @@ public static class CompatibilityEndpoints
 
         if (profileProvider is null)
         {
-            return await db.Providers
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            var activeProfileId = await db.Profiles.AsNoTracking()
+                .Where(x => x.IsActive)
+                .Select(x => x.ProfileId)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (activeProfileId is null) return null;
+            profileProvider = await db.ProfileProviders.AsNoTracking()
+                .Where(x => x.ProfileId == activeProfileId && x.Enabled)
+                .OrderBy(x => x.Priority)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (profileProvider is null) return null;
         }
 
         return await db.Providers
@@ -1045,8 +1052,8 @@ public static class CompatibilityEndpoints
     {
         var reasons = new List<string>();
 
-        if (!await db.Providers.AsNoTracking().AnyAsync(x => x.IsActive && x.Enabled, cancellationToken))
-            reasons.Add("no active provider");
+        if (!await db.Profiles.AsNoTracking().AnyAsync(x => x.IsActive && x.Enabled, cancellationToken))
+            reasons.Add("no active profile");
 
         if (!await db.Snapshots.AsNoTracking().AnyAsync(x => x.Status == "active", cancellationToken))
             reasons.Add("no active snapshot");
@@ -1094,9 +1101,21 @@ public static class CompatibilityEndpoints
                 .AsNoTracking()
                 .FirstOrDefaultAsync(x => x.Status == "active", cancellationToken);
 
-            var activeProvider = await db.Providers
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            var activeProfileId = await db.Profiles.AsNoTracking()
+                .Where(x => x.IsActive)
+                .Select(x => x.ProfileId)
+                .FirstOrDefaultAsync(cancellationToken);
+            Provider? activeProvider = null;
+            if (activeProfileId is not null)
+            {
+                var pp = await db.ProfileProviders.AsNoTracking()
+                    .Where(x => x.ProfileId == activeProfileId && x.Enabled)
+                    .OrderBy(x => x.Priority)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (pp is not null)
+                    activeProvider = await db.Providers.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.ProviderId == pp.ProviderId && x.Enabled, cancellationToken);
+            }
 
             FetchRunInfo? lastRefresh = null;
             if (activeProvider is not null)

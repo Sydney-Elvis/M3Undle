@@ -168,6 +168,8 @@ Within a group you can select individual channels and set per-channel overrides:
 - **Channel number** — explicit `tvg-chno` that takes precedence over auto-numbering
 - **Output group** — move a channel to a different output group without changing its source group
 
+Checking a channel in a pending manual-review group also promotes that group to **Include**. This keeps search-driven mapping usable: you can approve only the channels you checked without needing a second group-level click.
+
 **Channel Review Queue**
 
 The dedicated review page (`/channels/review`) lists pending channels across the selected profile and supports:
@@ -179,6 +181,8 @@ The dedicated review page (`/channels/review`) lists pending channels across the
 **Build Output**
 
 After making changes, use **Build Output** to update the published lineup. Changes to channel settings are pending until the next build.
+
+Technical note: excluded live groups are dropped earlier than snapshot composition. They are skipped during provider-channel sync and deactivated in the live catalog, so exclusion is the state that reduces later processing work. Pending groups still stay indexed so they remain reviewable.
 
 ---
 

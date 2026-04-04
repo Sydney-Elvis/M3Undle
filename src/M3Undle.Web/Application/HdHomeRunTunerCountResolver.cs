@@ -70,10 +70,11 @@ public sealed class HdHomeRunTunerCountResolver(
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        return db.Providers
+        return db.ProfileProviders
             .AsNoTracking()
-            .Where(x => x.IsActive && x.Enabled)
-            .Select(x => x.MaxConcurrentStreams)
+            .Where(pp => pp.Enabled && pp.Profile.IsActive && pp.Provider.Enabled)
+            .OrderBy(pp => pp.Priority)
+            .Select(pp => pp.Provider.MaxConcurrentStreams)
             .FirstOrDefault();
     }
 

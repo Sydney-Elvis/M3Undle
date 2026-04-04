@@ -5,7 +5,10 @@ using Microsoft.EntityFrameworkCore;
 
 namespace M3Undle.Web.Application;
 
-internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
+internal sealed class ProfilesPageService(
+    IServiceScopeFactory scopeFactory,
+    IRefreshTrigger refreshTrigger,
+    AppEventBus eventBus)
 {
     public async Task<List<ProfileStubDto>> GetProfileStubsAsync(CancellationToken ct)
     {
@@ -96,6 +99,58 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
         return null;
     }
 
+    public async Task<string?> SetProfileActiveAsync(string profileId, CancellationToken ct)
+    {
+        if (refreshTrigger.IsRefreshing)
+            return "A snapshot refresh is currently in progress. Please wait for it to finish.";
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var exists = await db.Profiles.AnyAsync(x => x.ProfileId == profileId, ct);
+        if (!exists)
+            return "Profile not found.";
+
+        var now = DateTime.UtcNow;
+
+        await db.Profiles
+            .Where(x => x.IsActive && x.ProfileId != profileId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, false)
+                .SetProperty(p => p.UpdatedUtc, now), ct);
+
+        await db.Profiles
+            .Where(x => x.ProfileId == profileId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, true)
+                .SetProperty(p => p.UpdatedUtc, now), ct);
+
+        eventBus.Publish(AppEventKind.ProviderActivated);
+        refreshTrigger.TriggerRefresh();
+
+        return null;
+    }
+
+    public async Task AutoActivateProfileIfNoneAsync(string profileId, CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var hasActive = await db.Profiles.AsNoTracking().AnyAsync(x => x.IsActive, ct);
+        if (hasActive)
+            return;
+
+        var now = DateTime.UtcNow;
+        await db.Profiles
+            .Where(x => x.ProfileId == profileId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, true)
+                .SetProperty(p => p.UpdatedUtc, now), ct);
+
+        eventBus.Publish(AppEventKind.ProviderActivated);
+        refreshTrigger.TriggerRefresh();
+    }
+
     public async Task<List<ProfilePageItemDto>> GetProfilesAsync(CancellationToken ct)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -158,12 +213,6 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
             .OrderBy(pp => pp.Priority)
             .ToListAsync(ct);
 
-        var activeProviderIds = await db.Providers
-            .AsNoTracking()
-            .Where(p => p.IsActive)
-            .Select(p => p.ProviderId)
-            .ToListAsync(ct);
-
         var activeSnapshots = await db.Snapshots
             .AsNoTracking()
             .Where(s => profileIds.Contains(s.ProfileId) && s.Status == "active")
@@ -220,7 +269,6 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
                     Name = pp.Provider.Name,
                     Priority = pp.Priority,
                     Enabled = pp.Enabled,
-                    IsActive = activeProviderIds.Contains(pp.ProviderId),
                 })
                 .ToList();
 
@@ -239,6 +287,7 @@ internal sealed class ProfilesPageService(IServiceScopeFactory scopeFactory)
                 OutputName = profile.OutputName,
                 MergeMode = profile.MergeMode,
                 Enabled = profile.Enabled,
+                IsActive = profile.IsActive,
                 CreatedUtc = profile.CreatedUtc,
                 Providers = providers,
                 LastPublishedUtc = snapshot?.CreatedUtc,

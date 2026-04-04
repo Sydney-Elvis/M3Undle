@@ -11,23 +11,21 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var provider = await db.Providers
+        var activeProfile = await db.Profiles
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, ct);
+            .Include(x => x.ProfileProviders)
+                .ThenInclude(pp => pp.Provider)
+            .FirstOrDefaultAsync(x => x.IsActive, ct);
 
-        if (provider is null)
+        if (activeProfile is null)
             return new ChannelMappingStatsDto();
 
-        var profileLink = await db.ProfileProviders
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(ct);
-
-        if (profileLink is null)
-            return new ChannelMappingStatsDto();
-
-        var profileId = profileLink.ProfileId;
+        var profileId = activeProfile.ProfileId;
+        var provider = activeProfile.ProfileProviders
+            .Where(pp => pp.Enabled)
+            .OrderBy(pp => pp.Priority)
+            .Select(pp => pp.Provider)
+            .FirstOrDefault(p => p.Enabled);
 
         var groupsIncluded = await db.ProfileGroupFilters
             .AsNoTracking()
@@ -85,19 +83,28 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
             .OrderByDescending(x => x.CreatedUtc)
             .FirstOrDefaultAsync(ct);
 
-        var lastFetchRun = await db.FetchRuns
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Status == "ok")
-            .OrderByDescending(x => x.StartedUtc)
-            .FirstOrDefaultAsync(ct);
+        int? channelsInProvider = null;
+        int vodGroups = 0;
+        int seriesGroups = 0;
 
-        var vodGroups = await db.ProviderGroups
-            .AsNoTracking()
-            .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", ct);
+        if (provider is not null)
+        {
+            var lastFetchRun = await db.FetchRuns
+                .AsNoTracking()
+                .Where(x => x.ProviderId == provider.ProviderId && x.Status == "ok")
+                .OrderByDescending(x => x.StartedUtc)
+                .FirstOrDefaultAsync(ct);
 
-        var seriesGroups = await db.ProviderGroups
-            .AsNoTracking()
-            .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", ct);
+            channelsInProvider = lastFetchRun?.ChannelCountSeen;
+
+            vodGroups = await db.ProviderGroups
+                .AsNoTracking()
+                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", ct);
+
+            seriesGroups = await db.ProviderGroups
+                .AsNoTracking()
+                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", ct);
+        }
 
         return new ChannelMappingStatsDto
         {
@@ -111,9 +118,9 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
             ChannelsInOutput = activeSnapshot?.LiveChannelCount ?? 0,
             VodItemsInOutput = activeSnapshot?.VodChannelCount ?? 0,
             SeriesItemsInOutput = activeSnapshot?.SeriesChannelCount ?? 0,
-            VodEnabled = provider.IncludeVod,
-            SeriesEnabled = provider.IncludeSeries,
-            ChannelsInProvider = lastFetchRun?.ChannelCountSeen,
+            VodEnabled = provider?.IncludeVod ?? false,
+            SeriesEnabled = provider?.IncludeSeries ?? false,
+            ChannelsInProvider = channelsInProvider,
             VodGroupsInProvider = vodGroups,
             SeriesGroupsInProvider = seriesGroups,
         };

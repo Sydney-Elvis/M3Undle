@@ -1,5 +1,6 @@
 @using M3Undle.Web.Contracts.Providers
 @inject M3Undle.Web.Application.ProviderPageService ProviderPageService
+@inject M3Undle.Web.Application.ProfilesPageService ProfilesPageService
 
 <MudDialog Style="min-width:680px">
     <DialogContent>
@@ -285,10 +286,6 @@
                                         <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center">
                                             <MudCheckBox T="bool" @bind-Value="selOpts!.IncludeVod" Label="Include VOD" />
                                             <MudCheckBox T="bool" @bind-Value="selOpts!.IncludeSeries" Label="Include Series" />
-                                            @if (!_importedProviders.Any(p => p.IsActive))
-                                            {
-                                                <MudCheckBox T="bool" @bind-Value="selOpts!.SetAsActive" Label="Set as active" />
-                                            }
                                         </MudStack>
 
                                         <MudSelect T="string" Label="Associated Profile"
@@ -590,6 +587,10 @@
                 return;
             }
 
+            var linkedProfileId = result.Provider?.AssociatedProfileIds.FirstOrDefault();
+            if (!string.IsNullOrEmpty(linkedProfileId))
+                await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
+
             await OnSaved.InvokeAsync();
             MudDialog.Close(DialogResult.Ok(true));
         }
@@ -662,8 +663,9 @@
             if (dto is not null)
             {
                 _importedProviders.Add(dto);
-                if (opts.SetAsActive)
-                    await ProviderPageService.SetProviderActiveAsync(dto.ProviderId, true, CancellationToken.None);
+                var linkedProfileId = dto.AssociatedProfileIds.FirstOrDefault();
+                if (!string.IsNullOrEmpty(linkedProfileId))
+                    await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
             }
             await OnSaved.InvokeAsync();
             MudDialog.Close(DialogResult.Ok(true));
@@ -726,7 +728,6 @@
     {
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
-        public bool SetAsActive { get; set; }
         public int? MaxConcurrentStreams { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }

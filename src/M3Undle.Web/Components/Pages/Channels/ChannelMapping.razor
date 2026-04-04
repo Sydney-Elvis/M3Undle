@@ -622,7 +622,7 @@ else
 
                         @if (pendingCount > 0)
                         {
-                            <MudTooltip Text="@($"{pendingCount} group{(pendingCount != 1 ? "s" : "")} are pending — click ✓ to accept them into the output")" Arrow="true">
+                            <MudTooltip Text="@($"{pendingCount} member group{(pendingCount != 1 ? "s" : "")} still need approval. Click ✓ to include every channel from those groups, or select channels inside them to approve only those picks.")" Arrow="true">
                                 <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text" Icon="@Icons.Material.Filled.Warning">
                                     @pendingCount pending
                                 </MudChip>
@@ -2789,6 +2789,10 @@ else
             })
             .ToList();
 
+        var shouldPromotePendingGroup =
+            items.Count > 0 &&
+            LineupReviewSemantics.IsGroupPending(filter.Decision, filter.IsNew);
+
         try
         {
             var updated = await ChannelMappingPageService.UpdateChannelSelectionsAsync(
@@ -2798,7 +2802,17 @@ else
                 _cts.Token);
 
             if (!updated)
+            {
                 Snackbar.Add("Channel save failed.", Severity.Error);
+                return;
+            }
+
+            if (shouldPromotePendingGroup)
+            {
+                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                filter.IsNew = false;
+                StateHasChanged();
+            }
         }
         catch (Exception ex)
         {

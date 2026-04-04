@@ -48,7 +48,7 @@
             @foreach (var p in _providers)
             {
                 <MudSelectItem T="ProviderListItemDto?" Value="@p">
-                    @p.Name@(p.IsActive ? " ★" : "")
+                    @p.Name
                 </MudSelectItem>
             }
         </MudSelect>
@@ -398,7 +398,7 @@ else
             // Auto-select active provider on first load
             if (_selectedProvider is null)
             {
-                var active = providers.FirstOrDefault(p => p.IsActive) ?? providers.FirstOrDefault();
+                var active = providers.FirstOrDefault();
                 if (active is not null)
                     await OnProviderChanged(active);
             }

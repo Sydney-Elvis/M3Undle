@@ -191,7 +191,6 @@ public sealed class ProviderPageService(
             UserAgent = configProvider.UserAgent,
             TimeoutSeconds = configProvider.TimeoutSeconds,
             Enabled = configProvider.Enabled,
-            IsActive = false,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
@@ -481,48 +480,6 @@ public sealed class ProviderPageService(
         using var logScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
         logger.LogInformation("Provider {ProviderId} enabled={Enabled}.", providerId, provider.Enabled);
         eventBus.Publish(AppEventKind.ProviderChanged);
-
-        return null;
-    }
-
-    public async Task<string?> SetProviderActiveAsync(string providerId, bool isActive, CancellationToken cancellationToken)
-    {
-        if (refreshTrigger.IsRefreshing)
-            return "A snapshot refresh is currently in progress. Please wait for it to finish.";
-
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var exists = await db.Providers.AnyAsync(x => x.ProviderId == providerId, cancellationToken);
-        if (!exists)
-            return "Provider not found.";
-
-        var now = DateTime.UtcNow;
-
-        if (isActive)
-        {
-            await db.Providers
-                .Where(x => x.IsActive && x.ProviderId != providerId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(p => p.IsActive, false)
-                    .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
-        }
-
-        await db.Providers
-            .Where(x => x.ProviderId == providerId)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.IsActive, isActive)
-                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
-
-        using var logScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
-        logger.LogInformation("Provider {ProviderId} set active={IsActive}.", providerId, isActive);
-        eventBus.Publish(AppEventKind.ProviderChanged);
-
-        if (isActive)
-        {
-            eventBus.Publish(AppEventKind.ProviderActivated);
-            refreshTrigger.TriggerRefresh();
-        }
 
         return null;
     }
@@ -938,7 +895,6 @@ public sealed class ProviderPageService(
                     HeadersJson = provider.HeadersJson,
                     UserAgent = provider.UserAgent,
                     Enabled = provider.Enabled,
-                    IsActive = provider.IsActive,
                     TimeoutSeconds = provider.TimeoutSeconds,
                     MaxConcurrentStreams = provider.MaxConcurrentStreams,
                     IncludeVod = provider.IncludeVod,
