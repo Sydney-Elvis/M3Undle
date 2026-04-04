@@ -468,20 +468,13 @@ public sealed class SnapshotHandlingTests
                 seriesFilter.Decision = "exclude";
                 seriesFilter.UpdatedUtc = DateTime.UtcNow;
 
-                var newsChannels = await edit.ProviderChannels
-                    .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == "News" && x.ContentType == "live")
+                var newsChannels = await edit.ProfileGroupChannelFilters
+                    .Where(x => x.ProfileGroupFilterId == newsFilter.ProfileGroupFilterId)
                     .ToListAsync();
-                foreach (var ch in newsChannels)
+                foreach (var cf in newsChannels)
                 {
-                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                    {
-                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                        ProfileGroupFilterId = newsFilter.ProfileGroupFilterId,
-                        ProviderChannelId = ch.ProviderChannelId,
-                        State = LineupReviewSemantics.ChannelStateIncluded,
-                        CreatedUtc = DateTime.UtcNow,
-                        UpdatedUtc = DateTime.UtcNow,
-                    });
+                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
+                    cf.UpdatedUtc = DateTime.UtcNow;
                 }
 
                 await edit.SaveChangesAsync();
@@ -570,20 +563,13 @@ public sealed class SnapshotHandlingTests
                 filter.IsNew = false;
                 filter.UpdatedUtc = DateTime.UtcNow;
 
-                var foxChannels = await edit.ProviderChannels
-                    .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == "USA FOX" && x.ContentType == "live")
+                var foxChannels = await edit.ProfileGroupChannelFilters
+                    .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
                     .ToListAsync();
-                foreach (var ch in foxChannels)
+                foreach (var cf in foxChannels)
                 {
-                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                    {
-                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                        ProfileGroupFilterId = filter.ProfileGroupFilterId,
-                        ProviderChannelId = ch.ProviderChannelId,
-                        State = LineupReviewSemantics.ChannelStateIncluded,
-                        CreatedUtc = DateTime.UtcNow,
-                        UpdatedUtc = DateTime.UtcNow,
-                    });
+                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
+                    cf.UpdatedUtc = DateTime.UtcNow;
                 }
 
                 await edit.SaveChangesAsync();
@@ -642,21 +628,13 @@ public sealed class SnapshotHandlingTests
                     filter.IsNew = false;
                     filter.UpdatedUtc = DateTime.UtcNow;
 
-                    var groupName = filter.ProviderGroup.RawName;
-                    var groupChannels = await edit.ProviderChannels
-                        .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == groupName && x.ContentType == "live")
+                    var existingChannelFilters = await edit.ProfileGroupChannelFilters
+                        .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
                         .ToListAsync();
-                    foreach (var ch in groupChannels)
+                    foreach (var cf in existingChannelFilters)
                     {
-                        edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                        {
-                            ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                            ProfileGroupFilterId = filter.ProfileGroupFilterId,
-                            ProviderChannelId = ch.ProviderChannelId,
-                            State = LineupReviewSemantics.ChannelStateIncluded,
-                            CreatedUtc = DateTime.UtcNow,
-                            UpdatedUtc = DateTime.UtcNow,
-                        });
+                        cf.State = LineupReviewSemantics.ChannelStateIncluded;
+                        cf.UpdatedUtc = DateTime.UtcNow;
                     }
                 }
 

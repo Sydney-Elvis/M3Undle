@@ -97,8 +97,10 @@ public sealed class CustomGroupPageService(IServiceScopeFactory scopeFactory, Ap
         if (request.Decision is not null)
         {
             var d = request.Decision.Trim().ToLowerInvariant();
-            if (d is "include" or "exclude" or "pending")
+            if (d is "include" or "exclude")
                 group.Decision = d;
+            else if (d is "pending" or "hold")
+                group.Decision = "include";
         }
 
         if (request.ChannelMode is not null)

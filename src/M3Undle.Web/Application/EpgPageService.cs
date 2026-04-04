@@ -407,9 +407,7 @@ public sealed class EpgPageService(
             .AsNoTracking()
             .Where(f => f.ProfileGroupFilter.ProfileId == profileId &&
                         f.State == LineupReviewSemantics.ChannelStateIncluded &&
-                        (f.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionInclude
-                         || (f.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionLegacyHold
-                             && !f.ProfileGroupFilter.IsNew)))
+                        f.ProfileGroupFilter.Decision != LineupReviewSemantics.GroupDecisionExclude)
             .Select(f => f.ProviderChannelId)
             .Distinct()
             .ToListAsync(cancellationToken);

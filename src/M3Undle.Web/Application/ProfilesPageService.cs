@@ -224,8 +224,7 @@ internal sealed class ProfilesPageService(
             .Include(x => x.ProviderGroup)
             .Where(x => profileIds.Contains(x.ProfileId)
                         && x.ProviderGroup.ContentType == "live"
-                        && (x.Decision == LineupReviewSemantics.GroupDecisionPending
-                            || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew)))
+                        && x.IsNew)
             .GroupBy(x => x.ProfileId)
             .Select(g => new { ProfileId = g.Key, Count = g.Count() })
             .ToListAsync(ct);

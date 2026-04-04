@@ -29,8 +29,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew))
+                             && x.IsNew
                              && x.TrackNewChannels, ct);
 
         var channelsPendingReview = await db.ProfileGroupChannelFilters

@@ -13,7 +13,7 @@ namespace M3Undle.Web.Tests.Application;
 public sealed class ChannelMappingPageServiceTests
 {
     [TestMethod]
-    public async Task UpdateChannelSelectionsAsync_SelectingChannelInPendingManualReviewGroup_PromotesGroupToInclude()
+    public async Task UpdateChannelSelectionsAsync_SelectingChannelInNewManualReviewGroup_KeepsGroupIncluded()
     {
         await using var fixture = await CreateFixtureAsync();
         await SeedBasicMappingGraphAsync(fixture);
@@ -47,7 +47,6 @@ public sealed class ChannelMappingPageServiceTests
 
         var filter = await verifyDb.ProfileGroupFilters.SingleAsync(x => x.ProfileGroupFilterId == "filter-1");
         Assert.AreEqual(LineupReviewSemantics.GroupDecisionInclude, filter.Decision);
-        Assert.IsFalse(filter.IsNew);
 
         var row = await verifyDb.ProfileGroupChannelFilters.SingleAsync(x => x.ProfileGroupFilterId == "filter-1");
         Assert.AreEqual("channel-1", row.ProviderChannelId);
@@ -168,7 +167,7 @@ public sealed class ChannelMappingPageServiceTests
             ProfileGroupFilterId = "filter-1",
             ProfileId = "profile-1",
             ProviderGroupId = "group-1",
-            Decision = LineupReviewSemantics.GroupDecisionPending,
+            Decision = LineupReviewSemantics.GroupDecisionInclude,
             IsNew = true,
             ChannelMode = LineupReviewSemantics.GroupModeManualReview,
             TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,

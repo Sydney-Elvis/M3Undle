@@ -71,8 +71,7 @@ public static class ChannelFilterApiEndpoints
             .ToListAsync(cancellationToken);
 
         var dtos = filters
-            .OrderBy(f => LineupReviewSemantics.IsGroupPending(f.Decision, f.IsNew) ? 0 : 1)
-            .ThenByDescending(f => f.IsNew)
+            .OrderByDescending(f => f.IsNew)
             .ThenBy(f => f.ProviderGroup.RawName, StringComparer.OrdinalIgnoreCase)
             .Select(f => ToDto(f))
             .ToList();
@@ -104,7 +103,6 @@ public static class ChannelFilterApiEndpoints
             if (normalizedDecision is not null)
             {
                 filter.Decision = normalizedDecision;
-                filter.IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending;
             }
         }
 
@@ -125,11 +123,6 @@ public static class ChannelFilterApiEndpoints
         if (request.ClearIsNew)
         {
             filter.IsNew = false;
-            if (request.Decision is null
-                && LineupReviewSemantics.NormalizeGroupDecision(filter.Decision, true) == LineupReviewSemantics.GroupDecisionPending)
-            {
-                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
-            }
         }
 
         if (request.ClearOutputName)
@@ -208,7 +201,6 @@ public static class ChannelFilterApiEndpoints
             .Where(x => x.ProfileId == profileId && x.IsNew)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.IsNew, false)
-                .SetProperty(x => x.Decision, LineupReviewSemantics.GroupDecisionInclude)
                 .SetProperty(x => x.UpdatedUtc, DateTime.UtcNow), cancellationToken);
 
         return TypedResults.Ok((object)new { updated });
@@ -224,7 +216,7 @@ public static class ChannelFilterApiEndpoints
     {
         var normalizedDecision = NormalizeRequestedDecision(request.Decision);
         if (normalizedDecision is null)
-            return TypedResults.BadRequest("Decision must be 'pending', 'include', or 'exclude'.");
+            return TypedResults.BadRequest("Decision must be 'include' or 'exclude'.");
 
         if (request.ProviderGroupIds.Count == 0)
             return TypedResults.Ok((object)new { updated = 0 });
@@ -243,7 +235,7 @@ public static class ChannelFilterApiEndpoints
             if (existingByGroupId.TryGetValue(groupId, out var filter))
             {
                 filter.Decision = normalizedDecision;
-                filter.IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending;
+                filter.IsNew = false;
                 filter.UpdatedUtc = now;
             }
             else
@@ -254,7 +246,7 @@ public static class ChannelFilterApiEndpoints
                     ProfileId = profileId,
                     ProviderGroupId = groupId,
                     Decision = normalizedDecision,
-                    IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending,
+                    IsNew = false,
                     ChannelMode = LineupReviewSemantics.GroupModeManualReview,
                     TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
                     TrackNewChannels = false,
@@ -728,8 +720,7 @@ public static class ChannelFilterApiEndpoints
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId
                              && x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew))
+                             && x.Decision != LineupReviewSemantics.GroupDecisionExclude
                              && x.ChannelFilters.Any(), cancellationToken);
 
         var groupsHold = await db.ProfileGroupFilters
@@ -737,8 +728,7 @@ public static class ChannelFilterApiEndpoints
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId
                              && x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew))
+                             && x.IsNew
                              && !x.ChannelFilters.Any(), cancellationToken);
 
         var groupsNew = await db.ProfileGroupFilters
@@ -746,8 +736,7 @@ public static class ChannelFilterApiEndpoints
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId
                              && x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew))
+                             && x.IsNew
                              && x.TrackNewChannels, cancellationToken);
 
         var pendingChannelsTotal = await db.ProfileGroupChannelFilters
@@ -840,7 +829,7 @@ public static class ChannelFilterApiEndpoints
         ChannelCount = f.ProviderGroup.ChannelCount,
         SelectedChannelCount = f.ChannelFilters.Count,
         ProviderName = f.ProviderGroup.Provider.Name,
-        Decision = LineupReviewSemantics.NormalizeGroupDecision(f.Decision, f.IsNew),
+        Decision = LineupReviewSemantics.NormalizeGroupDecision(f.Decision),
         IsNew = f.IsNew,
         ChannelMode = f.ChannelMode,
         TrackingPolicy = LineupReviewSemantics.NormalizeTrackingPolicy(f.TrackingPolicy),
@@ -862,7 +851,7 @@ public static class ChannelFilterApiEndpoints
         {
             LineupReviewSemantics.GroupDecisionExclude => LineupReviewSemantics.GroupDecisionExclude,
             LineupReviewSemantics.GroupDecisionInclude => LineupReviewSemantics.GroupDecisionInclude,
-            LineupReviewSemantics.GroupDecisionPending => LineupReviewSemantics.GroupDecisionPending,
+            LineupReviewSemantics.GroupDecisionLegacyPending => LineupReviewSemantics.GroupDecisionInclude,
             LineupReviewSemantics.GroupDecisionLegacyHold => LineupReviewSemantics.GroupDecisionInclude,
             _ => null,
         };

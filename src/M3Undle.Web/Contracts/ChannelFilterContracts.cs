@@ -12,7 +12,7 @@ public sealed class GroupFilterDto
     public int? ChannelCount { get; set; }
     public int SelectedChannelCount { get; set; }
     public string ProviderName { get; set; } = string.Empty;
-    public string Decision { get; set; } = "pending";
+    public string Decision { get; set; } = "include";
     public bool IsNew { get; set; }
     public string ChannelMode { get; set; } = "select";
     public string TrackingPolicy { get; set; } = "review"; // review | notify | auto_add_all | auto_add_matching

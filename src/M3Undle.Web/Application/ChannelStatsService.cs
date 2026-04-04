@@ -32,24 +32,21 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId
                              && x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew)), ct);
+                             && x.Decision != LineupReviewSemantics.GroupDecisionExclude, ct);
 
         var groupsHold = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId
                              && x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew)), ct);
+                             && x.IsNew, ct);
 
         var groupsNew = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProfileId == profileId
                              && x.ProviderGroup.ContentType == "live"
-                             && (x.Decision == LineupReviewSemantics.GroupDecisionPending
-                                 || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && x.IsNew))
+                             && x.IsNew
                              && x.TrackNewChannels, ct);
 
         var pendingChannelsTotal = await db.ProfileGroupChannelFilters

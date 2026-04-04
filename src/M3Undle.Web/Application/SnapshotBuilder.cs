@@ -399,7 +399,7 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var includedGroups = groupFilters
-            .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision, f.IsNew))
+            .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision))
             .ToDictionary(
             f => f.ProviderGroup.RawName,
             f => new GroupFilterConfig(
@@ -921,7 +921,7 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var includedFilterLookup = includedFilters
-            .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision, f.IsNew))
+            .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision))
             .ToDictionary(
                 f => f.ProviderGroup.RawName,
                 f => new GroupFilterConfig(
@@ -1272,7 +1272,7 @@ public sealed class SnapshotBuilder(
                 ProfileGroupFilterId = Guid.NewGuid().ToString(),
                 ProfileId = profileId,
                 ProviderGroupId = id,
-                Decision = LineupReviewSemantics.GroupDecisionPending,
+                Decision = LineupReviewSemantics.GroupDecisionInclude,
                 IsNew = true,
                 ChannelMode = LineupReviewSemantics.GroupModeManualReview,
                 TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
@@ -1286,7 +1286,7 @@ public sealed class SnapshotBuilder(
         {
             db.ProfileGroupFilters.AddRange(newFilters);
             await db.SaveChangesAsync(cancellationToken);
-            logger.LogInformation("Created {Count} new group filter(s) (pending review) for profile {ProfileId}.", newFilters.Count, profileId);
+            logger.LogInformation("Created {Count} new group filter(s) (auto-included) for profile {ProfileId}.", newFilters.Count, profileId);
         }
     }
 
@@ -1306,7 +1306,7 @@ public sealed class SnapshotBuilder(
 
         var candidateFilters = manualReviewFilters
             .Where(f =>
-                LineupReviewSemantics.IsGroupIncluded(f.Decision, f.IsNew)
+                LineupReviewSemantics.IsGroupIncluded(f.Decision)
                 && LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode) == LineupReviewSemantics.GroupModeManualReview
                 && LineupReviewSemantics.ShouldQueuePending(f.TrackingPolicy))
             .ToList();

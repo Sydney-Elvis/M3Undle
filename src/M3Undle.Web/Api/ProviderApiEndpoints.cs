@@ -145,8 +145,7 @@ public static class ProviderApiEndpoints
 
         var groupFilters = await db.ProfileGroupFilters
             .Where(x => x.ProfileId == profileId
-                        && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
-                            || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew)))
+                        && x.Decision != LineupReviewSemantics.GroupDecisionExclude)
             .ToListAsync(cancellationToken);
 
         if (groupFilters.Count == 0)

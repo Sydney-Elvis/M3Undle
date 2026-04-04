@@ -73,7 +73,7 @@
                         @foreach (var id in context.AssociatedProfileIds)
                         {
                             var profileName = _profiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id;
-                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">@profileName</MudChip>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined" Href="@($"/profiles/{id}")">@profileName</MudChip>
                         }
                     }
                 </MudTd>

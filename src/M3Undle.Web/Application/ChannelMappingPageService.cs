@@ -42,8 +42,7 @@ public sealed class ChannelMappingPageService(
             .ToListAsync(cancellationToken);
 
         return filters
-            .OrderBy(f => LineupReviewSemantics.IsGroupPending(f.Decision, f.IsNew) ? 0 : 1)
-            .ThenByDescending(f => f.IsNew)
+            .OrderByDescending(f => f.IsNew)
             .ThenBy(f => f.ProviderGroup.RawName, StringComparer.OrdinalIgnoreCase)
             .Select(ToDto)
             .ToList();
@@ -76,7 +75,6 @@ public sealed class ChannelMappingPageService(
             if (normalized is not null)
             {
                 filter.Decision = normalized;
-                filter.IsNew = normalized == LineupReviewSemantics.GroupDecisionPending;
             }
         }
 
@@ -94,11 +92,6 @@ public sealed class ChannelMappingPageService(
         if (request.ClearIsNew)
         {
             filter.IsNew = false;
-            if (request.Decision is null
-                && LineupReviewSemantics.NormalizeGroupDecision(filter.Decision, true) == LineupReviewSemantics.GroupDecisionPending)
-            {
-                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
-            }
         }
 
         if (request.ClearOutputName)
@@ -152,7 +145,6 @@ public sealed class ChannelMappingPageService(
             .Where(x => x.ProfileId == profileId && x.IsNew)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.IsNew, false)
-                .SetProperty(x => x.Decision, LineupReviewSemantics.GroupDecisionInclude)
                 .SetProperty(x => x.UpdatedUtc, DateTime.UtcNow), cancellationToken);
     }
 
@@ -186,7 +178,7 @@ public sealed class ChannelMappingPageService(
             if (existingByGroupId.TryGetValue(groupId, out var filter))
             {
                 filter.Decision = normalizedDecision;
-                filter.IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending;
+                filter.IsNew = false;
                 filter.UpdatedUtc = now;
             }
             else
@@ -197,7 +189,7 @@ public sealed class ChannelMappingPageService(
                     ProfileId = profileId,
                     ProviderGroupId = groupId,
                     Decision = normalizedDecision,
-                    IsNew = normalizedDecision == LineupReviewSemantics.GroupDecisionPending,
+                    IsNew = false,
                     ChannelMode = LineupReviewSemantics.GroupModeManualReview,
                     TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
                     TrackNewChannels = false,
@@ -379,15 +371,6 @@ public sealed class ChannelMappingPageService(
         var hasExplicitInclude = request.Channels.Any(x =>
             LineupReviewSemantics.NormalizeChannelState(x.State) == LineupReviewSemantics.ChannelStateIncluded);
 
-        // Selecting a channel in a pending manual-review group should make that group publishable.
-        if (filter.ChannelMode == LineupReviewSemantics.GroupModeManualReview
-            && hasExplicitInclude
-            && LineupReviewSemantics.IsGroupPending(filter.Decision, filter.IsNew))
-        {
-            filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
-            filter.IsNew = false;
-        }
-
         filter.UpdatedUtc = now;
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
@@ -417,7 +400,7 @@ public sealed class ChannelMappingPageService(
             ProviderGroupLastSeen = f.ProviderGroup.LastSeenUtc,
             ProviderGroupActive = f.ProviderGroup.Active,
             ProviderName = f.ProviderGroup.Provider?.Name ?? string.Empty,
-            Decision = LineupReviewSemantics.NormalizeGroupDecision(f.Decision, f.IsNew),
+            Decision = LineupReviewSemantics.NormalizeGroupDecision(f.Decision),
             IsNew = f.IsNew,
             OutputName = f.OutputName,
             AutoNumStart = f.AutoNumStart,
@@ -442,7 +425,7 @@ public sealed class ChannelMappingPageService(
         {
             LineupReviewSemantics.GroupDecisionExclude => LineupReviewSemantics.GroupDecisionExclude,
             LineupReviewSemantics.GroupDecisionInclude => LineupReviewSemantics.GroupDecisionInclude,
-            LineupReviewSemantics.GroupDecisionPending => LineupReviewSemantics.GroupDecisionPending,
+            LineupReviewSemantics.GroupDecisionLegacyPending => LineupReviewSemantics.GroupDecisionInclude,
             LineupReviewSemantics.GroupDecisionLegacyHold => LineupReviewSemantics.GroupDecisionInclude,
             _ => null,
         };

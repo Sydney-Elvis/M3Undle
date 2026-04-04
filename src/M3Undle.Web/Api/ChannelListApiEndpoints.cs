@@ -140,8 +140,7 @@ public static class ChannelListApiEndpoints
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
-                        && (x.Decision == LineupReviewSemantics.GroupDecisionInclude
-                            || (x.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.IsNew))
+                        && x.Decision != LineupReviewSemantics.GroupDecisionExclude
                         && x.ChannelFilters.Any())
             .Select(x => x.OutputName ?? x.ProviderGroup.RawName)
             .Distinct()
@@ -222,8 +221,7 @@ public static class ChannelListApiEndpoints
             .ThenInclude(f => f.ProviderGroup)
             .Include(x => x.ProviderChannel)
             .Where(x => x.ProfileGroupFilter.ProfileId == profileId
-                        && (x.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionInclude
-                            || (x.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionLegacyHold && !x.ProfileGroupFilter.IsNew))
+                        && x.ProfileGroupFilter.Decision != LineupReviewSemantics.GroupDecisionExclude
                         && x.State == LineupReviewSemantics.ChannelStateIncluded
                         && x.ProviderChannel.Active
                         && x.ProviderChannel.ContentType == "live")

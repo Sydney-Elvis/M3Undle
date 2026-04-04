@@ -174,7 +174,7 @@ else
               (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
             .ToList();
         var excluded = liveFilters.Where(IsExcluded).ToList();
-        var newCount = liveFilters.Count(IsPending);
+        var newCount = liveFilters.Count(f => f.IsNew);
         var chSelected = mapped.Sum(f =>
             _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
                 ? sel.Count(s => s.Value)
@@ -382,14 +382,7 @@ else
                             </MudText>
                         </MudTooltip>
 
-                        <!-- Include / Exclude buttons -->
-                        <MudTooltip Text="@(IsIncluded(filter) ? "Remove from lineup" : "Include group in lineup")" Arrow="true">
-                            <MudIconButton Icon="@(IsIncluded(filter) ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.CheckCircle)"
-                                           Size="Size.Small"
-                                           Color="@(IsIncluded(filter) ? Color.Success : Color.Default)"
-                                           OnClick="@(() => SetDecisionAsync(filter, IsIncluded(filter) ? LineupReviewSemantics.GroupDecisionPending : LineupReviewSemantics.GroupDecisionInclude))"
-                                           Disabled="_busyFilters.Contains(filterId)" />
-                        </MudTooltip>
+                        <!-- Exclude button -->
                         <MudTooltip Text="@(isExcluded ? "Remove exclusion" : "Exclude group")" Arrow="true">
                             <MudIconButton Icon="@(isExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
@@ -576,7 +569,7 @@ else
                 var selectedChannels = allMembersLoaded
                     ? parent.Members.Sum(m => _channelSelections.TryGetValue(m.ProfileGroupFilterId, out var mSel) ? mSel.Count(s => s.Value) : 0)
                     : -1;
-                var pendingCount = parent.Members.Count(IsPending);
+                var pendingCount = parent.Members.Count(m => m.IsNew);
                 var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
@@ -622,21 +615,14 @@ else
 
                         @if (pendingCount > 0)
                         {
-                            <MudTooltip Text="@($"{pendingCount} member group{(pendingCount != 1 ? "s" : "")} still need approval. Click ✓ to include every channel from those groups, or select channels inside them to approve only those picks.")" Arrow="true">
-                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text" Icon="@Icons.Material.Filled.Warning">
-                                    @pendingCount pending
+                            <MudTooltip Text="@($"{pendingCount} newly discovered member group{(pendingCount != 1 ? "s" : "")}.")" Arrow="true">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Icon="@Icons.Material.Filled.FiberNew">
+                                    @pendingCount new
                                 </MudChip>
                             </MudTooltip>
                         }
 
-                        <!-- Include / Exclude buttons (bulk) -->
-                        <MudTooltip Text="@(parent.Members.All(IsIncluded) ? "Remove all from lineup" : "Include all member groups")" Arrow="true">
-                            <MudIconButton Icon="@(parent.Members.All(IsIncluded) ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.CheckCircle)"
-                                           Size="Size.Small"
-                                           Color="@(parent.Members.All(IsIncluded) ? Color.Success : Color.Default)"
-                                           OnClick="@(() => ToggleParentIncludeAsync(parent))"
-                                           Disabled="@isBusy" />
-                        </MudTooltip>
+                        <!-- Exclude button (bulk) -->
                         <MudTooltip Text="@(allExcluded ? "Remove exclusion" : "Exclude all member groups")" Arrow="true">
                             <MudIconButton Icon="@(allExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
@@ -873,7 +859,6 @@ else
                 var cgLinksExpanded = _cgLinksExpanded.Contains(cg.CustomGroupId);
                 var cgBusy = _cgBusy.Contains(cg.CustomGroupId);
                 var cgIsExcluded = IsCgExcluded(cg);
-                var cgIsPending = IsCgPending(cg);
                 var cgRowStyle = cgIsExcluded ? "opacity:0.55;" : string.Empty;
                 var cgChannels = _cgChannelCache.GetValueOrDefault(cg.CustomGroupId) ?? [];
                 var cgLinks = _cgLinksCache.GetValueOrDefault(cg.CustomGroupId) ?? [];
@@ -933,18 +918,11 @@ else
                             @cg.SelectedChannelCount/@cg.ChannelCount ch
                         </MudText>
 
-                        <MudTooltip Text="@(!cgIsExcluded && !cgIsPending ? "Remove from lineup" : "Include group in lineup")" Arrow="true">
-                            <MudIconButton Icon="@(!cgIsExcluded && !cgIsPending ? Icons.Material.Filled.CheckCircle : Icons.Material.Outlined.CheckCircle)"
-                                           Size="Size.Small"
-                                           Color="@(!cgIsExcluded && !cgIsPending ? Color.Success : Color.Default)"
-                                           OnClick="@(() => SetCgDecisionAsync(cg, !cgIsExcluded && !cgIsPending ? "pending" : "include"))"
-                                           Disabled="@cgBusy" />
-                        </MudTooltip>
                         <MudTooltip Text="@(cgIsExcluded ? "Remove exclusion" : "Exclude group")" Arrow="true">
                             <MudIconButton Icon="@(cgIsExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
                                            Size="Size.Small"
                                            Color="@(cgIsExcluded ? Color.Error : Color.Default)"
-                                           OnClick="@(() => SetCgDecisionAsync(cg, cgIsExcluded ? "pending" : "exclude"))"
+                                           OnClick="@(() => SetCgDecisionAsync(cg, cgIsExcluded ? "include" : "exclude"))"
                                            Disabled="@cgBusy" />
                         </MudTooltip>
 
@@ -1369,11 +1347,8 @@ else
     private static bool IsExcluded(GroupFilterDto filter) =>
         string.Equals(filter.Decision, LineupReviewSemantics.GroupDecisionExclude, StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsPending(GroupFilterDto filter) =>
-        string.Equals(filter.Decision, LineupReviewSemantics.GroupDecisionPending, StringComparison.OrdinalIgnoreCase);
-
     private static bool IsIncluded(GroupFilterDto filter) =>
-        !IsExcluded(filter) && !IsPending(filter);
+        !IsExcluded(filter);
 
     private static bool IsAutoMode(GroupFilterDto filter) =>
         string.Equals(
@@ -1425,18 +1400,17 @@ else
                 (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0);
 
             bool FilterMatchesGroup(GroupFilterDto f) =>
+                IsExcluded(f) ? showExclude :
                 showAll ||
                 (showUsed     && IsIncluded(f) && IsUsed(f)) ||
                 (showUnmapped && IsIncluded(f) && !IsUsed(f)) ||
-                (showExclude  && IsExcluded(f)) ||
-                (showNew      && IsPending(f));
+                (showNew      && f.IsNew);
 
             bool CgMatchesFilter(CustomGroupDto cg) =>
+                IsCgExcluded(cg) ? showExclude :
                 showAll ||
                 (showUsed     && IsCgIncluded(cg) && cg.SelectedChannelCount > 0) ||
-                (showUnmapped && IsCgIncluded(cg) && cg.SelectedChannelCount == 0) ||
-                (showExclude  && IsCgExcluded(cg)) ||
-                (showNew      && IsCgPending(cg));
+                (showUnmapped && IsCgIncluded(cg) && cg.SelectedChannelCount == 0);
 
             Func<object, bool> decisionMatch = o => o switch
             {
@@ -1458,12 +1432,12 @@ else
                                             && ((showUsed && IsIncluded(f) && IsUsed(f))
                                                 || (showUnmapped && IsIncluded(f) && !IsUsed(f))
                                                 || (showExclude && IsExcluded(f))
-                                                || (showNew && IsPending(f))),
+                                                || (showNew && f.IsNew)),
                         VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
                                                                 && ((showUsed && IsIncluded(m) && IsUsed(m))
                                                                     || (showUnmapped && IsIncluded(m) && !IsUsed(m))
                                                                     || (showExclude && IsExcluded(m))
-                                                                    || (showNew && IsPending(m)))),
+                                                                    || (showNew && m.IsNew))),
                         _ => false,
                     };
                 };
@@ -1502,21 +1476,21 @@ else
     private void RebuildDisplayOrder()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var entries = new List<(string Key, string SortName, bool IsPending)>();
+        var entries = new List<(string Key, string SortName, bool IsNew)>();
 
         foreach (var f in _allFilters.Where(f => f.ProviderGroupContentType == "live"))
         {
             var key = f.OutputName is not null ? $"parent:{f.OutputName}" : f.ProfileGroupFilterId;
             var sortName = f.OutputName ?? f.ProviderGroupRawName;
             if (seen.Add(key))
-                entries.Add((key, sortName, IsPending(f)));
+                entries.Add((key, sortName, f.IsNew));
         }
 
         foreach (var cg in _customGroups)
-            entries.Add(($"cg:{cg.CustomGroupId}", cg.Name, IsCgPending(cg)));
+            entries.Add(($"cg:{cg.CustomGroupId}", cg.Name, false));
 
         _displayOrderIds = entries
-            .OrderBy(e => e.IsPending ? 0 : 1)
+            .OrderBy(e => e.IsNew ? 0 : 1)
             .ThenBy(e => e.SortName, StringComparer.OrdinalIgnoreCase)
             .Select(e => e.Key)
             .ToList();
@@ -1848,7 +1822,6 @@ else
             }
 
             filter.Decision = decision;
-            filter.IsNew = string.Equals(decision, LineupReviewSemantics.GroupDecisionPending, StringComparison.OrdinalIgnoreCase);
             _sessionChangedFilterIds.Add(filterId);
             StateHasChanged();
         }
@@ -1898,7 +1871,6 @@ else
             foreach (var f in _allFilters.Where(f => groupIdSet.Contains(f.ProviderGroupId)))
             {
                 f.Decision = decision;
-                f.IsNew = string.Equals(decision, LineupReviewSemantics.GroupDecisionPending, StringComparison.OrdinalIgnoreCase);
                 _sessionChangedFilterIds.Add(f.ProfileGroupFilterId);
             }
 
@@ -2003,8 +1975,6 @@ else
         await PatchFilterAsync(filter, req, f =>
         {
             f.IsNew = false;
-            if (IsPending(f))
-                f.Decision = LineupReviewSemantics.GroupDecisionInclude;
         });
     }
 
@@ -2026,8 +1996,6 @@ else
             foreach (var f in _allFilters)
             {
                 f.IsNew = false;
-                if (IsPending(f))
-                    f.Decision = LineupReviewSemantics.GroupDecisionInclude;
             }
 
             EventBus.Publish(AppEventKind.GroupFiltersChanged);
@@ -2331,15 +2299,7 @@ else
     private async Task ToggleParentDecisionAsync(VirtualParent parent, string decision)
     {
         var allMatch = parent.Members.All(m => m.Decision == decision);
-        var newDecision = allMatch ? LineupReviewSemantics.GroupDecisionPending : decision;
-        await Task.WhenAll(parent.Members.Select(m => SetDecisionAsync(m, newDecision)));
-    }
-
-    private async Task ToggleParentIncludeAsync(VirtualParent parent)
-    {
-        var newDecision = parent.Members.All(IsIncluded)
-            ? LineupReviewSemantics.GroupDecisionPending
-            : LineupReviewSemantics.GroupDecisionInclude;
+        var newDecision = allMatch ? LineupReviewSemantics.GroupDecisionInclude : decision;
         await Task.WhenAll(parent.Members.Select(m => SetDecisionAsync(m, newDecision)));
     }
 
@@ -2789,10 +2749,6 @@ else
             })
             .ToList();
 
-        var shouldPromotePendingGroup =
-            items.Count > 0 &&
-            LineupReviewSemantics.IsGroupPending(filter.Decision, filter.IsNew);
-
         try
         {
             var updated = await ChannelMappingPageService.UpdateChannelSelectionsAsync(
@@ -2805,13 +2761,6 @@ else
             {
                 Snackbar.Add("Channel save failed.", Severity.Error);
                 return;
-            }
-
-            if (shouldPromotePendingGroup)
-            {
-                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
-                filter.IsNew = false;
-                StateHasChanged();
             }
         }
         catch (Exception ex)
@@ -3240,11 +3189,8 @@ else
     private static bool IsCgExcluded(CustomGroupDto cg) =>
         string.Equals(cg.Decision, "exclude", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsCgPending(CustomGroupDto cg) =>
-        string.Equals(cg.Decision, "pending", StringComparison.OrdinalIgnoreCase);
-
     private static bool IsCgIncluded(CustomGroupDto cg) =>
-        !IsCgExcluded(cg) && !IsCgPending(cg);
+        !IsCgExcluded(cg);
 
     private Color GetSettingsButtonColor(string? trackingPolicy, string? trackingKeywords, string targetId)
     {

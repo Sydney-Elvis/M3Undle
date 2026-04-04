@@ -2,9 +2,11 @@ namespace M3Undle.Web.Application;
 
 internal static class LineupReviewSemantics
 {
-    public const string GroupDecisionPending = "pending";
     public const string GroupDecisionInclude = "include";
     public const string GroupDecisionExclude = "exclude";
+
+    // Legacy values kept for migration/normalization only.
+    public const string GroupDecisionLegacyPending = "pending";
     public const string GroupDecisionLegacyHold = "hold";
 
     // Stored in profile_group_filters.channel_mode
@@ -21,37 +23,18 @@ internal static class LineupReviewSemantics
     public const string ChannelStateIncluded = "included";
     public const string ChannelStateExcluded = "excluded";
 
-    public static bool IsGroupPending(string? decision, bool isNew)
-    {
-        if (string.Equals(decision, GroupDecisionPending, StringComparison.Ordinal))
-            return true;
-
-        // Backward compatibility for pre-migration rows.
-        return string.Equals(decision, GroupDecisionLegacyHold, StringComparison.Ordinal) && isNew;
-    }
-
-    public static bool IsGroupIncluded(string? decision, bool isNew)
-    {
-        if (string.Equals(decision, GroupDecisionInclude, StringComparison.Ordinal))
-            return true;
-
-        // Backward compatibility for pre-migration rows.
-        return string.Equals(decision, GroupDecisionLegacyHold, StringComparison.Ordinal) && !isNew;
-    }
+    public static bool IsGroupIncluded(string? decision)
+        => !IsGroupExcluded(decision);
 
     public static bool IsGroupExcluded(string? decision)
         => string.Equals(decision, GroupDecisionExclude, StringComparison.Ordinal);
 
-    public static string NormalizeGroupDecision(string? decision, bool isNew)
+    public static string NormalizeGroupDecision(string? decision)
     {
         if (IsGroupExcluded(decision))
             return GroupDecisionExclude;
-        if (IsGroupPending(decision, isNew))
-            return GroupDecisionPending;
-        if (IsGroupIncluded(decision, isNew))
-            return GroupDecisionInclude;
 
-        return GroupDecisionPending;
+        return GroupDecisionInclude;
     }
 
     public static string NormalizeGroupMode(string? mode)
