@@ -89,11 +89,6 @@ public sealed class ChannelMappingPageService(
         else if (request.TrackingKeywords is not null)
             filter.TrackingKeywords = string.IsNullOrWhiteSpace(request.TrackingKeywords) ? null : request.TrackingKeywords.Trim();
 
-        if (request.ClearIsNew)
-        {
-            filter.IsNew = false;
-        }
-
         if (request.ClearOutputName)
             filter.OutputName = null;
         else if (request.OutputName is not null)
@@ -119,6 +114,9 @@ public sealed class ChannelMappingPageService(
 
         if (request.SortOverride is not null)
             filter.SortOverride = request.SortOverride;
+
+        if (ShouldClearIsNew(request))
+            filter.IsNew = false;
 
         filter.UpdatedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
@@ -368,9 +366,7 @@ public sealed class ChannelMappingPageService(
             db.ProfileGroupChannelFilters.Add(row);
         }
 
-        var hasExplicitInclude = request.Channels.Any(x =>
-            LineupReviewSemantics.NormalizeChannelState(x.State) == LineupReviewSemantics.ChannelStateIncluded);
-
+        filter.IsNew = false;
         filter.UpdatedUtc = now;
         await db.SaveChangesAsync(cancellationToken);
         eventBus.Publish(AppEventKind.GroupFiltersChanged);
@@ -388,7 +384,8 @@ public sealed class ChannelMappingPageService(
 
     private static GroupFilterDto ToDto(ProfileGroupFilter f)
     {
-        var selectedCount = f.ChannelFilters?.Count ?? 0;
+        var selectedCount = f.ChannelFilters?
+            .Count(cf => string.Equals(cf.State, LineupReviewSemantics.ChannelStateIncluded, StringComparison.Ordinal)) ?? 0;
 
         return new GroupFilterDto
         {
@@ -430,6 +427,22 @@ public sealed class ChannelMappingPageService(
             _ => null,
         };
     }
+
+    private static bool ShouldClearIsNew(UpdateGroupFilterRequest request)
+        => request.ClearIsNew
+           || request.Decision is not null
+           || request.ChannelMode is not null
+           || request.TrackingPolicy is not null
+           || request.TrackingKeywords is not null
+           || request.ClearTrackingKeywords
+           || request.OutputName is not null
+           || request.ClearOutputName
+           || request.AutoNumStart is not null
+           || request.ClearAutoNum
+           || request.AutoNumEnd is not null
+           || request.ClearAutoNumEnd
+           || request.TrackNewChannels is not null
+           || request.SortOverride is not null;
 
     public async Task<ReviewQueueListResponse> ListReviewQueueAsync(
         string profileId,

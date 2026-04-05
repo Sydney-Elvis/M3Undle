@@ -165,28 +165,22 @@ else
         var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
         var mapped = liveFilters.Where(f =>
             IsIncluded(f) &&
-            ((_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
-             (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
+            GetSelectedChannelCount(f) > 0)
             .ToList();
-        var unmapped = liveFilters.Where(f =>
-            IsIncluded(f) &&
-            !((_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel) && sel.Any(s => s.Value)) ||
-              (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0)))
-            .ToList();
+        var unmapped = liveFilters.Where(IsUnmappedBySelection).ToList();
         var excluded = liveFilters.Where(IsExcluded).ToList();
         var newCount = liveFilters.Count(f => f.IsNew);
-        var chSelected = mapped.Sum(f =>
-            _channelSelections.TryGetValue(f.ProfileGroupFilterId, out var sel)
-                ? sel.Count(s => s.Value)
-                : f.SelectedChannelCount);
+        var chSelected = mapped.Sum(GetSelectedChannelCount);
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
             <MudChip T="string" Size="Size.Small" Color="Color.Success"
                      Variant="@(_decisionFilterStates.Contains("used") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("used"))">@mapped.Count groups · @chSelected.ToString("N0") ch used</MudChip>
-            <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                     Variant="@(_decisionFilterStates.Contains("unmapped") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("unmapped"))">@unmapped.Count unmapped</MudChip>
+                     OnClick="@((chip) => ToggleDecisionFilterState("used"))">@mapped.Count mapped · @chSelected.ToString("N0") ch used</MudChip>
+            <MudTooltip Text="Included groups with zero selected channels. Click to filter them." Arrow="true">
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                         Variant="@(_decisionFilterStates.Contains("unmapped") ? Variant.Filled : Variant.Outlined)"
+                         OnClick="@((chip) => ToggleDecisionFilterState("unmapped"))">@unmapped.Count unmapped</MudChip>
+            </MudTooltip>
             <MudChip T="string" Size="Size.Small" Color="Color.Default"
                      Variant="@(_decisionFilterStates.Contains("exclude") ? Variant.Filled : Variant.Outlined)"
                      OnClick="@((chip) => ToggleDecisionFilterState("exclude"))">@excluded.Count excluded</MudChip>
@@ -376,7 +370,7 @@ else
                                          DebounceInterval="800"
                                          Immediate="true" />
                         <!-- Channel count (always n/n), to the right of Start # -->
-                        <MudTooltip Text="@($"First seen: {filter.ProviderGroupFirstSeen:yyyy-MM-dd}")" Arrow="true" Placement="Placement.Top">
+                        <MudTooltip Text="@GetChannelCountTooltipText(filter, filterId)" Arrow="true" Placement="Placement.Top">
                             <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right; cursor:default;">
                                 @GetChannelCountText(filter, filterId)
                             </MudText>
@@ -472,7 +466,7 @@ else
                                     <MudLink Typo="Typo.caption" OnClick="@(() => SelectAllChannelsAsync(filter))" Style="cursor:pointer;">All</MudLink>
                                     <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllChannelsAsync(filterId))" Style="cursor:pointer;">None</MudLink>
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                        @selections.Count(s => s.Value) of @channels.Count selected
+                                        @GetSelectedChannelCount(filter) of @channels.Count selected
                                     </MudText>
                                 }
                                 else if (!isExcluded && isAutoMode)
@@ -491,7 +485,7 @@ else
                                     <MudLink Typo="Typo.caption" OnClick="@(() => SelectAllChannelsAsync(filter))" Style="cursor:pointer;">All</MudLink>
                                     <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllChannelsAsync(filterId))" Style="cursor:pointer;">None</MudLink>
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                        @selections.Count(s => s.Value) of @channels.Count selected
+                                        @GetSelectedChannelCount(filter) of @channels.Count selected
                                     </MudText>
                                 </MudStack>
                             }
@@ -506,14 +500,15 @@ else
                             else
                             {
                                 <div style="max-height:400px; overflow-y:auto;">
-                                    @foreach (var ch in filtered)
-                                    {
+                                    <Virtualize Items="@filtered" Context="ch" ItemSize="36" OverscanCount="3">
+                                        @{
                                         var isSelected  = selections.GetValueOrDefault(ch.ProviderChannelId);
                                         var numEntry    = _channelNumbers.GetValueOrDefault(filterId)?.GetValueOrDefault(ch.ProviderChannelId);
                                         var conflictMsg = isSelected && numEntry.HasValue &&
                                             _numberIndex.TryGetValue(numEntry.Value, out var usedBy) &&
                                             (usedBy.FilterId != filterId || usedBy.ChannelId != ch.ProviderChannelId)
                                                 ? $"#{numEntry.Value} already used by {usedBy.Description}" : null;
+                                        }
 
                                         <div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--mud-palette-divider); padding:2px 0;">
                                             @if (!isExcluded && !isAutoMode)
@@ -549,7 +544,7 @@ else
                                                 }
                                             }
                                         </div>
-                                    }
+                                    </Virtualize>
                                 </div>
                             }
                         }
@@ -567,7 +562,7 @@ else
                 var totalChannels = parent.Members.Sum(m => m.ChannelCount ?? 0);
                 var allMembersLoaded = parent.Members.All(m => _channelSelections.ContainsKey(m.ProfileGroupFilterId));
                 var selectedChannels = allMembersLoaded
-                    ? parent.Members.Sum(m => _channelSelections.TryGetValue(m.ProfileGroupFilterId, out var mSel) ? mSel.Count(s => s.Value) : 0)
+                    ? parent.Members.Sum(GetSelectedChannelCount)
                     : -1;
                 var pendingCount = parent.Members.Count(m => m.IsNew);
                 var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
@@ -711,7 +706,7 @@ else
                         var filteredParentChs = GetFilteredParentChannelsForDisplay(parent, allParentChs, globalActive, parentFilterText, hiddenMembers, showSelectedOnly);
                         var totalSelected     = parent.Members
                             .Where(m => !IsExcluded(m) && IsManualMode(m))
-                            .Sum(m => _channelSelections.GetValueOrDefault(m.ProfileGroupFilterId)?.Count(s => s.Value) ?? 0);
+                            .Sum(GetSelectedChannelCount);
                         var selectableCount   = allParentChs.Count(e => !IsExcluded(e.Filter) && IsManualMode(e.Filter));
                         var isAnyLoading = parent.Members.Any(m => _loadingChannels.Contains(m.ProfileGroupFilterId));
 
@@ -795,8 +790,8 @@ else
                         else
                         {
                             <div style="max-height:500px; overflow-y:auto;">
-                                @foreach (var entry in filteredParentChs)
-                                {
+                                <Virtualize Items="@filteredParentChs" Context="entry" ItemSize="36" OverscanCount="3">
+                                    @{
                                     var memberFilter = entry.Filter;
                                     var ch           = entry.Channel;
                                     var mfid         = memberFilter.ProfileGroupFilterId;
@@ -807,6 +802,7 @@ else
                                         _numberIndex.TryGetValue(numEntry.Value, out var usedByP) &&
                                         (usedByP.FilterId != mfid || usedByP.ChannelId != ch.ProviderChannelId)
                                             ? $"#{numEntry.Value} already used by {usedByP.Description}" : null;
+                                    }
 
                                     <div style="display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--mud-palette-divider); padding:2px 0;">
                                         @if (canSelect)
@@ -847,7 +843,7 @@ else
                                             }
                                         }
                                     </div>
-                                }
+                                </Virtualize>
                             </div>
                         }
                     }
@@ -1288,10 +1284,13 @@ else
     private HashSet<string> _parentShowSelectedOnly = [];
     private Dictionary<string, HashSet<string>> _hiddenParentMembers = [];
     private Dictionary<string, int> _parentStartNum = [];
-    private Dictionary<string, CancellationTokenSource> _channelSaveCts = [];
+    private HashSet<string> _dirtyChannelSelectionFilterIds = [];
+    private CancellationTokenSource? _channelSaveDebounceCts;
 
     private record NumberEntry(string FilterId, string ChannelId, string Description);
     private Dictionary<int, NumberEntry> _numberIndex = [];
+    private List<object>? _filteredItemsCache;
+    private Dictionary<string, int>? _selectedCountForRender;
 
     private int _defaultStartNum = 100;
     private string? _startNumProfileId;
@@ -1301,12 +1300,13 @@ else
     private string _searchTerm = string.Empty;
     private string? _searchError;
     private Func<string, bool>? _searchPredicate;
-    private HashSet<string> _decisionFilterStates = ["used", "unmapped", "new"];
+    private HashSet<string> _decisionFilterStates = ["used", "unmapped"];
     private List<string> _displayOrderIds = [];
 
     private string _globalChannelFilter = string.Empty;
     private bool _globalChannelSearchBusy;
     private Dictionary<string, List<ChannelSearchItemDto>> _globalChannelSearchResults = [];
+    private Dictionary<string, HashSet<string>> _globalChannelSearchHitIds = [];
     private CancellationTokenSource? _globalSearchDebounceCts;
     private HashSet<string> _searchAutoExpandedGroups = [];
     private HashSet<string> _searchAutoExpandedParents = [];
@@ -1350,6 +1350,52 @@ else
     private static bool IsIncluded(GroupFilterDto filter) =>
         !IsExcluded(filter);
 
+    private static bool MatchesNew(GroupFilterDto filter, bool showNew) =>
+        showNew && IsIncluded(filter) && filter.IsNew;
+
+    private int GetSelectedChannelCount(GroupFilterDto filter)
+    {
+        _selectedCountForRender ??= [];
+        if (_selectedCountForRender.TryGetValue(filter.ProfileGroupFilterId, out var cached))
+            return cached;
+        var count = _channelSelections.TryGetValue(filter.ProfileGroupFilterId, out var sel)
+            ? sel.Count(s => s.Value)
+            : filter.SelectedChannelCount;
+        _selectedCountForRender[filter.ProfileGroupFilterId] = count;
+        return count;
+    }
+
+    private bool IsUnmappedBySelection(GroupFilterDto filter) =>
+        IsIncluded(filter)
+        && GetSelectedChannelCount(filter) == 0;
+
+    private int GetAvailableChannelCount(GroupFilterDto filter, string filterId) =>
+        _channelCache.TryGetValue(filterId, out var cachedChs)
+            ? cachedChs.Count
+            : (filter.ChannelCount ?? 0);
+
+    private string GetChannelCountTooltipText(GroupFilterDto filter, string filterId)
+    {
+        var available = GetAvailableChannelCount(filter, filterId);
+        var firstSeen = $"First seen: {filter.ProviderGroupFirstSeen:yyyy-MM-dd}";
+
+        if (IsExcluded(filter))
+            return available > 0
+                ? $"Excluded from output. {available:N0} channels available. {firstSeen}"
+                : $"Excluded from output. {firstSeen}";
+
+        if (IsAutoMode(filter))
+            return available > 0
+                ? $"Auto-update mode manages this group without manual channel picks. {available:N0} channels available. {firstSeen}"
+                : $"Auto-update mode manages this group without manual channel picks. {firstSeen}";
+
+        var selected = GetSelectedChannelCount(filter);
+        if (selected == 0 && available > 0)
+            return $"No channels are selected for output in this group yet. Expand the row to choose channels. {firstSeen}";
+
+        return $"{selected:N0}/{available:N0} channels selected for output. {firstSeen}";
+    }
+
     private static bool IsAutoMode(GroupFilterDto filter) =>
         string.Equals(
             LineupReviewSemantics.NormalizeGroupMode(filter.ChannelMode),
@@ -1361,11 +1407,11 @@ else
     private sealed record VirtualParent(string OutputName, List<GroupFilterDto> Members);
     private sealed record ParentChannelEntry(GroupFilterDto Filter, ProviderChannelSelectDto Channel);
 
-    private List<object> FilteredItems
+    private List<object> FilteredItems => _filteredItemsCache ??= BuildFilteredItems();
+
+    private List<object> BuildFilteredItems()
     {
-        get
-        {
-            var allLive = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
+        var allLive = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
 
             var standaloneDict = allLive
                 .Where(f => f.OutputName is null)
@@ -1395,16 +1441,12 @@ else
             var showNew      = _decisionFilterStates.Contains("new");
             var showAll      = _decisionFilterStates.Count == 0 || (showUsed && showUnmapped && showExclude);
 
-            bool IsUsed(GroupFilterDto f) =>
-                (_channelSelections.TryGetValue(f.ProfileGroupFilterId, out var fSel) && fSel.Any(s => s.Value)) ||
-                (!_channelSelections.ContainsKey(f.ProfileGroupFilterId) && f.SelectedChannelCount > 0);
-
             bool FilterMatchesGroup(GroupFilterDto f) =>
                 IsExcluded(f) ? showExclude :
                 showAll ||
-                (showUsed     && IsIncluded(f) && IsUsed(f)) ||
-                (showUnmapped && IsIncluded(f) && !IsUsed(f)) ||
-                (showNew      && f.IsNew);
+                (showUsed     && IsIncluded(f) && GetSelectedChannelCount(f) > 0) ||
+                (showUnmapped && IsUnmappedBySelection(f)) ||
+                MatchesNew(f, showNew);
 
             bool CgMatchesFilter(CustomGroupDto cg) =>
                 IsCgExcluded(cg) ? showExclude :
@@ -1429,15 +1471,15 @@ else
                     return o switch
                     {
                         GroupFilterDto f => _sessionChangedFilterIds.Contains(f.ProfileGroupFilterId)
-                                            && ((showUsed && IsIncluded(f) && IsUsed(f))
-                                                || (showUnmapped && IsIncluded(f) && !IsUsed(f))
+                                            && ((showUsed && IsIncluded(f) && GetSelectedChannelCount(f) > 0)
+                                                || (showUnmapped && IsUnmappedBySelection(f))
                                                 || (showExclude && IsExcluded(f))
-                                                || (showNew && f.IsNew)),
+                                                || MatchesNew(f, showNew)),
                         VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
-                                                                && ((showUsed && IsIncluded(m) && IsUsed(m))
-                                                                    || (showUnmapped && IsIncluded(m) && !IsUsed(m))
+                                                                && ((showUsed && IsIncluded(m) && GetSelectedChannelCount(m) > 0)
+                                                                    || (showUnmapped && IsUnmappedBySelection(m))
                                                                     || (showExclude && IsExcluded(m))
-                                                                    || (showNew && m.IsNew))),
+                                                                    || MatchesNew(m, showNew))),
                         _ => false,
                     };
                 };
@@ -1470,7 +1512,6 @@ else
                 .Where(searchMatch)
                 .Where(channelSearchMatch)
                 .ToList();
-        }
     }
 
     private void RebuildDisplayOrder()
@@ -1541,6 +1582,13 @@ else
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
 
+    protected override bool ShouldRender()
+    {
+        _filteredItemsCache = null;
+        _selectedCountForRender = null;
+        return true;
+    }
+
     protected override async Task OnInitializedAsync()
     {
         _allProfiles = await ProfilesService.GetProfileStubsAsync(_cts.Token);
@@ -1604,6 +1652,26 @@ else
                 }
             }
         }
+    }
+
+    private void UpdateNumberIndexEntry(string filterId, string channelId, int? newNumber, int? oldNumber = null)
+    {
+        if (oldNumber.HasValue)
+            _numberIndex.Remove(oldNumber.Value);
+
+        if (newNumber.HasValue)
+        {
+            var group    = _allFilters.FirstOrDefault(f => f.ProfileGroupFilterId == filterId);
+            var channels = _channelCache.GetValueOrDefault(filterId) ?? [];
+            var ch       = channels.FirstOrDefault(c => c.ProviderChannelId == channelId);
+            _numberIndex[newNumber.Value] = new NumberEntry(filterId, channelId, $"{group?.ProviderGroupRawName ?? "?"}: {ch?.DisplayName ?? "?"}");
+        }
+    }
+
+    private void RemoveNumberIndexEntry(int? number)
+    {
+        if (number.HasValue)
+            _numberIndex.Remove(number.Value);
     }
 
     private HashSet<int> GetAssignedNumbers((string FilterId, string ChannelId)? except = null, IEnumerable<string>? exceptFilterIds = null)
@@ -1690,7 +1758,8 @@ else
         _cts.Cancel();
         _cts.Dispose();
         _eventSubscription?.Dispose();
-        foreach (var cts in _channelSaveCts.Values) { cts.Cancel(); cts.Dispose(); }
+        _channelSaveDebounceCts?.Cancel();
+        _channelSaveDebounceCts?.Dispose();
         _globalSearchDebounceCts?.Cancel();
         _globalSearchDebounceCts?.Dispose();
     }
@@ -1822,6 +1891,7 @@ else
             }
 
             filter.Decision = decision;
+            filter.IsNew = false;
             _sessionChangedFilterIds.Add(filterId);
             StateHasChanged();
         }
@@ -1871,6 +1941,7 @@ else
             foreach (var f in _allFilters.Where(f => groupIdSet.Contains(f.ProviderGroupId)))
             {
                 f.Decision = decision;
+                f.IsNew = false;
                 _sessionChangedFilterIds.Add(f.ProfileGroupFilterId);
             }
 
@@ -1929,8 +2000,14 @@ else
             RebuildNumberIndex();
             StateHasChanged();
 
+            var clearedNew = false;
             foreach (var filterId in allFilterIds)
-                await ScheduleSaveChannelSelectionsAsync(filterId);
+                clearedNew |= MarkChannelSelectionsDirty(filterId);
+
+            if (clearedNew)
+                StateHasChanged();
+
+            await DebounceDirtyChannelSelectionSaveAsync();
         }
         finally
         {
@@ -1960,8 +2037,14 @@ else
         RebuildNumberIndex();
         StateHasChanged();
 
+        var clearedNew = false;
         foreach (var filterId in filterIds)
-            await ScheduleSaveChannelSelectionsAsync(filterId);
+            clearedNew |= MarkChannelSelectionsDirty(filterId);
+
+        if (clearedNew)
+            StateHasChanged();
+
+        await DebounceDirtyChannelSelectionSaveAsync();
     }
 
     // -------------------------------------------------------------------------
@@ -2063,17 +2146,12 @@ else
 
     private string GetChannelCountText(GroupFilterDto filter, string filterId)
     {
-        var denominator = _channelCache.TryGetValue(filterId, out var cachedChs)
-            ? cachedChs.Count
-            : (filter.ChannelCount ?? 0);
+        var denominator = GetAvailableChannelCount(filter, filterId);
 
         if (denominator <= 0)
             return "0 ch";
 
-        if (!_channelSelections.TryGetValue(filterId, out var selDict))
-            return $"0/{denominator:N0} ch";
-
-        var selected = selDict.Count(s => s.Value);
+        var selected = GetSelectedChannelCount(filter);
         return $"{selected:N0}/{denominator:N0} ch";
     }
 
@@ -2227,6 +2305,8 @@ else
                 return;
             }
             mutate(filter);
+            if (ShouldClearNewOnInteraction(req))
+                filter.IsNew = false;
             StateHasChanged();
         }
         catch (Exception ex)
@@ -2361,8 +2441,8 @@ else
         if (globalActive)
         {
             result = all.Where(e =>
-                _globalChannelSearchResults.TryGetValue(e.Filter.ProfileGroupFilterId, out var hits) &&
-                hits.Any(h => h.ProviderChannelId == e.Channel.ProviderChannelId));
+                _globalChannelSearchHitIds.TryGetValue(e.Filter.ProfileGroupFilterId, out var hitIds) &&
+                hitIds.Contains(e.Channel.ProviderChannelId));
         }
         else
         {
@@ -2389,9 +2469,8 @@ else
     {
         if (globalActive)
         {
-            if (!_globalChannelSearchResults.TryGetValue(filterId, out var hits))
+            if (!_globalChannelSearchHitIds.TryGetValue(filterId, out var hitIds))
                 return [];
-            var hitIds = hits.Select(h => h.ProviderChannelId).ToHashSet();
             return channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
         }
 
@@ -2413,6 +2492,7 @@ else
         if (string.IsNullOrWhiteSpace(value) || value.Trim().Length < 2)
         {
             _globalChannelSearchResults.Clear();
+            _globalChannelSearchHitIds.Clear();
             _globalChannelSearchBusy = false;
             foreach (var id in _searchAutoExpandedGroups)
                 _expandedGroups.Remove(id);
@@ -2444,6 +2524,10 @@ else
         {
             var results = await ChannelMappingPageService.SearchChannelsAsync(_profileId, term, _cts.Token);
             _globalChannelSearchResults = results.ToDictionary(r => r.FilterId, r => r.Channels);
+            _globalChannelSearchHitIds = results.ToDictionary(
+                r => r.FilterId,
+                r => r.Channels.Select(c => c.ProviderChannelId).ToHashSet(StringComparer.Ordinal),
+                StringComparer.Ordinal);
 
             var channelLoadTasks = new List<Task>();
             var expandedParentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2518,8 +2602,14 @@ else
         RebuildNumberIndex();
         StateHasChanged();
 
+        var clearedNew = false;
         foreach (var filterId in visibleFilterIds)
-            await ScheduleSaveChannelSelectionsAsync(filterId);
+            clearedNew |= MarkChannelSelectionsDirty(filterId);
+
+        if (clearedNew)
+            StateHasChanged();
+
+        await DebounceDirtyChannelSelectionSaveAsync();
     }
 
     private async Task SelectAllParentChannelsAsync(VirtualParent parent)
@@ -2554,8 +2644,14 @@ else
         RebuildNumberIndex();
         StateHasChanged();
 
+        var clearedNew = false;
         foreach (var member in includedMembers)
-            await ScheduleSaveChannelSelectionsAsync(member.ProfileGroupFilterId);
+            clearedNew |= MarkChannelSelectionsDirty(member.ProfileGroupFilterId);
+
+        if (clearedNew)
+            StateHasChanged();
+
+        await DebounceDirtyChannelSelectionSaveAsync();
     }
 
     private async Task DeselectAllParentChannelsAsync(VirtualParent parent)
@@ -2575,8 +2671,14 @@ else
         RebuildNumberIndex();
         StateHasChanged();
 
+        var clearedNew = false;
         foreach (var member in includedMembers)
-            await ScheduleSaveChannelSelectionsAsync(member.ProfileGroupFilterId);
+            clearedNew |= MarkChannelSelectionsDirty(member.ProfileGroupFilterId);
+
+        if (clearedNew)
+            StateHasChanged();
+
+        await DebounceDirtyChannelSelectionSaveAsync();
     }
 
     private async Task LoadChannelsAsync(string filterId)
@@ -2672,16 +2774,18 @@ else
             var used = GetAssignedNumbers(except: (filterId, channelId), exceptFilterIds: new[] { filterId });
             var next = GetNextNumberForGroup(filter, numbers, used);
             numbers[channelId] = next;
+            UpdateNumberIndexEntry(filterId, channelId, next);
         }
         else if (!isChecked)
         {
+            var oldNumber = numbers.GetValueOrDefault(channelId);
             numbers.Remove(channelId);
+            RemoveNumberIndexEntry(oldNumber);
         }
 
         _channelSelections[filterId] = selections;
         _channelNumbers[filterId]    = numbers;
 
-        RebuildNumberIndex();
         StateHasChanged();
         await ScheduleSaveChannelSelectionsAsync(filterId);
     }
@@ -2689,6 +2793,8 @@ else
     private async Task OnChannelNumberChanged(string filterId, string channelId, int? value)
     {
         var numbers = _channelNumbers.GetValueOrDefault(filterId) ?? [];
+        var oldNumber = numbers.GetValueOrDefault(channelId);
+
         if (value.HasValue)
         {
             var used = GetAssignedNumbers(except: (filterId, channelId));
@@ -2696,35 +2802,68 @@ else
                 ? NextUnused(value.Value, used)
                 : value.Value;
             numbers[channelId] = unique;
+            UpdateNumberIndexEntry(filterId, channelId, unique, oldNumber);
         }
         else
         {
             numbers.Remove(channelId);
+            RemoveNumberIndexEntry(oldNumber);
         }
         _channelNumbers[filterId] = numbers;
 
-        RebuildNumberIndex();
         StateHasChanged();
         await ScheduleSaveChannelSelectionsAsync(filterId);
     }
 
     private async Task ScheduleSaveChannelSelectionsAsync(string filterId)
     {
-        if (_channelSaveCts.TryGetValue(filterId, out var existing))
-        {
-            existing.Cancel();
-            existing.Dispose();
-        }
+        if (MarkChannelSelectionsDirty(filterId))
+            StateHasChanged();
+
+        await DebounceDirtyChannelSelectionSaveAsync();
+    }
+
+    private bool MarkChannelSelectionsDirty(string filterId)
+    {
+        var filter = _allFilters.FirstOrDefault(f => f.ProfileGroupFilterId == filterId);
+        var clearedNew = filter is not null && filter.IsNew;
+        if (clearedNew)
+            filter!.IsNew = false;
+
+        _dirtyChannelSelectionFilterIds.Add(filterId);
+        return clearedNew;
+    }
+
+    private async Task DebounceDirtyChannelSelectionSaveAsync()
+    {
+
+        _channelSaveDebounceCts?.Cancel();
+        _channelSaveDebounceCts?.Dispose();
 
         var cts = new CancellationTokenSource();
-        _channelSaveCts[filterId] = cts;
+        _channelSaveDebounceCts = cts;
 
         try
         {
             await Task.Delay(800, cts.Token);
-            await SaveChannelSelectionsNowAsync(filterId);
+            await SaveDirtyChannelSelectionsNowAsync();
         }
         catch (OperationCanceledException) { }
+    }
+
+    private async Task SaveDirtyChannelSelectionsNowAsync()
+    {
+        if (_dirtyChannelSelectionFilterIds.Count == 0)
+            return;
+
+        var dirtyFilterIds = _dirtyChannelSelectionFilterIds.ToList();
+        _dirtyChannelSelectionFilterIds.Clear();
+
+        foreach (var filterId in dirtyFilterIds)
+            await SaveChannelSelectionsNowAsync(filterId);
+
+        if (_dirtyChannelSelectionFilterIds.Count > 0)
+            await DebounceDirtyChannelSelectionSaveAsync();
     }
 
     private async Task SaveChannelSelectionsNowAsync(string filterId)
@@ -2762,6 +2901,9 @@ else
                 Snackbar.Add("Channel save failed.", Severity.Error);
                 return;
             }
+
+            filter.IsNew = false;
+            StateHasChanged();
         }
         catch (Exception ex)
         {
@@ -2815,6 +2957,22 @@ else
             _searchPredicate = null;
         }
     }
+
+    private static bool ShouldClearNewOnInteraction(UpdateGroupFilterRequest req)
+        => req.ClearIsNew
+           || req.Decision is not null
+           || req.ChannelMode is not null
+           || req.TrackingPolicy is not null
+           || req.TrackingKeywords is not null
+           || req.ClearTrackingKeywords
+           || req.OutputName is not null
+           || req.ClearOutputName
+           || req.AutoNumStart is not null
+           || req.ClearAutoNum
+           || req.AutoNumEnd is not null
+           || req.ClearAutoNumEnd
+           || req.TrackNewChannels is not null
+           || req.SortOverride is not null;
 
     private void ClearSearch() => OnSearchTermChanged(string.Empty);
 

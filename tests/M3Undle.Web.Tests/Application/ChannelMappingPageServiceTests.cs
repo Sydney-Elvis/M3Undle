@@ -47,6 +47,7 @@ public sealed class ChannelMappingPageServiceTests
 
         var filter = await verifyDb.ProfileGroupFilters.SingleAsync(x => x.ProfileGroupFilterId == "filter-1");
         Assert.AreEqual(LineupReviewSemantics.GroupDecisionInclude, filter.Decision);
+        Assert.IsFalse(filter.IsNew);
 
         var row = await verifyDb.ProfileGroupChannelFilters.SingleAsync(x => x.ProfileGroupFilterId == "filter-1");
         Assert.AreEqual("channel-1", row.ProviderChannelId);
@@ -99,6 +100,9 @@ public sealed class ChannelMappingPageServiceTests
         await using var verifyScope = fixture.Services.CreateAsyncScope();
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
+        var filter = await verifyDb.ProfileGroupFilters.SingleAsync(x => x.ProfileGroupFilterId == "filter-1");
+        Assert.IsFalse(filter.IsNew);
+
         var rows = await verifyDb.ProfileGroupChannelFilters
             .Where(x => x.ProfileGroupFilterId == "filter-1")
             .OrderBy(x => x.ProviderChannelId)
@@ -109,6 +113,63 @@ public sealed class ChannelMappingPageServiceTests
         Assert.AreEqual(LineupReviewSemantics.ChannelStatePending, rows.Single(x => x.ProviderChannelId == "channel-2").State);
         Assert.AreEqual(LineupReviewSemantics.ChannelStateExcluded, rows.Single(x => x.ProviderChannelId == "channel-3").State);
         Assert.IsFalse(rows.Any(x => x.ProviderChannelId == "channel-4"));
+    }
+
+    [TestMethod]
+    public async Task UpdateGroupFilterAsync_StateChangingEdit_ClearsIsNew()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedBasicMappingGraphAsync(fixture);
+
+        var service = new ChannelMappingPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var updated = await service.UpdateGroupFilterAsync(
+            "profile-1",
+            "filter-1",
+            new UpdateGroupFilterRequest
+            {
+                Decision = LineupReviewSemantics.GroupDecisionExclude,
+            },
+            CancellationToken.None);
+
+        Assert.IsTrue(updated);
+
+        await using var verifyScope = fixture.Services.CreateAsyncScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var filter = await verifyDb.ProfileGroupFilters.SingleAsync(x => x.ProfileGroupFilterId == "filter-1");
+        Assert.AreEqual(LineupReviewSemantics.GroupDecisionExclude, filter.Decision);
+        Assert.IsFalse(filter.IsNew);
+    }
+
+    [TestMethod]
+    public async Task ListGroupFiltersAsync_OnlyCountsIncludedChannels()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedBasicMappingGraphAsync(fixture);
+
+        await using (var seedScope = fixture.Services.CreateAsyncScope())
+        {
+            var db = seedScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            db.ProfileGroupChannelFilters.AddRange(
+                NewChannelFilterRow("r1", "filter-1", "channel-1", LineupReviewSemantics.ChannelStateIncluded),
+                NewChannelFilterRow("r2", "filter-1", "channel-2", LineupReviewSemantics.ChannelStatePending),
+                NewChannelFilterRow("r3", "filter-1", "channel-3", LineupReviewSemantics.ChannelStateExcluded));
+            await db.SaveChangesAsync();
+        }
+
+        var service = new ChannelMappingPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var filters = await service.ListGroupFiltersAsync("profile-1", CancellationToken.None);
+        var dto = filters.Single(f => f.ProfileGroupFilterId == "filter-1");
+
+        Assert.AreEqual(1, dto.SelectedChannelCount);
     }
 
     private static async Task SeedBasicMappingGraphAsync(TestFixture fixture)
