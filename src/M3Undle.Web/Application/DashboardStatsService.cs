@@ -18,6 +18,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
         var activeSnapshots = await db.Snapshots
             .AsNoTracking()
             .Where(s => s.Status == "active")
+            .OrderByDescending(s => s.CreatedUtc)
             .ToListAsync(ct);
 
         var latestFetchRun = await db.FetchRuns
@@ -53,6 +54,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
         int publishedLive = 0, publishedMovie = 0, publishedSeries = 0;
         DateTime? lastPublishedUtc = null;
+        string? lastChangeClass = null;
 
         var summaries = new List<DashboardProfileSummary>();
 
@@ -75,6 +77,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                     publishedMovie = snapshot.VodChannelCount;
                     publishedSeries = snapshot.SeriesChannelCount;
                     lastPublishedUtc = snapshot.CreatedUtc;
+                    lastChangeClass = snapshot.ChangeClass;
                 }
             }
 
@@ -106,6 +109,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             ProfileSummaries = summaries,
             LastPublishedUtc = lastPublishedUtc,
             RefreshFailed = refreshFailed,
+            LastChangeClass = lastChangeClass,
         };
     }
 }

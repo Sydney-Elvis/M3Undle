@@ -310,48 +310,49 @@ else
                         }
                         else
                         {
-                            <!-- Name + edit button grouped tight -->
-                            <div style="display:inline-flex; align-items:center; gap:2px;">
-                                <MudStack Spacing="0" Style="min-width:120px; cursor:pointer;" @onclick="@(() => ToggleExpandAsync(filter))">
-                                    <MudText Typo="Typo.body1" Style="@($"font-weight:{(!isExcluded ? "600" : "400")};")">
-                                        @displayName
-                                    </MudText>
-                                    @if (filter.OutputName is not null)
-                                    {
-                                        <MudText Typo="Typo.caption" Color="Color.Tertiary">
-                                            @filter.ProviderGroupRawName · @filter.ProviderName
+                            <!-- Name, edit button, and badges — flex:1 so Start # aligns with other row types -->
+                            <div style="flex:1; min-width:0; display:flex; align-items:center; gap:4px; flex-wrap:wrap;">
+                                <div style="display:inline-flex; align-items:center; gap:2px;">
+                                    <MudStack Spacing="0" Style="min-width:120px; cursor:pointer;" @onclick="@(() => ToggleExpandAsync(filter))">
+                                        <MudText Typo="Typo.body1" Style="@($"font-weight:{(!isExcluded ? "600" : "400")};")">
+                                            @displayName
                                         </MudText>
-                                    }
-                                    else
-                                    {
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                            @filter.ProviderName
-                                        </MudText>
-                                    }
-                                </MudStack>
+                                        @if (filter.OutputName is not null)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Tertiary">
+                                                @filter.ProviderGroupRawName · @filter.ProviderName
+                                            </MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                @filter.ProviderName
+                                            </MudText>
+                                        }
+                                    </MudStack>
 
-                                <!-- Rename / merge button -->
-                                <MudTooltip Text="@(filter.OutputName is not null ? "Rename or merge into another group" : "Rename or merge into a group")" Arrow="true">
-                                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
-                                                   Size="Size.Small"
-                                                   Color="@(filter.OutputName is not null ? Color.Primary : Color.Default)"
-                                                   OnClick="@(() => BeginEdit(filterId, filter.OutputName ?? string.Empty))" />
-                                </MudTooltip>
+                                    <!-- Rename / merge button -->
+                                    <MudTooltip Text="@(filter.OutputName is not null ? "Rename or merge into another group" : "Rename or merge into a group")" Arrow="true">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                       Size="Size.Small"
+                                                       Color="@(filter.OutputName is not null ? Color.Primary : Color.Default)"
+                                                       OnClick="@(() => BeginEdit(filterId, filter.OutputName ?? string.Empty))" />
+                                    </MudTooltip>
+                                </div>
+
+                                @if (!filter.ProviderGroupActive)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
+                                }
+                                @if (filter.IsNew)
+                                {
+                                    <MudTooltip Text="New since last sync — click to dismiss" Arrow="true">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
+                                                 Style="cursor:pointer;"
+                                                 OnClick="@(() => DismissNewAsync(filter))">new</MudChip>
+                                    </MudTooltip>
+                                }
                             </div>
-
-                            @if (!filter.ProviderGroupActive)
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
-                            }
-                            @if (filter.IsNew)
-                            {
-                                <MudTooltip Text="New since last sync — click to dismiss" Arrow="true">
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
-                                             Style="cursor:pointer;"
-                                             OnClick="@(() => DismissNewAsync(filter))">new</MudChip>
-                                </MudTooltip>
-                            }
-                            <MudSpacer />
                         }
 
                         @if (!isEditing)
@@ -568,79 +569,109 @@ else
                 var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
+                var pFirstActive = parent.Members.FirstOrDefault(m => !IsExcluded(m)) ?? parent.Members.FirstOrDefault();
 
                 <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
-                        <!-- Name + member summary -->
-                        <MudStack Spacing="0" Style="flex:1; min-width:120px; cursor:pointer;" @onclick="@(() => ToggleParentExpandAsync(parent))">
-                            <MudText Typo="Typo.body1" Style="@($"font-weight:{(anyActive ? "600" : "400")};")">
-                                @parent.OutputName
-                            </MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @parent.Members.Count group@(parent.Members.Count != 1 ? "s" : "") · @providerNames
-                            </MudText>
-                        </MudStack>
-
-                        <!-- Manage member groups button -->
-                        <MudTooltip Text="Manage member groups" Arrow="true">
-                            <MudIconButton Icon="@Icons.Material.Filled.AccountTree"
-                                           Size="Size.Small"
-                                           Color="@(isEditorShown ? Color.Primary : Color.Default)"
-                                           OnClick="@(() => ToggleParentEditor(parent.OutputName))" />
-                        </MudTooltip>
-
-                        <!-- Start # -->
-                        <MudNumericField T="int?"
-                                         Value="@((int?)GetParentStartNum(parent.OutputName))"
-                                         ValueChanged="@(v => OnParentStartNumChanged(parent.OutputName, v))"
-                                         Label="Start #"
-                                         Placeholder="—"
-                                         Margin="Margin.Dense"
-                                         Variant="Variant.Outlined"
-                                         Disabled="@allExcluded"
-                                         HideSpinButtons="true"
-                                         Style="width:72px;"
-                                         Immediate="true" />
-
-                        <!-- Channel count (selected/total or total only when not loaded) -->
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right;">
-                            @(selectedChannels < 0 ? $"0/{totalChannels:N0} ch" : $"{selectedChannels:N0}/{totalChannels:N0} ch")
-                        </MudText>
-
-                        @if (pendingCount > 0)
+                        @if (_editingParentOutputName == parent.OutputName)
                         {
-                            <MudTooltip Text="@($"{pendingCount} newly discovered member group{(pendingCount != 1 ? "s" : "")}.")" Arrow="true">
-                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Icon="@Icons.Material.Filled.FiberNew">
-                                    @pendingCount new
-                                </MudChip>
+                            <!-- Inline rename mode -->
+                            <div style="flex:1; min-width:0; display:inline-flex; align-items:center; gap:4px;">
+                                <MudTextField T="string"
+                                              @bind-Value="_editParentNameText"
+                                              Placeholder="Group name…"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true"
+                                              Style="min-width:140px; max-width:240px;" />
+                                <MudTooltip Text="Confirm" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success"
+                                                   OnClick="@(() => CommitParentRenameAsync(parent))"
+                                                   Disabled="@(string.IsNullOrWhiteSpace(_editParentNameText))" />
+                                </MudTooltip>
+                                <MudTooltip Text="Cancel" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                   OnClick="CancelEditParent" />
+                                </MudTooltip>
+                            </div>
+                        }
+                        else
+                        {
+                            <!-- Name + member summary + rename button — flex:1 so Start # aligns -->
+                            <div style="flex:1; min-width:0; display:flex; align-items:center; gap:2px;">
+                                <MudStack Spacing="0" Style="min-width:120px; cursor:pointer;" @onclick="@(() => ToggleParentExpandAsync(parent))">
+                                    <MudText Typo="Typo.body1" Style="@($"font-weight:{(anyActive ? "600" : "400")};")">
+                                        @parent.OutputName
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        @parent.Members.Count group@(parent.Members.Count != 1 ? "s" : "") · @providerNames
+                                    </MudText>
+                                </MudStack>
+                                <MudTooltip Text="Rename group" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => BeginEditParent(parent))" />
+                                </MudTooltip>
+                            </div>
+
+                            <!-- Start # -->
+                            <MudNumericField T="int?"
+                                             Value="@((int?)GetParentStartNum(parent.OutputName))"
+                                             ValueChanged="@(v => OnParentStartNumChanged(parent.OutputName, v))"
+                                             Label="Start #"
+                                             Placeholder="—"
+                                             Margin="Margin.Dense"
+                                             Variant="Variant.Outlined"
+                                             Disabled="@allExcluded"
+                                             HideSpinButtons="true"
+                                             Style="width:72px;"
+                                             Immediate="true" />
+
+                            <!-- Channel count (selected/total or total only when not loaded) -->
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:64px; text-align:right;">
+                                @(selectedChannels < 0 ? $"0/{totalChannels:N0} ch" : $"{selectedChannels:N0}/{totalChannels:N0} ch")
+                            </MudText>
+
+                            @if (pendingCount > 0)
+                            {
+                                <MudTooltip Text="@($"{pendingCount} newly discovered member group{(pendingCount != 1 ? "s" : "")}.")" Arrow="true">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Text" Icon="@Icons.Material.Filled.FiberNew">
+                                        @pendingCount new
+                                    </MudChip>
+                                </MudTooltip>
+                            }
+
+                            <!-- Exclude button (bulk) -->
+                            <MudTooltip Text="@(allExcluded ? "Remove exclusion" : "Exclude all member groups")" Arrow="true">
+                                <MudIconButton Icon="@(allExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
+                                               Size="Size.Small"
+                                               Color="@(allExcluded ? Color.Error : Color.Default)"
+                                               OnClick="@(() => ToggleParentDecisionAsync(parent, "exclude"))"
+                                               Disabled="@isBusy" />
                             </MudTooltip>
-                        }
 
-                        <!-- Exclude button (bulk) -->
-                        <MudTooltip Text="@(allExcluded ? "Remove exclusion" : "Exclude all member groups")" Arrow="true">
-                            <MudIconButton Icon="@(allExcluded ? Icons.Material.Filled.Block : Icons.Material.Outlined.Block)"
+                            <!-- Manage member groups button -->
+                            <MudTooltip Text="Manage member groups" Arrow="true">
+                                <MudIconButton Icon="@Icons.Material.Filled.AccountTree"
+                                               Size="Size.Small"
+                                               Color="@(isEditorShown ? Color.Primary : Color.Default)"
+                                               OnClick="@(() => ToggleParentEditor(parent.OutputName))" />
+                            </MudTooltip>
+
+                            <!-- Settings drawer button -->
+                            <MudTooltip Text="Group settings" Arrow="true">
+                                <MudIconButton Icon="@Icons.Material.Filled.Tune"
+                                               Size="Size.Small"
+                                               Color="@GetSettingsButtonColor(pFirstActive?.TrackingPolicy, pFirstActive?.TrackingKeywords, $"parent:{parent.OutputName}")"
+                                               OnClick="@(() => OpenSettingsDrawer(parent.OutputName, SettingsTargetKind.Parent))" />
+                            </MudTooltip>
+
+                            <!-- Expand channels button -->
+                            <MudIconButton Icon="@(isParentExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
                                            Size="Size.Small"
-                                           Color="@(allExcluded ? Color.Error : Color.Default)"
-                                           OnClick="@(() => ToggleParentDecisionAsync(parent, "exclude"))"
-                                           Disabled="@isBusy" />
-                        </MudTooltip>
-
-                        <!-- Settings drawer button -->
-                        @{
-                            var pFirstActive = parent.Members.FirstOrDefault(m => !IsExcluded(m)) ?? parent.Members.FirstOrDefault();
+                                           OnClick="@(() => ToggleParentExpandAsync(parent))" />
                         }
-                        <MudTooltip Text="Group settings" Arrow="true">
-                            <MudIconButton Icon="@Icons.Material.Filled.Tune"
-                                           Size="Size.Small"
-                                           Color="@GetSettingsButtonColor(pFirstActive?.TrackingPolicy, pFirstActive?.TrackingKeywords, $"parent:{parent.OutputName}")"
-                                           OnClick="@(() => OpenSettingsDrawer(parent.OutputName, SettingsTargetKind.Parent))" />
-                        </MudTooltip>
-
-                        <!-- Expand channels button -->
-                        <MudIconButton Icon="@(isParentExpanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                                       Size="Size.Small"
-                                       OnClick="@(() => ToggleParentExpandAsync(parent))" />
                     </MudStack>
 
                     <!-- Member management panel -->
@@ -764,7 +795,9 @@ else
                                 {
                                     var pmId    = pm.ProfileGroupFilterId;
                                     var pmVis   = !hiddenMembers.Contains(pmId);
-                                    var pmCount = _channelCache.TryGetValue(pmId, out var pmChs) ? pmChs.Count : (pm.ChannelCount ?? 0);
+                                    var pmCount = globalActive
+                                        ? (_globalChannelSearchResults.TryGetValue(pmId, out var pmSearchChs) ? pmSearchChs.Count : 0)
+                                        : (_channelCache.TryGetValue(pmId, out var pmChs) ? pmChs.Count : (pm.ChannelCount ?? 0));
                                     <MudChip T="string"
                                              Color="@(pmVis ? Color.Primary : Color.Default)"
                                              Variant="@(pmVis ? Variant.Filled : Variant.Outlined)"
@@ -880,7 +913,8 @@ else
                         }
                         else
                         {
-                            <div style="display:inline-flex; align-items:center; gap:2px;">
+                            <!-- Name + rename button — flex:1 so Start # aligns with other row types -->
+                            <div style="flex:1; min-width:0; display:flex; align-items:center; gap:2px;">
                                 <MudStack Spacing="0" Style="min-width:120px; cursor:pointer;"
                                           @onclick="@(() => ToggleCgExpandAsync(cg))">
                                     <MudText Typo="Typo.body1" Style="@($"font-weight:{(!cgIsExcluded ? "600" : "400")};")">
@@ -896,8 +930,6 @@ else
                                 </MudTooltip>
                             </div>
                         }
-
-                        <MudSpacer />
 
                         <MudNumericField T="int?"
                                          Value="@cg.AutoNumStart"
@@ -1329,6 +1361,8 @@ else
     private string _cgNewName = string.Empty;
     private string? _cgEditingId;
     private string _cgEditName = string.Empty;
+    private string? _editingParentOutputName;
+    private string _editParentNameText = string.Empty;
 
     // -------------------------------------------------------------------------
     // Settings drawer state
@@ -1531,8 +1565,7 @@ else
             entries.Add(($"cg:{cg.CustomGroupId}", cg.Name, false));
 
         _displayOrderIds = entries
-            .OrderBy(e => e.IsNew ? 0 : 1)
-            .ThenBy(e => e.SortName, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(e => e.SortName, StringComparer.OrdinalIgnoreCase)
             .Select(e => e.Key)
             .ToList();
     }
@@ -2110,6 +2143,48 @@ else
     {
         _editingFilterId = null;
         StateHasChanged();
+    }
+
+    private void BeginEditParent(VirtualParent parent)
+    {
+        _editingParentOutputName = parent.OutputName;
+        _editParentNameText      = parent.OutputName;
+        StateHasChanged();
+    }
+
+    private void CancelEditParent()
+    {
+        _editingParentOutputName = null;
+        StateHasChanged();
+    }
+
+    private async Task CommitParentRenameAsync(VirtualParent parent)
+    {
+        var newName = _editParentNameText.Trim();
+        _editingParentOutputName = null;
+
+        if (string.IsNullOrEmpty(newName) || string.Equals(newName, parent.OutputName, StringComparison.OrdinalIgnoreCase))
+        {
+            StateHasChanged();
+            return;
+        }
+
+        // Update display order key in-place before patching so the row stays in position
+        var oldKey = $"parent:{parent.OutputName}";
+        var newKey = $"parent:{newName}";
+        var idx = _displayOrderIds.FindIndex(id => string.Equals(id, oldKey, StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0) _displayOrderIds[idx] = newKey;
+        else _displayOrderIds.Add(newKey);
+
+        var req = new UpdateGroupFilterRequest { OutputName = newName };
+        foreach (var member in parent.Members)
+        {
+            var oldOutputName = member.OutputName;
+            await PatchFilterAsync(member, req, f => f.OutputName = newName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(_globalChannelFilter) && _globalChannelFilter.Trim().Length >= 2)
+            await ExecuteGlobalChannelSearchAsync(_globalChannelFilter.Trim());
     }
 
     private async Task CommitEditAsync(GroupFilterDto filter)

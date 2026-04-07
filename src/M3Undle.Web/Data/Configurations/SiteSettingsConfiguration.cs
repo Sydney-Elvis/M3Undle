@@ -77,6 +77,12 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.GeneratedHlsSettingsRestartRequired)
             .HasColumnName("generated_hls_settings_restart_required")
             .HasDefaultValue(false);
+        builder.Property(s => s.RefreshScheduleKind)
+            .HasColumnName("refresh_schedule_kind")
+            .HasDefaultValue("6h");
+        builder.Property(s => s.RefreshStartupCatchup)
+            .HasColumnName("refresh_startup_catchup")
+            .HasDefaultValue(true);
 
         builder.HasData(new SiteSettings
         {
@@ -104,6 +110,8 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             GeneratedHlsEnabled = true,
             GeneratedHlsFfmpegPath = null,
             GeneratedHlsSettingsRestartRequired = false,
+            RefreshScheduleKind = "6h",
+            RefreshStartupCatchup = true,
         });
     }
 }

@@ -30,6 +30,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<ProfileCustomGroup> ProfileCustomGroups => Set<ProfileCustomGroup>();
     public DbSet<ProfileCustomGroupChannel> ProfileCustomGroupChannels => Set<ProfileCustomGroupChannel>();
     public DbSet<ProfileCustomGroupProviderLink> ProfileCustomGroupProviderLinks => Set<ProfileCustomGroupProviderLink>();
+    public DbSet<DownstreamIntegration> DownstreamIntegrations => Set<DownstreamIntegration>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

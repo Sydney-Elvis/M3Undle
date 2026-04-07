@@ -14,6 +14,8 @@ public static class SiteSettingsApiEndpoints
         group.MapPut("/endpoint-security", UpdateEndpointSecurityAsync);
         group.MapGet("/generated-hls", GetGeneratedHlsSettingsAsync);
         group.MapPut("/generated-hls", UpdateGeneratedHlsSettingsAsync);
+        group.MapGet("/refresh-schedule", GetRefreshScheduleAsync);
+        group.MapPut("/refresh-schedule", UpdateRefreshScheduleAsync);
 
         return app;
     }
@@ -128,4 +130,47 @@ public static class SiteSettingsApiEndpoints
         bool EffectivelyEnabled,
         string ConfiguredFfmpegPath,
         bool RestartRequired);
+
+    // -------------------------------------------------------------------------
+    // Refresh schedule
+    // -------------------------------------------------------------------------
+
+    private static async Task<IResult> GetRefreshScheduleAsync(
+        IRefreshScheduleService refreshScheduleService,
+        CancellationToken cancellationToken)
+    {
+        var settings = await refreshScheduleService.GetSettingsAsync(cancellationToken);
+        var nextRefresh = await refreshScheduleService.GetNextScheduledRefreshUtcAsync(cancellationToken);
+        return TypedResults.Ok(new RefreshScheduleResponse(
+            ScheduleKind: settings.ScheduleKind,
+            StartupCatchup: settings.StartupCatchup,
+            NextScheduledRefreshUtc: nextRefresh));
+    }
+
+    private static async Task<IResult> UpdateRefreshScheduleAsync(
+        RefreshScheduleUpdateRequest request,
+        IRefreshScheduleService refreshScheduleService,
+        CancellationToken cancellationToken)
+    {
+        var (succeeded, error) = await refreshScheduleService.UpdateAsync(
+            new RefreshScheduleSettings(request.ScheduleKind, request.StartupCatchup), cancellationToken);
+
+        if (!succeeded)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["refreshSchedule"] = [error ?? "Failed to update refresh schedule."],
+            });
+        }
+
+        var settings = await refreshScheduleService.GetSettingsAsync(cancellationToken);
+        var nextRefresh = await refreshScheduleService.GetNextScheduledRefreshUtcAsync(cancellationToken);
+        return TypedResults.Ok(new RefreshScheduleResponse(
+            ScheduleKind: settings.ScheduleKind,
+            StartupCatchup: settings.StartupCatchup,
+            NextScheduledRefreshUtc: nextRefresh));
+    }
+
+    private sealed record RefreshScheduleUpdateRequest(string ScheduleKind, bool StartupCatchup);
+    private sealed record RefreshScheduleResponse(string ScheduleKind, bool StartupCatchup, DateTime? NextScheduledRefreshUtc);
 }

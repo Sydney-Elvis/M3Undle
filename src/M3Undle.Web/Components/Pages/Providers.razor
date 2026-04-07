@@ -56,6 +56,7 @@
                 <MudTh>Name</MudTh>
                 <MudTh>Profile</MudTh>
                 <MudTh>Enabled</MudTh>
+                <MudTh>Max Streams</MudTh>
                 <MudTh>Last Refresh</MudTh>
                 <MudTh>Published</MudTh>
                 <MudTh>Status</MudTh>
@@ -78,6 +79,7 @@
                     }
                 </MudTd>
                 <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
+                <MudTd>@(context.MaxConcurrentStreams?.ToString() ?? "—")</MudTd>
                 <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
                 <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
                 <MudTd>

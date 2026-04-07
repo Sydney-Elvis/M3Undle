@@ -26,4 +26,8 @@ public sealed class SiteSettings
     public bool GeneratedHlsEnabled { get; set; } = true;
     public string? GeneratedHlsFfmpegPath { get; set; }
     public bool GeneratedHlsSettingsRestartRequired { get; set; }
+
+    // Refresh schedule — "manual" | "6h" | "12h" | "24h"
+    public string RefreshScheduleKind { get; set; } = "6h";
+    public bool RefreshStartupCatchup { get; set; } = true;
 }

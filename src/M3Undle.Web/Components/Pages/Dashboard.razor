@@ -11,6 +11,7 @@
 @inject IRefreshTrigger RefreshTrigger
 @inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @inject DashboardStatsService DashboardStats
+@inject IRefreshScheduleService RefreshScheduleService
 @implements IDisposable
 
 <PageTitle>M3Undle</PageTitle>
@@ -137,6 +138,25 @@
                         }
                     </MudStack>
 
+                    @if (_nextRefreshUtc.HasValue || _refreshScheduleKind == "manual")
+                    {
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Next Refresh</MudText>
+                            @if (_nextRefreshUtc.HasValue && !_isRefreshing)
+                            {
+                                <MudText Typo="Typo.body2">@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</MudText>
+                            }
+                            else if (_refreshScheduleKind == "manual")
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Manual only</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Calculating…</MudText>
+                            }
+                        </MudStack>
+                    }
+
                     <MudStack Spacing="0">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Published Version</MudText>
                         @if (_dashboardStats is not null && _dashboardStats.PublishedLiveCount > 0)
@@ -149,7 +169,17 @@
                             </MudText>
                             @if (_dashboardStats.LastPublishedUtc.HasValue)
                             {
-                                <MudText Typo="Typo.caption">@_dashboardStats.LastPublishedUtc.Value.ToString("u")</MudText>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
+                                    <MudText Typo="Typo.caption">@_dashboardStats.LastPublishedUtc.Value.ToString("u")</MudText>
+                                    @if (_dashboardStats.LastChangeClass is not null)
+                                    {
+                                        <MudChip T="string" Size="Size.Small"
+                                                 Color="@ChangeClassChipColor(_dashboardStats.LastChangeClass)"
+                                                 Variant="Variant.Outlined">
+                                            @ChangeClasses.ToUserLabel(_dashboardStats.LastChangeClass)
+                                        </MudChip>
+                                    }
+                                </MudStack>
                             }
                         }
                         else if (lineup?.ActiveSnapshot is not null)
@@ -330,6 +360,9 @@
     private int _streamSessions;
     private int _streamClients;
 
+    private DateTime? _nextRefreshUtc;
+    private string _refreshScheduleKind = "6h";
+
     private bool HasActionItems => _dashboardStats is not null &&
         (_dashboardStats.GroupsPendingReview > 0 ||
          _dashboardStats.ChannelsPendingReview > 0 ||
@@ -397,7 +430,19 @@
 
     private async Task LoadAllAsync()
     {
-        await Task.WhenAll(LoadStatusAsync(), LoadDashboardStatsAsync());
+        await Task.WhenAll(LoadStatusAsync(), LoadDashboardStatsAsync(), LoadRefreshScheduleAsync());
+    }
+
+    private async Task LoadRefreshScheduleAsync()
+    {
+        try
+        {
+            var settings = await RefreshScheduleService.GetSettingsAsync(_cts.Token);
+            _refreshScheduleKind = settings.ScheduleKind;
+            _nextRefreshUtc = await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(_cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch { }
     }
 
     private async Task LoadStatusAsync()
@@ -504,6 +549,15 @@
         if (ts.TotalMinutes < 60) return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
         return $"{(int)ts.TotalHours}h {ts.Minutes}m";
     }
+
+    private static Color ChangeClassChipColor(string? changeClass) => changeClass switch
+    {
+        ChangeClasses.None      => Color.Default,
+        ChangeClasses.GuideOnly => Color.Info,
+        ChangeClasses.Lineup    => Color.Primary,
+        ChangeClasses.Breaking  => Color.Warning,
+        _                       => Color.Default,
+    };
 
     private async Task CancelRefreshAsync()
     {

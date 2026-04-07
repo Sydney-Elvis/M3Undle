@@ -3,6 +3,7 @@
 @using M3Undle.Web.Contracts.Epg
 @using M3Undle.Web.Contracts.Providers
 @inject EpgPageService EpgPageService
+@inject IRefreshScheduleService RefreshScheduleService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
@@ -37,6 +38,16 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary">
                 Manage guide data sources and channel mappings per provider.
             </MudText>
+            @if (_nextRefreshUtc.HasValue)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                    Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                </MudText>
+            }
+            else if (_refreshScheduleKind == "manual")
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">Refresh schedule: manual only</MudText>
+            }
         </MudStack>
         <MudSelect T="ProviderListItemDto?" Label="Provider"
                    Value="_selectedProvider"
@@ -363,6 +374,9 @@ else
     private string _mappingSearch = string.Empty;
     private string _mappingFilter = "all";
 
+    private DateTime? _nextRefreshUtc;
+    private string _refreshScheduleKind = "6h";
+
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
 
@@ -370,7 +384,19 @@ else
     {
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
-        await LoadProvidersAsync();
+        await Task.WhenAll(LoadProvidersAsync(), LoadRefreshScheduleAsync());
+    }
+
+    private async Task LoadRefreshScheduleAsync()
+    {
+        try
+        {
+            var settings = await RefreshScheduleService.GetSettingsAsync(_cts.Token);
+            _refreshScheduleKind = settings.ScheduleKind;
+            _nextRefreshUtc = await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(_cts.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch { }
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)

@@ -3,6 +3,7 @@ using System;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260407201756_Alpha5_DownstreamIntegrations")]
+    partial class Alpha5_DownstreamIntegrations
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
@@ -1686,10 +1689,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Property<string>("SnapshotId")
                         .HasColumnType("TEXT")
                         .HasColumnName("snapshot_id");
-
-                    b.Property<string>("ChangeClass")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("change_class");
 
                     b.Property<int>("ChannelCountPublished")
                         .HasColumnType("INTEGER")

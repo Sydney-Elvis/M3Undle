@@ -26,6 +26,7 @@ public sealed class SnapshotBuilder(
     IWebHostEnvironment env,
     IOptions<SnapshotOptions> snapshotOptions,
     CustomGroupPageService customGroupService,
+    IRefreshScheduleService refreshScheduleService,
     ILogger<SnapshotBuilder> logger)
 {
     internal sealed record GroupFilterConfig(
@@ -102,7 +103,7 @@ public sealed class SnapshotBuilder(
     }
 
     /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider)> RunAsync(CancellationToken cancellationToken)
+    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider, string? ChangeClass)> RunAsync(CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
@@ -114,26 +115,31 @@ public sealed class SnapshotBuilder(
         if (providers.Count == 0)
         {
             logger.LogInformation("Snapshot refresh skipped — no enabled providers found.");
-            return (false, null, new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>());
+            return (false, null, new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>(), null);
         }
 
         bool anySucceeded = false;
         string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
         var channelsByProvider = new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
+
+        var scheduleSettings = await refreshScheduleService.GetSettingsAsync(cancellationToken);
+        var globalIntervalHours = scheduleSettings.IntervalHours;
 
         foreach (var provider in providers)
         {
-            var (s, e, channels) = await RunForProviderAsync(provider, cancellationToken);
+            var (s, e, channels, cc) = await RunForProviderAsync(provider, globalIntervalHours, cancellationToken);
             if (s) anySucceeded = true;
             if (e is not null) lastErrorSummary = e;
             if (channels.Count > 0) channelsByProvider[provider.ProviderId] = channels;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
         }
 
-        return (anySucceeded, lastErrorSummary, channelsByProvider);
+        return (anySucceeded, lastErrorSummary, channelsByProvider, aggregateChangeClass);
     }
 
     /// <summary>Build snapshots from cached channels for all enabled providers — no re-fetch.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyAsync(
+    public async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildOnlyAsync(
         IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> channelsByProvider,
         CancellationToken cancellationToken)
     {
@@ -147,25 +153,27 @@ public sealed class SnapshotBuilder(
         if (providers.Count == 0)
         {
             logger.LogInformation("Snapshot build skipped — no enabled providers found.");
-            return (false, null);
+            return (false, null, null);
         }
 
         bool anySucceeded = false;
         string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
 
         foreach (var provider in providers)
         {
             channelsByProvider.TryGetValue(provider.ProviderId, out var cachedChannels);
-            var (s, e) = await BuildOnlyForProviderAsync(provider, cachedChannels ?? [], cancellationToken);
+            var (s, e, cc) = await BuildOnlyForProviderAsync(provider, cachedChannels ?? [], cancellationToken);
             if (s) anySucceeded = true;
             if (e is not null) lastErrorSummary = e;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
         }
 
-        return (anySucceeded, lastErrorSummary);
+        return (anySucceeded, lastErrorSummary, aggregateChangeClass);
     }
 
-    private async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels)> RunForProviderAsync(
-        Provider provider, CancellationToken cancellationToken)
+    private async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels, string? ChangeClass)> RunForProviderAsync(
+        Provider provider, int? globalIntervalHours, CancellationToken cancellationToken)
     {
         // 1. Find all enabled profiles linked to this provider, ordered by priority
         var allProfileLinks = await db.ProfileProviders
@@ -177,7 +185,7 @@ public sealed class SnapshotBuilder(
         if (allProfileLinks.Count == 0)
         {
             logger.LogInformation("Snapshot refresh skipped — provider {ProviderId} is not linked to any enabled profile.", provider.ProviderId);
-            return (false, null, []);
+            return (false, null, [], null);
         }
 
         var enabledProfileIds = await db.Profiles
@@ -190,7 +198,7 @@ public sealed class SnapshotBuilder(
         if (activeLinks.Count == 0)
         {
             logger.LogInformation("Snapshot refresh skipped — no enabled profiles linked to provider {ProviderId}.", provider.ProviderId);
-            return (false, null, []);
+            return (false, null, [], null);
         }
 
         var profileId = activeLinks[0].ProfileId;
@@ -221,7 +229,7 @@ public sealed class SnapshotBuilder(
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
             await FailFetchRunAsync(fetchRun, ex.Message);
-            return (false, ex.Message, []);
+            return (false, ex.Message, [], null);
         }
 
         logger.LogInformation("Playlist fetched in {Elapsed}ms — {ChannelCount} channels for provider {ProviderId}.",
@@ -234,7 +242,7 @@ public sealed class SnapshotBuilder(
         var stage = "xmltv";
         try
         {
-            xmltvContent = await FetchAndCompileEpgAsync(provider, profileId, sw, cancellationToken);
+            xmltvContent = await FetchAndCompileEpgAsync(provider, profileId, sw, globalIntervalHours, cancellationToken);
             xmltvBytes = Encoding.UTF8.GetByteCount(xmltvContent);
             cancellationToken.ThrowIfCancellationRequested();
             sw.Restart();
@@ -283,17 +291,19 @@ public sealed class SnapshotBuilder(
         // 5. Build snapshot for each linked profile
         bool anySucceeded = false;
         string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
         foreach (var link in activeLinks)
         {
-            var (s, e) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, playlistResult.Channels, cancellationToken);
+            var (s, e, cc) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, playlistResult.Channels, cancellationToken);
             if (s) anySucceeded = true;
             if (e is not null) lastErrorSummary = e;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
         }
 
-        return (anySucceeded, lastErrorSummary, playlistResult.Channels);
+        return (anySucceeded, lastErrorSummary, playlistResult.Channels, aggregateChangeClass);
     }
 
-    private async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyForProviderAsync(
+    private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildOnlyForProviderAsync(
         Provider provider, IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
     {
         var allProfileLinks = await db.ProfileProviders
@@ -305,7 +315,7 @@ public sealed class SnapshotBuilder(
         if (allProfileLinks.Count == 0)
         {
             logger.LogInformation("Snapshot build skipped — provider {ProviderId} has no enabled profile link.", provider.ProviderId);
-            return (false, null);
+            return (false, null, null);
         }
 
         var enabledProfileIds = await db.Profiles
@@ -318,11 +328,12 @@ public sealed class SnapshotBuilder(
         if (activeLinks.Count == 0)
         {
             logger.LogInformation("Snapshot build skipped — no enabled profiles linked to provider {ProviderId}.", provider.ProviderId);
-            return (false, null);
+            return (false, null, null);
         }
 
         bool anySucceeded = false;
         string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
 
         foreach (var link in activeLinks)
         {
@@ -338,25 +349,33 @@ public sealed class SnapshotBuilder(
 
             logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
 
-            var (s, e) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, providerChannels, cancellationToken);
+            var (s, e, cc) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, providerChannels, cancellationToken);
             if (s) anySucceeded = true;
             if (e is not null) lastErrorSummary = e;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
         }
 
-        return (anySucceeded, lastErrorSummary);
+        return (anySucceeded, lastErrorSummary, aggregateChangeClass);
     }
 
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private async Task<(bool Succeeded, string? ErrorSummary)> BuildSnapshotFromDbAsync(
+    private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildSnapshotFromDbAsync(
         Provider provider,
         string profileId,
         string xmltvContent,
         IReadOnlyList<ParsedProviderChannel> providerChannels,
         CancellationToken cancellationToken)
     {
+        // Load the current active snapshot for this profile so we can classify the change
+        var prevSnapshot = await db.Snapshots
+            .AsNoTracking()
+            .Where(s => s.ProfileId == profileId && s.Status == "active")
+            .OrderByDescending(s => s.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
         // Load live channels from DB (VOD/series are not persisted — sourced from in-memory providerChannels)
         var dbChannels = await db.ProviderChannels
             .AsNoTracking()
@@ -546,6 +565,28 @@ public sealed class SnapshotBuilder(
         }
         int seriesCount = seriesNames.Count;
 
+        // Classify the change against the previous active snapshot
+        var changeClass = await SnapshotChangeClassifier.ClassifyAsync(prevSnapshot, channelIndexPath, xmltvPath, cancellationToken);
+
+        if (prevSnapshot is not null && changeClass == ChangeClasses.None)
+        {
+            try
+            {
+                if (Directory.Exists(snapshotDir))
+                    Directory.Delete(snapshotDir, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete no-op snapshot directory {Dir}.", snapshotDir);
+            }
+
+            logger.LogInformation(
+                "No published change detected for profile {ProfileId} — keeping existing active snapshot {SnapshotId}.",
+                profileId, prevSnapshot.SnapshotId);
+
+            return (true, null, changeClass);
+        }
+
         var snapshot = new Snapshot
         {
             SnapshotId = snapshotId,
@@ -560,6 +601,7 @@ public sealed class SnapshotBuilder(
             LiveChannelCount = liveCount,
             VodChannelCount = vodCount,
             SeriesChannelCount = seriesCount,
+            ChangeClass = changeClass,
         };
         db.Snapshots.Add(snapshot);
         await db.SaveChangesAsync(cancellationToken);
@@ -569,10 +611,10 @@ public sealed class SnapshotBuilder(
 
         using var snapshotScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
         logger.LogInformation(
-            "Snapshot {SnapshotId} promoted to active — {ChannelCount} channels published.",
-            snapshotId, channelIndex.Count);
+            "Snapshot {SnapshotId} promoted to active — {ChannelCount} channels, change={ChangeClass}.",
+            snapshotId, channelIndex.Count, changeClass ?? "first_run");
 
-        return (true, null);
+        return (true, null, changeClass);
     }
 
     internal const int OverflowRangeStart = 9000;
@@ -833,6 +875,7 @@ public sealed class SnapshotBuilder(
         Provider provider,
         string profileId,
         Stopwatch sw,
+        int? globalIntervalHours,
         CancellationToken cancellationToken)
     {
         // Load (or lazy-create) enabled EPG sources for this provider
@@ -860,8 +903,24 @@ public sealed class SnapshotBuilder(
         {
             var startedUtc = DateTime.UtcNow;
             var cacheFile = Path.Combine(epgCacheDir, $"{source.EpgSourceId}.xml");
-            var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
 
+            // Per-source cadence check: skip network fetch if still fresh
+            var effectiveInterval = source.RefreshIntervalHours ?? globalIntervalHours;
+            if (effectiveInterval.HasValue
+                && source.LastSuccessUtc.HasValue
+                && (DateTime.UtcNow - source.LastSuccessUtc.Value).TotalHours < effectiveInterval.Value
+                && File.Exists(cacheFile))
+            {
+                logger.LogDebug(
+                    "EPG source {EpgSourceId} ({Name}): cadence not elapsed ({H}h since last success {Last:u}) — using cached data.",
+                    source.EpgSourceId, source.Name, effectiveInterval.Value, source.LastSuccessUtc.Value);
+                var cachedXml = await File.ReadAllTextAsync(cacheFile, cancellationToken);
+                var cachedResult = new EpgSourceFetcher.FetchResult(
+                    null, "not_modified", 0, source.ETag, source.LastModifiedUtc, null);
+                return (Source: source, Result: cachedResult, Xml: (string?)cachedXml, StartedUtc: startedUtc);
+            }
+
+            var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
             return (Source: source, Result: result, Xml: xml, StartedUtc: startedUtc);
         }).ToList();
 

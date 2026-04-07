@@ -29,4 +29,5 @@ public sealed class DashboardStatsDto
     public List<DashboardProfileSummary> ProfileSummaries { get; set; } = [];
     public DateTime? LastPublishedUtc { get; set; }
     public bool RefreshFailed { get; set; }
+    public string? LastChangeClass { get; set; }
 }

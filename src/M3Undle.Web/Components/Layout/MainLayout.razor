@@ -102,7 +102,7 @@
     private ChannelMappingStatsDto? _channelStats;
     private bool _systemIsDark;
     private bool _isRefreshing;
-    private bool _pendingProviderSwitchNotification;
+
     private HdhrFooterStatus? _hdhrStatus;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
@@ -315,15 +315,7 @@
                     await LoadHdhrStatusAsync();
                     await InvokeAsync(StateHasChanged);
 
-                    if (_pendingProviderSwitchNotification && evt.Succeeded)
-                    {
-                        _pendingProviderSwitchNotification = false;
-                        await InvokeAsync(() => DialogService.ShowMessageBoxAsync(
-                            "Active Provider Updated",
-                            "The updated lineup is ready. Your media players (Jellyfin, Plex, Emby, etc.) need to refresh or re-scan their channel list to pick up the changes.",
-                            yesText: "Got It"));
-                    }
-                    else if (!evt.Succeeded && evt.ErrorSummary is not null)
+                    if (!evt.Succeeded && evt.ErrorSummary is not null)
                     {
                         await InvokeAsync(() => Snackbar.Add(
                             $"Lineup refresh failed: {evt.ErrorSummary}",
@@ -333,7 +325,6 @@
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderActivated)
                 {
-                    _pendingProviderSwitchNotification = true;
                     await LoadHdhrStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)

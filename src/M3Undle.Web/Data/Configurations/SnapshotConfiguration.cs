@@ -24,6 +24,7 @@ public sealed class SnapshotConfiguration : IEntityTypeConfiguration<Snapshot>
         builder.Property(x => x.VodChannelCount).HasColumnName("vod_channel_count").IsRequired();
         builder.Property(x => x.SeriesChannelCount).HasColumnName("series_channel_count").IsRequired();
         builder.Property(x => x.ErrorSummary).HasColumnName("error_summary");
+        builder.Property(x => x.ChangeClass).HasColumnName("change_class");
 
         builder.HasIndex(x => new { x.ProfileId, x.Status, x.CreatedUtc })
             .HasDatabaseName("idx_snapshots_profile_status")

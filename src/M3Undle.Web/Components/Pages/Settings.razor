@@ -1,5 +1,6 @@
 @page "/settings"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
 @using M3Undle.Web.Contracts.Providers
 @using M3Undle.Web.Streaming.Configuration
 @using M3Undle.Web.Streaming.Observability
@@ -10,13 +11,77 @@
 @inject StreamingRegistry StreamingRegistry
 @inject IHdHomeRunSettingsService HdhrSettings
 @inject IGeneratedHlsSettingsService GeneratedHlsSettings
+@inject IRefreshScheduleService RefreshSchedule
+@inject IDownstreamIntegrationService DownstreamIntegrations
 @inject ProviderPageService ProviderPageService
+@inject IDialogService DialogService
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
 <MudText Typo="Typo.h5" Class="mb-4">Settings</MudText>
 
 <MudGrid Spacing="3">
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Refresh Schedule</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls how often M3Undle fetches new lineup and guide data from upstream providers.
+            </MudText>
+
+            @if (_loadingRefreshSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                <div class="mb-3">
+                    <RefreshIntervalSelect Value="@RefreshIntervalHoursAdapter"
+                                           ValueChanged="@(v => RefreshIntervalHoursAdapter = v)"
+                                           RecommendDefault="true" />
+                </div>
+
+                <MudSwitch T="bool" Label="Startup catch-up" @bind-Value="_refreshStartupCatchup"
+                           Color="Color.Primary" Class="mb-1" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                    When enabled, M3Undle will refresh on startup if the last published snapshot is stale.
+                </MudText>
+
+                @if (_nextRefreshUtc.HasValue)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                    </MudText>
+                }
+                else if (_refreshScheduleKind == "manual")
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Automatic refresh is disabled. Use the manual refresh button on the Dashboard.
+                    </MudText>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_refreshError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_refreshError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_refreshSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_refreshSuccess
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_savingRefreshSettings"
+                           OnClick="SaveRefreshScheduleAsync">
+                    @(_savingRefreshSettings ? "Saving..." : "Save Refresh Settings")
+                </MudButton>
+            }
+        </MudPaper>
+    </MudItem>
+
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1">
             <MudText Typo="Typo.h6" Class="mb-1">UI Security</MudText>
@@ -654,6 +719,100 @@
             }
         </MudPaper>
     </MudItem>
+
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                <MudText Typo="Typo.h6" Class="flex-grow-1">Downstream Integrations</MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="OpenAddIntegrationDialogAsync">
+                    Add Integration
+                </MudButton>
+            </MudStack>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                After a successful refresh, M3Undle can automatically notify connected media servers so they pick up new channels and guide data.
+            </MudText>
+
+            @if (_loadingIntegrations)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else if (_integrations.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    No integrations configured. Add one to enable automatic downstream notifications.
+                </MudText>
+            }
+            else
+            {
+                <MudTable Items="_integrations" Dense="true" Hover="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Type</MudTh>
+                        <MudTh>URL</MudTh>
+                        <MudTh>Triggers</MudTh>
+                        <MudTh>Status</MudTh>
+                        <MudTh></MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                @if (!context.Enabled)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                                }
+                                @context.Name
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Type">@IntegrationKindLabel(context.Kind)</MudTd>
+                        <MudTd DataLabel="URL">
+                            <MudText Typo="Typo.caption">@context.BaseUrl</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Triggers">
+                            <MudStack Row="true" Spacing="1">
+                                @if (context.TriggerOnLineupUpdate)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">Lineup</MudChip>
+                                }
+                                @if (context.TriggerOnGuideUpdate)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Secondary">Guide</MudChip>
+                                }
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Status">
+                            @if (!string.IsNullOrWhiteSpace(context.LastNotifyError))
+                            {
+                                <MudTooltip Text="@context.LastNotifyError" Arrow="true">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Error</MudChip>
+                                </MudTooltip>
+                            }
+                            else if (context.LastNotifiedUtc.HasValue)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Success">
+                                    OK @context.LastNotifiedUtc.Value.ToLocalTime().ToString("d MMM h:mm tt")
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Never notified</MudText>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                               OnClick="@(() => OpenEditIntegrationDialogAsync(context))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => DeleteIntegrationAsync(context))" />
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </MudItem>
 </MudGrid>
 
 @code {
@@ -709,6 +868,20 @@
     private bool _hdhrDisabledByEnv;
     private HdhrSettingsSnapshot? _appliedHdhrSettings;
 
+    private bool _loadingRefreshSettings;
+    private bool _savingRefreshSettings;
+    private string _refreshScheduleKind = "6h";
+    private bool _refreshStartupCatchup = true;
+    private DateTime? _nextRefreshUtc;
+    private string? _refreshError;
+    private string? _refreshSuccess;
+
+    private int? RefreshIntervalHoursAdapter
+    {
+        get => _refreshScheduleKind == "manual" ? null : int.TryParse(_refreshScheduleKind.TrimEnd('h'), out var h) ? h : (int?)null;
+        set => _refreshScheduleKind = value is null ? "manual" : $"{value}h";
+    }
+
     private bool _loadingGenHlsSettings;
     private bool _savingGenHlsSettings;
     private bool _genHlsRestartRequired;
@@ -723,10 +896,71 @@
 
     private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
 
+    private bool _loadingIntegrations;
+    private List<DownstreamIntegrationDto> _integrations = [];
+
+    private static string IntegrationKindLabel(string kind) => kind switch
+    {
+        "jellyfin" => "Jellyfin",
+        "emby" => "Emby",
+        "webhook" => "Webhook",
+        _ => kind,
+    };
+
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync());
+        await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync());
+    }
+
+    private async Task LoadIntegrationsAsync()
+    {
+        _loadingIntegrations = true;
+        try
+        {
+            _integrations = await DownstreamIntegrations.GetAllAsync(CancellationToken.None);
+        }
+        catch { }
+        finally
+        {
+            _loadingIntegrations = false;
+        }
+    }
+
+    private async Task OpenAddIntegrationDialogAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium };
+        var parameters = new DialogParameters<AddEditIntegrationDialog>
+        {
+            { x => x.OnSaved, EventCallback.Factory.Create(this, LoadIntegrationsAsync) },
+        };
+        await DialogService.ShowAsync<AddEditIntegrationDialog>("Add Integration", parameters, options);
+    }
+
+    private async Task OpenEditIntegrationDialogAsync(DownstreamIntegrationDto integration)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium };
+        var parameters = new DialogParameters<AddEditIntegrationDialog>
+        {
+            { x => x.Integration, integration },
+            { x => x.OnSaved, EventCallback.Factory.Create(this, LoadIntegrationsAsync) },
+        };
+        await DialogService.ShowAsync<AddEditIntegrationDialog>("Edit Integration", parameters, options);
+    }
+
+    private async Task DeleteIntegrationAsync(DownstreamIntegrationDto integration)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Integration",
+            $"Remove '{integration.Name}'? This cannot be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        var error = await DownstreamIntegrations.DeleteAsync(integration.DownstreamIntegrationId, CancellationToken.None);
+        if (error is not null)
+            await DialogService.ShowMessageBoxAsync("Error", error);
+        else
+            await LoadIntegrationsAsync();
     }
 
     private async Task LoadProfilesAsync()
@@ -748,6 +982,56 @@
             return;
         }
         _activeProfileName = _profiles.FirstOrDefault(p => p.ProfileId == _activeProfileId)?.Name;
+    }
+
+    private async Task LoadRefreshScheduleAsync()
+    {
+        _loadingRefreshSettings = true;
+        _refreshError = null;
+        try
+        {
+            var settings = await RefreshSchedule.GetSettingsAsync(CancellationToken.None);
+            _refreshScheduleKind = settings.ScheduleKind;
+            _refreshStartupCatchup = settings.StartupCatchup;
+            _nextRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _refreshError = $"Failed to load refresh settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingRefreshSettings = false;
+        }
+    }
+
+    private async Task SaveRefreshScheduleAsync()
+    {
+        _savingRefreshSettings = true;
+        _refreshError = null;
+        _refreshSuccess = null;
+        try
+        {
+            var (succeeded, error) = await RefreshSchedule.UpdateAsync(
+                new RefreshScheduleSettings(_refreshScheduleKind, _refreshStartupCatchup), CancellationToken.None);
+
+            if (!succeeded)
+            {
+                _refreshError = error ?? "Failed to save refresh settings.";
+                return;
+            }
+
+            _nextRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(CancellationToken.None);
+            _refreshSuccess = "Refresh settings saved.";
+        }
+        catch (Exception ex)
+        {
+            _refreshError = $"Failed to save refresh settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingRefreshSettings = false;
+        }
     }
 
     private async Task LoadEndpointSecurityAsync()

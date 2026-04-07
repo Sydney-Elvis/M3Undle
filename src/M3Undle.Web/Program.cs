@@ -3,6 +3,7 @@ using M3Undle.Core.M3u;
 using Microsoft.AspNetCore.Diagnostics;
 using M3Undle.Web.Api;
 using M3Undle.Web.Application;
+using M3Undle.Web.Application.Downstream;
 using M3Undle.Web.Components;
 using M3Undle.Web.Components.Account;
 using M3Undle.Web.Data;
@@ -148,6 +149,12 @@ builder.Services.AddHttpClient("epg", client =>
     AutomaticDecompression = System.Net.DecompressionMethods.All,
 });
 
+// Named HttpClient for downstream notifications (Jellyfin, Emby, webhooks)
+builder.Services.AddHttpClient("downstream", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
@@ -232,6 +239,11 @@ builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
 builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
 builder.Services.AddScoped<IHdHomeRunSettingsService, HdHomeRunSettingsService>();
 builder.Services.AddScoped<IGeneratedHlsSettingsService, GeneratedHlsSettingsService>();
+builder.Services.AddScoped<IRefreshScheduleService, RefreshScheduleService>();
+builder.Services.AddScoped<IDownstreamIntegrationService, DownstreamIntegrationService>();
+builder.Services.AddSingleton<IDownstreamAdapter, JellyfinAdapter>();
+builder.Services.AddSingleton<IDownstreamAdapter, EmbyAdapter>();
+builder.Services.AddSingleton<IDownstreamAdapter, WebhookAdapter>();
 builder.Services.AddSingleton<IApplicationRestartService, ApplicationRestartService>();
 builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
@@ -250,6 +262,7 @@ builder.Services.AddSingleton<ProfilesPageService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshService>());
+builder.Services.AddHostedService<DownstreamNotificationService>();
 builder.Services.AddSingleton<HdHomeRunTunerManager>();
 builder.Services.AddSingleton<StreamingRegistry>();
 builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
@@ -362,6 +375,7 @@ app.MapCompatibilityEndpoints();
 app.MapXtreamEndpoints();
 app.MapEpgApiEndpoints();
 app.MapDashboardApiEndpoints();
+app.MapDownstreamApiEndpoints();
 app.MapHealthChecks("/health");
 
 app.Run();

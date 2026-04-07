@@ -59,6 +59,13 @@
                 <MudButton Variant="Variant.Outlined"
                            Color="Color.Default"
                            Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.FilterList"
+                           Href="@($"channels/mapping{(!string.IsNullOrEmpty(_profileId) ? $"?profile={_profileId}" : "")}")">
+                    Map Channels
+                </MudButton>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Default"
+                           Size="Size.Small"
                            StartIcon="@Icons.Material.Filled.FormatListNumbered"
                            OnClick="EnterNumberManagerAsync">
                     Manage Numbers

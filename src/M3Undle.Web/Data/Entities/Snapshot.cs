@@ -16,6 +16,9 @@ public sealed class Snapshot
     public int SeriesChannelCount { get; set; }
     public string? ErrorSummary { get; set; }
 
+    /// <summary>none | guide_only | lineup | breaking | null (first snapshot / no previous state)</summary>
+    public string? ChangeClass { get; set; }
+
     public Profile Profile { get; set; } = null!;
 }
 

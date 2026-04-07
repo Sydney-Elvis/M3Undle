@@ -3,6 +3,7 @@ using System;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260407133607_Alpha5_RefreshScheduleSettings")]
+    partial class Alpha5_RefreshScheduleSettings
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
@@ -283,81 +286,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDatabaseName("idx_channel_sources_health");
 
                     b.ToTable("channel_sources", (string)null);
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.DownstreamIntegration", b =>
-                {
-                    b.Property<string>("DownstreamIntegrationId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("downstream_integration_id");
-
-                    b.Property<string>("ApiKeyEncrypted")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("api_key_encrypted");
-
-                    b.Property<string>("BaseUrl")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("base_url");
-
-                    b.Property<DateTime>("CreatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("created_utc");
-
-                    b.Property<bool>("Enabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true)
-                        .HasColumnName("enabled");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("kind");
-
-                    b.Property<DateTime?>("LastNotifiedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("last_notified_utc");
-
-                    b.Property<string>("LastNotifyError")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("last_notify_error");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("name");
-
-                    b.Property<string>("ProfileId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("profile_id");
-
-                    b.Property<bool>("TriggerOnGuideUpdate")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true)
-                        .HasColumnName("trigger_on_guide_update");
-
-                    b.Property<bool>("TriggerOnLineupUpdate")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true)
-                        .HasColumnName("trigger_on_lineup_update");
-
-                    b.Property<DateTime>("UpdatedUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("updated_utc");
-
-                    b.Property<string>("WebhookHeadersJson")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("webhook_headers_json");
-
-                    b.HasKey("DownstreamIntegrationId");
-
-                    b.HasIndex("ProfileId")
-                        .HasDatabaseName("idx_downstream_integrations_profile");
-
-                    b.ToTable("downstream_integrations", (string)null);
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointAccessBinding", b =>
@@ -1687,10 +1615,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("snapshot_id");
 
-                    b.Property<string>("ChangeClass")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("change_class");
-
                     b.Property<int>("ChannelCountPublished")
                         .HasColumnType("INTEGER")
                         .HasColumnName("channel_count_published");
@@ -1999,16 +1923,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Provider");
 
                     b.Navigation("ProviderChannel");
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.DownstreamIntegration", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.Profile", "Profile")
-                        .WithMany()
-                        .HasForeignKey("ProfileId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Profile");
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EndpointAccessBinding", b =>

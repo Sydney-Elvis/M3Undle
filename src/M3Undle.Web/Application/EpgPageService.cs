@@ -135,6 +135,7 @@ public sealed class EpgPageService(
             HeadersJson = request.HeadersJson?.Trim(),
             UserAgent = request.UserAgent?.Trim(),
             TimeoutSeconds = request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 30,
+            RefreshIntervalHours = request.RefreshIntervalHours,
             CreatedUtc = now,
             UpdatedUtc = now,
         };
@@ -162,6 +163,8 @@ public sealed class EpgPageService(
         if (request.UserAgent is not null) source.UserAgent = request.UserAgent.Trim();
         if (request.TimeoutSeconds.HasValue)
             source.TimeoutSeconds = request.TimeoutSeconds.Value > 0 ? request.TimeoutSeconds.Value : 30;
+        if (request.RefreshIntervalHoursSet)
+            source.RefreshIntervalHours = request.RefreshIntervalHours;
 
         source.UpdatedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
@@ -550,6 +553,7 @@ public sealed class EpgPageService(
         TimeoutSeconds = s.TimeoutSeconds,
         LastSuccessUtc = s.LastSuccessUtc,
         LastFailureUtc = s.LastFailureUtc,
+        RefreshIntervalHours = s.RefreshIntervalHours,
         CreatedUtc = s.CreatedUtc,
         UpdatedUtc = s.UpdatedUtc,
     };

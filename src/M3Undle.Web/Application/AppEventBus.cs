@@ -2,18 +2,18 @@ using System.Threading.Channels;
 
 namespace M3Undle.Web.Application;
 
-public enum AppEventKind { RefreshStarted, RefreshCompleted, ProviderChanged, ProviderActivated, GroupFiltersChanged }
+public enum AppEventKind { RefreshStarted, RefreshCompleted, ProviderChanged, ProviderActivated, GroupFiltersChanged, RefreshScheduleChanged }
 
-public sealed record AppEvent(AppEventKind Kind, bool Succeeded = false, string? ErrorSummary = null);
+public sealed record AppEvent(AppEventKind Kind, bool Succeeded = false, string? ErrorSummary = null, string? ChangeClass = null);
 
 public sealed class AppEventBus
 {
     private readonly List<ChannelWriter<AppEvent>> _subscribers = [];
     private readonly Lock _lock = new();
 
-    public void Publish(AppEventKind kind, bool succeeded = false, string? errorSummary = null)
+    public void Publish(AppEventKind kind, bool succeeded = false, string? errorSummary = null, string? changeClass = null)
     {
-        var evt = new AppEvent(kind, succeeded, errorSummary);
+        var evt = new AppEvent(kind, succeeded, errorSummary, changeClass);
         lock (_lock)
         {
             _subscribers.RemoveAll(w => !w.TryWrite(evt));

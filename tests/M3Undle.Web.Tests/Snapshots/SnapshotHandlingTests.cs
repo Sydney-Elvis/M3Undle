@@ -380,7 +380,7 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
-    public async Task SnapshotBuilder_SecondFetch_ArchivesPreviousSnapshot()
+    public async Task SnapshotBuilder_SecondIdenticalFetch_DoesNotCreateNewSnapshot()
     {
         await using var fixture = await CreateFixtureAsync();
 
@@ -403,6 +403,69 @@ public sealed class SnapshotHandlingTests
             await using (var db2 = fixture.CreateDbContext())
             {
                 await CreateBuilder(db2, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var snapshots = await verify.Snapshots.OrderByDescending(x => x.CreatedUtc).ToListAsync();
+            Assert.HasCount(1, snapshots);
+            Assert.AreEqual("active", snapshots[0].Status);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_SecondChangedFetch_ArchivesPreviousSnapshot()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var configure = fixture.CreateDbContext())
+            {
+                var group = await configure.ProviderGroups.SingleAsync(x => x.ProviderId == "provider-1" && x.RawName == "News");
+                var filter = await configure.ProfileGroupFilters
+                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroupId == group.ProviderGroupId);
+
+                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                filter.OutputName = "News";
+                filter.ChannelMode = LineupReviewSemantics.GroupModeAutoUpdate;
+                filter.TrackingPolicy = LineupReviewSemantics.TrackingPolicyAutoAddAll;
+                filter.TrackNewChannels = false;
+                filter.UpdatedUtc = DateTime.UtcNow;
+
+                var channelRows = await configure.ProfileGroupChannelFilters
+                    .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                    .ToListAsync();
+
+                foreach (var channelRow in channelRows)
+                {
+                    channelRow.State = LineupReviewSemantics.ChannelStateIncluded;
+                    channelRow.UpdatedUtc = DateTime.UtcNow;
+                }
+
+                await configure.SaveChangesAsync();
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleUpdatedM3u, tempDir).RunAsync(CancellationToken.None);
             }
 
             await using var verify = fixture.CreateDbContext();
@@ -680,6 +743,11 @@ public sealed class SnapshotHandlingTests
         "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US\n" +
         "http://example.com/stream/cnn\n";
 
+    private const string SampleUpdatedM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US HD\n" +
+        "http://example.com/stream/cnn\n";
+
     private const string SampleMixedM3u =
         "#EXTM3U\n" +
         "#EXTINF:-1 group-title=\"News\",Live News\n" +
@@ -744,9 +812,11 @@ public sealed class SnapshotHandlingTests
         var sp = services.BuildServiceProvider();
         var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
         var customGroupService = new CustomGroupPageService(scopeFactory, new AppEventBus());
+        var refreshScheduleService = new M3Undle.Web.Tests.Stubs.NullRefreshScheduleService();
         return new SnapshotBuilder(
             db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
-            runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService, NullLogger<SnapshotBuilder>.Instance);
+            runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService,
+            refreshScheduleService, NullLogger<SnapshotBuilder>.Instance);
     }
 
     private static async Task<TestFixture> CreateFixtureAsync()
