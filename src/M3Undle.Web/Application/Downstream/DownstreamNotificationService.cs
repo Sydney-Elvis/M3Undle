@@ -59,7 +59,9 @@ public sealed class DownstreamNotificationService(
             integrations = await db.DownstreamIntegrations
                 .AsNoTracking()
                 .Where(x => x.Enabled &&
-                    (trigger == DownstreamTrigger.LineupUpdate ? x.TriggerOnLineupUpdate : x.TriggerOnGuideUpdate))
+                    (changeClass == null
+                        ? (x.TriggerOnLineupUpdate || x.TriggerOnGuideUpdate)
+                        : (trigger == DownstreamTrigger.LineupUpdate ? x.TriggerOnLineupUpdate : x.TriggerOnGuideUpdate)))
                 .ToListAsync(ct);
         }
         catch (Exception ex)

@@ -814,6 +814,7 @@ public sealed class ChannelSessionIntegrationTests
 
         public async ValueTask DisposeAsync()
         {
+            await Manager.ResetAllAsync();
             await _serviceProvider.DisposeAsync();
             await _connection.DisposeAsync();
         }
