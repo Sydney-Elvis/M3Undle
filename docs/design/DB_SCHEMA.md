@@ -4,7 +4,7 @@
 1. Stable channel identity (canonical channel stays stable even if provider changes URL/name/order)
 2. Authoritative numbering (tvg-chno owned by us; stable across refresh)
 3. Support provider churn + ephemeral channels (PPV/events that appear and disappear)
-4. Prepare for multi-provider mapping and future redundancy/failover
+4. Prepare for future source mapping and reserved schema growth
 5. Fast UI: indexed lookups, minimal joins for common screens
 
 ## Terminology
@@ -345,11 +345,11 @@ Several schema fields and tables are present for forward-compatibility but are n
 
 ### `profiles.merge_mode`
 - **Current:** Always `single`. The `merged` and `redundancy-ready` values are schema-valid but unused.
-- **Future:** Controls how multiple providers are blended or failed-over for a single profile output.
+- **Future:** Reserved for possible profile source strategies if user-facing behavior is added later.
 
 ### `profile_providers.priority`
-- **Current:** Ordering/preference metadata only. Multi-provider merge and failover behavior is not exposed yet.
-- **Future:** Priority ordering for multi-provider merge and failover.
+- **Current:** Ordering/preference metadata only. No user-facing provider-priority behavior is exposed.
+- **Future:** Reserved for profile source ordering if that behavior is introduced later.
 
 ## Tables active in V1 (beyond the original design)
 
@@ -373,7 +373,7 @@ Several schema fields and tables are present for forward-compatibility but are n
 
 ### `channel_sources`
 - **Current:** Schema present, not populated.
-- **Future:** Maps canonical channels to one or more provider stream candidates. Foundation for multi-provider redundancy and failover.
+- **Future:** Maps canonical channels to one or more provider stream candidates. Foundation for later source-selection behavior if needed.
 
 ### `channel_match_rules`
 - **Current:** Schema present, not populated.

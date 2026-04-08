@@ -10,7 +10,7 @@ that supports:
 -   lightweight buffering
 -   multiple downstream subscribers on a single upstream stream
 -   reconnect logic for unstable providers
--   future extensibility for provider failover, access control, and
+-   future extensibility for access control and
     optional FFmpeg-based repair/transcode
 
 This document describes **what to build**, **why it should be built this
@@ -399,8 +399,6 @@ Streaming logic should remain independent from endpoint logic.
 
 The design must support future additions:
 
--   multiple providers per channel
--   automatic provider failover
 -   profile‑based access
 -   multiple virtual tuners
 
@@ -452,7 +450,6 @@ Phase 2 --- Stability
 
 Phase 3 --- Extensibility
 
--   provider failover
 -   optional FFmpeg adapter
 -   advanced monitoring
 
