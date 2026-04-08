@@ -45,7 +45,7 @@ Status: Complete.
 #### Provider Configuration UI
 - [x] List / add / edit providers
 - [x] Playlist URL + optional EPG URL
-- [x] Active toggle (one active provider at a time)
+- [x] Publish-target toggle (later replaced by the active-profile model)
 - [x] Associate provider to profile
 - [x] Inline profile creation from provider edit flow
 - [x] Auto-create profile on import
@@ -178,7 +178,6 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 - [ ] Configurable refresh schedule in Settings UI
 - [x] New channels inbox / review queue
 - [ ] Dynamic groups for rotating/event feeds
-- [ ] Provider switch assistance
 
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:

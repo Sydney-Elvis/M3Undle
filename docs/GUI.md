@@ -19,7 +19,7 @@ The interface emphasizes:
 
 The Provider section lets you configure and manage your upstream sources.
 
-Add multiple providers and browse each one's catalog. You can switch the active provider at any time — the active provider is the one that drives the published output at `/m3u/m3undle.m3u` and `/xmltv/m3undle.xml`.
+Add multiple providers and browse each one's catalog. The Provider page manages upstream sources and their profile associations. Published output at `/m3u/m3undle.m3u` and `/xmltv/m3undle.xml` is driven by the active profile.
 
 Configuration includes:
 
@@ -94,8 +94,7 @@ Clients receive URLs like:
 
 `/stream/<streamKey>`
 
-Stream keys are stable across refreshes. They only regenerate if the active provider is switched.
-
+Stream keys are stable across refreshes. They only regenerate when the published channel identity changes.
 This protects DVR mappings and client configurations.
 
 ---

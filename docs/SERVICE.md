@@ -38,7 +38,7 @@ At a high level, the service:
 ### Provider
 An upstream source you configure (URL + credentials). Providers can be large and noisy.
 
-Multiple providers can be configured and previewed. You can compare their catalogs and switch the active provider at any time. Only one provider drives the published output at a time — switching will rebuild the published lineup from the new source.
+Multiple providers can be configured and previewed. Published output is resolved through the active profile and its linked provider configuration. The shared `/m3u/m3undle.m3u` and `/xmltv/m3undle.xml` endpoints always serve the currently active profile.
 
 ### Group
 A category label from the provider playlist (e.g., `USA | News`, `LIVE | NFL (Direct)`, `UFC Fight Night | ...`). Groups are the primary way to understand the shape of a provider's catalog.
@@ -67,7 +67,7 @@ Clients receive a URL like `/stream/<streamKey>` instead of a raw provider URL.
 
 A refresh run follows this pattern:
 
-1. Fetch provider inputs (M3U + XMLTV) from the active provider
+1. Fetch provider inputs (M3U + XMLTV) for the active profile from its linked provider configuration
 2. Parse provider groups and channels into memory
 3. Build snapshot output (M3U + XMLTV files written to disk)
 4. Validate output (basic integrity checks)
@@ -111,7 +111,7 @@ The Web UI is intended to make large catalogs manageable.
 Views:
 
 - **Overview**: see system health, published output, active profiles, and action items
-- **Provider**: configure providers, preview catalogs, and manage the active provider
+- **Provider**: configure providers, preview catalogs, and manage provider/profile associations
   - Import providers from config.yaml (read-only, credentials secure)
   - Add/edit providers directly in the GUI (for testing or one-off providers)
   - Check provider health (credentials defined, last successful fetch, etc.)

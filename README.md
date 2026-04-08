@@ -13,7 +13,7 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - CLI tooling (provider fetch, group discovery, M3U/XMLTV filtering)
 > - Secure `.env` credential handling
 > - Database-backed provider configuration
-> - Provider switching with snapshot lifecycle
+> - Published lineup versioning with last-known-good lifecycle
 > - Group preview (read-only catalog browsing)
 > - Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
 > - Channel numbering assignment and group renaming at the output layer
@@ -30,7 +30,6 @@ Designed for self-hosted systems like NextPVR, Jellyfin, or any client that cons
 > - Configurable refresh schedule in Settings UI
 > - New channels inbox / review queue
 > - Dynamic groups for rotating/event feeds
-> - Provider switch assistance
 
 ---
 
@@ -109,7 +108,7 @@ The service layer is in **Alpha** — functional for daily-driver LAN use. See `
 Current Alpha capabilities include:
 
 - Database-backed configuration
-- Provider switching with snapshot lifecycle
+- Published lineup versioning with last-known-good lifecycle
 - Group preview (read-only catalog browse)
 - Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
 - Channel numbering assignment and group rename at the output layer

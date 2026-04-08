@@ -348,7 +348,7 @@ Several schema fields and tables are present for forward-compatibility but are n
 - **Future:** Controls how multiple providers are blended or failed-over for a single profile output.
 
 ### `profile_providers.priority`
-- **Current:** Stored but has no effect. Currently one active provider per profile.
+- **Current:** Ordering/preference metadata only. Multi-provider merge and failover behavior is not exposed yet.
 - **Future:** Priority ordering for multi-provider merge and failover.
 
 ## Tables active in V1 (beyond the original design)
