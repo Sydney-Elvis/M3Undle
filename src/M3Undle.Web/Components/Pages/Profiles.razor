@@ -116,7 +116,14 @@ else
                             {
                                 <div @onclick:stopPropagation="true">
                                     <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
-                                               OnClick="@(() => SetActiveAsync(profile))">Set Active</MudButton>
+                                               Disabled="@(_activatingProfileId is not null)"
+                                               OnClick="@(() => SetActiveAsync(profile))">
+                                        @if (_activatingProfileId == profile.ProfileId)
+                                        {
+                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                        }
+                                        @(_activatingProfileId == profile.ProfileId ? "Setting…" : "Set Active")
+                                    </MudButton>
                                 </div>
                             }
                             <div @onclick:stopPropagation="true">
@@ -207,6 +214,8 @@ else
     private bool _isLoading;
     private string? _loadError;
 
+    private string? _activatingProfileId;
+
     private bool _createDialogOpen;
     private string _createName = string.Empty;
     private string? _createError;
@@ -290,6 +299,8 @@ else
 
     private async Task SetActiveAsync(ProfilePageItemDto profile)
     {
+        _activatingProfileId = profile.ProfileId;
+        StateHasChanged();
         try
         {
             var error = await ProfilesService.SetProfileActiveAsync(profile.ProfileId, CancellationToken.None);
@@ -304,6 +315,10 @@ else
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to set profile active: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _activatingProfileId = null;
         }
     }
 
