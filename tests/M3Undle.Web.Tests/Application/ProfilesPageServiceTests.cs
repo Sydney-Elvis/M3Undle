@@ -1,0 +1,183 @@
+using M3Undle.Web.Application;
+using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace M3Undle.Web.Tests.Application;
+
+[TestClass]
+public sealed class ProfilesPageServiceTests
+{
+    [TestMethod]
+    public async Task SetProfileActiveAsync_SwitchesActiveProfile_AndTriggersRefresh()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", true), ("p2", false));
+
+        var refreshTrigger = new TestRefreshTrigger();
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            refreshTrigger,
+            new AppEventBus());
+
+        var error = await service.SetProfileActiveAsync("p2", CancellationToken.None);
+
+        Assert.IsNull(error);
+        Assert.AreEqual(1, refreshTrigger.TriggerRefreshCallCount);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        var p2 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p2");
+        Assert.IsFalse(p1.IsActive);
+        Assert.IsTrue(p2.IsActive);
+    }
+
+    [TestMethod]
+    public async Task SetProfileActiveAsync_WhenRefreshInProgress_ReturnsConflict()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", true));
+
+        var refreshTrigger = new TestRefreshTrigger { IsRefreshingValue = true };
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            refreshTrigger,
+            new AppEventBus());
+
+        var error = await service.SetProfileActiveAsync("p1", CancellationToken.None);
+
+        Assert.IsNotNull(error);
+        Assert.AreEqual(0, refreshTrigger.TriggerRefreshCallCount);
+    }
+
+    [TestMethod]
+    public async Task AutoActivateProfileIfNoneAsync_WhenNoActiveProfile_ActivatesTargetAndTriggersRefresh()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", false), ("p2", false));
+
+        var refreshTrigger = new TestRefreshTrigger();
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            refreshTrigger,
+            new AppEventBus());
+
+        await service.AutoActivateProfileIfNoneAsync("p2", CancellationToken.None);
+
+        Assert.AreEqual(1, refreshTrigger.TriggerRefreshCallCount);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        var p2 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p2");
+        Assert.IsFalse(p1.IsActive);
+        Assert.IsTrue(p2.IsActive);
+    }
+
+    [TestMethod]
+    public async Task AutoActivateProfileIfNoneAsync_WhenActiveProfileExists_DoesNotChangeActiveProfile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", true), ("p2", false));
+
+        var refreshTrigger = new TestRefreshTrigger();
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            refreshTrigger,
+            new AppEventBus());
+
+        await service.AutoActivateProfileIfNoneAsync("p2", CancellationToken.None);
+
+        Assert.AreEqual(0, refreshTrigger.TriggerRefreshCallCount);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        var p2 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p2");
+        Assert.IsTrue(p1.IsActive);
+        Assert.IsFalse(p2.IsActive);
+    }
+
+    private static async Task SeedProfilesAsync(SqliteConnection connection, params (string ProfileId, bool IsActive)[] profiles)
+    {
+        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var db = new ApplicationDbContext(options);
+
+        var now = DateTime.UtcNow;
+        foreach (var profile in profiles)
+        {
+            db.Profiles.Add(new Profile
+            {
+                ProfileId = profile.ProfileId,
+                Name = profile.ProfileId,
+                Enabled = true,
+                IsActive = profile.IsActive,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task<TestFixture> CreateFixtureAsync()
+    {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var services = new ServiceCollection();
+        services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(connection));
+        var provider = services.BuildServiceProvider();
+
+        await using (var scope = provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await db.Database.EnsureCreatedAsync();
+        }
+
+        return new TestFixture(connection, provider);
+    }
+
+    private sealed class TestFixture(SqliteConnection connection, ServiceProvider services) : IAsyncDisposable
+    {
+        public SqliteConnection Connection { get; } = connection;
+        public ServiceProvider Services { get; } = services;
+
+        public ApplicationDbContext CreateDbContext()
+        {
+            var options = new DbContextOptionsBuilder<ApplicationDbContext>()
+                .UseSqlite(Connection)
+                .Options;
+            return new ApplicationDbContext(options);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Services.DisposeAsync();
+            await Connection.DisposeAsync();
+        }
+    }
+
+    private sealed class TestRefreshTrigger : IRefreshTrigger
+    {
+        public bool IsRefreshingValue { get; set; }
+        public int TriggerRefreshCallCount { get; private set; }
+
+        public bool IsRefreshing => IsRefreshingValue;
+
+        public bool TriggerRefresh()
+        {
+            TriggerRefreshCallCount++;
+            return true;
+        }
+
+        public bool TriggerBuildOnly() => true;
+        public void CancelRefresh() { }
+    }
+}

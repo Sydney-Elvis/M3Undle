@@ -275,6 +275,7 @@ public static class ProviderApiEndpoints
         CreateProviderRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        IRefreshTrigger refreshTrigger,
         SecretEncryptionService encryption,
         ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
@@ -343,6 +344,10 @@ public static class ProviderApiEndpoints
             return TypedResults.Conflict("Provider could not be created due to a database conflict.");
         }
 
+        var linkedProfileId = profileIdsToApply.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(linkedProfileId))
+            await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
+
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
 
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
@@ -356,6 +361,7 @@ public static class ProviderApiEndpoints
         CreateProviderRequest request,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        IRefreshTrigger refreshTrigger,
         SecretEncryptionService encryption,
         ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
@@ -444,6 +450,10 @@ public static class ProviderApiEndpoints
         ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
 
         await db.SaveChangesAsync(cancellationToken);
+
+        var linkedProfileId = profileIdsToApply.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(linkedProfileId))
+            await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
 
         var newDto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         using var createScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
@@ -736,6 +746,7 @@ public static class ProviderApiEndpoints
         EnvironmentVariableService envVarService,
         ApplicationDbContext db,
         AppEventBus eventBus,
+        IRefreshTrigger refreshTrigger,
         ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
     {
@@ -814,6 +825,10 @@ public static class ProviderApiEndpoints
         ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
 
         await db.SaveChangesAsync(cancellationToken);
+
+        var linkedProfileId = profileIdsToApply.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(linkedProfileId))
+            await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
 
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
 
@@ -1660,6 +1675,32 @@ public static class ProviderApiEndpoints
         }
 
         return value is < 1 or > 50 ? null : value;
+    }
+
+    private static async Task AutoActivateProfileIfNoneAsync(
+        ApplicationDbContext db,
+        IRefreshTrigger refreshTrigger,
+        AppEventBus eventBus,
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        var hasActive = await db.Profiles
+            .AsNoTracking()
+            .AnyAsync(x => x.IsActive, cancellationToken);
+        if (hasActive)
+            return;
+
+        var now = DateTime.UtcNow;
+        var updated = await db.Profiles
+            .Where(x => x.ProfileId == profileId && x.Enabled)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, true)
+                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
+        if (updated == 0)
+            return;
+
+        eventBus.Publish(AppEventKind.ProviderActivated);
+        refreshTrigger.TriggerRefresh();
     }
 
     private static string BuildNullKeyComposite(string displayName, string streamUrl, string? groupTitle)

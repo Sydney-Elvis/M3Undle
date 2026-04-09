@@ -142,7 +142,7 @@ internal sealed class ProfilesPageService(
 
         var now = DateTime.UtcNow;
         await db.Profiles
-            .Where(x => x.ProfileId == profileId)
+            .Where(x => x.ProfileId == profileId && x.Enabled)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(p => p.IsActive, true)
                 .SetProperty(p => p.UpdatedUtc, now), ct);

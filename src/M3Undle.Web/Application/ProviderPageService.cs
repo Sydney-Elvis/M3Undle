@@ -216,6 +216,7 @@ public sealed class ProviderPageService(
         ApplyProviderProfiles(db, provider.ProviderId, [profile.ProfileId]);
 
         await db.SaveChangesAsync(cancellationToken);
+        await AutoActivateProfileIfNoneAsync(db, profile.ProfileId, cancellationToken);
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);
         return (dto, null);
@@ -288,6 +289,10 @@ public sealed class ProviderPageService(
         {
             return (null, "Provider could not be created due to a database conflict.");
         }
+
+        var linkedProfileId = profileIdsToApply.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(linkedProfileId))
+            await AutoActivateProfileIfNoneAsync(db, linkedProfileId, cancellationToken);
 
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);
@@ -570,6 +575,27 @@ public sealed class ProviderPageService(
             return 10;
 
         return value is < 1 or > 50 ? null : value;
+    }
+
+    private async Task AutoActivateProfileIfNoneAsync(ApplicationDbContext db, string profileId, CancellationToken cancellationToken)
+    {
+        var hasActive = await db.Profiles
+            .AsNoTracking()
+            .AnyAsync(x => x.IsActive, cancellationToken);
+        if (hasActive)
+            return;
+
+        var now = DateTime.UtcNow;
+        var updated = await db.Profiles
+            .Where(x => x.ProfileId == profileId && x.Enabled)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, true)
+                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
+        if (updated == 0)
+            return;
+
+        eventBus.Publish(AppEventKind.ProviderActivated);
+        refreshTrigger.TriggerRefresh();
     }
 
     private static async Task<Dictionary<string, string[]>> ValidateProviderRequestAsync(
