@@ -1093,61 +1093,14 @@ public static class CompatibilityEndpoints
         return Results.Ok(new { cleared = true });
     }
 
-    private static async Task ServeStatusAsync(HttpContext context, ApplicationDbContext db, CancellationToken cancellationToken)
+    private static async Task ServeStatusAsync(
+        HttpContext context,
+        LineupStatusService lineupStatusService,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var activeSnapshot = await db.Snapshots
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Status == "active", cancellationToken);
-
-            var activeProfileId = await db.Profiles.AsNoTracking()
-                .Where(x => x.IsActive)
-                .Select(x => x.ProfileId)
-                .FirstOrDefaultAsync(cancellationToken);
-            Provider? activeProvider = null;
-            if (activeProfileId is not null)
-            {
-                var pp = await db.ProfileProviders.AsNoTracking()
-                    .Where(x => x.ProfileId == activeProfileId && x.Enabled)
-                    .OrderBy(x => x.Priority)
-                    .FirstOrDefaultAsync(cancellationToken);
-                if (pp is not null)
-                    activeProvider = await db.Providers.AsNoTracking()
-                        .FirstOrDefaultAsync(x => x.ProviderId == pp.ProviderId && x.Enabled, cancellationToken);
-            }
-
-            FetchRunInfo? lastRefresh = null;
-            if (activeProvider is not null)
-            {
-                var run = await db.FetchRuns
-                    .AsNoTracking()
-                    .Where(x => x.ProviderId == activeProvider.ProviderId && x.Type == "snapshot")
-                    .OrderByDescending(x => x.StartedUtc)
-                    .FirstOrDefaultAsync(cancellationToken);
-
-                if (run is not null)
-                {
-                    lastRefresh = new FetchRunInfo(run.Status, run.StartedUtc, run.FinishedUtc, run.ChannelCountSeen, run.ErrorSummary);
-                }
-            }
-
-            var lineupStatus = activeSnapshot is not null
-                ? (lastRefresh?.Status == "fail" ? "degraded" : "ok")
-                : "no_active_snapshot";
-            var lineup = new LineupStatusInfo(
-                Name: "m3undle",
-                Status: lineupStatus,
-                ActiveProvider: activeProvider is null ? null : new ActiveProviderInfo(activeProvider.ProviderId, activeProvider.Name),
-                ActiveSnapshot: activeSnapshot is null ? null : new ActiveSnapshotInfo(
-                    activeSnapshot.SnapshotId,
-                    activeSnapshot.ProfileId,
-                    activeSnapshot.CreatedUtc,
-                    activeSnapshot.ChannelCountPublished),
-                LastRefresh: lastRefresh);
-
-            var status = new StatusResponse(Status: lineupStatus, Lineups: [lineup]);
-
+            var status = await lineupStatusService.GetStatusAsync(cancellationToken);
             context.Response.ContentType = "application/json; charset=utf-8";
             await JsonSerializer.SerializeAsync(context.Response.Body, status, JsonOptions, cancellationToken);
         }
@@ -1243,32 +1196,6 @@ public static class CompatibilityEndpoints
             ? TypedResults.NotFound()
             : Results.Json(snapshot, JsonOptions);
     }
-
-    private sealed record StatusResponse(
-        string Status,
-        IReadOnlyList<LineupStatusInfo> Lineups);
-
-    private sealed record LineupStatusInfo(
-        string Name,
-        string Status,
-        ActiveProviderInfo? ActiveProvider,
-        ActiveSnapshotInfo? ActiveSnapshot,
-        FetchRunInfo? LastRefresh);
-
-    private sealed record ActiveProviderInfo(string ProviderId, string Name);
-
-    private sealed record ActiveSnapshotInfo(
-        string SnapshotId,
-        string ProfileId,
-        DateTime CreatedUtc,
-        int ChannelCountPublished);
-
-    private sealed record FetchRunInfo(
-        string Status,
-        DateTime StartedUtc,
-        DateTime? FinishedUtc,
-        int? ChannelCountSeen,
-        string? ErrorSummary);
 
     private sealed record StreamStatusSummary(
         int ActiveSessionCount,

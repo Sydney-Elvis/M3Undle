@@ -2,6 +2,37 @@ html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
 }
 
+html[data-prehydrate-theme="dark"] {
+    color-scheme: dark;
+    --mud-palette-primary: #1FB6A6;
+    --mud-palette-primary-text: #081314;
+    --mud-palette-secondary: #3B82F6;
+    --mud-palette-secondary-text: #FFFFFF;
+    --mud-palette-background: #0F1720;
+    --mud-palette-surface: #111B26;
+    --mud-palette-appbar-background: #0E3535;
+    --mud-palette-appbar-text: #E6EDF3;
+    --mud-palette-drawer-background: #0A2020;
+    --mud-palette-drawer-text: #A8CECC;
+    --mud-palette-drawer-icon: #1FB6A6;
+    --mud-palette-text-primary: #E6EDF3;
+    --mud-palette-text-secondary: #9FB2C4;
+    --mud-palette-text-disabled: #5F7489;
+    --mud-palette-divider: #1F2D3A;
+    --mud-palette-action-default: #1FB6A6;
+    --mud-palette-lines-inputs: rgba(255, 255, 255, 0.15);
+    --mud-palette-success: #22C55E;
+    --mud-palette-warning: #F59E0B;
+    --mud-palette-error: #EF4444;
+    --mud-palette-info: #38BDF8;
+}
+
+html[data-prehydrate-theme="dark"],
+html[data-prehydrate-theme="dark"] body {
+    background-color: #0F1720;
+    color: #E6EDF3;
+}
+
 a, .btn-link {
     color: #006bb7;
 }

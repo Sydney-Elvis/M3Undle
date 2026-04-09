@@ -84,6 +84,7 @@ public sealed class HdHomeRunTunerCountResolver(
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         return db.SiteSettings
             .AsNoTracking()
+            .OrderBy(x => x.Id)
             .Select(x => x.HdhrTunerCountOverride)
             .FirstOrDefault();
     }

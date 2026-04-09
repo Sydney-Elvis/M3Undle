@@ -217,6 +217,7 @@ public sealed class ProviderPageService(
 
         await db.SaveChangesAsync(cancellationToken);
         await AutoActivateProfileIfNoneAsync(db, profile.ProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);
         return (dto, null);
@@ -293,6 +294,7 @@ public sealed class ProviderPageService(
         var linkedProfileId = profileIdsToApply.FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(linkedProfileId))
             await AutoActivateProfileIfNoneAsync(db, linkedProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
 
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);

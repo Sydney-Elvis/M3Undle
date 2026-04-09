@@ -18,7 +18,10 @@ public sealed class HdHomeRunSettingsService(
 {
     public async Task<HdhrSettingsState> GetSettingsAsync(CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings.AsNoTracking().FirstOrDefaultAsync(ct)
+        var settings = await db.SiteSettings
+            .AsNoTracking()
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(ct)
             ?? new SiteSettings { Id = 1 };
 
         var providerLimit = tunerCountResolver.QueryActiveProviderStreamLimit();
@@ -34,7 +37,9 @@ public sealed class HdHomeRunSettingsService(
 
     public async Task<HdhrSettingsUpdateResult> UpdateAsync(UpdateHdhrSettingsCommand command, CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+        var settings = await db.SiteSettings
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(ct);
         if (settings is null)
         {
             settings = new SiteSettings { Id = 1 };
@@ -84,7 +89,9 @@ public sealed class HdHomeRunSettingsService(
 
     public async Task ClearRestartRequiredAsync(CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+        var settings = await db.SiteSettings
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(ct);
         if (settings is null || !settings.HdhrSettingsRestartRequired)
             return;
 

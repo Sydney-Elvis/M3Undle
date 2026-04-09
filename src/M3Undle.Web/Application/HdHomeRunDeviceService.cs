@@ -177,7 +177,10 @@ public sealed class HdHomeRunDeviceService(
         {
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
-            var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+            var settings = db.SiteSettings
+                .AsNoTracking()
+                .OrderBy(x => x.Id)
+                .FirstOrDefault();
             if (settings is not null)
                 return dbSelector(settings);
         }
@@ -195,7 +198,10 @@ public sealed class HdHomeRunDeviceService(
         {
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
-            var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+            var settings = db.SiteSettings
+                .AsNoTracking()
+                .OrderBy(x => x.Id)
+                .FirstOrDefault();
             return settings is not null ? selector(settings) : default;
         }
         catch

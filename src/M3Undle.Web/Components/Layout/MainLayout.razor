@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject NavigationManager NavigationManager
+@inject IJSRuntime JS
 @inject M3Undle.Web.Application.AppEventBus EventBus
 @inject M3Undle.Web.Application.IRefreshTrigger RefreshTrigger
 @inject IDialogService DialogService
@@ -288,6 +289,7 @@
             _systemIsDark = await _themeProvider.GetSystemDarkModeAsync();
             _isDarkMode = _systemIsDark;
             await _themeProvider.WatchSystemDarkModeAsync(OnSystemDarkModeChanged);
+            await JS.InvokeVoidAsync("m3undleThemeBootstrap.clear");
             StateHasChanged();
         }
     }

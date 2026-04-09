@@ -258,6 +258,7 @@ builder.Services.AddScoped<ChannelListPageService>();
 builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
 builder.Services.AddSingleton<DashboardStatsService>();
+builder.Services.AddSingleton<LineupStatusService>();
 builder.Services.AddSingleton<ProfilesPageService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());

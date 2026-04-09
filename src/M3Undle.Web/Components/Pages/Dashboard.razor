@@ -1,17 +1,18 @@
+@attribute [StreamRendering]
+@using Microsoft.AspNetCore.Components
 @page "/"
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
-@using System.Net.Http.Json
-@inject HttpClient Http
 @inject NavigationManager Nav
-@inject IJSRuntime JS
 @inject IJsApiService JsApiService
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @inject DashboardStatsService DashboardStats
+@inject LineupStatusService StatusService
 @inject IRefreshScheduleService RefreshScheduleService
+@inject PersistentComponentState ApplicationState
 @implements IDisposable
 
 <PageTitle>M3Undle</PageTitle>
@@ -342,7 +343,7 @@
 @code {
     private const int ProfileTileDisplayBudget = 4;
 
-    private StatusResponse? _status;
+    private LineupStatusResponse? _status;
     private DashboardStatsDto? _dashboardStats;
     private bool _isLoading;
     private bool _isRefreshing;
@@ -356,6 +357,7 @@
     private DateTime? _refreshStartedAt;
     private PeriodicTimer? _elapsedTimer;
     private PeriodicTimer? _streamTimer;
+    private PersistingComponentStateSubscription? _persistSubscription;
     private bool _isCancelling;
     private int _streamSessions;
     private int _streamClients;
@@ -374,12 +376,24 @@
         _m3uUrl = $"{baseUri}/m3u/m3undle.m3u";
         _xmltvUrl = $"{baseUri}/xmltv/m3undle.xml";
 
-        if (!RendererInfo.IsInteractive) return;
-
         _isRefreshing = RefreshTrigger.IsRefreshing;
         if (_isRefreshing)
         {
             _refreshStartedAt = DateTime.UtcNow;
+        }
+
+        var restoredFromPrerender = TryRestorePersistedState();
+        if (!restoredFromPrerender)
+        {
+            await LoadAllAsync();
+        }
+
+        _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
+
+        if (!RendererInfo.IsInteractive) return;
+
+        if (_isRefreshing)
+        {
             StartElapsedTimer();
         }
 
@@ -390,7 +404,10 @@
         _streamTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
         _ = RunStreamTimerAsync(_streamTimer);
 
-        await LoadAllAsync();
+        if (restoredFromPrerender)
+        {
+            _ = LoadRefreshScheduleAsync();
+        }
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -452,7 +469,7 @@
 
         try
         {
-            _status = await Http.GetFromJsonAsync<StatusResponse>("/status", _cts.Token);
+            _status = await StatusService.GetStatusAsync(_cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -482,6 +499,7 @@
 
     public void Dispose()
     {
+        _persistSubscription?.Dispose();
         _cts.Cancel();
         _cts.Dispose();
         _eventSubscription?.Dispose();
@@ -575,30 +593,41 @@
         Snackbar.Add("Copied to clipboard", Severity.Success);
     }
 
-    private sealed record StatusResponse(string Status, IReadOnlyList<LineupStatusInfo>? Lineups)
+    private bool TryRestorePersistedState()
     {
-        public LineupStatusInfo? Lineup => Lineups?.FirstOrDefault(l => l.Name == "m3undle") ?? Lineups?.FirstOrDefault();
+        if (!ApplicationState.TryTakeFromJson<DashboardPersistentState>(nameof(DashboardPersistentState), out var state)
+            || state is null)
+        {
+            return false;
+        }
+
+        _status = state.Status;
+        _dashboardStats = state.DashboardStats;
+        _nextRefreshUtc = state.NextRefreshUtc;
+        _refreshScheduleKind = state.RefreshScheduleKind ?? _refreshScheduleKind;
+        return state.Status is not null && state.DashboardStats is not null;
     }
 
-    private sealed record LineupStatusInfo(
-        string Name,
-        string Status,
-        ActiveProviderInfo? ActiveProvider,
-        ActiveSnapshotInfo? ActiveSnapshot,
-        FetchRunInfo? LastRefresh);
+    private Task PersistStateAsync()
+    {
+        ApplicationState.PersistAsJson(
+            nameof(DashboardPersistentState),
+            new DashboardPersistentState
+            {
+                Status = _status,
+                DashboardStats = _dashboardStats,
+                NextRefreshUtc = _nextRefreshUtc,
+                RefreshScheduleKind = _refreshScheduleKind,
+            });
 
-    private sealed record ActiveProviderInfo(string ProviderId, string Name);
+        return Task.CompletedTask;
+    }
 
-    private sealed record ActiveSnapshotInfo(
-        string SnapshotId,
-        string ProfileId,
-        DateTime CreatedUtc,
-        int ChannelCountPublished);
-
-    private sealed record FetchRunInfo(
-        string Status,
-        DateTime StartedUtc,
-        DateTime? FinishedUtc,
-        int? ChannelCountSeen,
-        string? ErrorSummary);
+    private sealed class DashboardPersistentState
+    {
+        public LineupStatusResponse? Status { get; init; }
+        public DashboardStatsDto? DashboardStats { get; init; }
+        public DateTime? NextRefreshUtc { get; init; }
+        public string? RefreshScheduleKind { get; init; }
+    }
 }

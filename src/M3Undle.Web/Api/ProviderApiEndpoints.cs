@@ -347,6 +347,7 @@ public static class ProviderApiEndpoints
         var linkedProfileId = profileIdsToApply.FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(linkedProfileId))
             await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
 
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
 
@@ -454,6 +455,7 @@ public static class ProviderApiEndpoints
         var linkedProfileId = profileIdsToApply.FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(linkedProfileId))
             await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
 
         var newDto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         using var createScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
@@ -829,6 +831,7 @@ public static class ProviderApiEndpoints
         var linkedProfileId = profileIdsToApply.FirstOrDefault();
         if (!string.IsNullOrWhiteSpace(linkedProfileId))
             await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
 
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
 
