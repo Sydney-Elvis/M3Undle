@@ -648,6 +648,7 @@ public static class XtreamEndpoints
             $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
 
         string providerId;
+        var useSharedSession = false;
         try
         {
             var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
@@ -658,7 +659,23 @@ public static class XtreamEndpoints
             }
 
             providerId = resolved.SourceDescriptor.ProviderId;
+            useSharedSession = resolved.UseSharedSession;
+
+            if (useSharedSession)
+                _ = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
+
             channelSessionManager.TouchHlsSlot(resolved.SourceDescriptor.SessionKey);
+        }
+        catch (StreamAdmissionException ex)
+        {
+            logger.LogWarning(
+                "Xtream HLS proxy admission rejected for key={StreamKey}: {Reason}",
+                streamKey,
+                ex.Message);
+            if (ex.RetryAfterSeconds is { } retry)
+                context.Response.Headers["Retry-After"] = retry.ToString();
+            context.Response.StatusCode = ex.StatusCode;
+            return;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

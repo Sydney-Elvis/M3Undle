@@ -853,6 +853,8 @@ public static class CompatibilityEndpoints
 
         string providerId;
         ChannelSessionKey? admissionKey = null;
+        StreamSourceDescriptor? sourceDescriptor = null;
+        var useSharedSession = false;
         try
         {
             var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
@@ -864,6 +866,8 @@ public static class CompatibilityEndpoints
             }
 
             providerId = resolved.SourceDescriptor.ProviderId;
+            sourceDescriptor = resolved.SourceDescriptor;
+            useSharedSession = resolved.UseSharedSession;
             admissionKey = resolved.SourceDescriptor.SessionKey;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -875,6 +879,21 @@ public static class CompatibilityEndpoints
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             await context.Response.WriteAsync("Unknown stream key.", cancellationToken);
             return;
+        }
+
+        if (useSharedSession && sourceDescriptor is not null)
+        {
+            try
+            {
+                _ = channelSessionManager.ReserveHlsSlot(sourceDescriptor);
+            }
+            catch (StreamAdmissionException ex)
+            {
+                if (ex.RetryAfterSeconds is { } retry)
+                    context.Response.Headers["Retry-After"] = retry.ToString();
+                context.Response.StatusCode = ex.StatusCode;
+                return;
+            }
         }
 
         if (admissionKey is { } slotKey)
