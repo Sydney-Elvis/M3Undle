@@ -510,6 +510,11 @@ public sealed class ChannelMappingPageService(
                 Active = x.ProviderChannel.Active,
                 NotifyOnPending = x.ProfileGroupFilter.TrackNewChannels,
                 State = LineupReviewSemantics.NormalizeChannelState(x.State),
+                IsEvent = x.ProviderChannel.IsEvent,
+                EventContentKey = x.ProviderChannel.EventContentKey,
+                EventTitle = x.ProviderChannel.EventTitle,
+                EventSport = x.ProviderChannel.EventSport,
+                EventLeague = x.ProviderChannel.EventLeague,
             })
             .ToListAsync(cancellationToken);
 

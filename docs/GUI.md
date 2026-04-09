@@ -160,6 +160,21 @@ For each included group you can:
   - notify on: contributes to nav/footer/dashboard review counts
   - notify off: pending items remain reviewable but do not create global badge noise
 
+**Event tracking policy (for PPV/event groups)**
+
+For volatile event groups (PPV grids, rotating sports slots, live-event feeds), set an event tracking policy to control how event channels are handled without weekly manual review:
+
+- **Review** (default) — new events queue for manual review; blank placeholder slots are suppressed
+- **Notify only** — surface event arrivals without queuing pending rows and without auto-publishing
+- **Auto-add all** — automatically publish every non-placeholder event channel from this group
+- **Auto-add populated** — publish only events where the system successfully identified the event content (a matchup name, participant pair, or similar). Channels that are still blank slots or have unrecognizable names are skipped. Stricter than auto-add all.
+- **Auto-add matching** — publish only events whose name or content matches configured keywords
+
+For `auto_add_matching`, configure:
+- **Keywords** — comma, pipe, or newline-separated terms matched case-insensitively against event display name and content key. A live preview shows which currently-seen events would match.
+
+Note: structured recurring-interest rules (per-team, per-league, per-fighter matching with suppress/notify actions) are stored in the data model and applied during snapshot builds, but do not yet have an editing UI. Use keywords for self-service matching until the interest rules editor ships.
+
 **Per-channel control (manual-review groups)**
 
 Within a group you can select individual channels and set per-channel overrides:
@@ -176,6 +191,7 @@ The dedicated review page (`/channels/review`) lists pending channels across the
 - Include/exclude selected channels
 - Include/exclude all pending channels for a selected provider group
 - Search, group filtering, and notify-only filtering
+- **Event card view** — a toggle switch in the toolbar. When on, pending channels are grouped by event content key rather than shown as a flat list. Each event card shows the detected sport, league, and how many duplicate feeds exist, and lets you include or exclude all feeds for that event in one action. Useful for PPV and event groups where multiple feeds carry the same content.
 
 **Build Output**
 

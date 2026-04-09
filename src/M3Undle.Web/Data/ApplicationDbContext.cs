@@ -31,6 +31,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<ProfileCustomGroupChannel> ProfileCustomGroupChannels => Set<ProfileCustomGroupChannel>();
     public DbSet<ProfileCustomGroupProviderLink> ProfileCustomGroupProviderLinks => Set<ProfileCustomGroupProviderLink>();
     public DbSet<DownstreamIntegration> DownstreamIntegrations => Set<DownstreamIntegration>();
+    public DbSet<ProfileEventInterestRule> ProfileEventInterestRules => Set<ProfileEventInterestRule>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

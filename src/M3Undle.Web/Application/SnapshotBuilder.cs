@@ -29,6 +29,11 @@ public sealed class SnapshotBuilder(
     IRefreshScheduleService refreshScheduleService,
     ILogger<SnapshotBuilder> logger)
 {
+    internal sealed record InterestRuleConfig(
+        string MatchType,
+        string MatchValue,
+        string Action);
+
     internal sealed record GroupFilterConfig(
         string ProfileGroupFilterId,
         string OutputName,
@@ -37,7 +42,8 @@ public sealed class SnapshotBuilder(
         int? SortOverride,
         string GroupMode,
         string TrackingPolicy,
-        string? TrackingKeywords)
+        string? TrackingKeywords,
+        IReadOnlyList<InterestRuleConfig>? InterestRules = null)
     {
         public GroupFilterConfig(
             string ProfileGroupFilterId,
@@ -88,7 +94,11 @@ public sealed class SnapshotBuilder(
         string? LogoUrl,
         bool IsEvent = false,
         bool IsPlaceholder = false,
-        string? EventContentKey = null);
+        string? EventContentKey = null,
+        string? EventTitle = null,
+        string? EventSport = null,
+        string? EventLeague = null,
+        string? EventParticipantsJson = null);
     internal sealed record ChannelOverride(
         string State,
         string? DisplayNameOverride,
@@ -394,7 +404,11 @@ public sealed class SnapshotBuilder(
             ch.LogoUrl,
             ch.IsEvent,
             ch.IsPlaceholder,
-            ch.EventContentKey)).ToList();
+            ch.EventContentKey,
+            ch.EventTitle,
+            ch.EventSport,
+            ch.EventLeague,
+            ch.EventParticipantsJson)).ToList();
 
         // Append VOD/series from in-memory provider channels (not persisted to DB)
         if (provider.IncludeVod || provider.IncludeSeries)
@@ -417,19 +431,36 @@ public sealed class SnapshotBuilder(
             .Where(x => x.ProfileId == profileId && x.ProviderGroup.ProviderId == provider.ProviderId)
             .ToListAsync(cancellationToken);
 
+        // Load structured event interest rules for this profile (profile-wide + group-scoped)
+        var allInterestRules = await db.ProfileEventInterestRules
+            .AsNoTracking()
+            .Where(r => r.ProfileId == profileId && r.Enabled)
+            .OrderBy(r => r.Priority)
+            .ToListAsync(cancellationToken);
+
         var includedGroups = groupFilters
             .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision))
             .ToDictionary(
             f => f.ProviderGroup.RawName,
-            f => new GroupFilterConfig(
-                f.ProfileGroupFilterId,
-                f.OutputName ?? f.ProviderGroup.RawName,
-                f.AutoNumStart,
-                f.AutoNumEnd,
-                f.SortOverride,
-                LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode),
-                LineupReviewSemantics.NormalizeTrackingPolicy(f.TrackingPolicy),
-                f.TrackingKeywords),
+            f =>
+            {
+                // Include profile-wide rules + rules scoped to this specific group
+                var groupRules = allInterestRules
+                    .Where(r => r.ProviderGroupId is null || r.ProviderGroupId == f.ProviderGroupId)
+                    .Select(r => new InterestRuleConfig(r.MatchType, r.MatchValue, r.Action))
+                    .ToList();
+
+                return new GroupFilterConfig(
+                    f.ProfileGroupFilterId,
+                    f.OutputName ?? f.ProviderGroup.RawName,
+                    f.AutoNumStart,
+                    f.AutoNumEnd,
+                    f.SortOverride,
+                    LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode),
+                    LineupReviewSemantics.NormalizeTrackingPolicy(f.TrackingPolicy),
+                    f.TrackingKeywords,
+                    groupRules);
+            },
             StringComparer.Ordinal);
 
         // Load per-channel overrides/state for all included filters.
@@ -523,7 +554,11 @@ public sealed class SnapshotBuilder(
                         ch.LogoUrl,
                         ch.IsEvent,
                         ch.IsPlaceholder,
-                        ch.EventContentKey));
+                        ch.EventContentKey,
+                        ch.EventTitle,
+                        ch.EventSport,
+                        ch.EventLeague,
+                        ch.EventParticipantsJson));
                 }
             }
             customGroupOverrides[cg.CustomGroupId] = overrideMap;
@@ -827,6 +862,24 @@ public sealed class SnapshotBuilder(
 
         if (LineupReviewSemantics.ShouldAutoAddMatching(filter.TrackingPolicy))
         {
+            // First check structured interest rules (suppress takes precedence, then auto_add)
+            if (filter.InterestRules is { Count: > 0 })
+            {
+                string?[] candidateTexts = [channel.DisplayName, channel.GroupTitle, channel.EventContentKey, channel.EventTitle, channel.EventSport, channel.EventLeague, channel.EventParticipantsJson];
+                foreach (var rule in filter.InterestRules)
+                {
+                    if (!LineupReviewSemantics.InterestRuleMatches(rule.MatchValue, candidateTexts))
+                        continue;
+
+                    if (rule.Action == LineupReviewSemantics.InterestActionSuppress)
+                        return false;
+                    if (rule.Action == LineupReviewSemantics.InterestActionAutoAdd)
+                        return true;
+                    // notify — surface but don't auto-add
+                }
+            }
+
+            // Fall back to free-text keyword matching
             return LineupReviewSemantics.MatchesTrackingKeywords(
                 filter.TrackingKeywords,
                 channel.DisplayName,
@@ -1050,7 +1103,11 @@ public sealed class SnapshotBuilder(
                     ch.LogoUrl,
                     ch.IsEvent,
                     ch.IsPlaceholder,
-                    ch.EventContentKey);
+                    ch.EventContentKey,
+                    ch.EventTitle,
+                    ch.EventSport,
+                    ch.EventLeague,
+                    ch.EventParticipantsJson);
 
                 return ShouldIncludeLiveChannel(buildData, filter, hasOverride, ov);
             })
@@ -1537,6 +1594,10 @@ public sealed class SnapshotBuilder(
                 entity.IsPlaceholder = eventClassification.IsPlaceholder;
                 entity.EventSlotKey = eventClassification.EventSlotKey;
                 entity.EventContentKey = eventClassification.EventContentKey;
+                entity.EventTitle = eventClassification.EventTitle;
+                entity.EventSport = eventClassification.EventSport;
+                entity.EventLeague = eventClassification.EventLeague;
+                entity.EventParticipantsJson = eventClassification.EventParticipantsJson;
                 entity.EventStartUtc = null;
                 entity.EventEndUtc = null;
                 entity.LastSeenUtc = now;
@@ -1564,6 +1625,10 @@ public sealed class SnapshotBuilder(
                     IsPlaceholder = eventClassification.IsPlaceholder,
                     EventSlotKey = eventClassification.EventSlotKey,
                     EventContentKey = eventClassification.EventContentKey,
+                    EventTitle = eventClassification.EventTitle,
+                    EventSport = eventClassification.EventSport,
+                    EventLeague = eventClassification.EventLeague,
+                    EventParticipantsJson = eventClassification.EventParticipantsJson,
                     EventStartUtc = null,
                     EventEndUtc = null,
                     FirstSeenUtc = now,

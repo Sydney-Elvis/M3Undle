@@ -16,6 +16,10 @@ public sealed class ProviderChannel
     public bool IsPlaceholder { get; set; }
     public string? EventSlotKey { get; set; }
     public string? EventContentKey { get; set; }
+    public string? EventTitle { get; set; }
+    public string? EventSport { get; set; }
+    public string? EventLeague { get; set; }
+    public string? EventParticipantsJson { get; set; }
     public DateTime? EventStartUtc { get; set; }
     public DateTime? EventEndUtc { get; set; }
     public DateTime FirstSeenUtc { get; set; }

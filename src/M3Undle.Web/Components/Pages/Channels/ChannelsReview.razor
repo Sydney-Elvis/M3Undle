@@ -90,6 +90,12 @@ else
                        Label="Notify only"
                        Size="Size.Small"
                        Color="Color.Primary" />
+            <MudSwitch T="bool"
+                       Value="_eventCardView"
+                       ValueChanged="OnEventCardViewChangedAsync"
+                       Label="Event card view"
+                       Size="Size.Small"
+                       Color="Color.Secondary" />
         </MudStack>
 
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mt-2">
@@ -140,6 +146,71 @@ else
             No pending channels for this profile/filter.
         </MudAlert>
     }
+    else if (_eventCardView)
+    {
+        @foreach (var card in EventCards)
+        {
+            <MudPaper Class="pa-3 mb-3" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap" Spacing="1" Class="mb-2">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.subtitle1">
+                            @(card.EventTitle ?? card.Representative.DisplayName)
+                        </MudText>
+                        <MudStack Row="true" Spacing="1">
+                            @if (!string.IsNullOrWhiteSpace(card.Sport))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info">@card.Sport</MudChip>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(card.League))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Primary">@card.League</MudChip>
+                            }
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">@card.Representative.ProviderGroupRawName</MudChip>
+                            @if (card.Channels.Count > 1)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">@card.Channels.Count feeds</MudChip>
+                            }
+                        </MudStack>
+                    </MudStack>
+                    <MudStack Row="true" Spacing="1">
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="_busy"
+                                   OnClick="@(() => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = card.Channels.Select(c => c.ProviderChannelId).ToList(), State = LineupReviewSemantics.ChannelStateIncluded }))">
+                            Include all
+                        </MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small" Disabled="_busy"
+                                   OnClick="@(() => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = card.Channels.Select(c => c.ProviderChannelId).ToList(), State = LineupReviewSemantics.ChannelStateExcluded }))">
+                            Exclude all
+                        </MudButton>
+                    </MudStack>
+                </MudStack>
+                <MudTable Items="card.Channels" Dense="true" Hover="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>Feed</MudTh>
+                        <MudTh>Last Seen</MudTh>
+                        <MudTh>Actions</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                            @if (!string.IsNullOrWhiteSpace(context.TvgId))
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.TvgId</MudText>
+                            }
+                        </MudTd>
+                        <MudTd>@context.LastSeenUtc.ToString("u")</MudTd>
+                        <MudTd>
+                            <MudStack Row="true" Spacing="1">
+                                <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" Disabled="_busy"
+                                               OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateIncluded))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small" Color="Color.Error" Disabled="_busy"
+                                               OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateExcluded))" />
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+    }
     else
     {
         <MudTable Items="_queue.Items" Dense="true" Hover="true" Bordered="true">
@@ -163,6 +234,10 @@ else
                     @if (!string.IsNullOrWhiteSpace(context.TvgId))
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">@context.TvgId</MudText>
+                    }
+                    @if (context.IsEvent)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Class="mt-1">event</MudChip>
                     }
                 </MudTd>
                 <MudTd>@context.ProviderGroupRawName</MudTd>
@@ -195,6 +270,14 @@ else
     [SupplyParameterFromQuery(Name = "profile")]
     public string? InitialProfile { get; set; }
 
+    private sealed record EventCard(
+        string? EventContentKey,
+        string? EventTitle,
+        string? Sport,
+        string? League,
+        ReviewQueueItemDto Representative,
+        List<ReviewQueueItemDto> Channels);
+
     private List<ProfileStubDto> _profiles = [];
     private ReviewQueueListResponse _queue = new();
     private List<ReviewQueueItemDto> _groups = [];
@@ -203,11 +286,30 @@ else
     private string? _groupFilter;
     private string _search = string.Empty;
     private bool _notifyOnly;
+    private bool _eventCardView;
     private bool _isLoading;
     private bool _busy;
     private string? _error;
 
     private bool AllRowsSelected => _queue.Items.Count > 0 && _queue.Items.All(x => _selectedChannelIds.Contains(x.ProviderChannelId));
+
+    private IReadOnlyList<EventCard> EventCards => _queue.Items
+        .GroupBy(x => string.IsNullOrWhiteSpace(x.EventContentKey) ? $"__raw__{x.ProviderChannelId}" : x.EventContentKey,
+                 StringComparer.Ordinal)
+        .Select(g =>
+        {
+            var rep = g.First();
+            return new EventCard(
+                rep.EventContentKey,
+                rep.EventTitle,
+                rep.EventSport,
+                rep.EventLeague,
+                rep,
+                g.ToList());
+        })
+        .OrderBy(c => c.Representative.ProviderGroupRawName, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(c => c.EventTitle ?? c.Representative.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -258,6 +360,12 @@ else
     {
         _notifyOnly = value;
         await LoadQueueAsync();
+    }
+
+    private Task OnEventCardViewChangedAsync(bool value)
+    {
+        _eventCardView = value;
+        return Task.CompletedTask;
     }
 
     private async Task LoadQueueAsync()

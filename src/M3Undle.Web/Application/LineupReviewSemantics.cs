@@ -91,6 +91,38 @@ internal static class LineupReviewSemantics
         return false;
     }
 
+    // Interest rule match_type values
+    public const string InterestMatchTypeKeyword = "keyword";
+    public const string InterestMatchTypeTeam = "team";
+    public const string InterestMatchTypeLeague = "league";
+    public const string InterestMatchTypeSport = "sport";
+    public const string InterestMatchTypeFighter = "fighter";
+    public const string InterestMatchTypePromotion = "promotion";
+    public const string InterestMatchTypeSeries = "series";
+
+    // Interest rule action values
+    public const string InterestActionAutoAdd = "auto_add";
+    public const string InterestActionNotify = "notify";
+    public const string InterestActionSuppress = "suppress";
+
+    /// <summary>
+    /// Tests whether a structured interest rule's match_value hits any of the candidate texts.
+    /// All match types use case-insensitive substring matching; the distinction is semantic only.
+    /// </summary>
+    public static bool InterestRuleMatches(string matchValue, params string?[] candidateTexts)
+    {
+        if (string.IsNullOrWhiteSpace(matchValue))
+            return false;
+
+        var needle = matchValue.Trim().ToUpperInvariant();
+        var haystack = string.Join('\n',
+            candidateTexts
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!.Trim().ToUpperInvariant()));
+
+        return haystack.Contains(needle, StringComparison.Ordinal);
+    }
+
     public static List<string> ParseTrackingKeywords(string? rawKeywords)
     {
         if (string.IsNullOrWhiteSpace(rawKeywords))

@@ -441,4 +441,226 @@ public sealed class ChannelNumberingTests
         Assert.AreEqual("Sky Sports+ | Event 10: Eagles vs Giants", result[0].DisplayName);
         Assert.AreEqual(3000, result[0].TvgChno);
     }
+
+    // -------------------------------------------------------------------------
+    // State reuse: same event content in a different slot
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Regression: when an event moves from slot N to slot M (stream URL changes),
+    /// auto_add_all policy must still publish it — it must not require a prior per-slot override.
+    /// </summary>
+    [TestMethod]
+    public void EventStateReuse_AutoAddAll_PublishesEventInNewSlot()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddAll,
+                TrackingKeywords: null),
+        };
+
+        // Simulate "week 2": event that was in slot 1 has moved to slot 3.
+        // There is no prior override for the new stream URL.
+        var eventInNewSlot = LiveEventChannel(
+            "Sky Sports+ | Event 3: Eagles vs Giants",
+            "Events",
+            eventContentKey: "EVENTS::EAGLES VS GIANTS",
+            streamUrl: "http://stream/new-slot-3");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [eventInNewSlot],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result, "Event moved to a new slot must still be published under auto_add_all.");
+        Assert.AreEqual("Sky Sports+ | Event 3: Eagles vs Giants", result[0].DisplayName);
+    }
+
+    /// <summary>
+    /// Regression: when an event moves between slots, auto_add_matching must match by
+    /// content (keyword against display name / content key), not by prior slot stream URL.
+    /// </summary>
+    [TestMethod]
+    public void EventStateReuse_AutoAddMatching_MatchesEventInNewSlot()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddMatching,
+                TrackingKeywords: "Eagles"),
+        };
+
+        // Week 1: Eagles game in slot 1 (old stream URL, no override stored)
+        // Week 2: same event is now in slot 5 (new stream URL)
+        var eventInNewSlot = LiveEventChannel(
+            "Sky Sports+ | Event 5: Eagles vs Cowboys",
+            "Events",
+            eventContentKey: "EVENTS::EAGLES VS COWBOYS",
+            streamUrl: "http://stream/slot5-eagles");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [eventInNewSlot],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result, "Matching event in a new slot must be auto-added by keyword.");
+    }
+
+    /// <summary>
+    /// Regression: a placeholder in the same slot that previously held a real event
+    /// must not be published, even when surrounded by real events that are auto-added.
+    /// </summary>
+    [TestMethod]
+    public void EventStateReuse_PlaceholderInFormerSlot_IsNeverPublished()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddAll,
+                TrackingKeywords: null),
+        };
+
+        // Slot 1 now empty (placeholder), slot 2 has a real event
+        var emptySlot = LiveEventChannel("Sky Sports+ | Event 1:", "Events", isPlaceholder: true);
+        var realEvent = LiveEventChannel(
+            "Sky Sports+ | Event 2: Spurs vs Celtics",
+            "Events",
+            eventContentKey: "EVENTS::SPURS VS CELTICS");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [emptySlot, realEvent],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result, "Only the real event must be published; the empty slot is a placeholder.");
+        Assert.AreEqual("Sky Sports+ | Event 2: Spurs vs Celtics", result[0].DisplayName);
+    }
+
+    /// <summary>
+    /// Regression: when a group has auto_add_all policy, multiple feeds for the same
+    /// event content key (duplicate feeds) are all published — the user decides on deduplication.
+    /// </summary>
+    [TestMethod]
+    public void EventStateReuse_MultipleFeedsForSameContent_AllPublished()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddAll,
+                TrackingKeywords: null),
+        };
+
+        var feed1 = LiveEventChannel(
+            "Sky Sports+ | Event 4: UFC 300 Main Card",
+            "Events",
+            eventContentKey: "EVENTS::UFC 300 MAIN CARD",
+            streamUrl: "http://stream/ufc300-hd");
+        var feed2 = LiveEventChannel(
+            "Sky Sports+ | Event 5: UFC 300 Main Card",
+            "Events",
+            eventContentKey: "EVENTS::UFC 300 MAIN CARD",
+            streamUrl: "http://stream/ufc300-sd");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [feed1, feed2],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(2, result, "Both feeds for the same event must be published independently.");
+        Assert.AreEqual(3000, result.Min(r => r.TvgChno), "First feed should get 3000.");
+        Assert.AreEqual(3001, result.Max(r => r.TvgChno), "Second feed should get 3001.");
+    }
+
+    /// <summary>
+    /// Regression: structured interest rules (auto_add action) must match events
+    /// by typed criteria (sport/league) and suppress must block auto-add.
+    /// </summary>
+    [TestMethod]
+    public void InterestRules_AutoAdd_AndSuppress_WorkCorrectly()
+    {
+        // Suppress Bellator (priority 50) is checked before auto_add mma (priority 100).
+        // Without correct ordering, the mma auto_add rule would fire first for Bellator events
+        // and the suppress would never be reached.
+        var rules = new List<SnapshotBuilder.InterestRuleConfig>
+        {
+            new(LineupReviewSemantics.InterestMatchTypeLeague, "Bellator", LineupReviewSemantics.InterestActionSuppress),
+            new(LineupReviewSemantics.InterestMatchTypeSport, "mma", LineupReviewSemantics.InterestActionAutoAdd),
+        };
+
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddMatching,
+                TrackingKeywords: null,
+                InterestRules: rules),
+        };
+
+        // UFC event: sport=mma → auto_add rule hits → included
+        var ufcEvent = new SnapshotBuilder.ChannelBuildData(
+            string.Empty, null, "UFC 305 Main Card", "http://stream/ufc305", "live", "Events",
+            null, null, null,
+            IsEvent: true, IsPlaceholder: false, EventContentKey: "EVENTS::UFC 305",
+            EventSport: "mma", EventLeague: "UFC");
+
+        // Bellator event: league=Bellator → suppress rule hits → excluded
+        var bellatorEvent = new SnapshotBuilder.ChannelBuildData(
+            string.Empty, null, "Bellator 300", "http://stream/bellator300", "live", "Events",
+            null, null, null,
+            IsEvent: true, IsPlaceholder: false, EventContentKey: "EVENTS::BELLATOR 300",
+            EventSport: "mma", EventLeague: "Bellator");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [ufcEvent, bellatorEvent],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result, "Suppressed Bellator event must be excluded; UFC must be included.");
+        Assert.AreEqual("UFC 305 Main Card", result[0].DisplayName);
+    }
 }

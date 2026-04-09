@@ -25,6 +25,10 @@ public sealed class ProviderChannelConfiguration : IEntityTypeConfiguration<Prov
         builder.Property(x => x.IsPlaceholder).HasColumnName("is_placeholder").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.EventSlotKey).HasColumnName("event_slot_key");
         builder.Property(x => x.EventContentKey).HasColumnName("event_content_key");
+        builder.Property(x => x.EventTitle).HasColumnName("event_title");
+        builder.Property(x => x.EventSport).HasColumnName("event_sport");
+        builder.Property(x => x.EventLeague).HasColumnName("event_league");
+        builder.Property(x => x.EventParticipantsJson).HasColumnName("event_participants_json");
         builder.Property(x => x.EventStartUtc).HasColumnName("event_start_utc");
         builder.Property(x => x.EventEndUtc).HasColumnName("event_end_utc");
         builder.Property(x => x.FirstSeenUtc).HasColumnName("first_seen_utc").IsRequired();

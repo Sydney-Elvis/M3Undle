@@ -196,6 +196,11 @@ public sealed class ReviewQueueItemDto
     public bool Active { get; set; }
     public bool NotifyOnPending { get; set; }
     public string State { get; set; } = "pending";
+    public bool IsEvent { get; set; }
+    public string? EventContentKey { get; set; }
+    public string? EventTitle { get; set; }
+    public string? EventSport { get; set; }
+    public string? EventLeague { get; set; }
 }
 
 public sealed class ReviewQueueListResponse

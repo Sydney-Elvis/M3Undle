@@ -153,10 +153,12 @@ The following lineup shaping features are implemented:
 - Notify/mute controls for pending-review alert noise on high-churn groups
 - Channel numbering (start ranges, pinned numbers, overflow handling, sort position via Number Manager)
 - Custom `tvg-id` override per channel (lock-gated field in the channel edit dialog)
-
-Planned for a future release:
-
-- Dynamic groups for rotating sports or event feeds
+- **Event tracking policies** for volatile groups (PPV/event/sports grids): `review`, `notify`, `auto_add_all`, `auto_add_populated`, `auto_add_matching`
+- **Placeholder suppression**: blank/empty event slots are classified and never published or queued
+- **Event content identity**: event slot key vs event content key distinguishes the slot from the real event
+- **Richer event metadata**: sport, league, participants extracted per channel and available for filtering
+- **Structured interest rules**: typed recurring-interest rules (team/league/sport/fighter/promotion/series) with `auto_add`, `notify`, or `suppress` actions, scoped to a profile/provider/group
+- **Event card view** in the channel review queue: groups pending channels by event content key with inline sport/league labels and multi-feed count visibility
 
 ---
 

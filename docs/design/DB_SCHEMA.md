@@ -109,11 +109,19 @@ Tracks the volatile world.
 - group_title (TEXT, nullable)
 - provider_group_id (FK provider_groups, nullable)
 - is_event (INTEGER, 0/1)
+- is_placeholder (INTEGER, 0/1, default 0) -- blank/empty event slot
+- event_slot_key (TEXT, nullable) -- stable identity for the reusable upstream slot
+- event_content_key (TEXT, nullable) -- normalized identity for the event content assigned to a slot
+- event_title (TEXT, nullable) -- normalized human-readable event title
+- event_sport (TEXT, nullable) -- detected sport category (e.g. "football", "mma", "racing")
+- event_league (TEXT, nullable) -- detected league or promotion (e.g. "NFL", "UFC", "Formula 1")
+- event_participants_json (TEXT, nullable) -- JSON array of participant names (e.g. ["Eagles","Giants"])
 - event_start_utc (TEXT, nullable)
 - event_end_utc (TEXT, nullable)
 - first_seen_utc (TEXT)
 - last_seen_utc (TEXT)
 - active (INTEGER, 0/1)
+- content_type (TEXT, default 'live') -- 'live'|'vod'|'series'
 - last_fetch_run_id (FK fetch_runs)
 
 Unique:
@@ -123,6 +131,8 @@ Indexes:
 - idx_provider_channels_provider_active(provider_id, active)
 - idx_provider_channels_seen(provider_id, last_seen_utc DESC)
 - idx_provider_channels_is_event(provider_id, is_event, event_start_utc)
+- idx_provider_channels_placeholder_active(provider_id, is_placeholder, active)
+- idx_provider_channels_event_content(provider_id, event_content_key) WHERE event_content_key IS NOT NULL
 
 ---
 
@@ -220,6 +230,8 @@ V1 per-group inclusion decisions for a profile. Drives what channels appear in t
 - decision (TEXT) — `'pending'` | `'include'` | `'exclude'`
 - is_new (INTEGER, 0/1) — compatibility flag; in current behavior `pending` groups are treated as new
 - channel_mode (TEXT) — `'select'` (manual review) | `'all'` (auto-update)
+- tracking_policy (TEXT, default 'review') — event-channel tracking: `'review'` | `'notify'` | `'auto_add_all'` | `'auto_add_populated'` | `'auto_add_matching'`
+- tracking_keywords (TEXT, nullable) — comma/newline/pipe-separated free-text keywords for `auto_add_matching`
 - output_name (TEXT, nullable) — renames the group in the published output; defaults to provider raw_name
 - auto_num_start (INTEGER, nullable) — first channel number for auto-numbering within this group
 - auto_num_end (INTEGER, nullable) — last channel number before auto-numbering stops
@@ -230,6 +242,30 @@ V1 per-group inclusion decisions for a profile. Drives what channels appear in t
 
 Unique:
 - (profile_id, provider_group_id)
+
+Indexes:
+- idx_pgf_profile_group_unique (profile_id, provider_group_id)
+- idx_pgf_profile_decision (profile_id, decision)
+- idx_pgf_profile_tracking_policy (profile_id, tracking_policy)
+
+---
+
+### profile_event_interest_rules
+Structured recurring-interest rules for event channel auto-add/notify/suppress behavior.
+- rule_id (PK, TEXT, uuid)
+- profile_id (FK profiles)
+- provider_id (FK providers, nullable) — optional scope to one provider
+- provider_group_id (FK provider_groups, nullable) — optional scope to one group
+- enabled (INTEGER, 0/1, default 1)
+- match_type (TEXT) — `'keyword'` | `'team'` | `'league'` | `'sport'` | `'fighter'` | `'promotion'` | `'series'`
+- match_value (TEXT) — value to match (case-insensitive substring)
+- action (TEXT) — `'auto_add'` | `'notify'` | `'suppress'`
+- priority (INTEGER, default 100) — evaluation order; lower values are checked first
+- created_utc (TEXT)
+- updated_utc (TEXT)
+
+Indexes:
+- idx_peir_profile_enabled_priority (profile_id, enabled, priority)
 
 ---
 
