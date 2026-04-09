@@ -18,7 +18,7 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 
 - [ ] Configurable refresh schedule in Settings UI
 - [ ] Real-time trigger + manual refresh with status
-- [ ] Persisted preferred refresh policy per profile
+- [~] Persisted preferred refresh policy per profile — descoped to post-1.0.0 (#47; global schedule is sufficient for Alpha/Beta)
 - [x] Dashboard and `/status` resolve lineup state from the active profile only
 - [x] Active profile switching shows requested, refreshing, completed, and failed/last-known-good feedback states
 - [x] Multi-profile status regressions covered by tests
