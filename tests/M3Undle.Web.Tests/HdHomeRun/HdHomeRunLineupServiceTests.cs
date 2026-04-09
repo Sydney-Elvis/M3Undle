@@ -69,6 +69,39 @@ public sealed class HdHomeRunLineupServiceTests
     }
 
     [TestMethod]
+    public async Task TryBuildActiveLineupAsync_MixedInputOrder_ReturnsGloballySortedGuideNumbers()
+    {
+        var lineup = new RenderedLineup(
+            SnapshotId: "snapshot-1",
+            ProfileId: "profile-1",
+            SnapshotCreatedUtc: DateTime.UtcNow,
+            ChannelIndexPath: "unused",
+            XmltvPath: null,
+            Channels:
+            [
+                new RenderedLineupChannel("live-129", "Ch 129", "ch129", null, null, "A", 129, "http://example.com/live/129.ts", "live"),
+                new RenderedLineupChannel("live-130", "Ch 130", "ch130", null, null, "A", 130, "http://example.com/live/130.ts", "live"),
+                new RenderedLineupChannel("live-131", "Ch 131", "ch131", null, null, "A", 131, "http://example.com/live/131.ts", "live"),
+                new RenderedLineupChannel("live-103", "Ch 103", "ch103", null, null, "B", 103, "http://example.com/live/103.ts", "live"),
+                new RenderedLineupChannel("live-100", "Ch 100", "ch100", null, null, "B", 100, "http://example.com/live/100.ts", "live"),
+                new RenderedLineupChannel("live-104", "Ch 104", "ch104", null, null, "B", 104, "http://example.com/live/104.ts", "live"),
+                new RenderedLineupChannel("live-102", "Ch 102", "ch102", null, null, "B", 102, "http://example.com/live/102.ts", "live"),
+                new RenderedLineupChannel("live-101", "Ch 101", "ch101", null, null, "B", 101, "http://example.com/live/101.ts", "live"),
+                new RenderedLineupChannel("live-105", "Ch 105", "ch105", null, null, "B", 105, "http://example.com/live/105.ts", "live"),
+            ]);
+
+        var service = new HdHomeRunLineupService();
+        var context = new DefaultHttpContext();
+
+        var result = await service.TryBuildActiveLineupAsync("http://test-host:8080", lineup, context, CancellationToken.None);
+
+        Assert.IsNotNull(result);
+        CollectionAssert.AreEqual(
+            new[] { "100", "101", "102", "103", "104", "105", "129", "130", "131" },
+            result.Channels.Select(c => c.GuideNumber).ToArray());
+    }
+
+    [TestMethod]
     public void TryResolveStreamKeyByGuideNumber_MatchesLiveGuideNumbers()
     {
         var lineup = new RenderedLineup(
