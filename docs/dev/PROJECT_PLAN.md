@@ -23,7 +23,8 @@ Primary published endpoints:
 - Alpha 2: complete
 - Alpha 3: complete
 - Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; DVR client validation (Plex/Emby/Jellyfin) moved to Beta
-- Alpha 5: planned
+- Alpha 5: in progress — most items complete; active profile switching and lineup status in final polish
+- Alpha 6: planned — per-provider gateway/VPN support
 - Beta: hardening and release prep
 
 ## Release Milestones
@@ -172,16 +173,56 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 - [x] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
 - [x] Dashboard redesign — health dashboard with Published Output, Published Profiles, Action Items, Output URLs sections
 - [x] Profiles UX — `/profiles` list page and profile detail page (display name, output name, provider membership, published history)
+- [x] Active profile switching — switch active profile from the UI with visible status feedback
 - [x] Terminology cleanup — snapshot language scrubbed from user-facing UI; lineup/published-version language throughout
 - [x] HLS playback for JavaScript/browser clients (GeneratedHls compatibility layer)
 - [x] CORS support for external network access
-- [ ] Configurable refresh schedule in Settings UI
+- [x] Configurable refresh schedule in Settings UI — per-provider and global intervals via `RefreshScheduleService`
 - [x] New channels inbox / review queue
-- [ ] Dynamic groups for rotating/event feeds
-
+- [x] Dynamic groups for rotating/event feeds
+- [x] Downstream integrations — notify Jellyfin/Emby when the lineup changes (webhook + native adapter); snapshot change classification to suppress notifications for no-op refreshes
+- [~] Lineup status service — real-time status display for active profile state and switching feedback
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:
 > `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`
+
+### Alpha 6 — Per-Provider Gateway Support (UI + Routing)
+Goal: Add gateway URL and mode configuration per provider, route fetches and streams through the gateway when configured, and surface full gateway status in the UI. Documentation and the companion gateway project remain insiders features.
+
+Status: Planned.
+
+#### Schema & Model
+- [ ] `gateway_url` (nullable) and `gateway_mode` (`Block` / `Fallback`) columns on `providers` table
+- [ ] EF migration
+- [ ] `GatewayMode` enum on `Provider` entity
+
+#### Gateway Status Service
+- [ ] `GatewayStatusService` singleton — in-memory status cache per provider (no DB writes)
+- [ ] Probe on app startup for all providers with `GatewayUrl` set (background, non-blocking)
+- [ ] Probe on provider save when `GatewayUrl` changes
+- [ ] Manual probe trigger (from UI "Refresh" button)
+- [ ] Periodic background probe (5-minute interval, configurable)
+- [ ] Probe sequence: `GET /info` → detect gateway, `GET /health` → get public IP, latency, VPN state
+
+#### Fetch Routing
+- [ ] `ProviderFetcher` routes playlist fetch to `{GatewayUrl}/m3u` when gateway is configured
+- [ ] `ProviderFetcher` routes XMLTV fetch to `{GatewayUrl}/xmltv` when gateway is configured
+- [ ] Block mode: fail fast with `ProviderFetchException` if gateway status is unreachable
+- [ ] Fallback mode: log warning and continue with direct connection if gateway is unreachable
+
+#### Stream Relay Routing
+- [ ] Stream relay routes through `{GatewayUrl}/stream?url={base64url(streamUrl)}` when gateway is configured
+- [ ] Block mode: return `503` if gateway is unreachable — do not fall back to direct relay
+- [ ] Fallback mode: relay directly and log warning if gateway is unreachable
+
+#### UI
+- [ ] Provider list: gateway status chip (public IP + country, latency, or error state)
+- [ ] Provider settings: Gateway section — URL input, Block/Fallback mode toggle
+- [ ] Provider settings: status panel (connection, public IP, VPN tunnel, provider latency, last checked)
+- [ ] Provider settings: troubleshooting panel (DNS, routes, recent errors from `/debug`)
+- [ ] Provider settings: "Open Gateway Dashboard" link (shown only when gateway reports `ui: true`)
+- [ ] Block mode unreachable state: clear "provider offline" messaging
+- [ ] Fallback mode unreachable state: amber warning with "direct connection" label and last-known gateway IP
 
 ### Beta — Hardening & Release Prep
 Goal: No major feature additions. Stabilize, validate, and document.
