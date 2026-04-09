@@ -180,13 +180,13 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 - [x] New channels inbox / review queue
 - [x] Dynamic groups for rotating/event feeds
 - [x] Downstream integrations — notify Jellyfin/Emby when the lineup changes (webhook + native adapter); snapshot change classification to suppress notifications for no-op refreshes
-- [~] Lineup status service — real-time status display for active profile state and switching feedback
-  - [ ] Active-profile-scoped status payload: include active profile identity, serving provider, published snapshot/version, last refresh result, and refresh/switch state
-  - [ ] Correct status resolution: derive lineup state from the active profile's published snapshot, not any active snapshot in the database
-  - [ ] Explicit switch lifecycle feedback: requested, refresh/build in progress, complete, failed while serving last known-good
-  - [ ] Dashboard polish: show which profile is currently serving at the published output URLs and whether a switch is pending or degraded
-  - [ ] `/status` and readiness semantics aligned with the active profile state
-  - [ ] Regression coverage for multi-profile status cases: inactive profiles with retained snapshots, successful switch, failed switch, and no-active-profile state
+- [x] Lineup status service — real-time status display for active profile state and switching feedback
+  - [x] Active-profile-scoped status payload: include active profile identity, serving provider, published snapshot/version, last refresh result, and refresh/switch state
+  - [x] Correct status resolution: derive lineup state from the active profile's published snapshot, not any active snapshot in the database
+  - [x] Explicit switch lifecycle feedback: requested, refresh/build in progress, complete, failed while serving last known-good
+  - [x] Dashboard polish: show which profile is currently serving at the published output URLs and whether a switch is pending or degraded
+  - [x] `/status` and readiness semantics aligned with the active profile state
+  - [x] Regression coverage for multi-profile status cases: inactive profiles with retained snapshots, successful switch, failed switch, and no-active-profile state
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:
 > `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`

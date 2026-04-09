@@ -1051,12 +1051,22 @@ public static class CompatibilityEndpoints
         CancellationToken cancellationToken)
     {
         var reasons = new List<string>();
+        var activeProfileId = await db.Profiles.AsNoTracking()
+            .Where(x => x.IsActive && x.Enabled)
+            .Select(x => x.ProfileId)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        if (!await db.Profiles.AsNoTracking().AnyAsync(x => x.IsActive && x.Enabled, cancellationToken))
+        if (activeProfileId is null)
+        {
             reasons.Add("no active profile");
-
-        if (!await db.Snapshots.AsNoTracking().AnyAsync(x => x.Status == "active", cancellationToken))
-            reasons.Add("no active snapshot");
+        }
+        else
+        {
+            var hasActiveSnapshot = await db.Snapshots.AsNoTracking()
+                .AnyAsync(x => x.ProfileId == activeProfileId && x.Status == "active", cancellationToken);
+            if (!hasActiveSnapshot)
+                reasons.Add("no active snapshot for active profile");
+        }
 
         if (refreshTrigger.IsRefreshing)
             reasons.Add("refresh in progress");

@@ -53,9 +53,9 @@
                 <MudStack Spacing="3">
                     <div>
                         <MudChip T="string"
-                                 Color="@(_status.Status == "ok" ? Color.Success : _status.Status == "degraded" ? Color.Warning : Color.Error)"
-                                 Icon="@(_status.Status == "ok" ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.Warning)">
-                            @(_status.Status == "ok" ? "Output Active" : _status.Status == "degraded" ? "Degraded — refresh failing" : "No Published Lineup")
+                                 Color="@LineupStatusChipColor(_status.Status)"
+                                 Icon="@LineupStatusChipIcon(_status.Status)">
+                            @LineupStatusLabel(_status.Status)
                         </MudChip>
                     </div>
 
@@ -63,12 +63,36 @@
 
                     @{ var lineup = _status.Lineup; }
 
-                    @if (lineup?.ActiveProvider is not null)
+                    @if (lineup?.ActiveProfile is not null)
                     {
                         <MudStack Spacing="0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Serving Provider</MudText>
-                            <MudText Typo="Typo.body1">@lineup.ActiveProvider.Name</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Active Profile</MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudText Typo="Typo.body1">@lineup.ActiveProfile.Name</MudText>
+                                @if (SwitchStateLabel(lineup.SwitchState) is { } switchLabel)
+                                {
+                                    <MudChip T="string" Size="Size.Small"
+                                             Color="@SwitchStateChipColor(lineup.SwitchState)"
+                                             Variant="Variant.Outlined">
+                                        @switchLabel
+                                    </MudChip>
+                                }
+                            </MudStack>
                         </MudStack>
+
+                        @if (lineup.ActiveProvider is not null)
+                        {
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Serving Provider</MudText>
+                                <MudText Typo="Typo.body1">@lineup.ActiveProvider.Name</MudText>
+                            </MudStack>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                No enabled provider linked to the active profile.
+                            </MudText>
+                        }
                     }
                     else
                     {
@@ -79,7 +103,7 @@
 
                     <MudStack Spacing="1">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Last Refresh</MudText>
-                        @if (_isRefreshing)
+                        @if (ShowRefreshing)
                         {
                             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
                                 <MudProgressCircular Indeterminate="true" Size="Size.Small" />
@@ -143,7 +167,7 @@
                     {
                         <MudStack Spacing="0">
                             <MudText Typo="Typo.caption" Color="Color.Secondary">Next Refresh</MudText>
-                            @if (_nextRefreshUtc.HasValue && !_isRefreshing)
+                            @if (_nextRefreshUtc.HasValue && !ShowRefreshing)
                             {
                                 <MudText Typo="Typo.body2">@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</MudText>
                             }
@@ -194,7 +218,7 @@
                         {
                             <MudText Typo="Typo.body2" Color="Color.Secondary">None</MudText>
                         }
-                        @if (_isRefreshing)
+                        @if (ShowRefreshing)
                         {
                             <MudText Typo="Typo.caption" Color="Color.Info">Updating lineup…</MudText>
                         }
@@ -364,6 +388,7 @@
 
     private DateTime? _nextRefreshUtc;
     private string _refreshScheduleKind = "6h";
+    private bool ShowRefreshing => _isRefreshing || _status?.IsRefreshing == true;
 
     private bool HasActionItems => _dashboardStats is not null &&
         (_dashboardStats.GroupsPendingReview > 0 ||
@@ -436,6 +461,11 @@
                 {
                     await InvokeAsync(LoadDashboardStatsAsync);
                 }
+                else if (evt.Kind == AppEventKind.ProviderActivated)
+                {
+                    if (!_isLoading)
+                        await InvokeAsync(LoadAllAsync);
+                }
                 else if (!_isLoading)
                 {
                     await InvokeAsync(LoadStatusAsync);
@@ -470,6 +500,22 @@
         try
         {
             _status = await StatusService.GetStatusAsync(_cts.Token);
+
+            // Keep the page-level refresh spinner/timer in sync with server state
+            // when the page loads mid-refresh or event delivery is delayed.
+            if (_status.IsRefreshing && !_isRefreshing)
+            {
+                _isRefreshing = true;
+                _refreshStartedAt ??= DateTime.UtcNow;
+                StartElapsedTimer();
+            }
+            else if (!_status.IsRefreshing && _isRefreshing)
+            {
+                _isRefreshing = false;
+                _isCancelling = false;
+                _refreshStartedAt = null;
+                StopElapsedTimer();
+            }
         }
         catch (OperationCanceledException)
         {
@@ -575,6 +621,55 @@
         ChangeClasses.Lineup    => Color.Primary,
         ChangeClasses.Breaking  => Color.Warning,
         _                       => Color.Default,
+    };
+
+    private static string LineupStatusLabel(string? status) => status switch
+    {
+        LineupStatusCodes.Ok => "Output Active",
+        LineupStatusCodes.Refreshing => "Output Active — Refreshing",
+        LineupStatusCodes.Switching => "Profile Switch In Progress",
+        LineupStatusCodes.Degraded => "Degraded — refresh failing",
+        LineupStatusCodes.NoActiveProfile => "No Active Profile",
+        LineupStatusCodes.NoActiveSnapshot => "No Published Lineup",
+        _ => "Status Unknown",
+    };
+
+    private static Color LineupStatusChipColor(string? status) => status switch
+    {
+        LineupStatusCodes.Ok => Color.Success,
+        LineupStatusCodes.Refreshing => Color.Info,
+        LineupStatusCodes.Switching => Color.Info,
+        LineupStatusCodes.Degraded => Color.Warning,
+        LineupStatusCodes.NoActiveProfile => Color.Warning,
+        LineupStatusCodes.NoActiveSnapshot => Color.Warning,
+        _ => Color.Default,
+    };
+
+    private static string LineupStatusChipIcon(string? status) => status switch
+    {
+        LineupStatusCodes.Ok => Icons.Material.Filled.CheckCircle,
+        LineupStatusCodes.Refreshing => Icons.Material.Filled.Autorenew,
+        LineupStatusCodes.Switching => Icons.Material.Filled.Sync,
+        LineupStatusCodes.Degraded => Icons.Material.Filled.Warning,
+        LineupStatusCodes.NoActiveProfile => Icons.Material.Filled.Info,
+        LineupStatusCodes.NoActiveSnapshot => Icons.Material.Filled.Warning,
+        _ => Icons.Material.Filled.Help,
+    };
+
+    private static string? SwitchStateLabel(string? switchState) => switchState switch
+    {
+        LineupSwitchStates.Requested => "Switch requested",
+        LineupSwitchStates.InProgress => "Switching…",
+        LineupSwitchStates.Failed => "Switch failed (last known-good active)",
+        _ => null,
+    };
+
+    private static Color SwitchStateChipColor(string? switchState) => switchState switch
+    {
+        LineupSwitchStates.Requested => Color.Info,
+        LineupSwitchStates.InProgress => Color.Info,
+        LineupSwitchStates.Failed => Color.Warning,
+        _ => Color.Default,
     };
 
     private async Task CancelRefreshAsync()
