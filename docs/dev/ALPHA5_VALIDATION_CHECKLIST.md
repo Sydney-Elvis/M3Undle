@@ -19,6 +19,9 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 - [ ] Configurable refresh schedule in Settings UI
 - [ ] Real-time trigger + manual refresh with status
 - [ ] Persisted preferred refresh policy per profile
+- [ ] Dashboard and `/status` resolve lineup state from the active profile only
+- [ ] Active profile switching shows requested, refreshing, completed, and failed/last-known-good feedback states
+- [ ] Multi-profile status regressions covered by tests
 
 ## HDHomeRun / DVR Client Scenario
 

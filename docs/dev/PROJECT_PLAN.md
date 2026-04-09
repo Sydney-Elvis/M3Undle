@@ -153,7 +153,6 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
   `GET /discover.json`, `GET /lineup.json`, `GET /lineup_status.json`, discovery service, device identity, lineup rendering tests
 - [x] Number of tuners setting in user-facing configuration
 - [x] Connection limiting via HDHomeRun tuner-slot enforcement keyed by `VirtualTunerId` from endpoint binding; same-tuner retunes replace prior subscriber instead of consuming another slot
-- [ ] End-to-end validation with Plex, Emby, and Jellyfin *(moved to Beta — see BETA_VALIDATION_CHECKLIST.md)*
 
 #### EPG Sources
 - [x] EPG source management UI + API (multiple sources per provider, test fetch, auto-map, manual mapping)
@@ -182,47 +181,29 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 - [x] Dynamic groups for rotating/event feeds
 - [x] Downstream integrations — notify Jellyfin/Emby when the lineup changes (webhook + native adapter); snapshot change classification to suppress notifications for no-op refreshes
 - [~] Lineup status service — real-time status display for active profile state and switching feedback
+  - [ ] Active-profile-scoped status payload: include active profile identity, serving provider, published snapshot/version, last refresh result, and refresh/switch state
+  - [ ] Correct status resolution: derive lineup state from the active profile's published snapshot, not any active snapshot in the database
+  - [ ] Explicit switch lifecycle feedback: requested, refresh/build in progress, complete, failed while serving last known-good
+  - [ ] Dashboard polish: show which profile is currently serving at the published output URLs and whether a switch is pending or degraded
+  - [ ] `/status` and readiness semantics aligned with the active profile state
+  - [ ] Regression coverage for multi-profile status cases: inactive profiles with retained snapshots, successful switch, failed switch, and no-active-profile state
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:
 > `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`
 
-### Alpha 6 — Per-Provider Gateway Support (UI + Routing)
-Goal: Add gateway URL and mode configuration per provider, route fetches and streams through the gateway when configured, and surface full gateway status in the UI. Documentation and the companion gateway project remain insiders features.
+### Alpha 6 — Per-Provider Gateway Support, Xtream Auto-Detection & System Events
+Goal: Per-provider gateway/VPN routing with Block and Fallback modes. Xtream Codes auto-detection at provider add time with explicit user mode selection. System event infrastructure with nav bar badge for diagnostic visibility. Gateway documentation and companion gateway project remain insiders features.
 
 Status: Planned.
 
-#### Schema & Model
-- [ ] `gateway_url` (nullable) and `gateway_mode` (`Block` / `Fallback`) columns on `providers` table
-- [ ] EF migration
-- [ ] `GatewayMode` enum on `Provider` entity
+- [ ] Per-provider gateway/VPN routing (Block and Fallback modes)
+- [ ] Xtream Codes auto-detection at provider add time
+- [ ] System event badge (nav bar, in-memory, diagnostic)
 
-#### Gateway Status Service
-- [ ] `GatewayStatusService` singleton — in-memory status cache per provider (no DB writes)
-- [ ] Probe on app startup for all providers with `GatewayUrl` set (background, non-blocking)
-- [ ] Probe on provider save when `GatewayUrl` changes
-- [ ] Manual probe trigger (from UI "Refresh" button)
-- [ ] Periodic background probe (5-minute interval, configurable)
-- [ ] Probe sequence: `GET /info` → detect gateway, `GET /health` → get public IP, latency, VPN state
-
-#### Fetch Routing
-- [ ] `ProviderFetcher` routes playlist fetch to `{GatewayUrl}/m3u` when gateway is configured
-- [ ] `ProviderFetcher` routes XMLTV fetch to `{GatewayUrl}/xmltv` when gateway is configured
-- [ ] Block mode: fail fast with `ProviderFetchException` if gateway status is unreachable
-- [ ] Fallback mode: log warning and continue with direct connection if gateway is unreachable
-
-#### Stream Relay Routing
-- [ ] Stream relay routes through `{GatewayUrl}/stream?url={base64url(streamUrl)}` when gateway is configured
-- [ ] Block mode: return `503` if gateway is unreachable — do not fall back to direct relay
-- [ ] Fallback mode: relay directly and log warning if gateway is unreachable
-
-#### UI
-- [ ] Provider list: gateway status chip (public IP + country, latency, or error state)
-- [ ] Provider settings: Gateway section — URL input, Block/Fallback mode toggle
-- [ ] Provider settings: status panel (connection, public IP, VPN tunnel, provider latency, last checked)
-- [ ] Provider settings: troubleshooting panel (DNS, routes, recent errors from `/debug`)
-- [ ] Provider settings: "Open Gateway Dashboard" link (shown only when gateway reports `ui: true`)
-- [ ] Block mode unreachable state: clear "provider offline" messaging
-- [ ] Fallback mode unreachable state: amber warning with "direct connection" label and last-known gateway IP
+See implementation plans:
+- [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/AUTOMATION_LAB_INTEGRATION_PLAN.md) — gateway support
+- [XTREM_PROVIDER_DETECTION.md](../../.ai_docs/XTREM_PROVIDER_DETECTION.md) — Xtream auto-detection
+- [EVENT_BADGE_SYSTEM.md](../../.ai_docs/EVENT_BADGE_SYSTEM.md) — system event badge
 
 ### Beta — Hardening & Release Prep
 Goal: No major feature additions. Stabilize, validate, and document.
