@@ -19,6 +19,14 @@ public sealed record HdHomeRunDeviceDescriptor(
     string FirmwareName,
     string FirmwareVersion);
 
+public sealed record HdHomeRunRuntimeSnapshot(
+    bool Enabled,
+    bool DiscoveryEnabled,
+    bool SsdpEnabled,
+    bool SiliconDustDiscoveryEnabled,
+    string ResolvedBaseUrl,
+    DateTime CapturedUtc);
+
 public sealed class HdHomeRunDeviceService(
     RuntimePaths runtimePaths,
     IOptions<HdHomeRunOptions> options,
@@ -42,6 +50,19 @@ public sealed class HdHomeRunDeviceService(
 
     private volatile HdHomeRunIdentityFile? _cachedIdentity;
     private volatile string? _cachedBaseUrl;
+    private volatile HdHomeRunRuntimeSnapshot? _runtimeSnapshot;
+
+    public void CaptureRuntimeSnapshot()
+    {
+        if (_runtimeSnapshot is not null)
+            return;
+
+        var snapshot = BuildRuntimeSnapshot();
+        Interlocked.CompareExchange(ref _runtimeSnapshot, snapshot, null);
+    }
+
+    public HdHomeRunRuntimeSnapshot GetRuntimeSnapshot()
+        => _runtimeSnapshot ?? BuildRuntimeSnapshot();
 
     public bool IsEnabled
     {
@@ -170,6 +191,15 @@ public sealed class HdHomeRunDeviceService(
     }
 
     private int ResolveTunerCount() => tunerCountResolver.ResolveTunerCount();
+
+    private HdHomeRunRuntimeSnapshot BuildRuntimeSnapshot()
+        => new(
+            Enabled: IsEnabled,
+            DiscoveryEnabled: IsDiscoveryEnabled,
+            SsdpEnabled: IsSsdpEnabled,
+            SiliconDustDiscoveryEnabled: IsSiliconDustDiscoveryEnabled,
+            ResolvedBaseUrl: ResolveBaseUrl(),
+            CapturedUtc: DateTime.UtcNow);
 
     private bool GetDbBoolSetting(Func<Data.Entities.SiteSettings, bool> dbSelector, bool defaultValue)
     {

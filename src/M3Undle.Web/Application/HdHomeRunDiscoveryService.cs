@@ -39,13 +39,16 @@ public sealed class HdHomeRunDiscoveryService(
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = HdhrEventType });
 
-        if (!deviceService.IsEnabled)
+        deviceService.CaptureRuntimeSnapshot();
+        var runtime = deviceService.GetRuntimeSnapshot();
+
+        if (!runtime.Enabled)
         {
             logger.LogInformation("HDHomeRun discovery not started because HDHomeRun endpoints are disabled.");
             return;
         }
 
-        if (!deviceService.IsDiscoveryEnabled)
+        if (!runtime.DiscoveryEnabled)
         {
             logger.LogInformation("HDHomeRun discovery is disabled (manual add endpoints remain enabled).");
             return;
@@ -53,11 +56,11 @@ public sealed class HdHomeRunDiscoveryService(
 
         var workers = new List<Task>(2);
 
-        if (deviceService.IsSsdpEnabled)
-            workers.Add(RunSsdpListenerAsync(stoppingToken));
+        if (runtime.SsdpEnabled)
+            workers.Add(RunSsdpListenerAsync(runtime, stoppingToken));
 
-        if (deviceService.IsSiliconDustDiscoveryEnabled)
-            workers.Add(RunSiliconDustListenerAsync(stoppingToken));
+        if (runtime.SiliconDustDiscoveryEnabled)
+            workers.Add(RunSiliconDustListenerAsync(runtime, stoppingToken));
 
         if (workers.Count == 0)
         {
@@ -68,7 +71,7 @@ public sealed class HdHomeRunDiscoveryService(
         await Task.WhenAll(workers);
     }
 
-    private async Task RunSsdpListenerAsync(CancellationToken cancellationToken)
+    private async Task RunSsdpListenerAsync(HdHomeRunRuntimeSnapshot runtime, CancellationToken cancellationToken)
     {
         UdpClient? udp = null;
         try
@@ -90,7 +93,7 @@ public sealed class HdHomeRunDiscoveryService(
                 await Task.Delay(Random.Shared.Next(0, maxDelayMs + 1), cancellationToken);
 
                 var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
-                var baseUrl = deviceService.ResolveBaseUrl();
+                var baseUrl = runtime.ResolvedBaseUrl;
                 var effectiveSearchTarget = string.Equals(searchTarget, SsdpAllType, StringComparison.OrdinalIgnoreCase)
                     ? SsdpMediaServerType
                     : searchTarget;
@@ -123,7 +126,7 @@ public sealed class HdHomeRunDiscoveryService(
         }
     }
 
-    private async Task RunSiliconDustListenerAsync(CancellationToken cancellationToken)
+    private async Task RunSiliconDustListenerAsync(HdHomeRunRuntimeSnapshot runtime, CancellationToken cancellationToken)
     {
         UdpClient? udp = null;
         try
@@ -144,7 +147,7 @@ public sealed class HdHomeRunDiscoveryService(
                 if (!ShouldRespondToDiscover(request, deviceId))
                     continue;
 
-                var baseUrl = deviceService.ResolveBaseUrl().TrimEnd('/');
+                var baseUrl = runtime.ResolvedBaseUrl.TrimEnd('/');
                 var lineupUrl = $"{baseUrl}/hdhr/lineup.json";
                 var packet = BuildDiscoverResponsePacket(
                     deviceId,

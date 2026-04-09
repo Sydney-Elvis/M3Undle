@@ -119,20 +119,21 @@ public sealed class HdHomeRunSettingsService(
 
     private HdhrSettingsSnapshot BuildAppliedSnapshot(int? providerLimit)
     {
+        var runtime = deviceService.GetRuntimeSnapshot();
         var effectiveTunerCount = tunerCountResolver.ResolveTunerCount();
         var isLimitEnforced = tunerCountResolver.ResolveStreamLimit() is not null;
 
         return new HdhrSettingsSnapshot(
-            Enabled: deviceService.IsEnabled,
+            Enabled: runtime.Enabled,
             EffectiveTunerCount: effectiveTunerCount,
             TunerCountOverride: null,
             ProviderTunerLimit: providerLimit,
             IsStreamLimitEnforced: isLimitEnforced,
             AdvertisedBaseUrl: null,
-            ResolvedBaseUrl: deviceService.ResolveBaseUrl(),
-            DiscoveryEnabled: deviceService.IsDiscoveryEnabled,
-            SsdpEnabled: deviceService.IsSsdpEnabled,
-            SiliconDustDiscoveryEnabled: deviceService.IsSiliconDustDiscoveryEnabled);
+            ResolvedBaseUrl: runtime.ResolvedBaseUrl,
+            DiscoveryEnabled: runtime.DiscoveryEnabled,
+            SsdpEnabled: runtime.SsdpEnabled,
+            SiliconDustDiscoveryEnabled: runtime.SiliconDustDiscoveryEnabled);
     }
 
     private static IEnumerable<string> Validate(UpdateHdhrSettingsCommand command)
