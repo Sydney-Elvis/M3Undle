@@ -112,7 +112,9 @@ public static class XtreamEndpoints
             user_info = new
             {
                 username = access.Credential.Username,
-                password = access.UrlCredential?.Password ?? string.Empty,
+                // Deliberately never echo endpoint credentials back in account-info responses.
+                // The field remains present for shape compatibility, but value is always redacted.
+                password = string.Empty,
                 message = string.Empty,
                 auth = 1,
                 status = "Active",

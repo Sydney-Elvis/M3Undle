@@ -280,7 +280,34 @@ public static class ProviderApiEndpoints
         ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
     {
-        var isXtream = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var hasPlaylistInputs =
+            !string.IsNullOrWhiteSpace(request.PlaylistUrl)
+            || !string.IsNullOrWhiteSpace(request.XmltvUrl)
+            || !string.IsNullOrWhiteSpace(request.HeadersJson)
+            || !string.IsNullOrWhiteSpace(request.UserAgent);
+        var hasXtreamBase = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var hasXtreamInputs = hasXtreamBase
+            || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+            || !string.IsNullOrWhiteSpace(request.XtreamPassword)
+            || request.XtreamIncludeXmltv;
+
+        if (hasPlaylistInputs && hasXtreamInputs)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["providerMode"] = ["Playlist/file fields and Xtream fields are mutually exclusive."]
+            });
+        }
+
+        if (!hasXtreamBase && hasXtreamInputs)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["providerMode"] = ["xtreamUsername/xtreamPassword/xtreamIncludeXmltv require xtreamBaseUrl."]
+            });
+        }
+
+        var isXtream = hasXtreamBase;
         var validationErrors = isXtream
             ? await ValidateXtreamProviderRequestAsync(db, request.Name, request.XtreamBaseUrl!, request.XtreamUsername, request.XtreamPassword, encryption, request.AssociateToProfileIds, null, cancellationToken)
             : await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, null, cancellationToken);
@@ -367,6 +394,19 @@ public static class ProviderApiEndpoints
         ILogger<ProviderApiLog> logger,
         CancellationToken cancellationToken)
     {
+        var hasXtreamInputs =
+            !string.IsNullOrWhiteSpace(request.XtreamBaseUrl)
+            || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+            || !string.IsNullOrWhiteSpace(request.XtreamPassword)
+            || request.XtreamIncludeXmltv;
+        if (hasXtreamInputs)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["providerMode"] = ["Upsert only supports playlist/file providers. Use POST /api/v1/providers for Xtream providers."]
+            });
+        }
+
         if (string.IsNullOrWhiteSpace(request.Name))
         {
             return TypedResults.ValidationProblem(new Dictionary<string, string[]>
@@ -488,6 +528,13 @@ public static class ProviderApiEndpoints
                 validationErrors["name"] = ["name is required."];
             if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl) && !IsValidHttpUrl(request.XtreamBaseUrl))
                 validationErrors["xtreamBaseUrl"] = ["xtreamBaseUrl must be an http/https URL."];
+            if (!string.IsNullOrWhiteSpace(request.PlaylistUrl)
+                || !string.IsNullOrWhiteSpace(request.XmltvUrl)
+                || !string.IsNullOrWhiteSpace(request.HeadersJson)
+                || !string.IsNullOrWhiteSpace(request.UserAgent))
+            {
+                validationErrors["providerMode"] = ["Xtream providers cannot be updated with playlist/file fields."];
+            }
             if (!string.IsNullOrWhiteSpace(request.Name))
             {
                 var dup = await db.Providers.AsNoTracking()
@@ -497,7 +544,19 @@ public static class ProviderApiEndpoints
         }
         else
         {
+            if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl)
+                || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+                || request.XtreamIncludeXmltv)
+            {
+                validationErrors = new Dictionary<string, string[]>
+                {
+                    ["providerMode"] = ["Playlist/file providers cannot be updated with Xtream fields."]
+                };
+            }
+            else
+            {
             validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+            }
         }
 
         if (validationErrors.Count > 0)

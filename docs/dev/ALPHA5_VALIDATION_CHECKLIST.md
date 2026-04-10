@@ -48,6 +48,15 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 - [x] Block disabled profiles from being activated in `ProfilesPageService.SetProfileActiveAsync()`
 - [x] Harden `20260404000000_Alpha6_ActiveProfile` migration table rebuild behavior
 
+## Post-Review Medium Coverage (2026-04-10)
+
+- [x] Decide/document Xtream account-info password behavior (`user_info.password` is now redacted)
+- [x] Add baseline tests for `GeneratedHlsSessionManager`
+- [x] Add baseline tests for `SnapshotChangeClassifier`
+- [x] Add baseline tests for `EventChannelClassifier`
+- [x] Expand negative/edge-case coverage for `HlsManifestRewriter`
+- [x] Expand failure-path/concurrency coverage for `DownstreamNotificationService`
+
 ## Documentation
 
 - [x] Update roadmap & user docs with Alpha 5 scope and status (dashboard redesign, profiles UX, terminology, HLS/CORS)

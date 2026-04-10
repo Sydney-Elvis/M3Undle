@@ -228,7 +228,24 @@ public sealed class ProviderPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var isXtream = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var hasPlaylistInputs =
+            !string.IsNullOrWhiteSpace(request.PlaylistUrl)
+            || !string.IsNullOrWhiteSpace(request.XmltvUrl)
+            || !string.IsNullOrWhiteSpace(request.HeadersJson)
+            || !string.IsNullOrWhiteSpace(request.UserAgent);
+        var hasXtreamBase = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var hasXtreamInputs = hasXtreamBase
+            || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+            || !string.IsNullOrWhiteSpace(request.XtreamPassword)
+            || request.XtreamIncludeXmltv;
+
+        if (hasPlaylistInputs && hasXtreamInputs)
+            return (null, "Playlist/file fields and Xtream fields are mutually exclusive.");
+
+        if (!hasXtreamBase && hasXtreamInputs)
+            return (null, "xtreamUsername/xtreamPassword/xtreamIncludeXmltv require xtreamBaseUrl.");
+
+        var isXtream = hasXtreamBase;
         var validationErrors = isXtream
             ? await ValidateXtreamProviderRequestAsync(db, request.Name, request.XtreamBaseUrl!, request.XtreamUsername, request.XtreamPassword, request.AssociateToProfileIds, null, cancellationToken)
             : await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, null, cancellationToken);
@@ -358,6 +375,13 @@ public sealed class ProviderPageService(
                 validationErrors["name"] = ["name is required."];
             if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl) && !IsValidHttpUrl(request.XtreamBaseUrl))
                 validationErrors["xtreamBaseUrl"] = ["xtreamBaseUrl must be an http/https URL."];
+            if (!string.IsNullOrWhiteSpace(request.PlaylistUrl)
+                || !string.IsNullOrWhiteSpace(request.XmltvUrl)
+                || !string.IsNullOrWhiteSpace(request.HeadersJson)
+                || !string.IsNullOrWhiteSpace(request.UserAgent))
+            {
+                validationErrors["providerMode"] = ["Xtream providers cannot be updated with playlist/file fields."];
+            }
             if (!string.IsNullOrWhiteSpace(request.Name))
             {
                 var dup = await db.Providers.AsNoTracking()
@@ -367,7 +391,19 @@ public sealed class ProviderPageService(
         }
         else
         {
-            validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl)
+                || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+                || request.XtreamIncludeXmltv)
+            {
+                validationErrors = new Dictionary<string, string[]>
+                {
+                    ["providerMode"] = ["Playlist/file providers cannot be updated with Xtream fields."]
+                };
+            }
+            else
+            {
+                validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+            }
         }
 
         if (validationErrors.Count > 0)
