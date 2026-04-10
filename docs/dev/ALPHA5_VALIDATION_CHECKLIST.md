@@ -36,11 +36,17 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 - [ ] VOD / Series counts match UI & exported stats
 - [ ] IPTVnavtor groups and MacOS behavior validated
 
-## Post-Review Hardening (2026-04-09)
+## Post-Review Hardening (2026-04-10)
 
 - [x] Guard `AddDatabaseDeveloperPageExceptionFilter()` so it only runs in Development
 - [x] Fix `GeneratedHlsSessionManager` pump-task exception handling so FFmpeg reader failures are observed and logged
 - [x] Fix `GeneratedHlsSessionManager` manifest-timeout cleanup so timed-out FFmpeg processes are stopped immediately
+- [x] Distinguish timeout cancellation from user cancellation in `SnapshotRefreshService`
+- [x] Move strike-store cooldown checks under the admission lock in `ChannelSessionManager`
+- [x] Make `ChannelSessionManager.RemoveIfClosedAsync()` atomic
+- [x] Add a transaction around `ProfilesPageService.DeleteProfileAsync()`
+- [x] Block disabled profiles from being activated in `ProfilesPageService.SetProfileActiveAsync()`
+- [x] Harden `20260404000000_Alpha6_ActiveProfile` migration table rebuild behavior
 
 ## Documentation
 

@@ -76,6 +76,8 @@ internal sealed class ProfilesPageService(
         if (profile is null)
             return "Profile not found.";
 
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+
         // Cascade delete all profile-scoped data
         await db.EpgChannelMaps.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
         await db.ChannelMatchRules.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(ct);
@@ -95,6 +97,7 @@ internal sealed class ProfilesPageService(
 
         db.Profiles.Remove(profile);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         return null;
     }
@@ -107,9 +110,16 @@ internal sealed class ProfilesPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var exists = await db.Profiles.AnyAsync(x => x.ProfileId == profileId, ct);
-        if (!exists)
+        var target = await db.Profiles
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => new { x.Enabled })
+            .SingleOrDefaultAsync(ct);
+
+        if (target is null)
             return "Profile not found.";
+        if (!target.Enabled)
+            return "Disabled profiles cannot be activated.";
 
         var now = DateTime.UtcNow;
 

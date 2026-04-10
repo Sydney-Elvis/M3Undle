@@ -54,6 +54,57 @@ public sealed class ProfilesPageServiceTests
     }
 
     [TestMethod]
+    public async Task SetProfileActiveAsync_WhenTargetProfileDisabled_ReturnsErrorAndDoesNotSwitchActiveProfile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        var now = DateTime.UtcNow;
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Profiles.Add(new Profile
+            {
+                ProfileId = "p1",
+                Name = "Profile 1",
+                Enabled = true,
+                IsActive = true,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+            db.Profiles.Add(new Profile
+            {
+                ProfileId = "p2",
+                Name = "Profile 2",
+                Enabled = false,
+                IsActive = false,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var refreshTrigger = new TestRefreshTrigger();
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            refreshTrigger,
+            new AppEventBus());
+
+        var error = await service.SetProfileActiveAsync("p2", CancellationToken.None);
+
+        Assert.AreEqual("Disabled profiles cannot be activated.", error);
+        Assert.AreEqual(0, refreshTrigger.TriggerRefreshCallCount);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        var p2 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p2");
+        Assert.IsTrue(p1.IsActive);
+        Assert.IsFalse(p2.IsActive);
+    }
+
+    [TestMethod]
     public async Task AutoActivateProfileIfNoneAsync_WhenNoActiveProfile_ActivatesTargetAndTriggersRefresh()
     {
         await using var fixture = await CreateFixtureAsync();

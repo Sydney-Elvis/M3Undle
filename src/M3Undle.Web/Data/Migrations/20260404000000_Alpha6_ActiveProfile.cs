@@ -47,10 +47,13 @@ namespace M3Undle.Web.Data.Migrations
                 )
                 """);
 
-            // 4+5. Remove is_active from providers via SQLite table rebuild
-            //      (SQLite does not support ALTER TABLE DROP COLUMN directly).
+            // 4+5. Remove is_active from providers via controlled SQLite rebuild.
+            // Hardened with explicit transaction boundaries and post-rebuild FK verification.
             migrationBuilder.Sql("PRAGMA foreign_keys = 0;", suppressTransaction: true);
             migrationBuilder.Sql("""
+                BEGIN IMMEDIATE;
+                DROP TABLE IF EXISTS "providers_new";
+
                 CREATE TABLE "providers_new" (
                     "provider_id" TEXT NOT NULL CONSTRAINT "PK_providers" PRIMARY KEY,
                     "config_source_path" TEXT NULL,
@@ -90,10 +93,13 @@ namespace M3Undle.Web.Data.Migrations
 
                 DROP TABLE "providers";
                 ALTER TABLE "providers_new" RENAME TO "providers";
-                """);
-            migrationBuilder.Sql("CREATE INDEX \"idx_providers_enabled\" ON \"providers\" (\"enabled\");");
-            migrationBuilder.Sql("CREATE UNIQUE INDEX \"IX_providers_name\" ON \"providers\" (\"name\");");
+
+                CREATE INDEX "idx_providers_enabled" ON "providers" ("enabled");
+                CREATE UNIQUE INDEX "IX_providers_name" ON "providers" ("name");
+                COMMIT;
+                """, suppressTransaction: true);
             migrationBuilder.Sql("PRAGMA foreign_keys = 1;", suppressTransaction: true);
+            migrationBuilder.Sql("PRAGMA foreign_key_check;", suppressTransaction: true);
         }
 
         /// <inheritdoc />
@@ -131,9 +137,12 @@ namespace M3Undle.Web.Data.Migrations
                 name: "idx_profiles_is_active",
                 table: "profiles");
 
-            // Remove is_active from profiles via SQLite table rebuild.
+            // Remove is_active from profiles via controlled SQLite rebuild.
             migrationBuilder.Sql("PRAGMA foreign_keys = 0;", suppressTransaction: true);
             migrationBuilder.Sql("""
+                BEGIN IMMEDIATE;
+                DROP TABLE IF EXISTS "profiles_new";
+
                 CREATE TABLE "profiles_new" (
                     "profile_id" TEXT NOT NULL CONSTRAINT "PK_profiles" PRIMARY KEY,
                     "created_utc" TEXT NOT NULL,
@@ -153,9 +162,11 @@ namespace M3Undle.Web.Data.Migrations
 
                 DROP TABLE "profiles";
                 ALTER TABLE "profiles_new" RENAME TO "profiles";
-                """);
-            migrationBuilder.Sql("CREATE UNIQUE INDEX \"IX_profiles_name\" ON \"profiles\" (\"name\");");
+                CREATE UNIQUE INDEX "IX_profiles_name" ON "profiles" ("name");
+                COMMIT;
+                """, suppressTransaction: true);
             migrationBuilder.Sql("PRAGMA foreign_keys = 1;", suppressTransaction: true);
+            migrationBuilder.Sql("PRAGMA foreign_key_check;", suppressTransaction: true);
         }
     }
 }

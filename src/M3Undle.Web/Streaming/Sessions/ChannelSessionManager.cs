@@ -50,21 +50,10 @@ public sealed class ChannelSessionManager
         ct.ThrowIfCancellationRequested();
         var key = source.SessionKey;
 
-        if (_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
-        {
-            _logger.LogWarning(
-                "Stream request rejected for '{DisplayName}' — upstream is in cooldown for {Seconds:F0}s more. Try again shortly.",
-                source.DisplayName,
-                cooldownRemaining.TotalSeconds);
-            throw new StreamAdmissionException(
-                $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
-                StreamAdmissionFailureKind.Cooldown,
-                StatusCodes.Status503ServiceUnavailable,
-                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
-        }
-
         lock (_admissionGate)
         {
+            ThrowIfCoolingDown(key, source.DisplayName, logWarning: true);
+
             if (_sessions.TryGetValue(key, out var existing))
             {
                 _logger.LogDebug(
@@ -131,15 +120,10 @@ public sealed class ChannelSessionManager
     {
         var key = source.SessionKey;
 
-        if (_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
-            throw new StreamAdmissionException(
-                $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
-                StreamAdmissionFailureKind.Cooldown,
-                StatusCodes.Status503ServiceUnavailable,
-                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
-
         lock (_admissionGate)
         {
+            ThrowIfCoolingDown(key, source.DisplayName, logWarning: false);
+
             if (_sessions.ContainsKey(key) || _hlsSlots.ContainsKey(key))
                 return;
 
@@ -177,15 +161,10 @@ public sealed class ChannelSessionManager
         var key = source.SessionKey;
         var effectiveTtl = ttl ?? DefaultHlsSlotTtl;
 
-        if (_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
-            throw new StreamAdmissionException(
-                $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
-                StreamAdmissionFailureKind.Cooldown,
-                StatusCodes.Status503ServiceUnavailable,
-                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
-
         lock (_admissionGate)
         {
+            ThrowIfCoolingDown(key, source.DisplayName, logWarning: false);
+
             if (_sessions.ContainsKey(key) || _hlsSlots.ContainsKey(key))
             {
                 if (_hlsSlots.TryGetValue(key, out var existingSlot))
@@ -248,9 +227,10 @@ public sealed class ChannelSessionManager
 
     public Task RemoveIfClosedAsync(ChannelSessionKey key, ChannelStreamSession session)
     {
-        if (_sessions.TryGetValue(key, out var current) && ReferenceEquals(current, session))
+        lock (_admissionGate)
         {
-            _sessions.TryRemove(key, out _);
+            if (_sessions.TryGetValue(key, out var current) && ReferenceEquals(current, session))
+                _sessions.TryRemove(key, out _);
         }
 
         return Task.CompletedTask;
@@ -307,6 +287,26 @@ public sealed class ChannelSessionManager
             failureKind,
             StatusCodes.Status503ServiceUnavailable,
             retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(DefaultAdmissionRetryAfterSeconds, observation.Remaining.TotalSeconds))));
+    }
+
+    private void ThrowIfCoolingDown(ChannelSessionKey key, string displayName, bool logWarning)
+    {
+        if (!_strikeStore.IsCoolingDown(key, out var cooldownRemaining))
+            return;
+
+        if (logWarning)
+        {
+            _logger.LogWarning(
+                "Stream request rejected for '{DisplayName}' — upstream is in cooldown for {Seconds:F0}s more. Try again shortly.",
+                displayName,
+                cooldownRemaining.TotalSeconds);
+        }
+
+        throw new StreamAdmissionException(
+            $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
+            StreamAdmissionFailureKind.Cooldown,
+            StatusCodes.Status503ServiceUnavailable,
+            retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
     }
 
     private int CountProviderUpstreamsLocked(string providerId)

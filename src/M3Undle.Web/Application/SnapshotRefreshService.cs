@@ -325,9 +325,10 @@ public sealed class SnapshotRefreshService(
     private async Task RunRefreshAsync(CancellationToken stoppingToken)
     {
         _cancelledByUser = false;
+        var timeoutMinutes = Math.Max(1, refreshOptions.Value.TimeoutMinutes);
         using var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         _currentRunCts = runCts;
-        runCts.CancelAfter(TimeSpan.FromMinutes(refreshOptions.Value.TimeoutMinutes));
+        runCts.CancelAfter(TimeSpan.FromMinutes(timeoutMinutes));
 
         logger.LogInformation("Snapshot refresh started.");
         eventBus.Publish(AppEventKind.RefreshStarted);
@@ -349,6 +350,15 @@ public sealed class SnapshotRefreshService(
             errorSummary = "Cancelled by user.";
             logger.LogInformation("Snapshot refresh cancelled by user.");
         }
+        catch (OperationCanceledException) when (!_cancelledByUser && !stoppingToken.IsCancellationRequested && runCts.IsCancellationRequested)
+        {
+            errorSummary = $"Timed out after {timeoutMinutes} minute(s).";
+            logger.LogWarning("Snapshot refresh timed out after {TimeoutMinutes} minute(s).", timeoutMinutes);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Snapshot refresh cancelled due to service shutdown.");
+        }
         finally
         {
             _currentRunCts = null;
@@ -359,9 +369,10 @@ public sealed class SnapshotRefreshService(
     private async Task RunBuildOnlyAsync(CancellationToken stoppingToken)
     {
         _cancelledByUser = false;
+        var timeoutMinutes = Math.Max(1, refreshOptions.Value.TimeoutMinutes);
         using var runCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         _currentRunCts = runCts;
-        runCts.CancelAfter(TimeSpan.FromMinutes(refreshOptions.Value.TimeoutMinutes));
+        runCts.CancelAfter(TimeSpan.FromMinutes(timeoutMinutes));
 
         logger.LogInformation("Snapshot build-only started.");
         eventBus.Publish(AppEventKind.RefreshStarted);
@@ -379,6 +390,15 @@ public sealed class SnapshotRefreshService(
         {
             errorSummary = "Cancelled by user.";
             logger.LogInformation("Snapshot build-only cancelled by user.");
+        }
+        catch (OperationCanceledException) when (!_cancelledByUser && !stoppingToken.IsCancellationRequested && runCts.IsCancellationRequested)
+        {
+            errorSummary = $"Timed out after {timeoutMinutes} minute(s).";
+            logger.LogWarning("Snapshot build-only timed out after {TimeoutMinutes} minute(s).", timeoutMinutes);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Snapshot build-only cancelled due to service shutdown.");
         }
         finally
         {
