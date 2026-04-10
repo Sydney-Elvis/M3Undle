@@ -47,6 +47,7 @@ public sealed class ProviderDto
     public int? MaxConcurrentStreams { get; set; }
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+    public bool ForceMpegTs { get; set; }
     public List<string> AssociatedProfileIds { get; set; } = [];
     public ProviderLastRefreshDto? LastRefresh { get; set; }
     public List<ProviderLatestSnapshotDto> LatestSnapshots { get; set; } = [];
@@ -78,6 +79,7 @@ public sealed class CreateProviderRequest
     public bool Enabled { get; set; } = true;
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+    public bool ForceMpegTs { get; set; }
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
@@ -108,6 +110,7 @@ public sealed class UpdateProviderRequest
     public bool Enabled { get; set; }
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+    public bool ForceMpegTs { get; set; }
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;

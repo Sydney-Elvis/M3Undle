@@ -20,6 +20,8 @@ public sealed class Provider
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
 
+    public bool ForceMpegTs { get; set; }
+
     // Xtream Codes API provider fields
     public string? XtreamBaseUrl { get; set; }
     public string? XtreamUsername { get; set; }

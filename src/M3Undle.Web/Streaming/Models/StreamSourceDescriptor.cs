@@ -9,7 +9,8 @@ public sealed record StreamSourceDescriptor(
     string RequestedRoute,
     string? UserAgent,
     string? RemoteIp,
-    int? TunerLimit = null)
+    int? TunerLimit = null,
+    bool ForceMpegTs = false)
 {
     public ChannelSessionKey SessionKey => new(ProviderId, ProviderChannelId);
 }

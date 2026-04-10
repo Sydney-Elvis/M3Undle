@@ -471,7 +471,7 @@ public static class XtreamEndpoints
         logger.LogInformation("Xtream stream tune-in: channel={Channel} id={StreamId} client={Client}",
             entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
 
-        var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs: false);
+        var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs: resolved.SourceDescriptor?.ForceMpegTs ?? false);
 
         ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
         if (requiresHls && resolved.UseSharedSession && resolved.SourceDescriptor is not null)

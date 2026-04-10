@@ -48,6 +48,9 @@ public sealed class UpstreamStreamConnector(
                 effectiveStreamUrl = refreshedStreamUrl;
         }
 
+        if (source.ForceMpegTs)
+            effectiveStreamUrl = RewriteUrlForMpegTs(effectiveStreamUrl);
+
         var client = httpClientFactory.CreateClient("stream-relay");
         ProviderFetcher.ApplyHeadersFromJson(client, provider.HeadersJson);
         if (!string.IsNullOrWhiteSpace(provider.UserAgent))
@@ -127,6 +130,45 @@ public sealed class UpstreamStreamConnector(
             client.Dispose();
             throw;
         }
+    }
+
+    internal static string RewriteUrlForMpegTs(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return url;
+
+        var path = uri.AbsolutePath;
+        if (path.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            var stripped = path[..^5];
+            uri = new UriBuilder(uri) { Path = stripped }.Uri;
+        }
+
+        var query = uri.Query;
+        if (string.IsNullOrEmpty(query))
+            return uri.ToString();
+
+        var pairs = query.TrimStart('?').Split('&');
+        var modified = false;
+        for (var i = 0; i < pairs.Length; i++)
+        {
+            var kv = pairs[i].Split('=', 2);
+            if (kv.Length != 2) continue;
+            var key = Uri.UnescapeDataString(kv[0]);
+            if (!key.Equals("output", StringComparison.OrdinalIgnoreCase)) continue;
+            var value = Uri.UnescapeDataString(kv[1]);
+            if (value.Equals("m3u8", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("hls", StringComparison.OrdinalIgnoreCase))
+            {
+                pairs[i] = $"{kv[0]}=ts";
+                modified = true;
+            }
+        }
+
+        if (!modified)
+            return uri.ToString();
+
+        return new UriBuilder(uri) { Query = string.Join("&", pairs) }.Uri.ToString();
     }
 
     public UpstreamFailureKind Classify(Exception ex, int? statusCode = null)

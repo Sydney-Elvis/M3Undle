@@ -108,7 +108,8 @@ builder.Services.ConfigureApplicationCookie(options =>
 var sqliteInterceptor = new SqliteConnectionInterceptor();
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlite(runtimePaths.DatabaseConnectionString).AddInterceptors(sqliteInterceptor));
-builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+if (builder.Environment.IsDevelopment())
+    builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
 builder.Services.AddValidation();

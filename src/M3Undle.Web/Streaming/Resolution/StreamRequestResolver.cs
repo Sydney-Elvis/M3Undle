@@ -56,10 +56,10 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             return StreamResolveResult.SuccessDirect(entry);
         }
 
-        var tunerLimit = await db.Providers
+        var providerMeta = await db.Providers
             .AsNoTracking()
             .Where(x => x.ProviderId == providerChannel.ProviderId)
-            .Select(x => (int?)x.MaxConcurrentStreams)
+            .Select(x => new { x.MaxConcurrentStreams, x.ForceMpegTs })
             .FirstOrDefaultAsync(ct);
 
         var descriptor = new StreamSourceDescriptor(
@@ -71,7 +71,8 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             RequestedRoute: context.Request.Path.Value ?? "/stream",
             UserAgent: context.Request.Headers.UserAgent.ToString(),
             RemoteIp: context.Connection.RemoteIpAddress?.ToString(),
-            TunerLimit: tunerLimit.HasValue && tunerLimit.Value > 0 ? tunerLimit : null);
+            TunerLimit: providerMeta?.MaxConcurrentStreams is > 0 ? providerMeta.MaxConcurrentStreams : null,
+            ForceMpegTs: providerMeta?.ForceMpegTs ?? false);
 
         return routeMode switch
         {

@@ -250,6 +250,7 @@ public sealed class ProviderPageService(
             MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
+            ForceMpegTs = request.ForceMpegTs,
             XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
             XtreamUsername = isXtream ? request.XtreamUsername?.Trim() : null,
             XtreamEncryptedPassword = isXtream ? encryption.Encrypt(request.XtreamPassword!) : null,
@@ -378,6 +379,7 @@ public sealed class ProviderPageService(
         provider.MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null;
         provider.IncludeVod = request.IncludeVod;
         provider.IncludeSeries = request.IncludeSeries;
+        provider.ForceMpegTs = request.ForceMpegTs;
         provider.UpdatedUtc = DateTime.UtcNow;
 
         if (isXtream)
@@ -927,6 +929,7 @@ public sealed class ProviderPageService(
                     MaxConcurrentStreams = provider.MaxConcurrentStreams,
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,
+                    ForceMpegTs = provider.ForceMpegTs,
                     AssociatedProfileIds = associatedProfileIds,
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,

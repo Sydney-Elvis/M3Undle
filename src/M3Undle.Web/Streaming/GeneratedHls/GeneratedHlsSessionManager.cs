@@ -100,8 +100,11 @@ public sealed class GeneratedHlsSessionManager(
             return null;
         }
 
-        _ = PumpProcessStreamAsync(session, process.StandardError, isError: true, _lifetimeCts.Token);
-        _ = PumpProcessStreamAsync(session, process.StandardOutput, isError: false, _lifetimeCts.Token);
+        var stderrPumpTask = PumpProcessStreamAsync(session, process.StandardError, isError: true, _lifetimeCts.Token);
+        var stdoutPumpTask = PumpProcessStreamAsync(session, process.StandardOutput, isError: false, _lifetimeCts.Token);
+        session.SetPumpTasks(stderrPumpTask, stdoutPumpTask);
+        ObservePumpTaskFailure(stderrPumpTask, session, "stderr");
+        ObservePumpTaskFailure(stdoutPumpTask, session, "stdout");
 
         var ready = await WaitForManifestReadyAsync(session, ct);
         if (!ready)
@@ -378,7 +381,7 @@ public sealed class GeneratedHlsSessionManager(
 
         try
         {
-            while (!timeoutCts.IsCancellationRequested)
+            while (!timeoutCts.Token.IsCancellationRequested)
             {
                 if (session.Process.HasExited)
                 {
@@ -398,13 +401,30 @@ public sealed class GeneratedHlsSessionManager(
 
                 await Task.Delay(200, timeoutCts.Token);
             }
-
-            return false;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
+            // Timeout and linked cancellation are handled below.
+        }
+
+        if (session.Process.HasExited)
+        {
+            logger.LogWarning(
+                "Generated HLS session {SessionId} exited before manifest was ready. exitCode={ExitCode}",
+                session.SessionId,
+                session.Process.ExitCode);
             return false;
         }
+
+        if (ct.IsCancellationRequested || _lifetimeCts.IsCancellationRequested)
+            return false;
+
+        logger.LogWarning(
+            "Generated HLS session {SessionId} startup timed out after {TimeoutSeconds}s; stopping FFmpeg immediately.",
+            session.SessionId,
+            _options.StartupTimeoutSeconds);
+        TryStopProcess(session.Process);
+        return false;
     }
 
     private async Task SweepLoopAsync(CancellationToken ct)
@@ -455,6 +475,7 @@ public sealed class GeneratedHlsSessionManager(
         }
         finally
         {
+            await ObservePumpTasksAsync(session);
             session.Process.Dispose();
             TryDeleteDirectory(session.WorkDirectory);
             logger.LogInformation(
@@ -462,6 +483,44 @@ public sealed class GeneratedHlsSessionManager(
                 sessionId,
                 reason);
         }
+    }
+
+    private async Task ObservePumpTasksAsync(GeneratedHlsSession session)
+    {
+        var pumpTasks = session.GetPumpTasks();
+        if (pumpTasks.Length == 0)
+            return;
+
+        try
+        {
+            await Task.WhenAll(pumpTasks).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException)
+        {
+            logger.LogDebug(
+                "Generated HLS session {SessionId} pump tasks did not complete within teardown timeout.",
+                session.SessionId);
+        }
+        catch
+        {
+            // Pump exceptions are logged via fault-only continuations.
+        }
+    }
+
+    private void ObservePumpTaskFailure(Task pumpTask, GeneratedHlsSession session, string streamName)
+    {
+        _ = pumpTask.ContinueWith(
+            faultedTask =>
+            {
+                logger.LogWarning(
+                    faultedTask.Exception,
+                    "Generated HLS session {SessionId} FFmpeg {StreamName} pump failed.",
+                    session.SessionId,
+                    streamName);
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private void CleanupStaleDirectories()
@@ -607,11 +666,7 @@ public sealed class GeneratedHlsSessionManager(
             {
                 line = await reader.ReadLineAsync(ct);
             }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return;
             }
@@ -639,6 +694,8 @@ public sealed class GeneratedHlsSessionManager(
         ChannelSessionKey? admissionKey = null)
     {
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        private Task? _stderrPumpTask;
+        private Task? _stdoutPumpTask;
 
         public string SessionId { get; } = sessionId;
 
@@ -656,6 +713,26 @@ public sealed class GeneratedHlsSessionManager(
 
         public DateTimeOffset LastAccessUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _lastAccessUnixMs));
+
+        public void SetPumpTasks(Task stderrPumpTask, Task stdoutPumpTask)
+        {
+            _stderrPumpTask = stderrPumpTask;
+            _stdoutPumpTask = stdoutPumpTask;
+        }
+
+        public Task[] GetPumpTasks()
+        {
+            if (_stderrPumpTask is null && _stdoutPumpTask is null)
+                return [];
+
+            if (_stderrPumpTask is null)
+                return [_stdoutPumpTask!];
+
+            if (_stdoutPumpTask is null)
+                return [_stderrPumpTask];
+
+            return [_stderrPumpTask, _stdoutPumpTask];
+        }
 
         public void Touch()
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());

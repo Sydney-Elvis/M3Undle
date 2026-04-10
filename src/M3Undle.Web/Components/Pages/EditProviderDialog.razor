@@ -80,6 +80,17 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
                 <MudSwitch @bind-Value="_model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
                 <MudSwitch @bind-Value="_model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
+                <MudDivider Class="my-1" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
+                <MudSwitch @bind-Value="_model.ForceMpegTs" Color="Color.Warning"
+                           Label="Force MPEG-TS (override HLS)"
+                           For="@(() => _model.ForceMpegTs)" />
+                @if (_model.ForceMpegTs)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
+                        Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
+                    </MudAlert>
+                }
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
             </MudStack>
         </MudForm>
@@ -172,6 +183,7 @@
                 MaxConcurrentStreams = Provider.MaxConcurrentStreams,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
+                ForceMpegTs = Provider.ForceMpegTs,
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             }
             : new EditModel
@@ -186,6 +198,7 @@
                 MaxConcurrentStreams = Provider.MaxConcurrentStreams,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
+                ForceMpegTs = Provider.ForceMpegTs,
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             };
 
@@ -261,6 +274,7 @@
                     MaxConcurrentStreams = _model.MaxConcurrentStreams,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
+                    ForceMpegTs = _model.ForceMpegTs,
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -278,6 +292,7 @@
                     MaxConcurrentStreams = _model.MaxConcurrentStreams,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
+                    ForceMpegTs = _model.ForceMpegTs,
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -328,6 +343,7 @@
         public int? MaxConcurrentStreams { get; set; }
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
+        public bool ForceMpegTs { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }
 }

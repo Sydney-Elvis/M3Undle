@@ -29,6 +29,7 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.XtreamBaseUrl).HasColumnName("xtream_base_url");
         builder.Property(x => x.XtreamUsername).HasColumnName("xtream_username");
         builder.Property(x => x.XtreamEncryptedPassword).HasColumnName("xtream_encrypted_password");
+        builder.Property(x => x.ForceMpegTs).HasColumnName("force_mpegts").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.XtreamIncludeXmltv).HasColumnName("xtream_include_xmltv").IsRequired().HasDefaultValue(false);
 
         builder.HasIndex(x => x.Name).IsUnique();

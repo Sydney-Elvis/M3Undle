@@ -39,6 +39,7 @@
                             <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_urlModel.MaxConcurrentStreams" Min="1" Max="100"
                                              HelperText="Leave blank to use the global setting" />
                             @RenderContentToggles(_urlModel)
+                            @RenderStreamFormatSection(_urlModel)
                             <MudSwitch @bind-Value="_urlModel.Enabled" Color="Color.Success" Label="Enabled" />
                             @RenderProfileSection(_urlModel)
                         </MudStack>
@@ -125,6 +126,7 @@
                             <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_fileModel.MaxConcurrentStreams" Min="1" Max="100"
                                              HelperText="Leave blank to use the global setting" />
                             @RenderContentToggles(_fileModel)
+                            @RenderStreamFormatSection(_fileModel)
                             <MudSwitch @bind-Value="_fileModel.Enabled" Color="Color.Success" Label="Enabled" />
                             @RenderProfileSection(_fileModel)
                         </MudStack>
@@ -177,6 +179,7 @@
                                              HelperText="Leave blank to use the global setting"
                                              Disabled="!_encryptionAvailable" />
                             @RenderContentToggles(_xtreamModel)
+                            @RenderStreamFormatSection(_xtreamModel)
                             <MudSwitch @bind-Value="_xtreamModel.Enabled" Color="Color.Success" Label="Enabled"
                                        Disabled="!_encryptionAvailable" />
                             @RenderProfileSection(_xtreamModel)
@@ -467,6 +470,32 @@
         <MudSwitch @bind-Value="model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
     };
 
+    private RenderFragment RenderStreamFormatSection(ProviderFormModel model) => __builder =>
+    {
+        <MudDivider Class="my-1" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
+        <MudSwitch @bind-Value="model.ForceMpegTs" Color="Color.Warning" Label="Force MPEG-TS (override HLS)" />
+        @if (model.ForceMpegTs)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
+                Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
+            </MudAlert>
+        }
+    };
+
+    private RenderFragment RenderStreamFormatSection(XtreamFormModel model) => __builder =>
+    {
+        <MudDivider Class="my-1" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
+        <MudSwitch @bind-Value="model.ForceMpegTs" Color="Color.Warning" Label="Force MPEG-TS (override HLS)" />
+        @if (model.ForceMpegTs)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
+                HLS delivery to clients is disabled for this provider.
+            </MudAlert>
+        }
+    };
+
     // ------------------------------------------------------------------
     // File browser
     // ------------------------------------------------------------------
@@ -536,6 +565,7 @@
                     Enabled = _urlModel.Enabled,
                     IncludeVod = _urlModel.IncludeVod,
                     IncludeSeries = _urlModel.IncludeSeries,
+                    ForceMpegTs = _urlModel.ForceMpegTs,
                     TimeoutSeconds = _urlModel.TimeoutSeconds,
                     MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
@@ -557,6 +587,7 @@
                     Enabled = _fileModel.Enabled,
                     IncludeVod = _fileModel.IncludeVod,
                     IncludeSeries = _fileModel.IncludeSeries,
+                    ForceMpegTs = _fileModel.ForceMpegTs,
                     TimeoutSeconds = _fileModel.TimeoutSeconds,
                     MaxConcurrentStreams = _fileModel.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(_fileModel.ProfileId),
@@ -575,6 +606,7 @@
                     Enabled = _xtreamModel.Enabled,
                     IncludeVod = _xtreamModel.IncludeVod,
                     IncludeSeries = _xtreamModel.IncludeSeries,
+                    ForceMpegTs = _xtreamModel.ForceMpegTs,
                     TimeoutSeconds = _xtreamModel.TimeoutSeconds,
                     MaxConcurrentStreams = _xtreamModel.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(_xtreamModel.ProfileId),
@@ -698,6 +730,7 @@
         public int? MaxConcurrentStreams { get; set; }
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
+        public bool ForceMpegTs { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }
 
@@ -713,6 +746,7 @@
         public int? MaxConcurrentStreams { get; set; }
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
+        public bool ForceMpegTs { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }
 

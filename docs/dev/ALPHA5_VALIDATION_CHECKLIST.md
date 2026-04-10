@@ -36,6 +36,12 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 - [ ] VOD / Series counts match UI & exported stats
 - [ ] IPTVnavtor groups and MacOS behavior validated
 
+## Post-Review Hardening (2026-04-09)
+
+- [x] Guard `AddDatabaseDeveloperPageExceptionFilter()` so it only runs in Development
+- [x] Fix `GeneratedHlsSessionManager` pump-task exception handling so FFmpeg reader failures are observed and logged
+- [x] Fix `GeneratedHlsSessionManager` manifest-timeout cleanup so timed-out FFmpeg processes are stopped immediately
+
 ## Documentation
 
 - [x] Update roadmap & user docs with Alpha 5 scope and status (dashboard redesign, profiles UX, terminology, HLS/CORS)

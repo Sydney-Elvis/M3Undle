@@ -565,7 +565,7 @@ public static class CompatibilityEndpoints
         logger.LogInformation("Stream tune-in: channel={Channel} key={StreamKey} client={Client}",
             entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
 
-        var forceTs = IsHdHomeRunTuneRoute(context.Request.Path);
+        var forceTs = IsHdHomeRunTuneRoute(context.Request.Path) || (resolved.SourceDescriptor?.ForceMpegTs ?? false);
         var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs);
 
         ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
