@@ -245,12 +245,13 @@ public static class ProviderApiEndpoints
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Profile" });
         logger.LogInformation("Profile {ProfileId} set active.", profileId);
         eventBus.Publish(AppEventKind.ProviderActivated);
-        refreshTrigger.TriggerRefresh();
+        var refreshTriggered = refreshTrigger.TriggerRefresh();
 
         return TypedResults.Ok(new ProfileActiveResponse
         {
             ProfileId = profileId,
             IsActive = true,
+            RefreshTriggered = refreshTriggered,
             UpdatedUtc = now,
         });
     }

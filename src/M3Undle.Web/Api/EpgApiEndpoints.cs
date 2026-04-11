@@ -24,6 +24,7 @@ public static class EpgApiEndpoints
         epg.MapPatch("/sources/{id}", UpdateSourceAsync).WithSummary("Update an EPG source");
         epg.MapDelete("/sources/{id}", DeleteSourceAsync).WithSummary("Delete an EPG source");
         epg.MapPost("/sources/{id}/test", TestSourceAsync).WithSummary("Test an EPG source");
+        epg.MapPost("/sources/{id}/fetch", FetchSourceAsync).WithSummary("Fetch and persist an EPG source");
         epg.MapPost("/sources/{id}/auto-map", AutoMapSourceAsync).WithSummary("Auto-map EPG channels");
         epg.MapGet("/sources/{id}/channels", ListSourceChannelsAsync).WithSummary("List source channels");
         epg.MapGet("/sources/{id}/fetch-runs", ListFetchRunsAsync).WithSummary("List EPG fetch runs");
@@ -176,6 +177,8 @@ public static class EpgApiEndpoints
             {
                 Success = false,
                 Error = result.ErrorSummary ?? "Fetch failed.",
+                ProviderId = source.ProviderId,
+                CachedXmlAvailable = File.Exists(cacheFile),
                 ElapsedMs = (int)sw.ElapsedMilliseconds,
             });
         }
@@ -188,12 +191,122 @@ public static class EpgApiEndpoints
         return TypedResults.Ok(new EpgSourceTestResult
         {
             Success = true,
+            ProviderId = source.ProviderId,
             ChannelCount = catalogue.Channels.Count,
             ProgrammeCount = allProgrammes.Count,
             EarliestProgramme = allProgrammes.Count > 0 ? allProgrammes.Min(p => p.StartUtc) : null,
             LatestProgramme = allProgrammes.Count > 0 ? allProgrammes.Max(p => p.StopUtc) : null,
             Bytes = result.Bytes,
             ElapsedMs = (int)sw.ElapsedMilliseconds,
+            CachedXmlAvailable = File.Exists(cacheFile),
+        });
+    }
+
+    private static async Task<Results<Ok<EpgFetchRunDto>, NotFound>> FetchSourceAsync(
+        string id,
+        ApplicationDbContext db,
+        EpgSourceFetcher epgSourceFetcher,
+        XmltvParser xmltvParser,
+        RuntimePaths runtimePaths,
+        CancellationToken cancellationToken)
+    {
+        var source = await db.EpgSources
+            .FirstOrDefaultAsync(x => x.EpgSourceId == id, cancellationToken);
+
+        if (source is null)
+            return TypedResults.NotFound();
+
+        Provider? provider = null;
+        if (source.ProviderId is not null)
+            provider = await db.Providers.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.ProviderId == source.ProviderId, cancellationToken);
+
+        var startedUtc = DateTime.UtcNow;
+        var cacheFile = Path.Combine(runtimePaths.DataDirectory, "epg-cache", $"{source.EpgSourceId}.xml");
+
+        var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
+
+        var finishedUtc = DateTime.UtcNow;
+
+        // Update source metadata columns
+        if (result.Status is "ok" or "not_modified")
+        {
+            source.LastSuccessUtc = finishedUtc;
+            source.ETag = result.ETag ?? source.ETag;
+            source.LastModifiedUtc = result.LastModifiedUtc ?? source.LastModifiedUtc;
+        }
+        else
+        {
+            source.LastFailureUtc = finishedUtc;
+        }
+        source.UpdatedUtc = finishedUtc;
+
+        // Upsert source channels from parsed catalogue
+        var channelCount = 0;
+        var programmeCount = 0;
+        if (!string.IsNullOrWhiteSpace(xml))
+        {
+            var catalogue = xmltvParser.Parse(source.EpgSourceId, xml);
+            channelCount = catalogue.Channels.Count;
+            programmeCount = catalogue.ProgrammesByChannel.Values.Sum(p => p.Count);
+
+            var now = DateTime.UtcNow;
+            var existing = await db.EpgSourceChannels
+                .Where(x => x.EpgSourceId == id)
+                .ToListAsync(cancellationToken);
+            var byId = existing.ToDictionary(x => x.XmltvChannelId, StringComparer.Ordinal);
+            var addedThisRun = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var ch in catalogue.Channels)
+            {
+                if (byId.TryGetValue(ch.XmltvChannelId, out var row))
+                {
+                    row.DisplayName = ch.DisplayName;
+                    row.IconUrl = ch.IconUrl;
+                    row.LastSeenUtc = now;
+                }
+                else if (addedThisRun.Add(ch.XmltvChannelId))
+                {
+                    db.EpgSourceChannels.Add(new EpgSourceChannel
+                    {
+                        EpgSourceChannelId = Guid.NewGuid().ToString(),
+                        EpgSourceId = id,
+                        XmltvChannelId = ch.XmltvChannelId,
+                        DisplayName = ch.DisplayName,
+                        IconUrl = ch.IconUrl,
+                        LastSeenUtc = now,
+                    });
+                }
+            }
+        }
+
+        var fetchRun = new EpgFetchRun
+        {
+            EpgFetchRunId = Guid.NewGuid().ToString(),
+            EpgSourceId = id,
+            StartedUtc = startedUtc,
+            FinishedUtc = finishedUtc,
+            Status = result.Status,
+            Bytes = result.Bytes > 0 ? (int)Math.Min(result.Bytes, int.MaxValue) : null,
+            ChannelCount = channelCount > 0 ? channelCount : null,
+            ProgrammeCount = programmeCount > 0 ? programmeCount : null,
+            ErrorSummary = result.ErrorSummary,
+        };
+        db.EpgFetchRuns.Add(fetchRun);
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return TypedResults.Ok(new EpgFetchRunDto
+        {
+            EpgFetchRunId = fetchRun.EpgFetchRunId,
+            EpgSourceId = fetchRun.EpgSourceId,
+            StartedUtc = fetchRun.StartedUtc,
+            FinishedUtc = fetchRun.FinishedUtc,
+            Status = fetchRun.Status,
+            Bytes = fetchRun.Bytes,
+            ChannelCount = fetchRun.ChannelCount,
+            ProgrammeCount = fetchRun.ProgrammeCount,
+            ErrorSummary = fetchRun.ErrorSummary,
         });
     }
 

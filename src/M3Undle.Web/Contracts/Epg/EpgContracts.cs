@@ -56,12 +56,14 @@ public sealed class EpgSourceTestResult
 {
     public bool Success { get; set; }
     public string? Error { get; set; }
+    public string? ProviderId { get; set; }
     public int ChannelCount { get; set; }
     public int ProgrammeCount { get; set; }
     public DateTimeOffset? EarliestProgramme { get; set; }
     public DateTimeOffset? LatestProgramme { get; set; }
     public long Bytes { get; set; }
     public int ElapsedMs { get; set; }
+    public bool CachedXmlAvailable { get; set; }
 }
 
 // -------------------------------------------------------------------------

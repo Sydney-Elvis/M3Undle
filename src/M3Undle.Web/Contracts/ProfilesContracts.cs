@@ -55,5 +55,6 @@ public sealed class ProfileActiveResponse
 {
     public string ProfileId { get; set; } = string.Empty;
     public bool IsActive { get; set; }
+    public bool RefreshTriggered { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

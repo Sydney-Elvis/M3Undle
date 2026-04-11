@@ -22,6 +22,12 @@ public static class ChannelListApiEndpoints
         channels.MapPut("/number-manager", BulkUpdateChannelNumbersAsync).WithSummary("Bulk update channel numbers");
         channels.MapPatch("/{providerChannelId}", UpdateOutputChannelAsync).WithSummary("Update output channel overrides");
         channels.MapDelete("/{providerChannelId}", RemoveOutputChannelAsync).WithSummary("Remove a channel from output");
+
+        var profileChannels = app.MapGroup("/api/v1/profiles");
+        profileChannels.RequireAuthorization(UiAccessPolicy.Name);
+        profileChannels.WithTags("Channels");
+        profileChannels.MapGet("/{profileId}/channels", GetProfileChannelsAsync).WithSummary("List channels for a specific profile");
+
         return app;
     }
 
@@ -96,6 +102,95 @@ public static class ChannelListApiEndpoints
                     continue;
 
                 // Search filter: substring match on name, tvg-id, or group
+                if (!string.IsNullOrEmpty(termUpper)
+                    && !e.DisplayName.Contains(termUpper, StringComparison.OrdinalIgnoreCase)
+                    && !(e.TvgId?.Contains(termUpper, StringComparison.OrdinalIgnoreCase) == true)
+                    && !(e.GroupTitle?.Contains(termUpper, StringComparison.OrdinalIgnoreCase) == true))
+                    continue;
+
+                all.Add(MapEntry(e));
+            }
+
+            var items = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
+            return TypedResults.Ok(new ChannelListResponse
+            {
+                Total = all.Count,
+                Page = page,
+                PageSize = pageSize,
+                Items = items,
+            });
+        }
+    }
+
+    private static async Task<Results<Ok<ChannelListResponse>, NotFound>> GetProfileChannelsAsync(
+        string profileId,
+        int page,
+        int pageSize,
+        string? search,
+        string? group,
+        ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        pageSize = Math.Clamp(pageSize, 10, 200);
+        page = Math.Max(1, page);
+
+        var exists = await db.Profiles.AnyAsync(x => x.ProfileId == profileId, cancellationToken);
+        if (!exists)
+            return TypedResults.NotFound();
+
+        var snapshot = await db.Snapshots
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (snapshot is null
+            || string.IsNullOrEmpty(snapshot.ChannelIndexPath)
+            || !File.Exists(snapshot.ChannelIndexPath))
+            return TypedResults.NotFound();
+
+        var term = search?.Trim();
+        var groupFilter = group?.Trim();
+        bool hasFilters = !string.IsNullOrEmpty(term) || !string.IsNullOrEmpty(groupFilter);
+
+        if (!hasFilters)
+        {
+            int total = snapshot.LiveChannelCount;
+            int skip = (page - 1) * pageSize;
+            var items = new List<ChannelListItemDto>(pageSize);
+            int liveCount = 0;
+
+            await foreach (var e in ChannelIndexStore.StreamAllAsync(snapshot.ChannelIndexPath, cancellationToken))
+            {
+                if (LiveClassifier.ClassifyContent(e.StreamUrl) != "live") continue;
+                liveCount++;
+                if (liveCount <= skip) continue;
+                items.Add(MapEntry(e));
+                if (items.Count >= pageSize) break;
+            }
+
+            return TypedResults.Ok(new ChannelListResponse
+            {
+                Total = total,
+                Page = page,
+                PageSize = pageSize,
+                Items = items,
+            });
+        }
+        else
+        {
+            var termUpper = term?.ToUpperInvariant();
+            var all = new List<ChannelListItemDto>();
+
+            await foreach (var e in ChannelIndexStore.StreamAllAsync(snapshot.ChannelIndexPath, cancellationToken))
+            {
+                if (LiveClassifier.ClassifyContent(e.StreamUrl) != "live") continue;
+
+                if (!string.IsNullOrEmpty(groupFilter)
+                    && !string.Equals(e.GroupTitle, groupFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 if (!string.IsNullOrEmpty(termUpper)
                     && !e.DisplayName.Contains(termUpper, StringComparison.OrdinalIgnoreCase)
                     && !(e.TvgId?.Contains(termUpper, StringComparison.OrdinalIgnoreCase) == true)

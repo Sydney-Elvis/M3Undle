@@ -88,6 +88,7 @@ public static class CompatibilityEndpoints
             debug.MapPost("/streams/reset", ServeDebugStreamResetAsync);
             debug.MapPost("/strikes/reset", ServeDebugStrikeResetAsync);
             debug.MapGet("/streams/strikes", ServeDebugStrikesAsync);
+            debug.MapGet("/snapshots/idle", ServeDebugSnapshotIdleAsync);
         }
 
         return app;
@@ -1120,6 +1121,27 @@ public static class CompatibilityEndpoints
     {
         strikeStore.ClearAll();
         return Results.Ok(new { cleared = true });
+    }
+
+    private static async Task<IResult> ServeDebugSnapshotIdleAsync(
+        IRefreshTrigger refreshTrigger,
+        ApplicationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var latestRun = await db.FetchRuns
+            .AsNoTracking()
+            .Where(x => x.Type == "snapshot")
+            .OrderByDescending(x => x.StartedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return Results.Json(new
+        {
+            idle = !refreshTrigger.IsRefreshing,
+            running = refreshTrigger.IsRefreshing,
+            lastStatus = latestRun?.Status,
+            startedUtc = latestRun?.StartedUtc,
+            completedUtc = latestRun?.FinishedUtc,
+        }, JsonOptions);
     }
 
     private static async Task ServeStatusAsync(
