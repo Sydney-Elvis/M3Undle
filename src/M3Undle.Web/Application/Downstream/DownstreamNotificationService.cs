@@ -23,6 +23,10 @@ public sealed class DownstreamNotificationService(
     private readonly Dictionary<string, IDownstreamAdapter> _adapters =
         adapters.ToDictionary(a => a.Kind, StringComparer.OrdinalIgnoreCase);
 
+    // SQLite only allows one writer at a time. Notifications run concurrently, but
+    // the result write-back must be serialized to avoid SQLITE_BUSY errors.
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var reader = eventBus.Subscribe(out var unsubscriber);
@@ -119,6 +123,7 @@ public sealed class DownstreamNotificationService(
 
     private async Task WriteResultAsync(string id, DateTime? notifiedUtc, string? error, CancellationToken ct)
     {
+        await _writeLock.WaitAsync(CancellationToken.None);
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
@@ -138,6 +143,10 @@ public sealed class DownstreamNotificationService(
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to write notification result for integration {Id}.", id);
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 
