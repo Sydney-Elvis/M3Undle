@@ -12,12 +12,16 @@ public static class ChannelListApiEndpoints
 {
     public static IEndpointRouteBuilder MapChannelListApiEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/v1/channels", GetChannelsAsync).RequireAuthorization(UiAccessPolicy.Name);
-        app.MapGet("/api/v1/channels/groups", GetMappedGroupsAsync).RequireAuthorization(UiAccessPolicy.Name);
-        app.MapGet("/api/v1/channels/number-manager", GetNumberManagerChannelsAsync).RequireAuthorization(UiAccessPolicy.Name);
-        app.MapPut("/api/v1/channels/number-manager", BulkUpdateChannelNumbersAsync).RequireAuthorization(UiAccessPolicy.Name);
-        app.MapPatch("/api/v1/channels/{providerChannelId}", UpdateOutputChannelAsync).RequireAuthorization(UiAccessPolicy.Name);
-        app.MapDelete("/api/v1/channels/{providerChannelId}", RemoveOutputChannelAsync).RequireAuthorization(UiAccessPolicy.Name);
+        var channels = app.MapGroup("/api/v1/channels");
+        channels.RequireAuthorization(UiAccessPolicy.Name);
+        channels.WithTags("Channels");
+
+        channels.MapGet("/", GetChannelsAsync).WithSummary("List channels");
+        channels.MapGet("/groups", GetMappedGroupsAsync).WithSummary("List mapped channel groups");
+        channels.MapGet("/number-manager", GetNumberManagerChannelsAsync).WithSummary("List channels for number manager");
+        channels.MapPut("/number-manager", BulkUpdateChannelNumbersAsync).WithSummary("Bulk update channel numbers");
+        channels.MapPatch("/{providerChannelId}", UpdateOutputChannelAsync).WithSummary("Update output channel overrides");
+        channels.MapDelete("/{providerChannelId}", RemoveOutputChannelAsync).WithSummary("Remove a channel from output");
         return app;
     }
 

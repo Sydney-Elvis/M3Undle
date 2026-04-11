@@ -11,7 +11,8 @@ public static class DashboardApiEndpoints
     {
         var dashboard = app.MapGroup("/api/v1/dashboard");
         dashboard.RequireAuthorization(UiAccessPolicy.Name);
-        dashboard.MapGet("/stats", GetStatsAsync);
+        dashboard.WithTags("Dashboard");
+        dashboard.MapGet("/stats", GetStatsAsync).WithSummary("Get dashboard stats");
         return app;
     }
 

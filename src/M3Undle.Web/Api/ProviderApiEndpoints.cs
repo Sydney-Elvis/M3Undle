@@ -18,42 +18,47 @@ public static class ProviderApiEndpoints
     {
         var profiles = app.MapGroup("/api/v1/profiles");
         profiles.RequireAuthorization(UiAccessPolicy.Name);
-        profiles.MapGet("/", ListProfilesAsync);
-        profiles.MapPost("/", CreateProfileAsync);
-        profiles.MapPost("/{profileId}/select-all-channels", SelectAllChannelsAsync);
-        profiles.MapPut("/{profileId}/active", SetProfileActiveAsync);
-        profiles.MapDelete("/{profileId}", DeleteProfileAsync);
+        profiles.WithTags("Profiles");
+        profiles.MapGet("/", ListProfilesAsync).WithSummary("List profiles");
+        profiles.MapPost("/", CreateProfileAsync).WithSummary("Create a profile");
+        profiles.MapPost("/{profileId}/select-all-channels", SelectAllChannelsAsync).WithSummary("Select all channels for a profile");
+        profiles.MapPut("/{profileId}/active", SetProfileActiveAsync).WithSummary("Set the active profile");
+        profiles.MapDelete("/{profileId}", DeleteProfileAsync).WithSummary("Delete a profile");
 
         var providers = app.MapGroup("/api/v1/providers");
         providers.RequireAuthorization(UiAccessPolicy.Name);
-        providers.MapGet("/", ListProvidersAsync);
-        providers.MapPost("/", CreateProviderAsync);
-        providers.MapPost("/upsert", UpsertProviderAsync);
-        providers.MapGet("/{providerId}", GetProviderAsync);
-        providers.MapPut("/{providerId}", UpdateProviderAsync);
-        providers.MapDelete("/{providerId}", DeleteProviderAsync);
-        providers.MapPatch("/{providerId}/enabled", SetProviderEnabledAsync);
-        providers.MapGet("/{providerId}/preview", GetPreviewAsync);
-        providers.MapPost("/{providerId}/refresh-preview", RefreshPreviewAsync);
-        providers.MapGet("/{providerId}/status", GetProviderStatusAsync);
-        providers.MapGet("/config/available", GetAvailableConfigProvidersAsync);
-        providers.MapPost("/config/import", ImportConfigProviderAsync);
-        providers.MapPost("/config/probe", ProbeConfigProviderAsync);
-        providers.MapGet("/{providerId}/health", GetProviderHealthAsync);
-        providers.MapPatch("/{providerId}/xtream-password", UpdateXtreamPasswordAsync);
+        providers.WithTags("Providers");
+        providers.MapGet("/", ListProvidersAsync).WithSummary("List providers");
+        providers.MapPost("/", CreateProviderAsync).WithSummary("Create a provider");
+        providers.MapPost("/upsert", UpsertProviderAsync).WithSummary("Create or update a provider");
+        providers.MapGet("/{providerId}", GetProviderAsync).WithSummary("Get a provider");
+        providers.MapPut("/{providerId}", UpdateProviderAsync).WithSummary("Update a provider");
+        providers.MapDelete("/{providerId}", DeleteProviderAsync).WithSummary("Delete a provider");
+        providers.MapPatch("/{providerId}/enabled", SetProviderEnabledAsync).WithSummary("Enable or disable a provider");
+        providers.MapGet("/{providerId}/preview", GetPreviewAsync).WithSummary("Preview provider channels");
+        providers.MapPost("/{providerId}/refresh-preview", RefreshPreviewAsync).WithSummary("Refresh provider preview");
+        providers.MapGet("/{providerId}/status", GetProviderStatusAsync).WithSummary("Get provider status");
+        providers.MapGet("/config/available", GetAvailableConfigProvidersAsync).WithSummary("List available provider configs");
+        providers.MapPost("/config/import", ImportConfigProviderAsync).WithSummary("Import a provider config");
+        providers.MapPost("/config/probe", ProbeConfigProviderAsync).WithSummary("Probe a provider config");
+        providers.MapGet("/{providerId}/health", GetProviderHealthAsync).WithSummary("Get provider health");
+        providers.MapPatch("/{providerId}/xtream-password", UpdateXtreamPasswordAsync).WithSummary("Rotate provider Xtream password");
         providers.MapGet("/encryption-status", (SecretEncryptionService enc) =>
-            TypedResults.Ok(new { available = enc.IsAvailable }));
+            TypedResults.Ok(new EncryptionStatusResponse(enc.IsAvailable)))
+            .WithSummary("Get encryption status");
 
         var fs = app.MapGroup("/api/v1/fs");
         fs.RequireAuthorization(UiAccessPolicy.Name);
-        fs.MapGet("/browse", BrowseFilesystemAsync);
+        fs.WithTags("File System");
+        fs.MapGet("/browse", BrowseFilesystemAsync).WithSummary("Browse the file system");
 
         var snapshots = app.MapGroup("/api/v1/snapshots");
         snapshots.RequireAuthorization(UiAccessPolicy.Name);
-        snapshots.MapPost("/refresh", TriggerRefreshAsync);
-        snapshots.MapPost("/build", TriggerBuildOnlyAsync);
-        snapshots.MapPost("/cancel", CancelRefreshAsync);
-        snapshots.MapGet("/status", GetSnapshotStatusAsync);
+        snapshots.WithTags("Snapshots");
+        snapshots.MapPost("/refresh", TriggerRefreshAsync).WithSummary("Run snapshot refresh");
+        snapshots.MapPost("/build", TriggerBuildOnlyAsync).WithSummary("Build snapshot without refresh");
+        snapshots.MapPost("/cancel", CancelRefreshAsync).WithSummary("Cancel snapshot refresh");
+        snapshots.MapGet("/status", GetSnapshotStatusAsync).WithSummary("Get snapshot status");
 
         return app;
     }
@@ -1995,5 +2000,6 @@ public static class ProviderApiEndpoints
         public string GroupName { get; init; } = string.Empty;
         public string? StreamUrl { get; init; }
     }
-}
 
+    private sealed record EncryptionStatusResponse(bool Available);
+}

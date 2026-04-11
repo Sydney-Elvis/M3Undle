@@ -16,21 +16,22 @@ public static class EpgApiEndpoints
     {
         var epg = app.MapGroup("/api/v1/epg");
         epg.RequireAuthorization(UiAccessPolicy.Name);
+        epg.WithTags("EPG");
 
         // Sources
-        epg.MapGet("/sources", ListSourcesAsync);
-        epg.MapPost("/sources", CreateSourceAsync);
-        epg.MapPatch("/sources/{id}", UpdateSourceAsync);
-        epg.MapDelete("/sources/{id}", DeleteSourceAsync);
-        epg.MapPost("/sources/{id}/test", TestSourceAsync);
-        epg.MapPost("/sources/{id}/auto-map", AutoMapSourceAsync);
-        epg.MapGet("/sources/{id}/channels", ListSourceChannelsAsync);
-        epg.MapGet("/sources/{id}/fetch-runs", ListFetchRunsAsync);
+        epg.MapGet("/sources", ListSourcesAsync).WithSummary("List EPG sources");
+        epg.MapPost("/sources", CreateSourceAsync).WithSummary("Create an EPG source");
+        epg.MapPatch("/sources/{id}", UpdateSourceAsync).WithSummary("Update an EPG source");
+        epg.MapDelete("/sources/{id}", DeleteSourceAsync).WithSummary("Delete an EPG source");
+        epg.MapPost("/sources/{id}/test", TestSourceAsync).WithSummary("Test an EPG source");
+        epg.MapPost("/sources/{id}/auto-map", AutoMapSourceAsync).WithSummary("Auto-map EPG channels");
+        epg.MapGet("/sources/{id}/channels", ListSourceChannelsAsync).WithSummary("List source channels");
+        epg.MapGet("/sources/{id}/fetch-runs", ListFetchRunsAsync).WithSummary("List EPG fetch runs");
 
         // Mappings
-        epg.MapGet("/mappings", ListMappingsAsync);
-        epg.MapPut("/mappings", UpsertMappingAsync);
-        epg.MapDelete("/mappings/{id}", DeleteMappingAsync);
+        epg.MapGet("/mappings", ListMappingsAsync).WithSummary("List EPG mappings");
+        epg.MapPut("/mappings", UpsertMappingAsync).WithSummary("Create or update an EPG mapping");
+        epg.MapDelete("/mappings/{id}", DeleteMappingAsync).WithSummary("Delete an EPG mapping");
 
         return app;
     }

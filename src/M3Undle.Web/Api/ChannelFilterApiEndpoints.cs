@@ -15,19 +15,23 @@ public static class ChannelFilterApiEndpoints
     {
         var profiles = app.MapGroup("/api/v1/profiles");
         profiles.RequireAuthorization(UiAccessPolicy.Name);
-        profiles.MapGet("/active", GetActiveProfileAsync);
-        profiles.MapGet("/{profileId}/group-filters", ListGroupFiltersAsync);
-        profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync);
-        profiles.MapPost("/{profileId}/group-filters/bulk-decide", BulkDecideAsync);
-        profiles.MapPost("/{profileId}/group-filters/dismiss-new", DismissNewGroupsAsync);
-        profiles.MapGet("/{profileId}/group-filters/{filterId}/channels", GetGroupChannelsAsync);
-        profiles.MapGet("/{profileId}/channels/search", SearchChannelsAsync);
-        profiles.MapGet("/{profileId}/group-filters/{filterId}/channel-selections", GetChannelSelectionsAsync);
-        profiles.MapPut("/{profileId}/group-filters/{filterId}/channel-selections", UpdateChannelSelectionsAsync);
-        profiles.MapGet("/{profileId}/review-queue", ListReviewQueueAsync);
-        profiles.MapPost("/{profileId}/review-queue/bulk-state", BulkSetReviewQueueStateAsync);
+        profiles.WithTags("Channel Filters");
+        profiles.MapGet("/active", GetActiveProfileAsync).WithSummary("Get active profile");
+        profiles.MapGet("/{profileId}/group-filters", ListGroupFiltersAsync).WithSummary("List group filters");
+        profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync).WithSummary("Update a group filter");
+        profiles.MapPost("/{profileId}/group-filters/bulk-decide", BulkDecideAsync).WithSummary("Bulk set group decisions");
+        profiles.MapPost("/{profileId}/group-filters/dismiss-new", DismissNewGroupsAsync).WithSummary("Dismiss new groups");
+        profiles.MapGet("/{profileId}/group-filters/{filterId}/channels", GetGroupChannelsAsync).WithSummary("List channels in a group");
+        profiles.MapGet("/{profileId}/channels/search", SearchChannelsAsync).WithSummary("Search channels by profile");
+        profiles.MapGet("/{profileId}/group-filters/{filterId}/channel-selections", GetChannelSelectionsAsync).WithSummary("Get channel selections");
+        profiles.MapPut("/{profileId}/group-filters/{filterId}/channel-selections", UpdateChannelSelectionsAsync).WithSummary("Update channel selections");
+        profiles.MapGet("/{profileId}/review-queue", ListReviewQueueAsync).WithSummary("List review queue");
+        profiles.MapPost("/{profileId}/review-queue/bulk-state", BulkSetReviewQueueStateAsync).WithSummary("Bulk update review queue state");
 
-        app.MapGet("/api/v1/channel-stats", GetChannelStatsAsync).RequireAuthorization(UiAccessPolicy.Name);
+        app.MapGet("/api/v1/channel-stats", GetChannelStatsAsync)
+            .RequireAuthorization(UiAccessPolicy.Name)
+            .WithTags("Channel Filters")
+            .WithSummary("Get channel stats");
 
         return app;
     }

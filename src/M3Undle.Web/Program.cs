@@ -112,6 +112,7 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
+builder.Services.AddM3UndleOpenApi();
 builder.Services.AddValidation();
 builder.Services.AddHttpClient();
 builder.Services.AddCors(options =>
@@ -378,7 +379,8 @@ app.MapXtreamEndpoints();
 app.MapEpgApiEndpoints();
 app.MapDashboardApiEndpoints();
 app.MapDownstreamApiEndpoints();
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health").ExcludeFromDescription();
+app.MapM3UndleOpenApiEndpoints(app.Environment);
 
 app.Run();
 

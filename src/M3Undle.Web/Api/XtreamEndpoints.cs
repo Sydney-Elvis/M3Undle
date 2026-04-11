@@ -54,6 +54,7 @@ public static class XtreamEndpoints
         // These use a dedicated filter that reads credentials from the route values.
         var xtream = app.MapGroup(string.Empty);
         xtream.AddEndpointFilter<XtreamPathCredentialFilter>();
+        xtream.ExcludeFromDescription();
 
         xtream.MapGet("live/{xtreamUser}/{xtreamPass}/{streamId}", ServeXtreamStreamAsync);
         xtream.MapGet("live/{xtreamUser}/{xtreamPass}/{streamId}/{*tail}", ServeXtreamStreamAsync);

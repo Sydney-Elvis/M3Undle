@@ -11,20 +11,21 @@ public static class CustomGroupApiEndpoints
     {
         var groups = app.MapGroup("/api/v1/profiles/{profileId}/custom-groups");
         groups.RequireAuthorization(UiAccessPolicy.Name);
+        groups.WithTags("Custom Groups");
 
-        groups.MapGet("/", ListAsync);
-        groups.MapPost("/", CreateAsync);
-        groups.MapPatch("/{customGroupId}", UpdateAsync);
-        groups.MapDelete("/{customGroupId}", DeleteAsync);
+        groups.MapGet("/", ListAsync).WithSummary("List custom groups");
+        groups.MapPost("/", CreateAsync).WithSummary("Create a custom group");
+        groups.MapPatch("/{customGroupId}", UpdateAsync).WithSummary("Update a custom group");
+        groups.MapDelete("/{customGroupId}", DeleteAsync).WithSummary("Delete a custom group");
 
-        groups.MapGet("/{customGroupId}/channels", ListChannelsAsync);
-        groups.MapPost("/{customGroupId}/channels", AddChannelsAsync);
-        groups.MapDelete("/{customGroupId}/channels/{providerChannelId}", RemoveChannelAsync);
-        groups.MapPatch("/{customGroupId}/channels/{providerChannelId}", UpdateChannelAsync);
+        groups.MapGet("/{customGroupId}/channels", ListChannelsAsync).WithSummary("List channels in a custom group");
+        groups.MapPost("/{customGroupId}/channels", AddChannelsAsync).WithSummary("Add channels to a custom group");
+        groups.MapDelete("/{customGroupId}/channels/{providerChannelId}", RemoveChannelAsync).WithSummary("Remove channel from a custom group");
+        groups.MapPatch("/{customGroupId}/channels/{providerChannelId}", UpdateChannelAsync).WithSummary("Update custom group channel");
 
-        groups.MapGet("/{customGroupId}/provider-links", ListProviderLinksAsync);
-        groups.MapPost("/{customGroupId}/provider-links", AddProviderLinkAsync);
-        groups.MapDelete("/{customGroupId}/provider-links/{providerGroupId}", RemoveProviderLinkAsync);
+        groups.MapGet("/{customGroupId}/provider-links", ListProviderLinksAsync).WithSummary("List provider links");
+        groups.MapPost("/{customGroupId}/provider-links", AddProviderLinkAsync).WithSummary("Add provider link");
+        groups.MapDelete("/{customGroupId}/provider-links/{providerGroupId}", RemoveProviderLinkAsync).WithSummary("Remove provider link");
 
         return app;
     }

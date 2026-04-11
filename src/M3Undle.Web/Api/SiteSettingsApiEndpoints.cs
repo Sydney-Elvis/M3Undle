@@ -1,5 +1,6 @@
 using M3Undle.Web.Application;
 using M3Undle.Web.Security;
+using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace M3Undle.Web.Api;
 
@@ -9,18 +10,19 @@ public static class SiteSettingsApiEndpoints
     {
         var group = app.MapGroup("/api/v1/settings");
         group.RequireAuthorization(UiAccessPolicy.Name);
+        group.WithTags("Settings");
 
-        group.MapGet("/endpoint-security", GetEndpointSecurityAsync);
-        group.MapPut("/endpoint-security", UpdateEndpointSecurityAsync);
-        group.MapGet("/generated-hls", GetGeneratedHlsSettingsAsync);
-        group.MapPut("/generated-hls", UpdateGeneratedHlsSettingsAsync);
-        group.MapGet("/refresh-schedule", GetRefreshScheduleAsync);
-        group.MapPut("/refresh-schedule", UpdateRefreshScheduleAsync);
+        group.MapGet("/endpoint-security", GetEndpointSecurityAsync).WithSummary("Get endpoint security settings");
+        group.MapPut("/endpoint-security", UpdateEndpointSecurityAsync).WithSummary("Update endpoint security settings");
+        group.MapGet("/generated-hls", GetGeneratedHlsSettingsAsync).WithSummary("Get generated HLS settings");
+        group.MapPut("/generated-hls", UpdateGeneratedHlsSettingsAsync).WithSummary("Update generated HLS settings");
+        group.MapGet("/refresh-schedule", GetRefreshScheduleAsync).WithSummary("Get refresh schedule settings");
+        group.MapPut("/refresh-schedule", UpdateRefreshScheduleAsync).WithSummary("Update refresh schedule settings");
 
         return app;
     }
 
-    private static async Task<IResult> GetEndpointSecurityAsync(
+    private static async Task<Ok<EndpointSecurityResponse>> GetEndpointSecurityAsync(
         IEndpointSecurityService endpointSecurityService,
         CancellationToken cancellationToken)
     {
@@ -33,7 +35,7 @@ public static class SiteSettingsApiEndpoints
             VirtualTunerId: settings.VirtualTunerId));
     }
 
-    private static async Task<IResult> UpdateEndpointSecurityAsync(
+    private static async Task<Results<Ok<EndpointSecurityResponse>, ValidationProblem>> UpdateEndpointSecurityAsync(
         EndpointSecurityUpdateRequest request,
         IEndpointSecurityService endpointSecurityService,
         CancellationToken cancellationToken)
@@ -75,7 +77,7 @@ public static class SiteSettingsApiEndpoints
         string? ActiveProfileId,
         string? VirtualTunerId);
 
-    private static async Task<IResult> GetGeneratedHlsSettingsAsync(
+    private static async Task<Ok<GeneratedHlsSettingsResponse>> GetGeneratedHlsSettingsAsync(
         IGeneratedHlsSettingsService settingsService,
         CancellationToken cancellationToken)
     {
@@ -90,7 +92,7 @@ public static class SiteSettingsApiEndpoints
             RestartRequired: state.RestartRequired));
     }
 
-    private static async Task<IResult> UpdateGeneratedHlsSettingsAsync(
+    private static async Task<Results<Ok<GeneratedHlsSettingsResponse>, ValidationProblem>> UpdateGeneratedHlsSettingsAsync(
         GeneratedHlsSettingsUpdateRequest request,
         IGeneratedHlsSettingsService settingsService,
         CancellationToken cancellationToken)
@@ -135,7 +137,7 @@ public static class SiteSettingsApiEndpoints
     // Refresh schedule
     // -------------------------------------------------------------------------
 
-    private static async Task<IResult> GetRefreshScheduleAsync(
+    private static async Task<Ok<RefreshScheduleResponse>> GetRefreshScheduleAsync(
         IRefreshScheduleService refreshScheduleService,
         CancellationToken cancellationToken)
     {
@@ -147,7 +149,7 @@ public static class SiteSettingsApiEndpoints
             NextScheduledRefreshUtc: nextRefresh));
     }
 
-    private static async Task<IResult> UpdateRefreshScheduleAsync(
+    private static async Task<Results<Ok<RefreshScheduleResponse>, ValidationProblem>> UpdateRefreshScheduleAsync(
         RefreshScheduleUpdateRequest request,
         IRefreshScheduleService refreshScheduleService,
         CancellationToken cancellationToken)
