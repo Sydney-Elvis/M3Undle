@@ -70,6 +70,8 @@ Each profile shows:
 
 Clicking a profile opens its detail page, which shows provider membership, published history, and pending review items.
 
+Profiles can be deleted via `DELETE /api/v1/profiles/{profileId}`. Deletion removes all associated data (group filters, channel selections, custom groups, canonical channels, stream keys, snapshots, and provider links) and is blocked while a snapshot refresh is in progress.
+
 ---
 
 ### 4. Published Version & Status

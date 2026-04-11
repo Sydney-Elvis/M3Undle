@@ -22,6 +22,7 @@ public static class ProviderApiEndpoints
         profiles.MapPost("/", CreateProfileAsync);
         profiles.MapPost("/{profileId}/select-all-channels", SelectAllChannelsAsync);
         profiles.MapPut("/{profileId}/active", SetProfileActiveAsync);
+        profiles.MapDelete("/{profileId}", DeleteProfileAsync);
 
         var providers = app.MapGroup("/api/v1/providers");
         providers.RequireAuthorization(UiAccessPolicy.Name);
@@ -247,6 +248,68 @@ public static class ProviderApiEndpoints
             IsActive = true,
             UpdatedUtc = now,
         });
+    }
+
+    private static async Task<Results<NoContent, NotFound, Conflict<string>>> DeleteProfileAsync(
+        string profileId,
+        ApplicationDbContext db,
+        IRefreshTrigger refreshTrigger,
+        AppEventBus eventBus,
+        ILogger<ProviderApiLog> logger,
+        CancellationToken cancellationToken)
+    {
+        if (refreshTrigger.IsRefreshing)
+            return TypedResults.Conflict("A snapshot refresh is currently in progress. Please wait for it to finish before deleting a profile.");
+
+        var profile = await db.Profiles.SingleOrDefaultAsync(x => x.ProfileId == profileId, cancellationToken);
+        if (profile is null)
+            return TypedResults.NotFound();
+
+        // Delete children of ProfileGroupFilters before the parent
+        var filterIds = await db.ProfileGroupFilters
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => x.ProfileGroupFilterId)
+            .ToListAsync(cancellationToken);
+        if (filterIds.Count > 0)
+            await db.ProfileGroupChannelFilters
+                .Where(x => filterIds.Contains(x.ProfileGroupFilterId))
+                .ExecuteDeleteAsync(cancellationToken);
+
+        // Delete children of ProfileCustomGroups before the parent
+        var customGroupIds = await db.ProfileCustomGroups
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => x.CustomGroupId)
+            .ToListAsync(cancellationToken);
+        if (customGroupIds.Count > 0)
+        {
+            await db.ProfileCustomGroupChannels
+                .Where(x => customGroupIds.Contains(x.CustomGroupId))
+                .ExecuteDeleteAsync(cancellationToken);
+            await db.ProfileCustomGroupProviderLinks
+                .Where(x => customGroupIds.Contains(x.CustomGroupId))
+                .ExecuteDeleteAsync(cancellationToken);
+        }
+
+        // Cascade delete all remaining profile-scoped data
+        await db.ProfileGroupFilters.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.ProfileCustomGroups.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.ProfileEventInterestRules.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.EpgChannelMaps.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.EpgChannelMappings.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.ChannelMatchRules.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.CanonicalChannels.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.StreamKeys.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.Snapshots.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+        await db.ProfileProviders.Where(x => x.ProfileId == profileId).ExecuteDeleteAsync(cancellationToken);
+
+        db.Profiles.Remove(profile);
+        await db.SaveChangesAsync(cancellationToken);
+
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Profile" });
+        logger.LogInformation("Profile deleted: {ProfileId} '{Name}'.", profileId, profile.Name);
+        eventBus.Publish(AppEventKind.ProviderChanged);
+
+        return TypedResults.NoContent();
     }
 
     // -------------------------------------------------------------------------
