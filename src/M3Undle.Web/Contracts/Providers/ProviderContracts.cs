@@ -15,6 +15,7 @@ public sealed class ProfileListItemDto
     public string OutputName { get; set; } = string.Empty;
     public string MergeMode { get; set; } = string.Empty;
     public bool Enabled { get; set; }
+    public bool IsActive { get; set; }
 }
 
 public sealed class ProviderLastRefreshDto

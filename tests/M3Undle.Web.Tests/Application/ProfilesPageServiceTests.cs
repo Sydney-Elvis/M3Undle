@@ -150,6 +150,98 @@ public sealed class ProfilesPageServiceTests
         Assert.IsFalse(p2.IsActive);
     }
 
+    [TestMethod]
+    public async Task SetProfileEnabledAsync_DisablesProfile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", false));
+
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var error = await service.SetProfileEnabledAsync("p1", enabled: false, CancellationToken.None);
+
+        Assert.IsNull(error);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        Assert.IsFalse(p1.Enabled);
+    }
+
+    [TestMethod]
+    public async Task SetProfileEnabledAsync_EnablesProfile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        var now = DateTime.UtcNow;
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Profiles.Add(new Profile
+            {
+                ProfileId = "p1",
+                Name = "Profile 1",
+                Enabled = false,
+                IsActive = false,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var error = await service.SetProfileEnabledAsync("p1", enabled: true, CancellationToken.None);
+
+        Assert.IsNull(error);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        Assert.IsTrue(p1.Enabled);
+    }
+
+    [TestMethod]
+    public async Task SetProfileEnabledAsync_WhenDisablingActiveProfile_AlsoDeactivatesIt()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", true));
+
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var error = await service.SetProfileEnabledAsync("p1", enabled: false, CancellationToken.None);
+
+        Assert.IsNull(error);
+
+        await using var verify = fixture.CreateDbContext();
+        var p1 = await verify.Profiles.SingleAsync(x => x.ProfileId == "p1");
+        Assert.IsFalse(p1.Enabled);
+        Assert.IsFalse(p1.IsActive, "Disabling the active profile must also deactivate it.");
+    }
+
+    [TestMethod]
+    public async Task SetProfileEnabledAsync_WhenProfileNotFound_ReturnsError()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        var service = new ProfilesPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var error = await service.SetProfileEnabledAsync("does-not-exist", enabled: false, CancellationToken.None);
+
+        Assert.IsNotNull(error);
+    }
+
     private static async Task SeedProfilesAsync(SqliteConnection connection, params (string ProfileId, bool IsActive)[] profiles)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

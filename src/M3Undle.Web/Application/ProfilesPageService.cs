@@ -102,6 +102,29 @@ internal sealed class ProfilesPageService(
         return null;
     }
 
+    public async Task<string?> SetProfileEnabledAsync(string profileId, bool enabled, CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var profile = await db.Profiles.SingleOrDefaultAsync(x => x.ProfileId == profileId, ct);
+        if (profile is null)
+            return "Profile not found.";
+
+        profile.Enabled = enabled;
+        profile.UpdatedUtc = DateTime.UtcNow;
+
+        // Disabling the active profile also deactivates it so the system never
+        // serves content through a disabled profile.
+        if (!enabled && profile.IsActive)
+            profile.IsActive = false;
+
+        await db.SaveChangesAsync(ct);
+        eventBus.Publish(AppEventKind.ProviderChanged);
+
+        return null;
+    }
+
     public async Task<string?> SetProfileActiveAsync(string profileId, CancellationToken ct)
     {
         if (refreshTrigger.IsRefreshing)

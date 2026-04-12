@@ -18,6 +18,8 @@ public static class SiteSettingsApiEndpoints
         group.MapPut("/generated-hls", UpdateGeneratedHlsSettingsAsync).WithSummary("Update generated HLS settings");
         group.MapGet("/refresh-schedule", GetRefreshScheduleAsync).WithSummary("Get refresh schedule settings");
         group.MapPut("/refresh-schedule", UpdateRefreshScheduleAsync).WithSummary("Update refresh schedule settings");
+        group.MapGet("/hdhr", GetHdhrSettingsAsync).WithSummary("Get HDHomeRun settings");
+        group.MapPut("/hdhr", UpdateHdhrSettingsAsync).WithSummary("Update HDHomeRun settings");
 
         return app;
     }
@@ -175,4 +177,78 @@ public static class SiteSettingsApiEndpoints
 
     private sealed record RefreshScheduleUpdateRequest(string ScheduleKind, bool StartupCatchup);
     private sealed record RefreshScheduleResponse(string ScheduleKind, bool StartupCatchup, DateTime? NextScheduledRefreshUtc);
+
+    // -------------------------------------------------------------------------
+    // HDHomeRun settings
+    // -------------------------------------------------------------------------
+
+    private static async Task<Ok<HdhrSettingsResponse>> GetHdhrSettingsAsync(
+        IHdHomeRunSettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var state = await settingsService.GetSettingsAsync(cancellationToken);
+        return TypedResults.Ok(MapHdhrResponse(state));
+    }
+
+    private static async Task<Results<Ok<HdhrSettingsResponse>, ValidationProblem>> UpdateHdhrSettingsAsync(
+        HdhrSettingsUpdateRequest request,
+        IHdHomeRunSettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var result = await settingsService.UpdateAsync(new UpdateHdhrSettingsCommand(
+            Enabled: request.Enabled,
+            TunerCountOverride: request.TunerCountOverride,
+            AdvertisedBaseUrl: request.AdvertisedBaseUrl,
+            DiscoveryEnabled: request.DiscoveryEnabled,
+            SsdpEnabled: request.SsdpEnabled,
+            SiliconDustDiscoveryEnabled: request.SiliconDustDiscoveryEnabled), cancellationToken);
+
+        if (!result.Succeeded)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["hdhr"] = [result.Error ?? "HDHR settings update failed."],
+            });
+        }
+
+        var state = await settingsService.GetSettingsAsync(cancellationToken);
+        return TypedResults.Ok(MapHdhrResponse(state));
+    }
+
+    private static HdhrSettingsResponse MapHdhrResponse(HdhrSettingsState state) =>
+        new(
+            Enabled: state.Saved.Enabled,
+            EffectiveTunerCount: state.Saved.EffectiveTunerCount,
+            TunerCountOverride: state.Saved.TunerCountOverride,
+            ProviderTunerLimit: state.Saved.ProviderTunerLimit,
+            IsStreamLimitEnforced: state.Saved.IsStreamLimitEnforced,
+            AdvertisedBaseUrl: state.Saved.AdvertisedBaseUrl,
+            ResolvedBaseUrl: state.Saved.ResolvedBaseUrl,
+            DiscoveryEnabled: state.Saved.DiscoveryEnabled,
+            SsdpEnabled: state.Saved.SsdpEnabled,
+            SiliconDustDiscoveryEnabled: state.Saved.SiliconDustDiscoveryEnabled,
+            RestartRequired: state.RestartRequired,
+            DisabledByEnvironment: state.DisabledByEnvironment);
+
+    private sealed record HdhrSettingsUpdateRequest(
+        bool Enabled,
+        int? TunerCountOverride,
+        string? AdvertisedBaseUrl,
+        bool DiscoveryEnabled,
+        bool SsdpEnabled,
+        bool SiliconDustDiscoveryEnabled);
+
+    private sealed record HdhrSettingsResponse(
+        bool Enabled,
+        int EffectiveTunerCount,
+        int? TunerCountOverride,
+        int? ProviderTunerLimit,
+        bool IsStreamLimitEnforced,
+        string? AdvertisedBaseUrl,
+        string ResolvedBaseUrl,
+        bool DiscoveryEnabled,
+        bool SsdpEnabled,
+        bool SiliconDustDiscoveryEnabled,
+        bool RestartRequired,
+        bool DisabledByEnvironment);
 }

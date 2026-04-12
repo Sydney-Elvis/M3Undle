@@ -32,6 +32,7 @@ public sealed class ProviderPageService(
                 OutputName = x.OutputName,
                 MergeMode = x.MergeMode,
                 Enabled = x.Enabled,
+                IsActive = x.IsActive,
             })
             .ToListAsync(cancellationToken);
 
@@ -354,6 +355,7 @@ public sealed class ProviderPageService(
             OutputName = profile.OutputName,
             MergeMode = profile.MergeMode,
             Enabled = profile.Enabled,
+            IsActive = profile.IsActive,
         }, null);
     }
 

@@ -23,6 +23,7 @@ public static class ProviderApiEndpoints
         profiles.MapPost("/", CreateProfileAsync).WithSummary("Create a profile");
         profiles.MapPost("/{profileId}/select-all-channels", SelectAllChannelsAsync).WithSummary("Select all channels for a profile");
         profiles.MapPut("/{profileId}/active", SetProfileActiveAsync).WithSummary("Set the active profile");
+        profiles.MapPatch("/{profileId}/enabled", SetProfileEnabledAsync).WithSummary("Enable or disable a profile");
         profiles.MapDelete("/{profileId}", DeleteProfileAsync).WithSummary("Delete a profile");
 
         var providers = app.MapGroup("/api/v1/providers");
@@ -81,6 +82,7 @@ public static class ProviderApiEndpoints
                     OutputName = x.OutputName,
                     MergeMode = x.MergeMode,
                     Enabled = x.Enabled,
+                    IsActive = x.IsActive,
                 })
                 .ToListAsync(cancellationToken);
 
@@ -133,6 +135,7 @@ public static class ProviderApiEndpoints
             OutputName = profile.OutputName,
             MergeMode = profile.MergeMode,
             Enabled = profile.Enabled,
+            IsActive = profile.IsActive,
         });
     }
 
@@ -224,9 +227,16 @@ public static class ProviderApiEndpoints
         if (refreshTrigger.IsRefreshing)
             return TypedResults.Conflict("A snapshot refresh is currently in progress. Please wait for it to finish.");
 
-        var exists = await db.Profiles.AnyAsync(x => x.ProfileId == profileId, cancellationToken);
-        if (!exists)
+        var target = await db.Profiles
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => new { x.Enabled })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (target is null)
             return TypedResults.NotFound();
+        if (!target.Enabled)
+            return TypedResults.Conflict("Disabled profiles cannot be activated.");
 
         var now = DateTime.UtcNow;
 
@@ -254,6 +264,54 @@ public static class ProviderApiEndpoints
             RefreshTriggered = refreshTriggered,
             UpdatedUtc = now,
         });
+    }
+
+    private static async Task<Results<Ok<ProfileEnabledResponse>, NotFound>> SetProfileEnabledAsync(
+        string profileId,
+        SetProfileEnabledRequest request,
+        ApplicationDbContext db,
+        AppEventBus eventBus,
+        ILogger<ProviderApiLog> logger,
+        CancellationToken cancellationToken)
+    {
+        var profile = await db.Profiles.SingleOrDefaultAsync(x => x.ProfileId == profileId, cancellationToken);
+        if (profile is null)
+            return TypedResults.NotFound();
+
+        profile.Enabled = request.Enabled;
+        profile.UpdatedUtc = DateTime.UtcNow;
+
+        // Disabling the active profile also deactivates it so the system never
+        // serves content through a disabled profile.
+        if (!request.Enabled && profile.IsActive)
+            profile.IsActive = false;
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Profile" });
+        logger.LogInformation("Profile {ProfileId} enabled={Enabled}.", profileId, profile.Enabled);
+        eventBus.Publish(AppEventKind.ProviderChanged);
+
+        return TypedResults.Ok(new ProfileEnabledResponse
+        {
+            ProfileId = profile.ProfileId,
+            Enabled = profile.Enabled,
+            IsActive = profile.IsActive,
+            UpdatedUtc = profile.UpdatedUtc,
+        });
+    }
+
+    private sealed class SetProfileEnabledRequest
+    {
+        public bool Enabled { get; set; }
+    }
+
+    private sealed class ProfileEnabledResponse
+    {
+        public string ProfileId { get; set; } = string.Empty;
+        public bool Enabled { get; set; }
+        public bool IsActive { get; set; }
+        public DateTime UpdatedUtc { get; set; }
     }
 
     private static async Task<Results<NoContent, NotFound, Conflict<string>>> DeleteProfileAsync(
