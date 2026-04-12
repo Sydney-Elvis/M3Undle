@@ -11,13 +11,13 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 
 ## Dynamic and Review Workflow
 
-- [ ] Dynamic groups for rotating/event feeds
+- [x] Dynamic groups for rotating/event feeds
 - [x] New channels inbox / review queue
 
 ## Refresh / Source Control
 
-- [ ] Configurable refresh schedule in Settings UI
-- [ ] Real-time trigger + manual refresh with status
+- [x] Configurable refresh schedule in Settings UI
+- [ ] Real-time trigger + manual refresh with status — validate end-to-end: trigger from UI, confirm status updates while running, confirm completion feedback
 - [~] Persisted preferred refresh policy per profile — descoped to post-1.0.0 (#47; global schedule is sufficient for Alpha/Beta)
 - [x] Dashboard and `/status` resolve lineup state from the active profile only
 - [x] Active profile switching shows requested, refreshing, completed, and failed/last-known-good feedback states

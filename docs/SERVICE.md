@@ -121,7 +121,7 @@ Views:
 - **Channel Review Queue**: review pending channels in `/channels/review`; include/exclude selected channels or bulk-action pending channels by provider group
 - **Channels**: browse the live channels currently in the published lineup; edit channel numbers, output groups, and EPG IDs
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
-- **Settings**: configure endpoint security credentials, the HDHomeRun `Virtual Tuner ID`, and stream proxy settings (enable/disable, session limits, buffer sizing, reconnect behaviour); displays active vs. saved configuration with a restart-required indicator and in-app restart button
+- **Settings**: configure endpoint security credentials, HDHomeRun settings, stream proxy settings, refresh schedule, and downstream integrations; displays active vs. saved configuration with a restart-required indicator and in-app restart button
 
 Design goals:
 - configuration should be explicit and understandable

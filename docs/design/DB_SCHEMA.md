@@ -27,8 +27,11 @@
 - headers_json (TEXT, nullable)
 - user_agent (TEXT, nullable)
 - timeout_seconds (INTEGER, default 20)
+- force_mpegts (INTEGER, 0/1, default 0) -- force upstream MPEG-TS stream handling regardless of content-type
 - created_utc (TEXT)
 - updated_utc (TEXT)
+
+Note: `providers.is_active` was removed in migration `Alpha6_ActiveProfile`. Active state now lives on `profiles.is_active`.
 
 Indexes:
 - idx_providers_enabled(enabled)
@@ -39,10 +42,14 @@ Indexes:
 - profile_id (PK, TEXT, uuid)
 - name (TEXT, unique)
 - enabled (INTEGER, 0/1)
+- is_active (INTEGER, 0/1, default 0) -- exactly one profile may have is_active=1; partial unique index enforced
 - output_name (TEXT)  -- used for /m3u/<output_name>.m3u and /xmltv/<output_name>.xml
 - merge_mode (TEXT)   -- 'single', 'merged', 'redundancy-ready'
 - created_utc (TEXT)
 - updated_utc (TEXT)
+
+Indexes:
+- idx_profiles_is_active(is_active) UNIQUE WHERE is_active = 1
 
 ---
 
@@ -301,6 +308,7 @@ Indexes:
 - status_json_path (TEXT)
 - channel_count_published (INTEGER)
 - error_summary (TEXT, nullable)
+- change_class (TEXT, nullable) -- classification of change vs previous snapshot: 'none'|'guide_only'|'lineup'|'breaking'|null (first run)
 
 Indexes:
 - idx_snapshots_profile_status(profile_id, status, created_utc DESC)
@@ -322,6 +330,88 @@ Unique:
 Indexes:
 - idx_stream_keys_profile(profile_id, revoked)
 - idx_stream_keys_channel(channel_id)
+
+---
+
+## Alpha 5 Additions
+
+The following tables and columns were added during the Alpha 5 release cycle.
+
+---
+
+### profile_custom_groups
+User-defined output groups not tied to a single provider group.
+- custom_group_id (PK, TEXT, uuid)
+- profile_id (FK profiles)
+- name (TEXT) -- user-defined output group name
+- decision (TEXT, default 'include') -- 'pending'|'include'|'exclude'
+- channel_mode (TEXT, default 'select') -- 'select' (manual review) | 'all' (auto-update)
+- tracking_policy (TEXT, default 'review') -- same policy options as profile_group_filters
+- tracking_keywords (TEXT, nullable)
+- auto_num_start (INTEGER, nullable)
+- auto_num_end (INTEGER, nullable)
+- track_new_channels (INTEGER, 0/1)
+- sort_override (INTEGER, nullable)
+- created_utc (TEXT)
+- updated_utc (TEXT)
+
+---
+
+### profile_custom_group_channels
+Per-channel membership in a custom group.
+- custom_group_channel_id (PK, TEXT, uuid)
+- custom_group_id (FK profile_custom_groups, CASCADE)
+- provider_channel_id (FK provider_channels, CASCADE)
+- state (TEXT, default 'included') -- 'pending'|'included'|'excluded'
+- channel_number (INTEGER, nullable)
+- display_name_override (TEXT, nullable)
+- tvg_id_override (TEXT, nullable)
+- created_utc (TEXT)
+- updated_utc (TEXT)
+
+Unique:
+- (custom_group_id, provider_channel_id)
+
+---
+
+### profile_custom_group_provider_links
+Linked provider groups that feed channels into a custom group.
+- link_id (PK, TEXT, uuid)
+- custom_group_id (FK profile_custom_groups, CASCADE)
+- provider_group_id (FK provider_groups, CASCADE)
+- created_utc (TEXT)
+
+Unique:
+- (custom_group_id, provider_group_id)
+
+---
+
+### downstream_integrations
+Configured downstream client integrations (Jellyfin, Emby, webhook).
+- downstream_integration_id (PK, TEXT, uuid)
+- profile_id (FK profiles, nullable) -- null = applies to all profiles
+- name (TEXT)
+- kind (TEXT) -- 'jellyfin'|'emby'|'webhook'
+- base_url (TEXT)
+- api_key_encrypted (TEXT, nullable) -- AES-256-GCM encrypted; requires M3UNDLE_ENCRYPTION_KEY
+- webhook_headers_json (TEXT, nullable)
+- trigger_on_lineup_update (INTEGER, 0/1, default 1)
+- trigger_on_guide_update (INTEGER, 0/1, default 1)
+- enabled (INTEGER, 0/1, default 1)
+- last_notified_utc (TEXT, nullable)
+- last_notify_error (TEXT, nullable)
+- created_utc (TEXT)
+- updated_utc (TEXT)
+
+---
+
+### site_settings additions (refresh schedule)
+New columns added to the existing `site_settings` table:
+- refresh_schedule_kind (TEXT, default '6h') -- 'manual'|'1h'|'2h'|'4h'|'6h'|'12h'|'24h'
+- refresh_startup_catchup (INTEGER, 0/1, default 1) -- trigger catch-up refresh on startup if lineup is stale
+
+### epg_sources additions
+- refresh_interval_hours (INTEGER, nullable) -- per-source cadence override; null = follow global schedule
 
 ---
 
@@ -420,7 +510,7 @@ Several schema fields and tables are present for forward-compatibility but are n
 - **Future:** Explicit tvg-id mapping between canonical channels and XMLTV channel IDs. Used when provider tvg-ids are unstable or need overriding.
 
 ### `epg_sources` / `epg_source_channels` / `epg_channel_mappings` / `epg_fetch_runs`
-- **Current:** Active web EPG pipeline stores provider-linked source definitions, discovered source channels, mapping records per profile+provider channel+source, and fetch history.
+- **Current:** Active web EPG pipeline stores provider-linked source definitions, discovered source channels, mapping records per profile+provider channel+source, and fetch history. `epg_sources.refresh_interval_hours` (nullable) was added in Alpha 5 to support per-source cadence overrides.
 - **Current:** Snapshot refresh compiles a merged guide.xml from enabled sources using source priority, coverage checks, and deduplication.
 - **Future:** Align this model with canonical channels for cross-provider EPG identity.
 

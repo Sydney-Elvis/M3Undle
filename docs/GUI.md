@@ -103,7 +103,7 @@ This protects DVR mappings and client configurations.
 
 ### 6. Settings
 
-The Settings page is split into three panels.
+The Settings page is split into several panels.
 
 **UI Security**
 Shows whether UI authentication (login) is currently enabled. This is controlled by the `M3UNDLE_AUTH_ENABLED` environment variable and is read-only in the UI.
@@ -116,6 +116,9 @@ Controls whether the M3U, XMLTV, stream, and HDHomeRun client endpoints require 
 - Set the `Virtual Tuner ID` used for HDHomeRun tuner ownership and retune/reuse behaviour
 - See whether a credential is currently configured
 
+**Refresh Schedule**
+Controls how often M3Undle fetches updated lineup and guide data from providers. Options: Manual only, every 1h, 2h, 4h, 6h (default), 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
+
 **Stream Proxy**
 Configures how M3Undle handles live stream relay. Settings are grouped into three areas:
 
@@ -125,9 +128,18 @@ Configures how M3Undle handles live stream relay. Settings are grouped into thre
 
 Each setting includes a plain-English description, and a help icon explains the purpose and default value in detail.
 
-Changes are saved to the database immediately but only take effect after a restart. The page shows the currently active (running) configuration alongside the saved values, and displays a warning banner when they differ. An in-app **Restart M3Undle** button is available once settings have been saved, and shows how many streams are currently active so you know the impact before restarting.
+Stream proxy changes are saved to the database immediately but only take effect after a restart. The page shows the currently active (running) configuration alongside the saved values, and displays a warning banner when they differ. An in-app **Restart M3Undle** button is available once settings have been saved, and shows how many streams are currently active so you know the impact before restarting.
 
 For HDHomeRun-style access, tuner ownership is tracked by the configured `Virtual Tuner ID`, not by remote IP. Re-tuning from the same virtual tuner replaces the prior playback session instead of consuming another tuner slot.
+
+**Downstream Integrations**
+Configure automated notification to downstream clients (Jellyfin, Emby, or a generic webhook) after M3Undle publishes a lineup or guide update. Each integration can be:
+
+- Enabled or disabled individually
+- Bound to a specific profile or applied to all profiles
+- Configured to fire on lineup updates, guide-only updates, or both
+
+M3Undle only fires notifications when a meaningful change is detected — no-op refreshes are suppressed. Recent notification success/failure status is shown for each configured integration.
 
 ---
 

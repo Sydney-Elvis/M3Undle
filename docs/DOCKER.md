@@ -204,7 +204,6 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 | Variable | Default | Description |
 |---|---|---|
 | `ASPNETCORE_HTTP_PORTS` | `5004;8080` | Ports the app listens on inside the container. `5004` is used for HDHomeRun-compatible tuning and `8080` for the web UI and general endpoints. |
-| `M3Undle__Refresh__IntervalHours` | `4` | How often the background refresh runs |
 | `M3Undle__Refresh__TimeoutMinutes` | `5` | Provider fetch timeout |
 | `M3Undle__Refresh__StartupDelaySeconds` | `30` | Delay before first refresh after startup |
 | `M3Undle__Snapshot__RetentionCount` | `3` | Number of snapshots to retain |

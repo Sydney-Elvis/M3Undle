@@ -27,7 +27,7 @@ These constraints held for Alpha 1 (pass-through) and continue to apply in curre
 - Last-known-good snapshots: refresh failures do not break clients. The last active snapshot continues to be served.
 - Stream proxy required: published playlists reference `/stream/<streamKey>` — clients never see raw provider URLs.
 - Pass-through (Alpha 1 only): no group filtering, no channel numbering, no lineup shaping. As of Alpha 2 these features are implemented.
-- In-memory snapshot build: `SnapshotBuilder` builds the channel index directly from `ParsedProviderChannel` (in-memory M3U parse result). It does NOT write to `provider_channels` or `provider_groups`. This is a deliberate performance decision.
+- Snapshot build: `SnapshotBuilder` fetches the provider playlist, parses it in memory, and writes the resulting channel and group data to `provider_channels` and `provider_groups` via `SyncProviderChannelsAsync`. It also syncs pending channel reviews and custom group membership before building the output files. The in-memory parse result (`ParsedProviderChannel`) drives the sync — raw provider URLs are not stored in the DB.
 - Profile auto-creation: importing a provider automatically creates a profile with the same name, making the provider immediately functional without manual steps.
 
 ## Alpha Client Contract
@@ -36,5 +36,5 @@ These constraints held for Alpha 1 (pass-through) and continue to apply in curre
 - Clients do not consume raw provider URLs.
 - The output endpoint is always `/m3u/m3undle.m3u` — clients should be pointed here.
 
-Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Alpha 5 added channel reorder, custom tvg-id, HLS compatibility, CORS, dashboard redesign, and profile UX. New-channel inbox and dynamic groups remain planned.
+Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Alpha 5 added channel reorder, custom tvg-id, HLS compatibility, CORS, dashboard redesign, profile UX, new-channel inbox/review queue, dynamic event-tracking groups, custom groups, configurable refresh schedule, downstream integrations, and active profile switching.
 

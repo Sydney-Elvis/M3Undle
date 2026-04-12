@@ -201,7 +201,7 @@ Status: Planned.
 - [ ] System event badge (nav bar, in-memory, diagnostic)
 
 See implementation plans:
-- [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/AUTOMATION_LAB_INTEGRATION_PLAN.md) — gateway support
+- [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/AUTOMATION_LAB_INTEGRATION_PLAN.md) — automation lab integration (provider seed, readiness endpoints, streaming test scenarios)
 - [XTREM_PROVIDER_DETECTION.md](../../.ai_docs/XTREM_PROVIDER_DETECTION.md) — Xtream auto-detection
 - [EVENT_BADGE_SYSTEM.md](../../.ai_docs/EVENT_BADGE_SYSTEM.md) — system event badge
 
