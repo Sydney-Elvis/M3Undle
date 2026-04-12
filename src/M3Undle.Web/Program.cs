@@ -222,6 +222,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     }
 });
 builder.Services.AddSingleton(runtimePaths);
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.XmltvParser>();

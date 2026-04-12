@@ -35,12 +35,12 @@ public sealed class DownstreamNotificationService(
             await foreach (var evt in reader.ReadAllAsync(stoppingToken))
             {
                 if (evt.Kind == AppEventKind.RefreshCompleted && evt.Succeeded)
-                    await NotifyAllAsync(evt.ChangeClass, stoppingToken);
+                    await NotifyAllAsync(evt.ChangeClass, evt.AffectedProfileIds, stoppingToken);
             }
         }
     }
 
-    private async Task NotifyAllAsync(string? changeClass, CancellationToken ct)
+    private async Task NotifyAllAsync(string? changeClass, IReadOnlySet<string>? affectedProfileIds, CancellationToken ct)
     {
         // No meaningful change — skip all downstream notifications
         if (changeClass == ChangeClasses.None)
@@ -67,6 +67,12 @@ public sealed class DownstreamNotificationService(
                         ? (x.TriggerOnLineupUpdate || x.TriggerOnGuideUpdate)
                         : (trigger == DownstreamTrigger.LineupUpdate ? x.TriggerOnLineupUpdate : x.TriggerOnGuideUpdate)))
                 .ToListAsync(ct);
+
+            // Filter to only integrations scoped to an affected profile (null ProfileId = global = always fires)
+            if (affectedProfileIds is { Count: > 0 })
+                integrations = integrations
+                    .Where(x => x.ProfileId is null || affectedProfileIds.Contains(x.ProfileId))
+                    .ToList();
         }
         catch (Exception ex)
         {

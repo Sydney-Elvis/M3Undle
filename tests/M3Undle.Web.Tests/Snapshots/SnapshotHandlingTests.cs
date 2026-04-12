@@ -816,7 +816,7 @@ public sealed class SnapshotHandlingTests
         return new SnapshotBuilder(
             db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
             runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService,
-            refreshScheduleService, NullLogger<SnapshotBuilder>.Instance);
+            refreshScheduleService, TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
     }
 
     private static async Task<TestFixture> CreateFixtureAsync()

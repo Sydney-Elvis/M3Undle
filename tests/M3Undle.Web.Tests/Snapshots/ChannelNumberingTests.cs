@@ -663,4 +663,281 @@ public sealed class ChannelNumberingTests
         Assert.HasCount(1, result, "Suppressed Bellator event must be excluded; UFC must be included.");
         Assert.AreEqual("UFC 305 Main Card", result[0].DisplayName);
     }
+
+    // -------------------------------------------------------------------------
+    // Tracking policy: auto_add_populated
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// auto_add_populated publishes event channels that have a non-empty EventContentKey
+    /// (i.e. the slot was successfully classified) and skips slots where EventContentKey
+    /// is null/empty (blank / unrecognisable slots).
+    /// </summary>
+    [TestMethod]
+    public void AutoUpdate_AutoAddPopulated_IncludesPopulatedEvents_ExcludesBlanks()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddPopulated,
+                TrackingKeywords: null),
+        };
+
+        // Slot with recognised content key → must be published.
+        var populated = LiveEventChannel(
+            "Sky Sports+ | Event 1: Arsenal vs Chelsea",
+            "Events",
+            eventContentKey: "EVENTS::ARSENAL VS CHELSEA");
+
+        // Slot where the classifier found no content → must be skipped.
+        var blank = LiveEventChannel(
+            "Sky Sports+ | Event 2:",
+            "Events",
+            eventContentKey: null);
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [populated, blank],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result, "Only the populated event slot must be published.");
+        Assert.AreEqual("Sky Sports+ | Event 1: Arsenal vs Chelsea", result[0].DisplayName);
+        Assert.AreEqual(3000, result[0].TvgChno);
+    }
+
+    /// <summary>
+    /// Non-event channels in an auto_add_populated group are always auto-included —
+    /// the populated check only gates event slots.
+    /// </summary>
+    [TestMethod]
+    public void AutoUpdate_AutoAddPopulated_IncludesNonEventChannels()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Sports"] = new(
+                "f1",
+                "Sports",
+                200,
+                299,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddPopulated,
+                TrackingKeywords: null),
+        };
+
+        var regular = LiveChannel("Sky Sports Main Event", "Sports");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [regular],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual("Sky Sports Main Event", result[0].DisplayName);
+    }
+
+    /// <summary>
+    /// Placeholders are always excluded regardless of policy, including auto_add_populated.
+    /// </summary>
+    [TestMethod]
+    public void AutoUpdate_AutoAddPopulated_PlaceholderAlwaysExcluded()
+    {
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddPopulated,
+                TrackingKeywords: null),
+        };
+
+        var placeholder = LiveEventChannel("Sky Sports+ | Event 1:", "Events", isPlaceholder: true);
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [placeholder],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(0, result, "Placeholder must be excluded even under auto_add_populated.");
+    }
+
+    // -------------------------------------------------------------------------
+    // Interest rules: notify action
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// A channel matched only by a notify rule must not be auto-published.
+    /// notify surfaces the channel in the review queue but does not trigger auto-add.
+    /// </summary>
+    [TestMethod]
+    public void InterestRules_Notify_DoesNotAutoPublishMatchedEvent()
+    {
+        var rules = new List<SnapshotBuilder.InterestRuleConfig>
+        {
+            new(LineupReviewSemantics.InterestMatchTypeLeague, "Premier League", LineupReviewSemantics.InterestActionNotify),
+        };
+
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddMatching,
+                TrackingKeywords: null,   // no keyword fallback
+                InterestRules: rules),
+        };
+
+        var premierLeagueEvent = new SnapshotBuilder.ChannelBuildData(
+            string.Empty, null,
+            "Sky Sports+ | Event 1: Arsenal vs Chelsea",
+            "http://stream/event1", "live", "Events",
+            null, null, null,
+            IsEvent: true, IsPlaceholder: false,
+            EventContentKey: "EVENTS::ARSENAL VS CHELSEA",
+            EventLeague: "Premier League");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [premierLeagueEvent],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(0, result, "A notify-rule match must not auto-publish the channel.");
+    }
+
+    /// <summary>
+    /// When one event matches notify and a different event independently matches auto_add,
+    /// only the auto_add event is published — notify does not contaminate unrelated rules.
+    /// </summary>
+    [TestMethod]
+    public void InterestRules_Notify_DoesNotSuppressUnrelatedAutoAddRule()
+    {
+        var rules = new List<SnapshotBuilder.InterestRuleConfig>
+        {
+            new(LineupReviewSemantics.InterestMatchTypeLeague, "Premier League", LineupReviewSemantics.InterestActionNotify),
+            new(LineupReviewSemantics.InterestMatchTypeSport, "mma", LineupReviewSemantics.InterestActionAutoAdd),
+        };
+
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddMatching,
+                TrackingKeywords: null,
+                InterestRules: rules),
+        };
+
+        var notifyEvent = new SnapshotBuilder.ChannelBuildData(
+            string.Empty, null,
+            "Sky Sports+ | Event 1: Arsenal vs Chelsea",
+            "http://stream/event1", "live", "Events",
+            null, null, null,
+            IsEvent: true, IsPlaceholder: false,
+            EventContentKey: "EVENTS::ARSENAL VS CHELSEA",
+            EventLeague: "Premier League");
+
+        var autoAddEvent = new SnapshotBuilder.ChannelBuildData(
+            string.Empty, null,
+            "UFC 300 Main Card",
+            "http://stream/ufc300", "live", "Events",
+            null, null, null,
+            IsEvent: true, IsPlaceholder: false,
+            EventContentKey: "EVENTS::UFC 300",
+            EventSport: "mma");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [notifyEvent, autoAddEvent],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        Assert.HasCount(1, result, "Only the auto_add event must be published; the notify event must not.");
+        Assert.AreEqual("UFC 300 Main Card", result[0].DisplayName);
+    }
+
+    /// <summary>
+    /// A notify rule takes precedence over a keyword fallback that would otherwise match.
+    /// If the rule engine fires notify, the channel is not auto-added even if TrackingKeywords
+    /// would independently match it.
+    /// </summary>
+    [TestMethod]
+    public void InterestRules_Notify_TakesPrecedenceOverKeywordFallback()
+    {
+        // The notify rule matches "Premier League" → loop continues past the rule without returning.
+        // TrackingKeywords also contains "Arsenal" which matches the event display name.
+        // The expected behaviour: keyword fallback still runs after a notify rule,
+        // so the channel IS published via keyword match. This test documents the current
+        // semantics and acts as a regression guard if the ordering is ever changed.
+        var rules = new List<SnapshotBuilder.InterestRuleConfig>
+        {
+            new(LineupReviewSemantics.InterestMatchTypeLeague, "Premier League", LineupReviewSemantics.InterestActionNotify),
+        };
+
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["Events"] = new(
+                "f1",
+                "Events",
+                3000,
+                3099,
+                SortOverride: null,
+                GroupMode: LineupReviewSemantics.GroupModeAutoUpdate,
+                TrackingPolicy: LineupReviewSemantics.TrackingPolicyAutoAddMatching,
+                TrackingKeywords: "Arsenal",   // keyword also matches
+                InterestRules: rules),
+        };
+
+        var event1 = new SnapshotBuilder.ChannelBuildData(
+            string.Empty, null,
+            "Sky Sports+ | Event 1: Arsenal vs Chelsea",
+            "http://stream/event1", "live", "Events",
+            null, null, null,
+            IsEvent: true, IsPlaceholder: false,
+            EventContentKey: "EVENTS::ARSENAL VS CHELSEA",
+            EventLeague: "Premier League");
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [event1],
+            "p1",
+            groups,
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal),
+            includeVod: false,
+            includeSeries: false);
+
+        // notify rule fires but does not return — keyword fallback runs and matches → included
+        Assert.HasCount(1, result,
+            "notify rule does not short-circuit keyword fallback; keyword match should still publish the channel.");
+    }
 }

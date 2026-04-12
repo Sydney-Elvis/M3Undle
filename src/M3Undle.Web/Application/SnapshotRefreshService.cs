@@ -15,6 +15,7 @@ public sealed class SnapshotRefreshService(
     IServiceScopeFactory scopeFactory,
     IOptions<RefreshOptions> refreshOptions,
     AppEventBus eventBus,
+    TimeProvider timeProvider,
     ILogger<SnapshotRefreshService> logger)
     : BackgroundService, IRefreshTrigger
 {
@@ -192,9 +193,10 @@ public sealed class SnapshotRefreshService(
                     }
 
                     var intervalHours = settings.IntervalHours!.Value;
-                    var baseline = lastSnapshotUtc ?? DateTime.UtcNow;
+                    var now = timeProvider.GetUtcNow().UtcDateTime;
+                    var baseline = lastSnapshotUtc ?? now;
                     var nextTrigger = baseline.AddHours(intervalHours);
-                    var delay = nextTrigger - DateTime.UtcNow;
+                    var delay = nextTrigger - now;
 
                     if (delay > TimeSpan.Zero)
                     {
@@ -291,8 +293,7 @@ public sealed class SnapshotRefreshService(
 
             // For manual schedule, treat 24h as the staleness threshold for startup recovery
             var thresholdHours = settings.IntervalHours ?? 24;
-            var isStale = lastSnapshotUtc is null
-                || (DateTime.UtcNow - lastSnapshotUtc.Value).TotalHours >= thresholdHours;
+            var isStale = IsStartupCatchupNeeded(lastSnapshotUtc, thresholdHours, timeProvider.GetUtcNow());
 
             if (isStale)
             {
@@ -319,6 +320,22 @@ public sealed class SnapshotRefreshService(
     }
 
     // -------------------------------------------------------------------------
+    // Startup catch-up predicate (internal for unit testing)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns <c>true</c> when a startup catch-up refresh should be triggered.
+    /// A catch-up is needed when there is no prior snapshot, or when the most-recent
+    /// snapshot is at least <paramref name="thresholdHours"/> old.
+    /// </summary>
+    internal static bool IsStartupCatchupNeeded(
+        DateTime? lastSnapshotUtc,
+        int thresholdHours,
+        DateTimeOffset utcNow)
+        => lastSnapshotUtc is null
+           || (utcNow.UtcDateTime - lastSnapshotUtc.Value).TotalHours >= thresholdHours;
+
+    // -------------------------------------------------------------------------
     // Refresh execution
     // -------------------------------------------------------------------------
 
@@ -335,12 +352,13 @@ public sealed class SnapshotRefreshService(
         bool succeeded = false;
         string? errorSummary = null;
         string? changeClass = null;
+        IReadOnlySet<string> affectedProfileIds = new HashSet<string>();
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            var (s, e, channelsByProvider, cc) = await builder.RunAsync(runCts.Token);
-            (succeeded, errorSummary, changeClass) = (s, e, cc);
+            var (s, e, channelsByProvider, cc, profileIds) = await builder.RunAsync(runCts.Token);
+            (succeeded, errorSummary, changeClass, affectedProfileIds) = (s, e, cc, profileIds);
             if (channelsByProvider.Count > 0)
                 _cachedChannels = channelsByProvider;
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
@@ -362,7 +380,8 @@ public sealed class SnapshotRefreshService(
         finally
         {
             _currentRunCts = null;
-            eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass);
+            eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
+                affectedProfileIds.Count > 0 ? affectedProfileIds : null);
         }
     }
 
@@ -379,11 +398,13 @@ public sealed class SnapshotRefreshService(
         bool succeeded = false;
         string? errorSummary = null;
         string? changeClass = null;
+        IReadOnlySet<string> affectedProfileIds = new HashSet<string>();
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            (succeeded, errorSummary, changeClass) = await builder.BuildOnlyAsync(_cachedChannels, runCts.Token);
+            var (s, e, cc, profileIds) = await builder.BuildOnlyAsync(_cachedChannels, runCts.Token);
+            (succeeded, errorSummary, changeClass, affectedProfileIds) = (s, e, cc, profileIds);
             logger.LogInformation("Snapshot build-only completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
         }
         catch (OperationCanceledException) when (_cancelledByUser && !stoppingToken.IsCancellationRequested)
@@ -403,7 +424,8 @@ public sealed class SnapshotRefreshService(
         finally
         {
             _currentRunCts = null;
-            eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass);
+            eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
+                affectedProfileIds.Count > 0 ? affectedProfileIds : null);
         }
     }
 }
