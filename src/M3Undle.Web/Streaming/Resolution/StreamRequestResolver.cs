@@ -120,6 +120,8 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             || path.StartsWithSegments("/stream", StringComparison.OrdinalIgnoreCase)
             || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
             || path.StartsWithSegments("/hdhr/tune", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWithSegments("/hdhr/auto", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWithSegments("/auto", StringComparison.OrdinalIgnoreCase)
             || IsNativeHdhrTunerPath(path))
         {
             return StreamRouteMode.SharedLiveSession;

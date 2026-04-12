@@ -79,6 +79,38 @@ public sealed class StreamRequestResolverTests
         Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
     }
 
+    [TestMethod]
+    public async Task ResolveAsync_HdhrAutoRoute_ReturnsSharedSessionDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/hdhr/auto/v1002", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_AutoRoute_ReturnsSharedSessionDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/auto/v1002", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
     private static DefaultHttpContext CreateHttpContext(string path, string profileId)
     {
         var context = new DefaultHttpContext();
