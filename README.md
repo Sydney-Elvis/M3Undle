@@ -4,7 +4,9 @@ A self-hosted lineup manager built for large provider catalogs.
 
 M3Undle helps you take control of massive provider playlists and publish clean, predictable lineups for DVR and media server environments.
 
-Designed for self-hosted systems like NextPVR, Jellyfin, or any client that consumes M3U + XMLTV.
+Designed for self-hosted systems like NextPVR, Jellyfin, Emby, or any client that consumes M3U + XMLTV.
+
+Plex should work via the HDHomeRun integration but cannot be validated without Plex Pass — testing is on hold until a Plex Pass is available.
 
 > [!IMPORTANT]
 > **Feature Status**

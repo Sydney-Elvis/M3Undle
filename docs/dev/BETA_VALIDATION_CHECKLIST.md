@@ -36,7 +36,8 @@ Each row represents a full pass of the corresponding section in `m3undle-lab/doc
 - [ ] HDHR mode — setup, playback, EPG, retune semantics
 
 ### Plex
-> Requires Plex Pass. Test environment must have an active Plex Pass subscription.
+> **BLOCKED — requires Plex Pass.** Plex Live TV & DVR is fully gated behind Plex Pass; there is no subset testable without it.
+> Testing is on hold until a Plex Pass is available (sponsorship welcome).
 - [ ] HDHR device added and channel scan completes
 - [ ] Guide data matches channels
 - [ ] Live playback starts
