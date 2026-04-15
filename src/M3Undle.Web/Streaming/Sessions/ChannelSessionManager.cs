@@ -200,7 +200,7 @@ public sealed class ChannelSessionManager
                         providerCap);
             }
 
-            var newSlot = new HlsAdmissionSlot(key, source.DisplayName, effectiveTtl);
+            var newSlot = new HlsAdmissionSlot(key, source.DisplayName, source.RequestedRoute, source.RemoteIp, source.UserAgent, effectiveTtl);
             _hlsSlots[key] = newSlot;
             _logger.LogInformation(
                 "Reserved HLS admission slot for '{DisplayName}' ({TotalUpstreams} upstream(s) now tracked).",
@@ -225,6 +225,7 @@ public sealed class ChannelSessionManager
     {
         if (_hlsSlots.TryRemove(key, out var slot))
         {
+            _registry.RemoveClient(slot.SessionId);
             _registry.RemoveSession(slot.SessionId);
             _logger.LogInformation("Released HLS admission slot for {Key}.", key);
         }
@@ -334,6 +335,16 @@ public sealed class ChannelSessionManager
             ReconnectAttempts: 0,
             LastFailureKind: null));
 
+        _registry.UpsertClient(new StreamClientSnapshot(
+            ClientId: slot.SessionId,
+            SessionId: slot.SessionId,
+            RequestedRoute: slot.RequestedRoute,
+            RemoteIp: slot.RemoteIp,
+            UserAgent: slot.UserAgent,
+            ConnectedUtc: slot.StartedUtc,
+            BytesSent: 0,
+            QueueDepth: 0));
+
         _registry.UpsertProvider(new StreamProviderSnapshot(
             SessionId: slot.SessionId,
             ProviderId: slot.Key.ProviderId,
@@ -362,11 +373,20 @@ public sealed class ChannelSessionManager
         foreach (var slot in expired)
         {
             if (_hlsSlots.TryRemove(slot.Key, out _))
+            {
+                _registry.RemoveClient(slot.SessionId);
                 _registry.RemoveSession(slot.SessionId);
+            }
         }
     }
 
-    internal sealed class HlsAdmissionSlot(ChannelSessionKey key, string displayName, TimeSpan ttl)
+    internal sealed class HlsAdmissionSlot(
+        ChannelSessionKey key,
+        string displayName,
+        string requestedRoute,
+        string? remoteIp,
+        string? userAgent,
+        TimeSpan ttl)
     {
         private long _expiresUnixMs = DateTimeOffset.UtcNow.Add(ttl).ToUnixTimeMilliseconds();
         private long _lastUpstreamByteUnixMs;
@@ -374,6 +394,9 @@ public sealed class ChannelSessionManager
         public string SessionId { get; } = Guid.NewGuid().ToString("N");
         public ChannelSessionKey Key { get; } = key;
         public string DisplayName { get; } = displayName;
+        public string RequestedRoute { get; } = requestedRoute;
+        public string? RemoteIp { get; } = remoteIp;
+        public string? UserAgent { get; } = userAgent;
         public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
 
         public DateTimeOffset ExpiresUtc

@@ -584,6 +584,20 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task ReserveHlsSlot_PublishesClientToRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var clients = fixture.Registry.GetActiveClients();
+        Assert.HasCount(1, clients);
+        Assert.AreEqual(fixture.Source.RequestedRoute, clients[0].RequestedRoute);
+        Assert.AreEqual(fixture.Source.RemoteIp, clients[0].RemoteIp);
+        Assert.AreEqual(fixture.Source.UserAgent, clients[0].UserAgent);
+    }
+
+    [TestMethod]
     public async Task ReleaseHlsSlot_RemovesSessionFromRegistry()
     {
         await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
@@ -594,6 +608,19 @@ public sealed class ChannelSessionIntegrationTests
         slot.Dispose();
 
         Assert.IsEmpty(fixture.Registry.GetActiveSessions());
+    }
+
+    [TestMethod]
+    public async Task ReleaseHlsSlot_RemovesClientFromRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+        Assert.HasCount(1, fixture.Registry.GetActiveClients());
+
+        slot.Dispose();
+
+        Assert.IsEmpty(fixture.Registry.GetActiveClients());
     }
 
     [TestMethod]
