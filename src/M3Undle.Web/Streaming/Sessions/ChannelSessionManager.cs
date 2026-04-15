@@ -200,11 +200,13 @@ public sealed class ChannelSessionManager
                         providerCap);
             }
 
-            _hlsSlots[key] = new HlsAdmissionSlot(key, effectiveTtl);
+            var newSlot = new HlsAdmissionSlot(key, source.DisplayName, effectiveTtl);
+            _hlsSlots[key] = newSlot;
             _logger.LogInformation(
                 "Reserved HLS admission slot for '{DisplayName}' ({TotalUpstreams} upstream(s) now tracked).",
                 source.DisplayName,
                 totalUpstreams + 1);
+            PublishHlsSlotSnapshot(newSlot);
 
             return new HlsSlotReservation(this, key);
         }
@@ -213,13 +215,19 @@ public sealed class ChannelSessionManager
     public void TouchHlsSlot(ChannelSessionKey key, TimeSpan? ttl = null)
     {
         if (_hlsSlots.TryGetValue(key, out var slot))
+        {
             slot.Touch(ttl ?? DefaultHlsSlotTtl);
+            PublishHlsSlotSnapshot(slot);
+        }
     }
 
     public void ReleaseHlsSlot(ChannelSessionKey key)
     {
-        if (_hlsSlots.TryRemove(key, out _))
+        if (_hlsSlots.TryRemove(key, out var slot))
+        {
+            _registry.RemoveSession(slot.SessionId);
             _logger.LogInformation("Released HLS admission slot for {Key}.", key);
+        }
     }
 
     public bool TryGet(ChannelSessionKey key, out ChannelStreamSession? session)
@@ -309,6 +317,34 @@ public sealed class ChannelSessionManager
             retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))));
     }
 
+    private void PublishHlsSlotSnapshot(HlsAdmissionSlot slot)
+    {
+        _registry.UpsertSession(new StreamSessionSnapshot(
+            SessionId: slot.SessionId,
+            ProviderId: slot.Key.ProviderId,
+            ProviderChannelId: slot.Key.ProviderChannelId,
+            DisplayName: slot.DisplayName,
+            State: SessionState.Live,
+            SubscriberCount: 1,
+            IsShared: false,
+            BufferUsedBytes: 0,
+            BufferMaxBytes: 0,
+            StartedUtc: slot.StartedUtc,
+            LastUpstreamByteUtc: slot.LastUpstreamByteUtc,
+            ReconnectAttempts: 0,
+            LastFailureKind: null));
+
+        _registry.UpsertProvider(new StreamProviderSnapshot(
+            SessionId: slot.SessionId,
+            ProviderId: slot.Key.ProviderId,
+            ProviderChannelId: slot.Key.ProviderChannelId,
+            State: SessionState.Live,
+            LastUpstreamByteUtc: slot.LastUpstreamByteUtc,
+            ReconnectAttempts: 0,
+            LastFailureKind: null,
+            ContentType: "application/vnd.apple.mpegurl"));
+    }
+
     private int CountProviderUpstreamsLocked(string providerId)
     {
         var tsCount = _sessions.Keys.Count(x => x.ProviderId == providerId);
@@ -322,22 +358,41 @@ public sealed class ChannelSessionManager
     private void EvictExpiredHlsSlotsLocked()
     {
         var now = DateTimeOffset.UtcNow;
-        var expired = _hlsSlots.Where(x => x.Value.ExpiresUtc <= now).Select(x => x.Key).ToArray();
-        foreach (var key in expired)
-            _hlsSlots.TryRemove(key, out _);
+        var expired = _hlsSlots.Where(x => x.Value.ExpiresUtc <= now).Select(x => x.Value).ToArray();
+        foreach (var slot in expired)
+        {
+            if (_hlsSlots.TryRemove(slot.Key, out _))
+                _registry.RemoveSession(slot.SessionId);
+        }
     }
 
-    internal sealed class HlsAdmissionSlot(ChannelSessionKey key, TimeSpan ttl)
+    internal sealed class HlsAdmissionSlot(ChannelSessionKey key, string displayName, TimeSpan ttl)
     {
         private long _expiresUnixMs = DateTimeOffset.UtcNow.Add(ttl).ToUnixTimeMilliseconds();
+        private long _lastUpstreamByteUnixMs;
 
+        public string SessionId { get; } = Guid.NewGuid().ToString("N");
         public ChannelSessionKey Key { get; } = key;
+        public string DisplayName { get; } = displayName;
+        public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
 
         public DateTimeOffset ExpiresUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _expiresUnixMs));
 
+        public DateTimeOffset? LastUpstreamByteUtc
+        {
+            get
+            {
+                var ms = Interlocked.Read(ref _lastUpstreamByteUnixMs);
+                return ms == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(ms);
+            }
+        }
+
         public void Touch(TimeSpan newTtl)
-            => Interlocked.Exchange(ref _expiresUnixMs, DateTimeOffset.UtcNow.Add(newTtl).ToUnixTimeMilliseconds());
+        {
+            Interlocked.Exchange(ref _expiresUnixMs, DateTimeOffset.UtcNow.Add(newTtl).ToUnixTimeMilliseconds());
+            Interlocked.Exchange(ref _lastUpstreamByteUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
     }
 
     public sealed class HlsSlotReservation(ChannelSessionManager manager, ChannelSessionKey key) : IDisposable

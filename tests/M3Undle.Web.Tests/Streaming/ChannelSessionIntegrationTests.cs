@@ -563,6 +563,93 @@ public sealed class ChannelSessionIntegrationTests
         fixture.Manager.CheckAdmission(source1);
     }
 
+    // ---------------------------------------------------------------------------
+    // HLS slot registry observability (regression for native upstream HLS blind spot)
+    // ---------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_PublishesSessionToRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var sessions = fixture.Registry.GetActiveSessions();
+        Assert.AreEqual(1, sessions.Count);
+        Assert.AreEqual(fixture.Source.DisplayName, sessions[0].DisplayName);
+        Assert.AreEqual(SessionState.Live, sessions[0].State);
+        // ProviderId and ProviderChannelId are normalized to uppercase by ChannelSessionKey.
+        Assert.AreEqual(slot.Key.ProviderId, sessions[0].ProviderId);
+        Assert.AreEqual(slot.Key.ProviderChannelId, sessions[0].ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ReleaseHlsSlot_RemovesSessionFromRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+        Assert.AreEqual(1, fixture.Registry.GetActiveSessions().Count);
+
+        slot.Dispose();
+
+        Assert.IsEmpty(fixture.Registry.GetActiveSessions());
+    }
+
+    [TestMethod]
+    public async Task TouchHlsSlot_UpdatesLastUpstreamByteUtcInRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var before = fixture.Registry.GetActiveSessions()[0].LastUpstreamByteUtc;
+        Assert.IsNull(before);
+
+        fixture.Manager.TouchHlsSlot(slot.Key);
+
+        var after = fixture.Registry.GetActiveSessions()[0].LastUpstreamByteUtc;
+        Assert.IsNotNull(after);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_SameChannelTwice_SingleRegistryEntry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot1 = fixture.Manager.ReserveHlsSlot(fixture.Source);
+        using var slot2 = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        // Both reservations share the same admission slot, so only one session in registry.
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_WhenActiveSharedSessionExists_RegistryShowsSharedSession()
+    {
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+
+        // Start a shared TS session so the registry already has a session entry.
+        var tsSession = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var cts = new CancellationTokenSource();
+        await tsSession.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.Registry.GetActiveSessions().Any(s => s.SessionId == tsSession.SessionId),
+            TimeSpan.FromSeconds(5));
+
+        // Reserving an HLS slot for the same channel does not add a second registry entry.
+        using var hlsSlot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var sessions = fixture.Registry.GetActiveSessions();
+        Assert.AreEqual(1, sessions.Count);
+        Assert.AreEqual(tsSession.SessionId, sessions[0].SessionId);
+
+        cts.Cancel();
+        await tsSession.DisposeAsync();
+    }
+
     private static async Task<TException> AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
     {
         try
