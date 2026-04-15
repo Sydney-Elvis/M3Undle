@@ -127,6 +127,11 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             return StreamRouteMode.SharedLiveSession;
         }
 
+        if (path.StartsWithSegments("/hls", StringComparison.OrdinalIgnoreCase))
+        {
+            return StreamRouteMode.DirectRelayWithDescriptor;
+        }
+
         return StreamRouteMode.DirectRelay;
     }
 
