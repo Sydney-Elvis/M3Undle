@@ -882,7 +882,7 @@ public static class CompatibilityEndpoints
             return;
         }
 
-        if (useSharedSession && sourceDescriptor is not null)
+        if (sourceDescriptor is not null)
         {
             try
             {
@@ -896,9 +896,10 @@ public static class CompatibilityEndpoints
                 return;
             }
         }
-
-        if (admissionKey is { } slotKey)
+        else if (admissionKey is { } slotKey)
+        {
             channelSessionManager.TouchHlsSlot(slotKey);
+        }
 
         await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }

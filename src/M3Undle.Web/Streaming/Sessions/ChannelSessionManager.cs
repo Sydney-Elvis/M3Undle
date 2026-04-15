@@ -22,7 +22,7 @@ public sealed class ChannelSessionManager
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, HlsAdmissionSlot> _hlsSlots = new();
     private const int DefaultAdmissionRetryAfterSeconds = 30;
-    private static readonly TimeSpan DefaultHlsSlotTtl = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan DefaultHlsSlotTtl = TimeSpan.FromSeconds(90);
 
     public ChannelSessionManager(
         IOptions<BufferOptions> bufferOptions,
@@ -214,10 +214,13 @@ public sealed class ChannelSessionManager
 
     public void TouchHlsSlot(ChannelSessionKey key, TimeSpan? ttl = null)
     {
-        if (_hlsSlots.TryGetValue(key, out var slot))
+        lock (_admissionGate)
         {
-            slot.Touch(ttl ?? DefaultHlsSlotTtl);
-            PublishHlsSlotSnapshot(slot);
+            if (_hlsSlots.TryGetValue(key, out var slot))
+            {
+                slot.Touch(ttl ?? DefaultHlsSlotTtl);
+                PublishHlsSlotSnapshot(slot);
+            }
         }
     }
 
