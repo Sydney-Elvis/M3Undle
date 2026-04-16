@@ -191,6 +191,7 @@
     private bool _isLoading;
     private bool _isRefreshing;
     private bool _isPreviewLoading;
+    private string? _previewLoadingProviderId;
     private bool _isDeletingProvider;
     private string? _deletingProviderId;
     private string? _deletingProviderName;
@@ -367,6 +368,7 @@
     private async Task RefreshPreviewAsync(string providerId)
     {
         _isPreviewLoading = true;
+        _previewLoadingProviderId = providerId;
         _error = null;
 
         try
@@ -396,6 +398,7 @@
         finally
         {
             _isPreviewLoading = false;
+            _previewLoadingProviderId = null;
         }
     }
 
@@ -413,7 +416,7 @@
     }
 
     private bool IsProviderActionDisabled(ProviderDto provider)
-        => _isRefreshing || _isDeletingProvider || _isLoading || (_isPreviewLoading && _preview?.ProviderId == provider.ProviderId);
+        => _isRefreshing || _isDeletingProvider || _isLoading || (_isPreviewLoading && _previewLoadingProviderId == provider.ProviderId);
 
 }
 

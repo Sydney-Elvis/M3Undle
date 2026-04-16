@@ -575,7 +575,7 @@ public sealed class ChannelSessionIntegrationTests
         using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
 
         var sessions = fixture.Registry.GetActiveSessions();
-        Assert.AreEqual(1, sessions.Count);
+        Assert.HasCount(1, sessions);
         Assert.AreEqual(fixture.Source.DisplayName, sessions[0].DisplayName);
         Assert.AreEqual(SessionState.Live, sessions[0].State);
         // ProviderId and ProviderChannelId are normalized to uppercase by ChannelSessionKey.
@@ -603,7 +603,7 @@ public sealed class ChannelSessionIntegrationTests
         await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
 
         var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
-        Assert.AreEqual(1, fixture.Registry.GetActiveSessions().Count);
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
 
         slot.Dispose();
 
@@ -670,7 +670,7 @@ public sealed class ChannelSessionIntegrationTests
         using var hlsSlot = fixture.Manager.ReserveHlsSlot(fixture.Source);
 
         var sessions = fixture.Registry.GetActiveSessions();
-        Assert.AreEqual(1, sessions.Count);
+        Assert.HasCount(1, sessions);
         Assert.AreEqual(tsSession.SessionId, sessions[0].SessionId);
 
         cts.Cancel();

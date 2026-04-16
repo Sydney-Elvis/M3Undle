@@ -1,6 +1,7 @@
 using M3Undle.Web.Application;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -61,7 +62,165 @@ public sealed class ProviderPageServiceValidationTests
         Assert.AreEqual(0, await verify.Providers.CountAsync());
     }
 
-    private static ProviderPageService CreateService(ServiceProvider services)
+    [TestMethod]
+    public async Task DeleteProviderAsync_WhenRefreshInProgress_ReturnsConflictError()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(
+            fixture.Services,
+            refreshTrigger: new TestRefreshTrigger(isRefreshing: true));
+
+        var error = await service.DeleteProviderAsync("provider-1", CancellationToken.None);
+
+        Assert.AreEqual("A snapshot refresh is currently in progress. Please wait for it to finish before deleting a provider.", error);
+    }
+
+    [TestMethod]
+    public async Task DeleteProviderAsync_WhenProviderDoesNotExist_ReturnsNotFound()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture.Services);
+
+        var error = await service.DeleteProviderAsync("missing-provider", CancellationToken.None);
+
+        Assert.AreEqual("Provider not found.", error);
+    }
+
+    [TestMethod]
+    public async Task DeleteProviderAsync_WhenProviderExists_DeletesProviderAndDependents()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        const string providerId = "provider-1";
+        const string profileId = "profile-1";
+        const string fetchRunId = "fetch-1";
+        const string providerGroupId = "provider-group-1";
+        const string providerChannelId = "provider-channel-1";
+        const string canonicalChannelId = "canonical-channel-1";
+
+        await using (var seed = fixture.CreateDbContext())
+        {
+            var now = DateTime.UtcNow;
+            seed.Profiles.Add(new Profile
+            {
+                ProfileId = profileId,
+                Name = "Primary Profile",
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                Enabled = true,
+                IsActive = true,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+            seed.Providers.Add(new Provider
+            {
+                ProviderId = providerId,
+                Name = "Provider One",
+                Enabled = true,
+                PlaylistUrl = "https://example.test/playlist.m3u",
+                TimeoutSeconds = 120,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+            seed.FetchRuns.Add(new FetchRun
+            {
+                FetchRunId = fetchRunId,
+                ProviderId = providerId,
+                StartedUtc = now,
+                FinishedUtc = now,
+                Status = "success",
+                Type = "snapshot",
+            });
+            seed.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = providerGroupId,
+                ProviderId = providerId,
+                RawName = "News",
+                FirstSeenUtc = now,
+                LastSeenUtc = now,
+                Active = true,
+                ContentType = "live",
+            });
+            seed.ProviderChannels.Add(new ProviderChannel
+            {
+                ProviderChannelId = providerChannelId,
+                ProviderId = providerId,
+                DisplayName = "Channel One",
+                StreamUrl = "https://example.test/stream/1",
+                ProviderGroupId = providerGroupId,
+                FirstSeenUtc = now,
+                LastSeenUtc = now,
+                Active = true,
+                ContentType = "live",
+                LastFetchRunId = fetchRunId,
+            });
+            seed.ProfileProviders.Add(new ProfileProvider
+            {
+                ProfileId = profileId,
+                ProviderId = providerId,
+                Priority = 1,
+                Enabled = true,
+            });
+            seed.CanonicalChannels.Add(new CanonicalChannel
+            {
+                ChannelId = canonicalChannelId,
+                ProfileId = profileId,
+                DisplayName = "Canonical Channel One",
+                ChannelNumber = 1,
+                Enabled = true,
+                IsEvent = false,
+                EventPolicy = "none",
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+            seed.ChannelSources.Add(new ChannelSource
+            {
+                ChannelSourceId = "channel-source-1",
+                ChannelId = canonicalChannelId,
+                ProviderId = providerId,
+                ProviderChannelId = providerChannelId,
+                Priority = 1,
+                Enabled = true,
+                HealthState = "healthy",
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+
+            await seed.SaveChangesAsync();
+        }
+
+        var eventBus = new AppEventBus();
+        var reader = eventBus.Subscribe(out var unsubscriber);
+        try
+        {
+            var service = CreateService(fixture.Services, eventBus: eventBus);
+
+            var error = await service.DeleteProviderAsync(providerId, CancellationToken.None);
+
+            Assert.IsNull(error);
+            Assert.IsTrue(reader.TryRead(out var evt));
+            Assert.AreEqual(AppEventKind.ProviderChanged, evt.Kind);
+        }
+        finally
+        {
+            unsubscriber.Dispose();
+        }
+
+        await using var verify = fixture.CreateDbContext();
+        Assert.AreEqual(0, await verify.ChannelSources.CountAsync(x => x.ProviderId == providerId));
+        Assert.AreEqual(0, await verify.ProviderChannels.CountAsync(x => x.ProviderId == providerId));
+        Assert.AreEqual(0, await verify.ProviderGroups.CountAsync(x => x.ProviderId == providerId));
+        Assert.AreEqual(0, await verify.FetchRuns.CountAsync(x => x.ProviderId == providerId));
+        Assert.AreEqual(0, await verify.ProfileProviders.CountAsync(x => x.ProviderId == providerId));
+        Assert.AreEqual(0, await verify.Providers.CountAsync(x => x.ProviderId == providerId));
+        Assert.AreEqual(1, await verify.Profiles.CountAsync(x => x.ProfileId == profileId));
+        Assert.AreEqual(1, await verify.CanonicalChannels.CountAsync(x => x.ChannelId == canonicalChannelId));
+    }
+
+    private static ProviderPageService CreateService(
+        ServiceProvider services,
+        IRefreshTrigger? refreshTrigger = null,
+        AppEventBus? eventBus = null)
     {
         var envVars = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
         var encryption = new SecretEncryptionService(envVars);
@@ -71,8 +230,8 @@ public sealed class ProviderPageServiceValidationTests
             configService: null!,
             envVarService: envVars,
             encryption,
-            refreshTrigger: new TestRefreshTrigger(),
-            eventBus: new AppEventBus(),
+            refreshTrigger: refreshTrigger ?? new TestRefreshTrigger(),
+            eventBus: eventBus ?? new AppEventBus(),
             logger: NullLogger<ProviderPageService>.Instance);
     }
 
@@ -114,11 +273,15 @@ public sealed class ProviderPageServiceValidationTests
         }
     }
 
-    private sealed class TestRefreshTrigger : IRefreshTrigger
+    private sealed class TestRefreshTrigger(bool isRefreshing = false) : IRefreshTrigger
     {
-        public bool IsRefreshing => false;
-        public bool TriggerRefresh() => true;
+        public bool IsRefreshing { get; private set; } = isRefreshing;
+        public bool TriggerRefresh()
+        {
+            IsRefreshing = true;
+            return true;
+        }
         public bool TriggerBuildOnly() => true;
-        public void CancelRefresh() { }
+        public void CancelRefresh() => IsRefreshing = false;
     }
 }
