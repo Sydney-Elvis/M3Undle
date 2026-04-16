@@ -240,6 +240,20 @@
                                                       Style="font-family:monospace; font-size:0.8rem;" />
                                     }
 
+                                    @if (LooksLikeXtreamUrl(selProvider.PlaylistUrl))
+                                    {
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Icon="@Icons.Material.Filled.Tv">Xtream Codes</MudChip>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">Credentials will be extracted and stored encrypted.</MudText>
+                                        </MudStack>
+                                        @if (!_encryptionAvailable)
+                                        {
+                                            <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined">
+                                                M3UNDLE_ENCRYPTION_KEY is not set — this provider cannot be imported until the key is configured.
+                                            </MudAlert>
+                                        }
+                                    }
+
                                     @if (selMissing)
                                     {
                                         <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
@@ -314,10 +328,12 @@
         <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
         <MudSpacer />
         @{
+            var selImportProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
             var canImport = _activeTab == ImportTabIndex
                 && !string.IsNullOrEmpty(_importSelectedName)
                 && !IsAlreadyImported(_importSelectedName)
-                && (_configProviders.FirstOrDefault(p => p.Name == _importSelectedName)?.MissingEnvVars.Count ?? 1) == 0;
+                && (selImportProvider?.MissingEnvVars.Count ?? 1) == 0
+                && !(LooksLikeXtreamUrl(selImportProvider?.PlaylistUrl) && !_encryptionAvailable);
         }
         @if (_activeTab == ImportTabIndex)
         {
@@ -639,6 +655,12 @@
     // ------------------------------------------------------------------
     // Import tab helpers
     // ------------------------------------------------------------------
+
+    private static bool LooksLikeXtreamUrl(string? url) =>
+        !string.IsNullOrEmpty(url)
+        && url.Contains("/get.php", StringComparison.OrdinalIgnoreCase)
+        && url.Contains("username=", StringComparison.OrdinalIgnoreCase)
+        && url.Contains("password=", StringComparison.OrdinalIgnoreCase);
 
     private ImportOptions GetImportOptions(string name)
     {

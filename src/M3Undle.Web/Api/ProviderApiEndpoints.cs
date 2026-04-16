@@ -971,6 +971,7 @@ public static class ProviderApiEndpoints
         ImportConfigProviderRequest request,
         ConfigYamlService configService,
         EnvironmentVariableService envVarService,
+        SecretEncryptionService encryption,
         ApplicationDbContext db,
         AppEventBus eventBus,
         IRefreshTrigger refreshTrigger,
@@ -1006,25 +1007,59 @@ public static class ProviderApiEndpoints
         }
 
         var now = DateTime.UtcNow;
-        var provider = new Provider
+        var resolvedUrl = envVarService.SubstituteEnvVars(configProvider.PlaylistUrl);
+        var isXtream = TryParseXtreamUrl(resolvedUrl, out var xtreamBaseUrl, out var xtreamUsername, out var xtreamPassword);
+
+        if (isXtream && !encryption.IsAvailable)
         {
-            ProviderId = Guid.NewGuid().ToString(),
-            Name = configProvider.Name,
-            PlaylistUrl = configProvider.PlaylistUrl,
-            XmltvUrl = configProvider.XmltvUrl,
-            HeadersJson = configProvider.Headers is not null
-                ? JsonSerializer.Serialize(configProvider.Headers)
-                : null,
-            UserAgent = configProvider.UserAgent,
-            TimeoutSeconds = configProvider.TimeoutSeconds,
-            Enabled = configProvider.Enabled,
-            IncludeVod = request.IncludeVod,
-            IncludeSeries = request.IncludeSeries,
-            ConfigSourcePath = configProvider.SourcePath,
-            NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["encryption"] = ["M3UNDLE_ENCRYPTION_KEY must be set to import this provider as Xtream Codes."]
+            });
+        }
+
+        Provider provider;
+        if (isXtream)
+        {
+            provider = new Provider
+            {
+                ProviderId = Guid.NewGuid().ToString(),
+                Name = configProvider.Name,
+                XtreamBaseUrl = xtreamBaseUrl,
+                XtreamUsername = xtreamUsername,
+                XtreamEncryptedPassword = encryption.Encrypt(xtreamPassword),
+                XtreamIncludeXmltv = false,
+                TimeoutSeconds = configProvider.TimeoutSeconds,
+                Enabled = configProvider.Enabled,
+                IncludeVod = request.IncludeVod,
+                IncludeSeries = request.IncludeSeries,
+                ConfigSourcePath = configProvider.SourcePath,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+        }
+        else
+        {
+            provider = new Provider
+            {
+                ProviderId = Guid.NewGuid().ToString(),
+                Name = configProvider.Name,
+                PlaylistUrl = configProvider.PlaylistUrl,
+                XmltvUrl = configProvider.XmltvUrl,
+                HeadersJson = configProvider.Headers is not null
+                    ? JsonSerializer.Serialize(configProvider.Headers)
+                    : null,
+                UserAgent = configProvider.UserAgent,
+                TimeoutSeconds = configProvider.TimeoutSeconds,
+                Enabled = configProvider.Enabled,
+                IncludeVod = request.IncludeVod,
+                IncludeSeries = request.IncludeSeries,
+                ConfigSourcePath = configProvider.SourcePath,
+                NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+        }
 
         db.Providers.Add(provider);
 
@@ -1810,6 +1845,33 @@ public static class ProviderApiEndpoints
         }
 
         return errors;
+    }
+
+    private static bool TryParseXtreamUrl(string url, out string baseUrl, out string username, out string password)
+    {
+        baseUrl = username = password = string.Empty;
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+
+        if (!uri.AbsolutePath.EndsWith("/get.php", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var query = uri.Query.TrimStart('?');
+        var parameters = query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2))
+            .Where(p => p.Length == 2)
+            .ToDictionary(p => Uri.UnescapeDataString(p[0]), p => Uri.UnescapeDataString(p[1]), StringComparer.OrdinalIgnoreCase);
+
+        if (!parameters.TryGetValue("username", out var u) || string.IsNullOrEmpty(u))
+            return false;
+        if (!parameters.TryGetValue("password", out var p2) || string.IsNullOrEmpty(p2))
+            return false;
+
+        baseUrl = $"{uri.Scheme}://{uri.Authority}";
+        username = u;
+        password = p2;
+        return true;
     }
 
     private static async Task<string> GetUniqueProfileNameAsync(ApplicationDbContext db, string baseName, CancellationToken cancellationToken)
