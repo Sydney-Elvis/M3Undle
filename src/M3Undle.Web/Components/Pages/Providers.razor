@@ -16,7 +16,8 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary">Configure upstream playlists, associate a profile, and preview discovered groups/channels.</MudText>
         </MudStack>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
-                   OnClick="OpenAddDialogAsync">Add Provider</MudButton>
+                   OnClick="OpenAddDialogAsync"
+                   Disabled="@_isDeletingProvider">Add Provider</MudButton>
     </MudStack>
 </MudPaper>
 
@@ -30,6 +31,16 @@
     </MudAlert>
 }
 
+@if (_isDeletingProvider)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            <span>Deleting provider "@_deletingProviderName" — this can take a while for large providers.</span>
+        </MudStack>
+    </MudAlert>
+}
+
 @if (!string.IsNullOrWhiteSpace(_error))
 {
     <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
@@ -38,7 +49,7 @@
 <MudPaper Class="pa-4" Elevation="1">
     <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
         <MudText Typo="Typo.h6">Configured Providers</MudText>
-        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="_isLoading">Reload</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="@(_isLoading || _isDeletingProvider)">Reload</MudButton>
     </MudStack>
 
     @if (_isLoading)
@@ -101,10 +112,17 @@
                 </MudTd>
                 <MudTd>
                     <MudStack Row="true" Spacing="1">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" />
-                        <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" />
-                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@_isRefreshing" />
-                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@_isRefreshing">Preview</MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        @if (_deletingProviderId == context.ProviderId)
+                        {
+                            <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Error" />
+                        }
+                        else
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        }
+                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@IsProviderActionDisabled(context)">Preview</MudButton>
                     </MudStack>
                 </MudTd>
             </RowTemplate>
@@ -173,6 +191,9 @@
     private bool _isLoading;
     private bool _isRefreshing;
     private bool _isPreviewLoading;
+    private bool _isDeletingProvider;
+    private string? _deletingProviderId;
+    private string? _deletingProviderName;
     private int _previewSampleSize = 10;
     private string? _previewGroupFilter;
     private ProviderPreviewDto? _preview;
@@ -205,10 +226,10 @@
                 else if (evt.Kind == AppEventKind.RefreshCompleted)
                 {
                     _isRefreshing = false;
-                    if (!_isLoading)
+                    if (!_isLoading && !_isDeletingProvider)
                         await InvokeAsync(LoadAsync);
                 }
-                else if (!_isLoading)
+                else if (!_isLoading && !_isDeletingProvider)
                 {
                     await InvokeAsync(LoadAsync);
                 }
@@ -279,6 +300,9 @@
 
     private async Task DeleteAsync(ProviderDto provider)
     {
+        if (_isDeletingProvider)
+            return;
+
         var confirmed = await DialogService.ShowMessageBoxAsync(
             "Delete Provider",
             $"Are you sure you want to delete \"{provider.Name}\"? This will permanently remove the provider and all associated data (fetch history, channel data, and profile links).",
@@ -288,6 +312,10 @@
         if (confirmed != true) return;
 
         _error = null;
+        _isDeletingProvider = true;
+        _deletingProviderId = provider.ProviderId;
+        _deletingProviderName = provider.Name;
+        await InvokeAsync(StateHasChanged);
 
         try
         {
@@ -306,6 +334,12 @@
         catch (Exception ex)
         {
             _error = $"Failed to delete provider: {ex.Message}";
+        }
+        finally
+        {
+            _isDeletingProvider = false;
+            _deletingProviderId = null;
+            _deletingProviderName = null;
         }
     }
 
@@ -377,6 +411,9 @@
         if (snapshots.Count == 0) return "None";
         return string.Join(" | ", snapshots.Select(x => $"{x.Status} @ {x.CreatedUtc:u}"));
     }
+
+    private bool IsProviderActionDisabled(ProviderDto provider)
+        => _isRefreshing || _isDeletingProvider || _isLoading || (_isPreviewLoading && _preview?.ProviderId == provider.ProviderId);
 
 }
 

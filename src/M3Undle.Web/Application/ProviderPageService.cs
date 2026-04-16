@@ -486,25 +486,59 @@ public sealed class ProviderPageService(
         if (provider is null)
             return "Provider not found.";
 
-        var channelSources = await db.ChannelSources.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ChannelSources.RemoveRange(channelSources);
-
-        var providerChannels = await db.ProviderChannels.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ProviderChannels.RemoveRange(providerChannels);
-
-        var providerGroups = await db.ProviderGroups.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ProviderGroups.RemoveRange(providerGroups);
-
-        var fetchRuns = await db.FetchRuns.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.FetchRuns.RemoveRange(fetchRuns);
-
-        var profileProviders = await db.ProfileProviders.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ProfileProviders.RemoveRange(profileProviders);
-
-        db.Providers.Remove(provider);
-        await db.SaveChangesAsync(cancellationToken);
-
         using var logScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
+        logger.LogInformation("Provider delete started: {ProviderId} '{Name}'.", providerId, provider.Name);
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        var deletedChannelSources = await db.ChannelSources
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} channel_sources removed={DeletedCount}.",
+            providerId,
+            deletedChannelSources);
+
+        var deletedProviderChannels = await db.ProviderChannels
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} provider_channels removed={DeletedCount}.",
+            providerId,
+            deletedProviderChannels);
+
+        var deletedProviderGroups = await db.ProviderGroups
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} provider_groups removed={DeletedCount}.",
+            providerId,
+            deletedProviderGroups);
+
+        var deletedFetchRuns = await db.FetchRuns
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} fetch_runs removed={DeletedCount}.",
+            providerId,
+            deletedFetchRuns);
+
+        var deletedProfileProviders = await db.ProfileProviders
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} profile_providers removed={DeletedCount}.",
+            providerId,
+            deletedProfileProviders);
+
+        var deletedProviders = await db.Providers
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        if (deletedProviders == 0)
+            return "Provider not found.";
+
+        await transaction.CommitAsync(cancellationToken);
+
         logger.LogInformation("Provider deleted: {ProviderId} '{Name}'.", providerId, provider.Name);
         eventBus.Publish(AppEventKind.ProviderChanged);
 
