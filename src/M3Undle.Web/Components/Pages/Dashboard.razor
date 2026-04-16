@@ -4,7 +4,7 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
 @inject NavigationManager Nav
-@inject IJsApiService JsApiService
+@inject IJSRuntime JS
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
@@ -684,8 +684,22 @@
 
     private async Task CopyAsync(string text)
     {
-        await JsApiService.CopyToClipboardAsync(text);
-        Snackbar.Add("Copied to clipboard", Severity.Success);
+        try
+        {
+            var copied = await JS.InvokeAsync<bool>("m3undleCopyText", text);
+            if (copied)
+            {
+                Snackbar.Add("Copied to clipboard", Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add("Copy failed. Please copy manually.", Severity.Warning);
+            }
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Copy failed. Please copy manually.", Severity.Warning);
+        }
     }
 
     private bool TryRestorePersistedState()
