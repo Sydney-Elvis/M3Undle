@@ -51,12 +51,16 @@ else
         <MudSpacer />
         @if (!profile.IsActive)
         {
-            <MudButton Variant="Variant.Outlined"
-                       Color="Color.Success"
-                       Size="Size.Small"
-                       OnClick="SetActiveAsync">
-                Set Active
-            </MudButton>
+            <MudTooltip Text="@(profile.Providers.Count == 0 ? "Add a provider before activating this profile" : "")"
+                        Disabled="@(profile.Providers.Count > 0)">
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Success"
+                           Size="Size.Small"
+                           Disabled="@(profile.Providers.Count == 0)"
+                           OnClick="SetActiveAsync">
+                    Set Active
+                </MudButton>
+            </MudTooltip>
         }
         <MudButton Variant="Variant.Outlined"
                    StartIcon="@Icons.Material.Filled.FilterList"
@@ -108,7 +112,13 @@ else
         <MudItem xs="12" md="6">
             <MudPaper Class="pa-4" Elevation="1">
                 <MudText Typo="Typo.h6" Class="mb-3">Published Output</MudText>
-                @if (profile.LastPublishedUtc.HasValue)
+                @if (profile.Providers.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                        No providers linked — link a provider to publish content.
+                    </MudAlert>
+                }
+                else if (profile.LastPublishedUtc.HasValue)
                 {
                     <MudStack Spacing="2">
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">

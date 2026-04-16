@@ -144,6 +144,12 @@ internal sealed class ProfilesPageService(
         if (!target.Enabled)
             return "Disabled profiles cannot be activated.";
 
+        var hasProviders = await db.ProfileProviders
+            .AsNoTracking()
+            .AnyAsync(x => x.ProfileId == profileId, ct);
+        if (!hasProviders)
+            return "This profile has no providers linked. Add a provider before activating.";
+
         var now = DateTime.UtcNow;
 
         await db.Profiles
@@ -304,8 +310,10 @@ internal sealed class ProfilesPageService(
                 })
                 .ToList();
 
+            var hasProviders = providers.Count > 0;
+
             var health = ProfileHealthStatus.NoOutput;
-            if (snapshot is not null)
+            if (hasProviders && snapshot is not null)
             {
                 health = lastFailedRun?.Status == "fail"
                     ? ProfileHealthStatus.Degraded
@@ -322,10 +330,10 @@ internal sealed class ProfilesPageService(
                 IsActive = profile.IsActive,
                 CreatedUtc = profile.CreatedUtc,
                 Providers = providers,
-                LastPublishedUtc = snapshot?.CreatedUtc,
-                LiveCount = snapshot?.LiveChannelCount ?? 0,
-                MovieCount = snapshot?.VodChannelCount ?? 0,
-                SeriesCount = snapshot?.SeriesChannelCount ?? 0,
+                LastPublishedUtc = hasProviders ? snapshot?.CreatedUtc : null,
+                LiveCount = hasProviders ? snapshot?.LiveChannelCount ?? 0 : 0,
+                MovieCount = hasProviders ? snapshot?.VodChannelCount ?? 0 : 0,
+                SeriesCount = hasProviders ? snapshot?.SeriesChannelCount ?? 0 : 0,
                 HealthStatus = health,
                 GroupsPendingReview = pendingByProfile.GetValueOrDefault(profile.ProfileId, 0),
                 ChannelsPendingReview = pendingChannelsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),

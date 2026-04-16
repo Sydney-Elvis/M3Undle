@@ -115,15 +115,18 @@ else
                             else
                             {
                                 <div @onclick:stopPropagation="true">
-                                    <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
-                                               Disabled="@(_activatingProfileId is not null)"
-                                               OnClick="@(() => SetActiveAsync(profile))">
-                                        @if (_activatingProfileId == profile.ProfileId)
-                                        {
-                                            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
-                                        }
-                                        @(_activatingProfileId == profile.ProfileId ? "Setting…" : "Set Active")
-                                    </MudButton>
+                                    <MudTooltip Text="@(profile.Providers.Count == 0 ? "Add a provider before activating this profile" : "")"
+                                                Disabled="@(profile.Providers.Count > 0)">
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                                   Disabled="@(_activatingProfileId is not null || profile.Providers.Count == 0)"
+                                                   OnClick="@(() => SetActiveAsync(profile))">
+                                            @if (_activatingProfileId == profile.ProfileId)
+                                            {
+                                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                            }
+                                            @(_activatingProfileId == profile.ProfileId ? "Setting…" : "Set Active")
+                                        </MudButton>
+                                    </MudTooltip>
                                 </div>
                             }
                             <div @onclick:stopPropagation="true">
@@ -162,10 +165,14 @@ else
                             }
                         </MudStack>
 
-                        @if (profile.Providers.Count > 0)
-                        {
-                            <MudStack Spacing="0">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Providers</MudText>
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Providers</MudText>
+                            @if (profile.Providers.Count == 0)
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Warning">No providers linked</MudText>
+                            }
+                            else
+                            {
                                 @foreach (var p in profile.Providers)
                                 {
                                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
@@ -176,8 +183,8 @@ else
                                         }
                                     </MudStack>
                                 }
-                            </MudStack>
-                        }
+                            }
+                        </MudStack>
 
                         @if (profile.GroupsPendingReview > 0)
                         {

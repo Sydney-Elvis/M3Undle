@@ -202,22 +202,32 @@ public sealed class ProviderPageService(
         };
 
         db.Providers.Add(provider);
-        var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
-        var profile = new Profile
+        var reuseImportProfile = await FindUnlinkedProfileByNameAsync(db, configProvider.Name, cancellationToken);
+        string importProfileId;
+        if (reuseImportProfile is not null)
         {
-            ProfileId = Guid.NewGuid().ToString(),
-            Name = profileName,
-            OutputName = "m3undle",
-            MergeMode = "replace",
-            Enabled = true,
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
-        db.Profiles.Add(profile);
-        ApplyProviderProfiles(db, provider.ProviderId, [profile.ProfileId]);
+            importProfileId = reuseImportProfile.ProfileId;
+        }
+        else
+        {
+            var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
+            var profile = new Profile
+            {
+                ProfileId = Guid.NewGuid().ToString(),
+                Name = profileName,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                Enabled = true,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+            db.Profiles.Add(profile);
+            importProfileId = profile.ProfileId;
+        }
+        ApplyProviderProfiles(db, provider.ProviderId, [importProfileId]);
 
         await db.SaveChangesAsync(cancellationToken);
-        await AutoActivateProfileIfNoneAsync(db, profile.ProfileId, cancellationToken);
+        await AutoActivateProfileIfNoneAsync(db, importProfileId, cancellationToken);
         refreshTrigger.TriggerRefresh();
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);
@@ -285,19 +295,28 @@ public sealed class ProviderPageService(
 
         if (profileIdsToApply is null or { Count: 0 })
         {
-            var profileName = await GetUniqueProfileNameAsync(db, request.Name.Trim(), cancellationToken);
-            var profile = new Profile
+            var baseName = request.Name.Trim();
+            var reuseProfile = await FindUnlinkedProfileByNameAsync(db, baseName, cancellationToken);
+            if (reuseProfile is not null)
             {
-                ProfileId = Guid.NewGuid().ToString(),
-                Name = profileName,
-                OutputName = "m3undle",
-                MergeMode = "replace",
-                Enabled = true,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-            db.Profiles.Add(profile);
-            profileIdsToApply = [profile.ProfileId];
+                profileIdsToApply = [reuseProfile.ProfileId];
+            }
+            else
+            {
+                var profileName = await GetUniqueProfileNameAsync(db, baseName, cancellationToken);
+                var profile = new Profile
+                {
+                    ProfileId = Guid.NewGuid().ToString(),
+                    Name = profileName,
+                    OutputName = "m3undle",
+                    MergeMode = "replace",
+                    Enabled = true,
+                    CreatedUtc = now,
+                    UpdatedUtc = now,
+                };
+                db.Profiles.Add(profile);
+                profileIdsToApply = [profile.ProfileId];
+            }
         }
 
         ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
@@ -786,6 +805,21 @@ public sealed class ProviderPageService(
         }
 
         return errors;
+    }
+
+    private static async Task<Profile?> FindUnlinkedProfileByNameAsync(ApplicationDbContext db, string name, CancellationToken cancellationToken)
+    {
+        var profile = await db.Profiles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Name == name, cancellationToken);
+
+        if (profile is null) return null;
+
+        var hasProviders = await db.ProfileProviders
+            .AsNoTracking()
+            .AnyAsync(pp => pp.ProfileId == profile.ProfileId, cancellationToken);
+
+        return hasProviders ? null : profile;
     }
 
     private static async Task<string> GetUniqueProfileNameAsync(ApplicationDbContext db, string baseName, CancellationToken cancellationToken)
