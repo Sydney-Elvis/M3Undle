@@ -242,14 +242,13 @@
 
                                     @if (LooksLikeXtreamUrl(selProvider.PlaylistUrl))
                                     {
-                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Icon="@Icons.Material.Filled.Tv">Xtream Codes</MudChip>
-                                            <MudText Typo="Typo.caption" Color="Color.Secondary">Credentials will be extracted and stored encrypted.</MudText>
-                                        </MudStack>
-                                        @if (!_encryptionAvailable)
+                                        <MudSwitch @bind-Value="selOpts!.ImportAsXtream" Color="Color.Info"
+                                                   Label="Import as Xtream Codes (extract credentials and store encrypted)"
+                                                   Disabled="!_encryptionAvailable" />
+                                        @if (selOpts!.ImportAsXtream && !_encryptionAvailable)
                                         {
                                             <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined">
-                                                M3UNDLE_ENCRYPTION_KEY is not set — this provider cannot be imported until the key is configured.
+                                                M3UNDLE_ENCRYPTION_KEY is not set — cannot import as Xtream Codes until the key is configured.
                                             </MudAlert>
                                         }
                                     }
@@ -329,11 +328,12 @@
         <MudSpacer />
         @{
             var selImportProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
+            var selImportOpts = string.IsNullOrEmpty(_importSelectedName) ? null : GetImportOptions(_importSelectedName);
             var canImport = _activeTab == ImportTabIndex
                 && !string.IsNullOrEmpty(_importSelectedName)
                 && !IsAlreadyImported(_importSelectedName)
                 && (selImportProvider?.MissingEnvVars.Count ?? 1) == 0
-                && !(LooksLikeXtreamUrl(selImportProvider?.PlaylistUrl) && !_encryptionAvailable);
+                && !(selImportOpts?.ImportAsXtream == true && !_encryptionAvailable);
         }
         @if (_activeTab == ImportTabIndex)
         {
@@ -710,6 +710,7 @@
                     IncludeSeries = opts.IncludeSeries,
                     MaxConcurrentStreams = opts.MaxConcurrentStreams,
                     AssociateToProfileIds = ProfileIdList(opts.ProfileId),
+                    ImportAsXtream = opts.ImportAsXtream,
                 },
                 CancellationToken.None);
             if (!string.IsNullOrWhiteSpace(import.Error)) { _importError = import.Error; return; }
@@ -786,5 +787,6 @@
         public bool IncludeSeries { get; set; } = true;
         public int? MaxConcurrentStreams { get; set; }
         public string ProfileId { get; set; } = string.Empty;
+        public bool ImportAsXtream { get; set; } = true;
     }
 }

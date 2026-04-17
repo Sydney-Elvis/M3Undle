@@ -1008,7 +1008,8 @@ public static class ProviderApiEndpoints
 
         var now = DateTime.UtcNow;
         var resolvedUrl = envVarService.SubstituteEnvVars(configProvider.PlaylistUrl);
-        var isXtream = TryParseXtreamUrl(resolvedUrl, out var xtreamBaseUrl, out var xtreamUsername, out var xtreamPassword);
+        string xtreamBaseUrl = string.Empty, xtreamUsername = string.Empty, xtreamPassword = string.Empty;
+        var isXtream = request.ImportAsXtream && TryParseXtreamUrl(resolvedUrl, out xtreamBaseUrl, out xtreamUsername, out xtreamPassword);
 
         if (isXtream && !encryption.IsAvailable)
         {
