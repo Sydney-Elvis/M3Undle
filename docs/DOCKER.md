@@ -47,6 +47,7 @@ services:
       # M3UNDLE_AUTH_ENABLED: "true"
       # M3UNDLE_ADMIN_USER: admin
       # M3UNDLE_ADMIN_PASSWORD: "choose-a-strong-password"
+      # M3UNDLE_ADMIN_PASSWORD_RESET: "false" # set "true" once to recover a forgotten admin password
     volumes:
       - ./config:/config
       - ./data:/data
@@ -188,7 +189,14 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 |---|---|---|
 | `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs. |
 | `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email. Used only on first startup when no account exists. |
-| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no admin account exists yet. Used only for the initial seed — changing this later has no effect (use Settings → Change Password instead). |
+| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no admin account exists yet. Also required when running one-time password recovery. |
+| `M3UNDLE_ADMIN_PASSWORD_RESET` | `false` | One-time recovery switch. Set to `true` to force-reset the existing admin password from `M3UNDLE_ADMIN_PASSWORD` on startup, then set back to `false`. |
+
+Password recovery workflow (lost admin password):
+1. Set `M3UNDLE_ADMIN_PASSWORD` to the new password.
+2. Set `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+3. Restart the container once and log in with the new password.
+4. Set `M3UNDLE_ADMIN_PASSWORD_RESET=false` and restart again.
 
 Endpoint security (M3U/XMLTV/stream/HDHR username/password auth) is managed in **Settings → Endpoint Security** and stored in the database.
 The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for tuner-slot ownership and retune behaviour.

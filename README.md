@@ -172,8 +172,22 @@ Authentication is controlled entirely by environment variables — no UI toggle 
 | `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs |
 | `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email (used on first startup only) |
 | `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no account exists yet |
+| `M3UNDLE_ADMIN_PASSWORD_RESET` | `false` | Set to `true` to force-reset the existing admin password from `M3UNDLE_ADMIN_PASSWORD` on startup (recovery flow) |
 
-On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables. On subsequent startups the account already exists — changing the env vars does not affect the stored password (use **Settings → Change Password** instead).
+On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables.
+On subsequent startups the account already exists — changing env vars does not affect the stored password unless you explicitly enable recovery with `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+
+### Password Recovery (Forgot Password)
+
+If the admin password is lost and you cannot log in:
+
+1. Set `M3UNDLE_ADMIN_PASSWORD` to the new desired password.
+2. Set `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+3. Restart M3Undle once.
+4. Log in with the new password.
+5. Set `M3UNDLE_ADMIN_PASSWORD_RESET=false` (or remove it), then restart again.
+
+When reset mode runs, lockout counters are also cleared for the admin account.
 
 ### Behavior
 

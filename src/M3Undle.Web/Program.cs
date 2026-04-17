@@ -159,6 +159,7 @@ builder.Services.AddHttpClient("downstream", client =>
 
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
+builder.Services.Configure<AdaptiveLockoutOptions>(builder.Configuration.GetSection("Identity:AdaptiveLockout"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
 builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.GetSection("M3Undle:EndpointAccess"));
 builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection("M3Undle:Streaming"));
@@ -238,6 +239,7 @@ builder.Services.AddSingleton<HdHomeRunTunerCountResolver>();
 builder.Services.AddSingleton<HdHomeRunDeviceService>();
 builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
+builder.Services.AddScoped<IAdaptiveLockoutService, AdaptiveLockoutService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
 builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
 builder.Services.AddScoped<IHdHomeRunSettingsService, HdHomeRunSettingsService>();
@@ -288,6 +290,9 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
         options.Password.RequireUppercase = false;
         options.Password.RequireNonAlphanumeric = false;
         options.Password.RequiredLength = 6;
+        options.Lockout.AllowedForNewUsers = true;
+        options.Lockout.MaxFailedAccessAttempts = builder.Configuration.GetValue("Identity:Lockout:MaxFailedAccessAttempts", 5);
+        options.Lockout.DefaultLockoutTimeSpan = builder.Configuration.GetValue("Identity:Lockout:DefaultLockoutTimeSpan", TimeSpan.FromMinutes(5));
     })
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddSignInManager()
@@ -389,27 +394,67 @@ app.Run();
 static async Task SeedAdminAccountIfNeededAsync(IServiceProvider services)
 {
     var env = services.GetRequiredService<EnvironmentVariableService>();
-    var authEnabled = string.Equals(env.GetValue("M3UNDLE_AUTH_ENABLED")?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+    var authEnabled = IsFlagEnabled(env.GetValue("M3UNDLE_AUTH_ENABLED"));
     if (!authEnabled) return;
 
     await using var scope = services.CreateAsyncScope();
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    if (await db.Users.AsNoTracking().AnyAsync()) return;
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+    var logger = services.GetRequiredService<ILogger<Program>>();
+    var hasAnyUsers = await db.Users.AsNoTracking().AnyAsync();
 
     var adminUser = env.GetValue("M3UNDLE_ADMIN_USER")?.Trim() ?? "admin";
-    var adminPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
+    var resetRequested = IsFlagEnabled(env.GetValue("M3UNDLE_ADMIN_PASSWORD_RESET"));
+
+    if (!hasAnyUsers)
+    {
+        var adminPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
+            ?? throw new InvalidOperationException(
+                "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_AUTH_ENABLED=true and no admin account exists.");
+
+        var user = new ApplicationUser { UserName = adminUser, Email = adminUser, EmailConfirmed = true };
+        var createResult = await userManager.CreateAsync(user, adminPassword);
+        if (!createResult.Succeeded)
+            throw new InvalidOperationException(
+                $"Failed to create admin account: {string.Join(", ", createResult.Errors.Select(e => e.Description))}");
+
+        logger.LogInformation("Admin account created from environment variables.");
+        return;
+    }
+
+    if (!resetRequested) return;
+
+    var resetPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
         ?? throw new InvalidOperationException(
-            "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_AUTH_ENABLED=true and no admin account exists.");
+            "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_ADMIN_PASSWORD_RESET=true.");
 
-    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-    var user = new ApplicationUser { UserName = adminUser, Email = adminUser, EmailConfirmed = true };
-    var result = await userManager.CreateAsync(user, adminPassword);
-    if (!result.Succeeded)
+    var existingAdmin = await userManager.FindByNameAsync(adminUser)
+                        ?? await userManager.FindByEmailAsync(adminUser);
+    if (existingAdmin is null)
         throw new InvalidOperationException(
-            $"Failed to create admin account: {string.Join(", ", result.Errors.Select(e => e.Description))}");
+            $"M3UNDLE_ADMIN_PASSWORD_RESET=true but user '{adminUser}' was not found.");
 
-    services.GetRequiredService<ILogger<Program>>()
-        .LogInformation("Admin account created from environment variables.");
+    var resetToken = await userManager.GeneratePasswordResetTokenAsync(existingAdmin);
+    var resetResult = await userManager.ResetPasswordAsync(existingAdmin, resetToken, resetPassword);
+    if (!resetResult.Succeeded)
+        throw new InvalidOperationException(
+            $"Failed to reset admin password: {string.Join(", ", resetResult.Errors.Select(e => e.Description))}");
+
+    await userManager.ResetAccessFailedCountAsync(existingAdmin);
+    await userManager.SetLockoutEndDateAsync(existingAdmin, null);
+    if (existingAdmin.AdaptiveLockoutEscalated)
+    {
+        existingAdmin.AdaptiveLockoutEscalated = false;
+        var updateResult = await userManager.UpdateAsync(existingAdmin);
+        if (!updateResult.Succeeded)
+            throw new InvalidOperationException(
+                $"Admin password was reset but lockout state cleanup failed: {string.Join(", ", updateResult.Errors.Select(e => e.Description))}");
+    }
+
+    logger.LogWarning(
+        "Admin password reset from environment variables for user '{AdminUser}'. " +
+        "Set M3UNDLE_ADMIN_PASSWORD_RESET back to false after recovery.",
+        adminUser);
 }
 
 static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptions> context, int statusCode)
@@ -426,6 +471,9 @@ static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptio
 
 static bool IsClientDeliveryPath(PathString path)
     => IsMediaSurfacePath(path);
+
+static bool IsFlagEnabled(string? value)
+    => string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
 
 static bool IsMediaSurfacePath(PathString path)
 {

@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
@@ -41,11 +40,18 @@ internal static class IdentityComponentsEndpointRouteBuilderExtensions
             return TypedResults.Challenge(properties, [provider]);
         });
 
+        var loggerFactory = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>();
+        var authLogger = loggerFactory.CreateLogger("AuthAudit");
+
         accountGroup.MapPost("/Logout", async (
-            ClaimsPrincipal user,
+            HttpContext context,
             [FromServices] SignInManager<ApplicationUser> signInManager,
             [FromForm] string returnUrl) =>
         {
+            using var authScope = authLogger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Auth" });
+            authLogger.LogInformation(
+                "UI logout succeeded. client={Client}",
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
             await signInManager.SignOutAsync();
             return TypedResults.LocalRedirect($"~/{returnUrl}");
         });
@@ -108,7 +114,6 @@ internal static class IdentityComponentsEndpointRouteBuilderExtensions
             return TypedResults.Challenge(properties, [provider]);
         });
 
-        var loggerFactory = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>();
         var downloadLogger = loggerFactory.CreateLogger("DownloadPersonalData");
 
         manageGroup.MapPost("/DownloadPersonalData", async (
@@ -150,4 +155,3 @@ internal static class IdentityComponentsEndpointRouteBuilderExtensions
         return accountGroup;
     }
 }
-
