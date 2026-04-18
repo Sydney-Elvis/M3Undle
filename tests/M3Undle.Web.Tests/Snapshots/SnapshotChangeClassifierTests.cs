@@ -114,6 +114,46 @@ public sealed class SnapshotChangeClassifierTests
     }
 
     [TestMethod]
+    public async Task ClassifyAsync_WhenChannelNumbersChange_ReturnsLineup()
+    {
+        var tempDir = CreateTempDir();
+        try
+        {
+            var (prevIndexPath, prevXmltvPath) = await WriteSnapshotFilesAsync(
+                tempDir,
+                "prev",
+                [Entry("a1", 1001), Entry("a2", 1002), Entry("a3", 1003)],
+                "<tv><channel id='a'/></tv>");
+
+            var (newIndexPath, newXmltvPath) = await WriteSnapshotFilesAsync(
+                tempDir,
+                "next",
+                [Entry("a1", 1001), Entry("a2", 8888), Entry("a3", 1003)],
+                "<tv><channel id='a'/></tv>");
+
+            var prev = new Snapshot
+            {
+                SnapshotId = "prev",
+                ProfileId = "profile-1",
+                ChannelIndexPath = prevIndexPath,
+                XmltvPath = prevXmltvPath,
+            };
+
+            var result = await SnapshotChangeClassifier.ClassifyAsync(
+                prev,
+                newIndexPath,
+                newXmltvPath,
+                CancellationToken.None);
+
+            Assert.AreEqual(ChangeClasses.Lineup, result);
+        }
+        finally
+        {
+            TryDelete(tempDir);
+        }
+    }
+
+    [TestMethod]
     public async Task ClassifyAsync_WhenChurnWithinThreshold_ReturnsLineup()
     {
         var tempDir = CreateTempDir();
@@ -193,7 +233,7 @@ public sealed class SnapshotChangeClassifierTests
         }
     }
 
-    private static ChannelIndexEntry Entry(string streamKey)
+    private static ChannelIndexEntry Entry(string streamKey, int? tvgChno = null)
         => new(
             StreamKey: streamKey,
             DisplayName: $"Channel {streamKey}",
@@ -201,7 +241,7 @@ public sealed class SnapshotChangeClassifierTests
             TvgName: null,
             LogoUrl: null,
             GroupTitle: "Group",
-            TvgChno: null,
+            TvgChno: tvgChno,
             ProviderChannelId: $"provider-{streamKey}",
             StreamUrl: $"https://example.test/{streamKey}.ts");
 

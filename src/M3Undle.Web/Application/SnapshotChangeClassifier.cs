@@ -10,8 +10,8 @@ namespace M3Undle.Web.Application;
 /// ChangeClass string indicating what kind of change occurred.
 ///
 /// Change classes (in ascending severity):
-///   none       — same channels, same guide content
-///   guide_only — same channels, guide content changed
+///   none       — same channels, same numbering, same guide content
+///   guide_only — same channels and numbering, guide content changed
 ///   lineup     — channels added/removed (≤ 20 % churn)
 ///   breaking   — > 20 % channel identity churn; clients may need to rescan
 ///   null       — no previous snapshot to compare against (first-ever run)
@@ -49,7 +49,12 @@ public static class SnapshotChangeClassifier
 
         if (added == 0 && removed == 0)
         {
-            // Same lineup — check guide
+            // Same stream identities. A numbering change still needs to publish a new lineup.
+            var numberingChanged = await ChannelNumbersChangedAsync(prev.ChannelIndexPath, newIdxPath, ct);
+            if (numberingChanged)
+                return ChangeClasses.Lineup;
+
+            // Same lineup metadata — check guide.
             var guideChanged = await GuideChangedAsync(prev.XmltvPath, newXmltvPath, ct);
             return guideChanged ? ChangeClasses.GuideOnly : ChangeClasses.None;
         }
@@ -123,6 +128,41 @@ public static class SnapshotChangeClassifier
         var prevHash = await HashFileAsync(prevXmltvPath, ct);
         var newHash  = await HashFileAsync(newXmltvPath, ct);
         return !prevHash.AsSpan().SequenceEqual(newHash);
+    }
+
+    private static async Task<bool> ChannelNumbersChangedAsync(
+        string prevChannelIndexPath,
+        string newChannelIndexPath,
+        CancellationToken ct)
+    {
+        if (!File.Exists(prevChannelIndexPath) || !File.Exists(newChannelIndexPath))
+            return false;
+
+        var prevNumbers = await ReadChannelNumbersAsync(prevChannelIndexPath, ct);
+        var newNumbers = await ReadChannelNumbersAsync(newChannelIndexPath, ct);
+
+        if (prevNumbers.Count != newNumbers.Count)
+            return true;
+
+        foreach (var (streamKey, prevNumber) in prevNumbers)
+        {
+            if (!newNumbers.TryGetValue(streamKey, out var newNumber) || prevNumber != newNumber)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static async Task<Dictionary<string, int?>> ReadChannelNumbersAsync(
+        string channelIndexPath,
+        CancellationToken ct)
+    {
+        var channelNumbers = new Dictionary<string, int?>(StringComparer.Ordinal);
+
+        await foreach (var entry in ChannelIndexStore.StreamAllAsync(channelIndexPath, ct))
+            channelNumbers[entry.StreamKey] = entry.TvgChno;
+
+        return channelNumbers;
     }
 
     private static async Task<byte[]> HashFileAsync(string path, CancellationToken ct)
