@@ -369,23 +369,30 @@ Port **8080** serves the web UI, M3U/XMLTV, Xtream Codes, and general compatibil
 
 Both ports are set in the Dockerfile — you do not need to add them manually.
 
-### Option A — Manual add (recommended for Docker)
+### Option A — Manual add (recommended)
 
-This is the simplest setup. No discovery ports, no special networking.
+This is the most reliable setup across all Docker networking modes and client applications. No discovery ports, no special networking.
 
 1. Keep `5004:5004` and `8080:8080` published in your compose file.
 2. In your DVR application, add a network tuner manually:
+   - **Jellyfin**: Dashboard → Live TV → Add Tuner Device → HD Homerun → enter `http://<host-ip>:5004` *(recommended — see note below)*
    - **NextPVR**: Settings → Tuners → Add → enter `http://<host-ip>:5004`
-   - **Jellyfin**: Dashboard → Live TV → Add Tuner Device → HD Homerun → enter `http://<host-ip>:5004`
    - **Emby**: Live TV → Add Tuner → HDHomeRun → enter `http://<host-ip>:5004`
    - **Plex**: Settings → Live TV & DVR → Set Up → enter `http://<host-ip>:5004`
 3. The client will connect, fetch `discover.json` and `lineup.json`, and show your channels.
 
 No extra environment variables are needed. HDHR is enabled by default, and the rest of the HDHR behavior can be adjusted later in **Settings → HDHomeRun**.
 
-### Option B — Auto-discovery
+> [!NOTE]
+> **Jellyfin users**: Manual add is the supported path for Jellyfin. Jellyfin's "Detect My Devices" auto-discovery may not find M3Undle in Docker bridge or NAT-like setups because some client autodetect flows connect to the responder IP on port 80 instead of using the advertised base URL on port 5004. Manual entry using `http://<host-ip>:5004` works reliably regardless of networking mode.
 
-If you want client apps to find M3Undle automatically (like a real HDHomeRun), you need discovery enabled and the UDP ports published. In most cases, change discovery in **Settings → HDHomeRun** first and only use env vars here if you need a forced startup default.
+### Option B — Auto-discovery (best effort)
+
+Auto-discovery lets some client apps find M3Undle automatically, similar to a real HDHomeRun. This works best on flat LAN or host-network deployments. In Docker bridge or NAT-like setups, discovery may not reach all clients — use [Option A](#option-a--manual-add-recommended) as the fallback.
+
+Not all clients handle discovery identically. Some (such as NextPVR) parse the advertised base URL from the discovery response and connect on the correct port. Others (such as Jellyfin) may ignore the advertised URL and attempt to connect to the responder IP on port 80, which fails when M3Undle serves HDHR on port 5004.
+
+In most cases, change discovery in **Settings → HDHomeRun** first and only use env vars here if you need a forced startup default.
 
 1. Discovery is enabled by default on a fresh install. If you have disabled it in **Settings → HDHomeRun** or want to force the startup default from Docker, add this to your `environment:` section:
    ```yaml
@@ -467,9 +474,9 @@ Because `M3UNDLE_HDHR_ENABLED` is a startup override, setting it to `false` also
 
 **Why multicast is tricky in Docker**: SSDP discovery uses UDP multicast on `239.255.255.250:1900`. Docker's bridge network creates a virtual network segment. Multicast packets from the container don't reach the physical LAN, and multicast queries from LAN clients don't reach the container. Publishing the port (`-p 1900:1900/udp`) only helps for unicast traffic — it does not bridge multicast.
 
-**Recommendation**: Use **manual add** (Option A) unless you have a specific reason to need auto-discovery. It works with any Docker networking mode and is the most reliable approach.
+**Recommendation**: Use **manual add** (Option A) unless you have a specific reason to need auto-discovery. It works with any Docker networking mode, any client application, and is the most reliable approach.
 
-**If you need auto-discovery**, use `network_mode: host` (Option C). It is the only straightforward option that reliably supports SSDP multicast across the LAN.
+**If you need auto-discovery**, use `network_mode: host` (Option C). It is the only straightforward option that reliably supports SSDP multicast across the LAN. Even with host networking, some clients may not follow the advertised base URL from discovery responses — manual add remains the most portable option.
 
 **`AdvertisedBaseUrl` explained**: When a client discovers M3Undle, the response includes a URL where the client should connect for tuning. If M3Undle is behind Docker NAT, it may auto-detect `172.17.0.x` as its address — which is unreachable from the LAN. Setting `AdvertisedBaseUrl` to `http://<your-host-ip>:5004` ensures clients get a reachable address. This is required for bridge networking with discovery; not needed with `network_mode: host`.
 
