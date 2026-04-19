@@ -3,11 +3,12 @@ using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Upstream;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Streaming.Sessions;
 
-public sealed class ChannelSessionManager
+public sealed class ChannelSessionManager : IHostedService, IDisposable
 {
     private readonly BufferOptions _bufferOptions;
     private readonly StreamProxyOptions _proxyOptions;
@@ -18,11 +19,15 @@ public sealed class ChannelSessionManager
     private readonly StreamingRegistry _registry;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChannelSessionManager> _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, HlsAdmissionSlot> _hlsSlots = new();
+    private CancellationTokenSource? _hlsSweepCts;
+    private Task? _hlsSweepTask;
     private const int DefaultAdmissionRetryAfterSeconds = 30;
     private static readonly TimeSpan DefaultHlsSlotTtl = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan DefaultHlsSlotSweepInterval = TimeSpan.FromSeconds(15);
 
     public ChannelSessionManager(
         IOptions<BufferOptions> bufferOptions,
@@ -32,7 +37,8 @@ public sealed class ChannelSessionManager
         UpstreamFailureStrikeStore strikeStore,
         StreamAdmissionBackoffStore admissionBackoffStore,
         StreamingRegistry registry,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        TimeProvider timeProvider)
     {
         _bufferOptions = bufferOptions.Value;
         _proxyOptions = proxyOptions.Value;
@@ -43,6 +49,62 @@ public sealed class ChannelSessionManager
         _registry = registry;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
+        _timeProvider = timeProvider;
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        lock (_admissionGate)
+        {
+            if (_hlsSweepTask is not null)
+                return Task.CompletedTask;
+
+            _hlsSweepCts = new CancellationTokenSource();
+            _hlsSweepTask = Task.Run(() => SweepExpiredHlsSlotsLoopAsync(_hlsSweepCts.Token), CancellationToken.None);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        CancellationTokenSource? sweepCts;
+        Task? sweepTask;
+
+        lock (_admissionGate)
+        {
+            sweepCts = _hlsSweepCts;
+            sweepTask = _hlsSweepTask;
+            _hlsSweepCts = null;
+            _hlsSweepTask = null;
+        }
+
+        if (sweepCts is null || sweepTask is null)
+            return;
+
+        try
+        {
+            sweepCts.Cancel();
+            await sweepTask.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            sweepCts.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_admissionGate)
+        {
+            _hlsSweepCts?.Cancel();
+            _hlsSweepCts?.Dispose();
+            _hlsSweepCts = null;
+            _hlsSweepTask = null;
+        }
     }
 
     public ValueTask<ChannelStreamSession> GetOrCreateAsync(StreamSourceDescriptor source, CancellationToken ct)
@@ -200,7 +262,14 @@ public sealed class ChannelSessionManager
                         providerCap);
             }
 
-            var newSlot = new HlsAdmissionSlot(key, source.DisplayName, source.RequestedRoute, source.RemoteIp, source.UserAgent, effectiveTtl);
+            var newSlot = new HlsAdmissionSlot(
+                key,
+                source.DisplayName,
+                source.RequestedRoute,
+                source.RemoteIp,
+                source.UserAgent,
+                effectiveTtl,
+                _timeProvider);
             _hlsSlots[key] = newSlot;
             _logger.LogInformation(
                 "Reserved HLS admission slot for '{DisplayName}' ({TotalUpstreams} upstream(s) now tracked).",
@@ -251,9 +320,11 @@ public sealed class ChannelSessionManager
     public async Task ResetAllAsync()
     {
         ChannelStreamSession[] sessions;
+        HlsAdmissionSlot[] hlsSlots;
         lock (_admissionGate)
         {
             sessions = _sessions.Values.ToArray();
+            hlsSlots = _hlsSlots.Values.ToArray();
             _sessions.Clear();
             _hlsSlots.Clear();
         }
@@ -261,8 +332,22 @@ public sealed class ChannelSessionManager
         if (sessions.Length > 0)
             _logger.LogInformation("Resetting all {Count} active stream session(s).", sessions.Length);
 
+        foreach (var slot in hlsSlots)
+        {
+            _registry.RemoveClient(slot.SessionId);
+            _registry.RemoveSession(slot.SessionId);
+        }
+
         foreach (var session in sessions)
             await session.StopAsync();
+    }
+
+    internal int SweepExpiredHlsSlots()
+    {
+        lock (_admissionGate)
+        {
+            return EvictExpiredHlsSlotsLocked();
+        }
     }
 
     private StreamAdmissionException CreateAdmissionException(
@@ -369,18 +454,40 @@ public sealed class ChannelSessionManager
     private int CountUniqueHlsUpstreamsLocked()
         => _hlsSlots.Keys.Count(k => !_sessions.ContainsKey(k));
 
-    private void EvictExpiredHlsSlotsLocked()
+    private async Task SweepExpiredHlsSlotsLoopAsync(CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
+        using var timer = new PeriodicTimer(DefaultHlsSlotSweepInterval, _timeProvider);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                var evicted = SweepExpiredHlsSlots();
+                if (evicted > 0)
+                    _logger.LogDebug("Evicted {Count} expired HLS admission slot(s).", evicted);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private int EvictExpiredHlsSlotsLocked()
+    {
+        var now = _timeProvider.GetUtcNow();
         var expired = _hlsSlots.Where(x => x.Value.ExpiresUtc <= now).Select(x => x.Value).ToArray();
+        var removed = 0;
         foreach (var slot in expired)
         {
             if (_hlsSlots.TryRemove(slot.Key, out _))
             {
                 _registry.RemoveClient(slot.SessionId);
                 _registry.RemoveSession(slot.SessionId);
+                removed++;
             }
         }
+
+        return removed;
     }
 
     internal sealed class HlsAdmissionSlot(
@@ -389,9 +496,11 @@ public sealed class ChannelSessionManager
         string requestedRoute,
         string? remoteIp,
         string? userAgent,
-        TimeSpan ttl)
+        TimeSpan ttl,
+        TimeProvider timeProvider)
     {
-        private long _expiresUnixMs = DateTimeOffset.UtcNow.Add(ttl).ToUnixTimeMilliseconds();
+        private readonly TimeProvider _timeProvider = timeProvider;
+        private long _expiresUnixMs = timeProvider.GetUtcNow().Add(ttl).ToUnixTimeMilliseconds();
         private long _lastUpstreamByteUnixMs;
 
         public string SessionId { get; } = Guid.NewGuid().ToString("N");
@@ -400,7 +509,7 @@ public sealed class ChannelSessionManager
         public string RequestedRoute { get; } = requestedRoute;
         public string? RemoteIp { get; } = remoteIp;
         public string? UserAgent { get; } = userAgent;
-        public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset StartedUtc { get; } = timeProvider.GetUtcNow();
 
         public DateTimeOffset ExpiresUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _expiresUnixMs));
@@ -416,8 +525,9 @@ public sealed class ChannelSessionManager
 
         public void Touch(TimeSpan newTtl)
         {
-            Interlocked.Exchange(ref _expiresUnixMs, DateTimeOffset.UtcNow.Add(newTtl).ToUnixTimeMilliseconds());
-            Interlocked.Exchange(ref _lastUpstreamByteUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var now = _timeProvider.GetUtcNow();
+            Interlocked.Exchange(ref _expiresUnixMs, now.Add(newTtl).ToUnixTimeMilliseconds());
+            Interlocked.Exchange(ref _lastUpstreamByteUnixMs, now.ToUnixTimeMilliseconds());
         }
     }
 
@@ -436,4 +546,3 @@ public sealed class ChannelSessionManager
         }
     }
 }
-

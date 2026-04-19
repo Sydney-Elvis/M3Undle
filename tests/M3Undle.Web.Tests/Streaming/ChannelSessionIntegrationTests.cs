@@ -624,6 +624,61 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task SweepExpiredHlsSlots_RemovesExpiredReservationFromRegistry()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 04, 19, 18, 00, 00, TimeSpan.Zero));
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            timeProvider: timeProvider);
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source, ttl: TimeSpan.FromSeconds(1));
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
+        Assert.HasCount(1, fixture.Registry.GetActiveClients());
+
+        timeProvider.Advance(TimeSpan.FromSeconds(2));
+
+        var evicted = fixture.Manager.SweepExpiredHlsSlots();
+
+        Assert.AreEqual(1, evicted);
+        Assert.IsEmpty(fixture.Registry.GetActiveSessions());
+        Assert.IsEmpty(fixture.Registry.GetActiveClients());
+
+        slot.Dispose();
+    }
+
+    [TestMethod]
+    public async Task SweepExpiredHlsSlots_ExpiredSlotFreesCapacity()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 04, 19, 18, 00, 00, TimeSpan.Zero));
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                MaxConcurrentSessions = 1,
+                IdleGrace = TimeSpan.FromSeconds(10),
+            },
+            timeProvider: timeProvider);
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source, ttl: TimeSpan.FromSeconds(1));
+        var secondSource = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        timeProvider.Advance(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(1, fixture.Manager.SweepExpiredHlsSlots());
+
+        using var slot2 = fixture.Manager.ReserveHlsSlot(secondSource);
+        Assert.AreEqual("CHANNEL-2", slot2.Key.ProviderChannelId);
+
+        slot.Dispose();
+    }
+
+    [TestMethod]
     public async Task TouchHlsSlot_UpdatesLastUpstreamByteUtcInRegistry()
     {
         await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
@@ -911,7 +966,7 @@ public sealed class ChannelSessionIntegrationTests
             var registry = new StreamingRegistry(proxyOpts);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
-                NullLoggerFactory.Instance);
+                NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
 
             var source = new StreamSourceDescriptor(
                 ProfileId: "profile-1",

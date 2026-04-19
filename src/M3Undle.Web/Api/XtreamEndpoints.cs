@@ -521,6 +521,7 @@ public static class XtreamEndpoints
 
                 if (manifest is not null)
                 {
+                    hlsSlotReservation?.Dispose();
                     logger.LogInformation(
                         "Xtream native upstream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
                         entry.DisplayName, streamId, streamKey);

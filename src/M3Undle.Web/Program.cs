@@ -277,6 +277,7 @@ builder.Services.AddSingleton<UpstreamStreamConnector>();
 builder.Services.AddSingleton<GeneratedHlsSessionManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<GeneratedHlsSessionManager>());
 builder.Services.AddSingleton<ChannelSessionManager>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ChannelSessionManager>());
 builder.Services.AddScoped<StreamRequestResolver>();
 builder.Services.AddSingleton<HlsManifestRewriter>();
 builder.Services.AddSingleton<HlsProxyService>();

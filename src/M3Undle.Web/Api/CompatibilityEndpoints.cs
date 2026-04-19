@@ -616,6 +616,7 @@ public static class CompatibilityEndpoints
 
                 if (manifest is not null)
                 {
+                    hlsSlotReservation?.Dispose();
                     logger.LogInformation(
                         "Native upstream HLS delivery: channel={Channel} key={StreamKey}",
                         entry.DisplayName,
