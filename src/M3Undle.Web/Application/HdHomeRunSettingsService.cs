@@ -147,13 +147,25 @@ public sealed class HdHomeRunSettingsService(
             yield return "Tuner count override must be between 1 and 32.";
         if (command.FriendlyName is { Length: > 0 } name && name.Trim().Length > 128)
             yield return "Friendly name must be 128 characters or fewer.";
-        if (command.AdvertisedBaseUrl is { Length: > 0 } url &&
-            !Uri.TryCreate(url, UriKind.Absolute, out var uri))
-            yield return "Advertised base URL must be a valid absolute URL.";
-        else if (command.AdvertisedBaseUrl is { Length: > 0 } url2 &&
-            Uri.TryCreate(url2, UriKind.Absolute, out var uri2) &&
-            uri2.Scheme is not "http" and not "https")
-            yield return "Advertised base URL must use http or https.";
+        if (command.AdvertisedBaseUrl is { Length: > 0 } url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                yield return "Advertised base URL must be a valid absolute URL.";
+            else if (uri.Scheme is not "http" and not "https")
+                yield return "Advertised base URL must use http or https.";
+            else if (IsLoopbackHost(uri.Host))
+                yield return "Advertised base URL must not be a loopback or localhost address.";
+        }
+    }
+
+    private static bool IsLoopbackHost(string host)
+    {
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return System.Net.IPAddress.TryParse(host, out var addr) &&
+               (System.Net.IPAddress.IsLoopback(addr) ||
+                addr.Equals(System.Net.IPAddress.Any) ||
+                addr.Equals(System.Net.IPAddress.IPv6Any));
     }
 }
 

@@ -221,6 +221,41 @@ public sealed class HdHomeRunSettingsServiceTests
     }
 
     [TestMethod]
+    public async Task UpdateAsync_RejectsLoopbackAdvertisedBaseUrl()
+    {
+        // A loopback URL saved as the advertised base URL would poison the DB: NormalizeAdvertisedBaseUrl
+        // silently rejects it, and the fallback reaches LAN IP detection instead of using the env-var
+        // value.  The validator must catch these at save time.
+        Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
+
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+
+        var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
+        var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
+        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+
+        var loopbackUrls = new[]
+        {
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1/",
+            "https://localhost",
+        };
+
+        foreach (var url in loopbackUrls)
+        {
+            var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
+                Enabled: true, TunerCountOverride: null, FriendlyName: null,
+                AdvertisedBaseUrl: url, DiscoveryEnabled: true,
+                SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+
+            Assert.IsFalse(result.Succeeded, $"Loopback URL '{url}' should be rejected.");
+            Assert.IsNotNull(result.Error, $"Error message expected for '{url}'.");
+        }
+    }
+
+    [TestMethod]
     public async Task GetSettingsAsync_AppliedSnapshot_UsesStartupLatchedRuntimeValues()
     {
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);

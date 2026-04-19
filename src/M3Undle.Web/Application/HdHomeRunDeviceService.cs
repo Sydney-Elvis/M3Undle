@@ -194,7 +194,11 @@ public sealed class HdHomeRunDeviceService(
     private string? GetAdvertisedBaseUrlSetting()
     {
         var dbValue = QueryDbSetting(s => s.HdhrAdvertisedBaseUrl);
-        if (!string.IsNullOrWhiteSpace(dbValue))
+        // Only prefer the DB value if it would actually survive NormalizeAdvertisedBaseUrl.
+        // If the DB holds a loopback/invalid URL (e.g. http://127.0.0.1:8080 saved by mistake),
+        // NormalizeAdvertisedBaseUrl would return null and the caller would fall through to LAN
+        // IP detection, silently bypassing the env-var / options value. Guard against that here.
+        if (!string.IsNullOrWhiteSpace(dbValue) && NormalizeAdvertisedBaseUrl(dbValue) is not null)
             return dbValue;
 
         return options.Value.AdvertisedBaseUrl;

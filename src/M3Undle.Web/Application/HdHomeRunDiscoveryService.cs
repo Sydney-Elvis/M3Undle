@@ -84,31 +84,46 @@ public sealed class HdHomeRunDiscoveryService(
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                var result = await udp.ReceiveAsync(cancellationToken);
-                if (!TryParseSsdpSearchTarget(result.Buffer, out var searchTarget, out var mxSeconds))
-                    continue;
+                try
+                {
+                    var result = await udp.ReceiveAsync(cancellationToken);
+                    if (!TryParseSsdpSearchTarget(result.Buffer, out var searchTarget, out var mxSeconds))
+                        continue;
 
-                // Respect SSDP MX delay per UPnP DA spec §1.3.3
-                var maxDelayMs = Math.Min(mxSeconds * 1000, 5_000);
-                await Task.Delay(Random.Shared.Next(0, maxDelayMs + 1), cancellationToken);
+                    // Respect SSDP MX delay per UPnP DA spec §1.3.3
+                    var maxDelayMs = Math.Min(mxSeconds * 1000, 5_000);
+                    await Task.Delay(Random.Shared.Next(0, maxDelayMs + 1), cancellationToken);
 
-                var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
-                var baseUrl = runtime.ResolvedBaseUrl;
-                var effectiveSearchTarget = string.Equals(searchTarget, SsdpAllType, StringComparison.OrdinalIgnoreCase)
-                    ? SsdpMediaServerType
-                    : searchTarget;
+                    var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
+                    var baseUrl = runtime.ResolvedBaseUrl;
+                    var effectiveSearchTarget = string.Equals(searchTarget, SsdpAllType, StringComparison.OrdinalIgnoreCase)
+                        ? SsdpMediaServerType
+                        : searchTarget;
 
-                var hdhrBaseUrl = $"{baseUrl.TrimEnd('/')}/hdhr";
-                var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, hdhrBaseUrl);
-                var bytes = Encoding.ASCII.GetBytes(response);
-                await udp.SendAsync(bytes, result.RemoteEndPoint, cancellationToken);
+                    var hdhrBaseUrl = $"{baseUrl.TrimEnd('/')}/hdhr";
+                    var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, hdhrBaseUrl);
+                    var bytes = Encoding.ASCII.GetBytes(response);
+                    await udp.SendAsync(bytes, result.RemoteEndPoint, cancellationToken);
 
-                logger.LogInformation(
-                    "HDHomeRun SSDP discovery response sent to {RemoteEndPoint}. st={SearchTarget} deviceId={DeviceId} location={Location}",
-                    result.RemoteEndPoint,
-                    effectiveSearchTarget,
-                    device.DeviceId,
-                    $"{hdhrBaseUrl}/device.xml");
+                    logger.LogInformation(
+                        "HDHomeRun SSDP discovery response sent to {RemoteEndPoint}. st={SearchTarget} deviceId={DeviceId} location={Location}",
+                        result.RemoteEndPoint,
+                        effectiveSearchTarget,
+                        device.DeviceId,
+                        $"{hdhrBaseUrl}/device.xml");
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (SocketException ex)
+                {
+                    logger.LogWarning(ex, "HDHomeRun SSDP listener encountered a socket error; continuing.");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "HDHomeRun SSDP listener encountered an error processing a request; continuing.");
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -118,6 +133,10 @@ public sealed class HdHomeRunDiscoveryService(
         catch (SocketException ex)
         {
             logger.LogWarning(ex, "HDHomeRun SSDP listener stopped due to socket error.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "HDHomeRun SSDP listener stopped due to an unexpected error.");
         }
         finally
         {
@@ -138,32 +157,47 @@ public sealed class HdHomeRunDiscoveryService(
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                var result = await udp.ReceiveAsync(cancellationToken);
-                if (!TryParseDiscoverRequest(result.Buffer, out var request))
-                    continue;
+                try
+                {
+                    var result = await udp.ReceiveAsync(cancellationToken);
+                    if (!TryParseDiscoverRequest(result.Buffer, out var request))
+                        continue;
 
-                var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
-                var deviceId = Convert.ToUInt32(device.DeviceId, 16);
-                if (!ShouldRespondToDiscover(request, deviceId))
-                    continue;
+                    var device = await deviceService.GetDeviceDescriptorAsync(cancellationToken);
+                    var deviceId = Convert.ToUInt32(device.DeviceId, 16);
+                    if (!ShouldRespondToDiscover(request, deviceId))
+                        continue;
 
-                var baseUrl = runtime.ResolvedBaseUrl.TrimEnd('/');
-                var lineupUrl = $"{baseUrl}/hdhr/lineup.json";
-                var packet = BuildDiscoverResponsePacket(
-                    deviceId,
-                    (byte)Math.Clamp(device.TunerCount, 1, 255),
-                    device.DeviceAuth,
-                    baseUrl,
-                    lineupUrl);
+                    var baseUrl = runtime.ResolvedBaseUrl.TrimEnd('/');
+                    var lineupUrl = $"{baseUrl}/hdhr/lineup.json";
+                    var packet = BuildDiscoverResponsePacket(
+                        deviceId,
+                        (byte)Math.Clamp(device.TunerCount, 1, 255),
+                        device.DeviceAuth,
+                        baseUrl,
+                        lineupUrl);
 
-                await udp.SendAsync(packet, result.RemoteEndPoint, cancellationToken);
+                    await udp.SendAsync(packet, result.RemoteEndPoint, cancellationToken);
 
-                logger.LogInformation(
-                    "HDHomeRun SiliconDust discovery response sent to {RemoteEndPoint}. deviceId={DeviceId} tunerCount={TunerCount} lineupUrl={LineupUrl}",
-                    result.RemoteEndPoint,
-                    device.DeviceId,
-                    device.TunerCount,
-                    lineupUrl);
+                    logger.LogInformation(
+                        "HDHomeRun SiliconDust discovery response sent to {RemoteEndPoint}. deviceId={DeviceId} tunerCount={TunerCount} lineupUrl={LineupUrl}",
+                        result.RemoteEndPoint,
+                        device.DeviceId,
+                        device.TunerCount,
+                        lineupUrl);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (SocketException ex)
+                {
+                    logger.LogWarning(ex, "HDHomeRun SiliconDust listener encountered a socket error; continuing.");
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "HDHomeRun SiliconDust listener encountered an error processing a request; continuing.");
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -173,6 +207,10 @@ public sealed class HdHomeRunDiscoveryService(
         catch (SocketException ex)
         {
             logger.LogWarning(ex, "HDHomeRun SiliconDust discovery listener stopped due to socket error.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "HDHomeRun SiliconDust discovery listener stopped due to an unexpected error.");
         }
         finally
         {
