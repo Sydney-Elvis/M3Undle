@@ -117,12 +117,22 @@ public sealed class HdHomeRunDeviceService(
         return new HdHomeRunDeviceDescriptor(
             DeviceId: identity.DeviceId,
             DeviceAuth: identity.DeviceAuth,
-            FriendlyName: identity.FriendlyName,
+            FriendlyName: ResolveFriendlyName(),
             ModelNumber: identity.ModelNumber,
             TunerCount: ResolveTunerCount(),
             Manufacturer: options.Value.Manufacturer,
             FirmwareName: options.Value.FirmwareName,
             FirmwareVersion: options.Value.FirmwareVersion);
+    }
+
+    public string ResolveFriendlyName()
+    {
+        var dbValue = QueryDbSetting(s => s.HdhrFriendlyName);
+        if (!string.IsNullOrWhiteSpace(dbValue))
+            return dbValue.Trim();
+        return string.IsNullOrWhiteSpace(options.Value.FriendlyName)
+            ? "M3Undle HDHomeRun"
+            : options.Value.FriendlyName.Trim();
     }
 
     internal async Task<HdHomeRunIdentityFile> GetIdentityAsync(CancellationToken cancellationToken)

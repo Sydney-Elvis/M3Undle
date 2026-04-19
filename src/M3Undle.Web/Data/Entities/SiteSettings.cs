@@ -22,6 +22,7 @@ public sealed class SiteSettings
     public bool HdhrDiscoveryEnabled { get; set; } = true;
     public bool HdhrSsdpEnabled { get; set; } = true;
     public bool HdhrSiliconDustDiscoveryEnabled { get; set; } = true;
+    public string? HdhrFriendlyName { get; set; }
     public bool HdhrSettingsRestartRequired { get; set; }
     public bool GeneratedHlsEnabled { get; set; } = true;
     public string? GeneratedHlsFfmpegPath { get; set; }

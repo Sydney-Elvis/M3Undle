@@ -1626,6 +1626,10 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("hdhr_advertised_base_url");
 
+                    b.Property<string>("HdhrFriendlyName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("hdhr_friendly_name");
+
                     b.Property<bool>("HdhrDiscoveryEnabled")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")

@@ -176,6 +176,15 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 
 ## Environment Variables
 
+Most Docker installs should use very few environment variables. If you are not sure whether you need one from the tables below, you probably do not.
+
+For HDHomeRun specifically, the normal workflow is:
+1. Start M3Undle with the default ports.
+2. Open the web UI.
+3. Adjust HDHomeRun behavior in **Settings → HDHomeRun**.
+
+Treat the HDHR environment variables below as advanced startup overrides. They are mainly useful for automation, bootstrap defaults, or forcing behavior in special Docker or reverse-proxy setups.
+
 ### Required / Recommended
 
 | Variable | Default | Description |
@@ -221,15 +230,25 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 
 ### Optional — HDHomeRun
 
+Most users can skip this entire section.
+
+Use the web UI at **Settings → HDHomeRun** for normal setup and day-to-day changes. The environment variables below are optional advanced overrides, not required setup.
+
+Most HDHR behavior is configurable in **Settings → HDHomeRun**. The main exceptions are:
+- `M3UNDLE_HDHR_ENABLED`, which can force HDHR off at startup
+- `M3Undle__HdHomeRun__FriendlyName`, which is currently env/config only
+
 | Variable | Default | Description |
 |---|---|---|
-| `M3UNDLE_HDHR_ENABLED` | `true` | Master switch for all HDHomeRun endpoints. Set to `false` to disable HDHR completely. Can also be toggled in **Settings** in the web UI. |
-| `M3Undle__HdHomeRun__DiscoveryEnabled` | `false` | Enable SSDP and SiliconDust network discovery so clients like NextPVR, Jellyfin, and Emby find M3Undle automatically. Requires UDP ports (see [Docker Networking for HDHomeRun](#docker-networking-for-hdhr)). |
-| `M3Undle__HdHomeRun__SsdpEnabled` | `true` | Enable SSDP/UPnP listener (UDP 1900). Only active when `DiscoveryEnabled` is also `true`. |
-| `M3Undle__HdHomeRun__SiliconDustDiscoveryEnabled` | `true` | Enable SiliconDust proprietary discovery (UDP 65001). Only active when `DiscoveryEnabled` is also `true`. |
-| `M3Undle__HdHomeRun__TunerCount` | `1` | Number of virtual tuner slots to advertise. Increase if your DVR app needs parallel recordings. |
-| `M3Undle__HdHomeRun__AdvertisedBaseUrl` | *(auto-detect)* | Base URL returned in `discover.json` and discovery responses (e.g. `http://192.168.1.50:5004`). **Set this when running behind Docker NAT or a reverse proxy** — the container's auto-detected address often isn't reachable from the LAN. |
-| `M3Undle__HdHomeRun__FriendlyName` | `M3Undle HDHomeRun` | Device name shown in client apps. |
+| `M3UNDLE_HDHR_ENABLED` | `true` | Master switch for all HDHomeRun endpoints. Normally leave this unset. Set it to `false` only if you want to disable HDHR completely. This env var overrides the UI setting at startup. |
+| `M3Undle__HdHomeRun__DiscoveryEnabled` | `true` | Enables SSDP and SiliconDust network discovery. Normally change this in **Settings → HDHomeRun**. Only set it here if you want a startup default or managed deployment behavior. Requires UDP ports (see [Docker Networking for HDHomeRun](#docker-networking-for-hdhr)). |
+| `M3Undle__HdHomeRun__SsdpEnabled` | `true` | Controls the SSDP/UPnP listener on UDP 1900. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__SiliconDustDiscoveryEnabled` | `true` | Controls the SiliconDust discovery listener on UDP 65001. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__TunerCount` | `4` | Sets the fallback virtual tuner count when no provider limit or UI override is in effect. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__AdvertisedBaseUrl` | *(auto-detect)* | Base URL returned in `discover.json` and discovery responses (for example `http://192.168.1.50:5004`). Normally leave this blank and let M3Undle auto-detect it. Set it only for advanced Docker NAT, LAN discovery, or reverse-proxy scenarios. This can also be changed in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__FriendlyName` | `M3Undle HDHomeRun` | Device name shown in client apps. Rarely needed. This is currently an env/config-only setting, not a web UI field. |
+
+Quick rule: if you are running Docker on a normal home server, do not add HDHR env vars just because they exist. Bring the app up first, then use **Settings → HDHomeRun**. The main exception is `M3UNDLE_HDHR_ENABLED=false`, which is the one env var intended to force HDHR off at startup.
 
 ### Optional — Reverse Proxy
 
@@ -362,13 +381,13 @@ This is the simplest setup. No discovery ports, no special networking.
    - **Plex**: Settings → Live TV & DVR → Set Up → enter `http://<host-ip>:5004`
 3. The client will connect, fetch `discover.json` and `lineup.json`, and show your channels.
 
-No extra environment variables are needed — HDHR is enabled by default.
+No extra environment variables are needed. HDHR is enabled by default, and the rest of the HDHR behavior can be adjusted later in **Settings → HDHomeRun**.
 
 ### Option B — Auto-discovery
 
-If you want client apps to find M3Undle automatically (like a real HDHomeRun), you need to enable network discovery and publish the UDP ports.
+If you want client apps to find M3Undle automatically (like a real HDHomeRun), you need discovery enabled and the UDP ports published. In most cases, change discovery in **Settings → HDHomeRun** first and only use env vars here if you need a forced startup default.
 
-1. Add to your `environment:` section:
+1. Discovery is enabled by default on a fresh install. If you have disabled it in **Settings → HDHomeRun** or want to force the startup default from Docker, add this to your `environment:` section:
    ```yaml
    M3Undle__HdHomeRun__DiscoveryEnabled: "true"
    ```
@@ -415,13 +434,13 @@ With `network_mode: host`, the container shares the host's network stack directl
 
 ### Tuner count
 
-The `TunerCount` setting (default: `1`) controls how many simultaneous streams the emulated tuner advertises. If your DVR records multiple channels at once, increase this:
+The `TunerCount` setting (default: `4`) controls how many simultaneous streams the emulated tuner advertises when no provider limit or UI override is in effect. Most users should change this in **Settings → HDHomeRun** if needed. If your deployment needs a startup default from Docker, set:
 
 ```yaml
 M3Undle__HdHomeRun__TunerCount: "4"
 ```
 
-The tuner count is also editable in the web UI under **Settings → HDHomeRun**.
+The tuner count is editable in the web UI under **Settings → HDHomeRun**.
 
 ### Disabling HDHR
 
@@ -432,6 +451,8 @@ M3UNDLE_HDHR_ENABLED: "false"
 ```
 
 This disables all HDHR endpoints and discovery. Port 5004 will still listen (it is set at the ASP.NET level) but will return 404 for HDHR routes.
+
+Because `M3UNDLE_HDHR_ENABLED` is a startup override, setting it to `false` also prevents normal HDHR management from the UI until you remove the env var and restart.
 
 ---
 

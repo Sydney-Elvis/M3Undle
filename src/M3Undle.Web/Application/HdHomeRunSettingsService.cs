@@ -72,6 +72,7 @@ public sealed class HdHomeRunSettingsService(
         settings.HdhrDiscoveryEnabled = command.DiscoveryEnabled;
         settings.HdhrSsdpEnabled = command.SsdpEnabled;
         settings.HdhrSiliconDustDiscoveryEnabled = command.SiliconDustDiscoveryEnabled;
+        settings.HdhrFriendlyName = string.IsNullOrWhiteSpace(command.FriendlyName) ? null : command.FriendlyName.Trim();
 
         if (changed)
             settings.HdhrSettingsRestartRequired = true;
@@ -110,6 +111,8 @@ public sealed class HdHomeRunSettingsService(
             TunerCountOverride: settings.HdhrTunerCountOverride,
             ProviderTunerLimit: providerLimit,
             IsStreamLimitEnforced: isLimitEnforced,
+            FriendlyName: settings.HdhrFriendlyName,
+            ResolvedFriendlyName: deviceService.ResolveFriendlyName(),
             AdvertisedBaseUrl: settings.HdhrAdvertisedBaseUrl,
             ResolvedBaseUrl: deviceService.ResolveBaseUrl(),
             DiscoveryEnabled: settings.HdhrDiscoveryEnabled,
@@ -129,6 +132,8 @@ public sealed class HdHomeRunSettingsService(
             TunerCountOverride: null,
             ProviderTunerLimit: providerLimit,
             IsStreamLimitEnforced: isLimitEnforced,
+            FriendlyName: null,
+            ResolvedFriendlyName: deviceService.ResolveFriendlyName(),
             AdvertisedBaseUrl: null,
             ResolvedBaseUrl: runtime.ResolvedBaseUrl,
             DiscoveryEnabled: runtime.DiscoveryEnabled,
@@ -140,6 +145,8 @@ public sealed class HdHomeRunSettingsService(
     {
         if (command.TunerCountOverride is < 1 or > 32)
             yield return "Tuner count override must be between 1 and 32.";
+        if (command.FriendlyName is { Length: > 0 } name && name.Trim().Length > 128)
+            yield return "Friendly name must be 128 characters or fewer.";
         if (command.AdvertisedBaseUrl is { Length: > 0 } url &&
             !Uri.TryCreate(url, UriKind.Absolute, out var uri))
             yield return "Advertised base URL must be a valid absolute URL.";
@@ -156,6 +163,8 @@ public sealed record HdhrSettingsSnapshot(
     int? TunerCountOverride,
     int? ProviderTunerLimit,
     bool IsStreamLimitEnforced,
+    string? FriendlyName,
+    string ResolvedFriendlyName,
     string? AdvertisedBaseUrl,
     string ResolvedBaseUrl,
     bool DiscoveryEnabled,
@@ -171,6 +180,7 @@ public sealed record HdhrSettingsState(
 public sealed record UpdateHdhrSettingsCommand(
     bool Enabled,
     int? TunerCountOverride,
+    string? FriendlyName,
     string? AdvertisedBaseUrl,
     bool DiscoveryEnabled,
     bool SsdpEnabled,

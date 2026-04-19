@@ -198,6 +198,7 @@ public static class SiteSettingsApiEndpoints
         var result = await settingsService.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: request.Enabled,
             TunerCountOverride: request.TunerCountOverride,
+            FriendlyName: request.FriendlyName,
             AdvertisedBaseUrl: request.AdvertisedBaseUrl,
             DiscoveryEnabled: request.DiscoveryEnabled,
             SsdpEnabled: request.SsdpEnabled,
@@ -222,6 +223,8 @@ public static class SiteSettingsApiEndpoints
             TunerCountOverride: state.Saved.TunerCountOverride,
             ProviderTunerLimit: state.Saved.ProviderTunerLimit,
             IsStreamLimitEnforced: state.Saved.IsStreamLimitEnforced,
+            FriendlyName: state.Saved.FriendlyName,
+            ResolvedFriendlyName: state.Saved.ResolvedFriendlyName,
             AdvertisedBaseUrl: state.Saved.AdvertisedBaseUrl,
             ResolvedBaseUrl: state.Saved.ResolvedBaseUrl,
             DiscoveryEnabled: state.Saved.DiscoveryEnabled,
@@ -233,6 +236,7 @@ public static class SiteSettingsApiEndpoints
     private sealed record HdhrSettingsUpdateRequest(
         bool Enabled,
         int? TunerCountOverride,
+        string? FriendlyName,
         string? AdvertisedBaseUrl,
         bool DiscoveryEnabled,
         bool SsdpEnabled,
@@ -244,6 +248,8 @@ public static class SiteSettingsApiEndpoints
         int? TunerCountOverride,
         int? ProviderTunerLimit,
         bool IsStreamLimitEnforced,
+        string? FriendlyName,
+        string ResolvedFriendlyName,
         string? AdvertisedBaseUrl,
         string ResolvedBaseUrl,
         bool DiscoveryEnabled,

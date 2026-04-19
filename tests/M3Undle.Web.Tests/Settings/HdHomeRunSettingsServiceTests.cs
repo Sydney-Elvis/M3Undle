@@ -49,6 +49,7 @@ public sealed class HdHomeRunSettingsServiceTests
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true,
             TunerCountOverride: 2,
+            FriendlyName: null,
             AdvertisedBaseUrl: null,
             DiscoveryEnabled: true,
             SsdpEnabled: false,
@@ -78,14 +79,14 @@ public sealed class HdHomeRunSettingsServiceTests
         var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
 
         var tooLow = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
-            Enabled: true, TunerCountOverride: 0,
+            Enabled: true, TunerCountOverride: 0, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
             SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
 
         Assert.IsFalse(tooLow.Succeeded, "Override of 0 should be rejected.");
 
         var tooHigh = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
-            Enabled: true, TunerCountOverride: 33,
+            Enabled: true, TunerCountOverride: 33, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
             SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
 
@@ -107,18 +108,116 @@ public sealed class HdHomeRunSettingsServiceTests
 
         // Set an override first
         await service.UpdateAsync(new UpdateHdhrSettingsCommand(
-            Enabled: true, TunerCountOverride: 2,
+            Enabled: true, TunerCountOverride: 2, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
             SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
 
         // Clear it
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
-            Enabled: true, TunerCountOverride: null,
+            Enabled: true, TunerCountOverride: null, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
             SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
 
         Assert.IsTrue(result.Succeeded);
         Assert.IsNull(result.Settings.TunerCountOverride, "Override should be cleared.");
+    }
+
+    [TestMethod]
+    public async Task UpdateAsync_SetsFriendlyName_AndReadsBackCorrectly()
+    {
+        Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
+
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+
+        var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
+        var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
+        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+
+        var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
+            Enabled: true,
+            TunerCountOverride: null,
+            FriendlyName: "My IPTV Box",
+            AdvertisedBaseUrl: null,
+            DiscoveryEnabled: true,
+            SsdpEnabled: true,
+            SiliconDustDiscoveryEnabled: true));
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.AreEqual("My IPTV Box", result.Settings.FriendlyName);
+        Assert.AreEqual("My IPTV Box", result.Settings.ResolvedFriendlyName);
+
+        var state = await service.GetSettingsAsync();
+        Assert.AreEqual("My IPTV Box", state.Saved.FriendlyName);
+    }
+
+    [TestMethod]
+    public async Task UpdateAsync_ClearsFriendlyName_WhenSetToNull()
+    {
+        Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
+
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+
+        var options = Options.Create(new HdHomeRunOptions { TunerCount = 4, FriendlyName = "Configured Default" });
+        var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory, options);
+        var tunerResolver = new HdHomeRunTunerCountResolver(options, fixture.ScopeFactory);
+        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+
+        await service.UpdateAsync(new UpdateHdhrSettingsCommand(
+            Enabled: true, TunerCountOverride: null, FriendlyName: "Override Name",
+            AdvertisedBaseUrl: null, DiscoveryEnabled: true,
+            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+
+        var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
+            Enabled: true, TunerCountOverride: null, FriendlyName: null,
+            AdvertisedBaseUrl: null, DiscoveryEnabled: true,
+            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.IsNull(result.Settings.FriendlyName, "DB override should be cleared.");
+        Assert.AreEqual("Configured Default", result.Settings.ResolvedFriendlyName, "Should fall back to config option.");
+    }
+
+    [TestMethod]
+    public async Task UpdateAsync_RejectsFriendlyNameExceeding128Characters()
+    {
+        Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
+
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+
+        var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
+        var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
+        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+
+        var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
+            Enabled: true, TunerCountOverride: null,
+            FriendlyName: new string('A', 129),
+            AdvertisedBaseUrl: null, DiscoveryEnabled: true,
+            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+
+        Assert.IsFalse(result.Succeeded, "FriendlyName over 128 characters should be rejected.");
+        Assert.IsNotNull(result.Error);
+    }
+
+    [TestMethod]
+    public async Task GetSettingsAsync_ResolvedFriendlyName_FallsBackToConfiguredOption()
+    {
+        Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
+
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+
+        var options = Options.Create(new HdHomeRunOptions { TunerCount = 4, FriendlyName = "Custom Config Name" });
+        var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory, options);
+        var tunerResolver = new HdHomeRunTunerCountResolver(options, fixture.ScopeFactory);
+        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+
+        var state = await service.GetSettingsAsync();
+
+        Assert.IsNull(state.Saved.FriendlyName, "No DB override set.");
+        Assert.AreEqual("Custom Config Name", state.Saved.ResolvedFriendlyName, "Should fall back to configured option.");
     }
 
     [TestMethod]
@@ -164,7 +263,10 @@ public sealed class HdHomeRunSettingsServiceTests
         Assert.IsTrue(state.Applied.SiliconDustDiscoveryEnabled);
     }
 
-    private static HdHomeRunDeviceService CreateDeviceService(IServiceScopeFactory scopeFactory, string tempDataDirectory)
+    private static HdHomeRunDeviceService CreateDeviceService(
+        IServiceScopeFactory scopeFactory,
+        string tempDataDirectory,
+        IOptions<HdHomeRunOptions>? options = null)
     {
         var runtimePaths = new RuntimePaths(
             DataDirectory: tempDataDirectory,
@@ -180,7 +282,7 @@ public sealed class HdHomeRunSettingsServiceTests
             })
             .Build();
 
-        var options = Options.Create(new HdHomeRunOptions
+        options ??= Options.Create(new HdHomeRunOptions
         {
             Enabled = true,
             DiscoveryEnabled = true,

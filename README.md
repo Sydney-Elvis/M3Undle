@@ -217,7 +217,9 @@ Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/
 
 Port `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints. Both are always needed.
 
-For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for full HDHR setup options, Docker networking guidance, and all environment variables.
+For normal Docker use, you do not need to set any HDHomeRun environment variables. Start the container, then manage HDHomeRun from **Settings → HDHomeRun** in the web UI.
+
+For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for the advanced HDHR overrides, Docker networking guidance, and the few cases where an env var is still useful.
 
 ---
 

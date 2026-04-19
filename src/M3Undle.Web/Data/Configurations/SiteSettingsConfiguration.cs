@@ -66,6 +66,8 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.HdhrSiliconDustDiscoveryEnabled)
             .HasColumnName("hdhr_silicondust_discovery_enabled")
             .HasDefaultValue(true);
+        builder.Property(s => s.HdhrFriendlyName)
+            .HasColumnName("hdhr_friendly_name");
         builder.Property(s => s.HdhrSettingsRestartRequired)
             .HasColumnName("hdhr_settings_restart_required")
             .HasDefaultValue(false);
@@ -106,6 +108,7 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             HdhrDiscoveryEnabled = true,
             HdhrSsdpEnabled = true,
             HdhrSiliconDustDiscoveryEnabled = true,
+            HdhrFriendlyName = null,
             HdhrSettingsRestartRequired = false,
             GeneratedHlsEnabled = true,
             GeneratedHlsFfmpegPath = null,

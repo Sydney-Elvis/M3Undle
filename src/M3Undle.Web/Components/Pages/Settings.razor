@@ -259,6 +259,22 @@
                     </MudItem>
                     <MudItem xs="12" sm="6">
                         <div class="d-flex align-center gap-2">
+                            <MudTextField @bind-Value="_hdhrFriendlyName"
+                                          Label="Friendly Name"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Placeholder="M3Undle HDHomeRun"
+                                          Disabled="_hdhrDisabledByEnv"
+                                          HelperText="@($"Shown to HDHR clients. Effective: {_hdhrResolvedFriendlyName}")"
+                                          Class="flex-grow-1" />
+                            <MudTooltip Text="The name shown to apps that discover this device (e.g. Plex, Channels DVR, NextPVR). Leave blank to use the default 'M3Undle HDHomeRun'."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <div class="d-flex align-center gap-2">
                             <MudTextField @bind-Value="_hdhrAdvertisedBaseUrl"
                                           Label="Advertised Base URL"
                                           Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -336,6 +352,10 @@
                     <MudItem xs="12" sm="4">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Tuner Count</MudText>
                         <MudText Typo="Typo.body2">@_appliedHdhrSettings?.EffectiveTunerCount</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Friendly Name</MudText>
+                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.ResolvedFriendlyName</MudText>
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Base URL</MudText>
@@ -855,6 +875,8 @@
     private bool _hdhrRestartRequired;
     private bool _hdhrEnabled;
     private int? _hdhrTunerCountOverride;
+    private string? _hdhrFriendlyName;
+    private string _hdhrResolvedFriendlyName = string.Empty;
     private string? _hdhrAdvertisedBaseUrl;
     private bool _hdhrDiscoveryEnabled;
     private bool _hdhrSsdpEnabled;
@@ -1230,6 +1252,7 @@
             var result = await HdhrSettings.UpdateAsync(new UpdateHdhrSettingsCommand(
                 Enabled: _hdhrEnabled,
                 TunerCountOverride: _hdhrTunerCountOverride,
+                FriendlyName: string.IsNullOrWhiteSpace(_hdhrFriendlyName) ? null : _hdhrFriendlyName.Trim(),
                 AdvertisedBaseUrl: string.IsNullOrWhiteSpace(_hdhrAdvertisedBaseUrl) ? null : _hdhrAdvertisedBaseUrl.Trim(),
                 DiscoveryEnabled: _hdhrDiscoveryEnabled,
                 SsdpEnabled: _hdhrSsdpEnabled,
@@ -1263,6 +1286,8 @@
     {
         _hdhrEnabled = settings.Enabled;
         _hdhrTunerCountOverride = settings.TunerCountOverride;
+        _hdhrFriendlyName = settings.FriendlyName;
+        _hdhrResolvedFriendlyName = settings.ResolvedFriendlyName;
         _hdhrAdvertisedBaseUrl = settings.AdvertisedBaseUrl;
         _hdhrDiscoveryEnabled = settings.DiscoveryEnabled;
         _hdhrSsdpEnabled = settings.SsdpEnabled;
