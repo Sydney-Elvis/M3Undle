@@ -176,6 +176,19 @@ public sealed class GeneratedHlsSessionManager(
         return true;
     }
 
+    public void TrackClient(string sessionId, string? remoteIp, string? userAgent, string requestedRoute)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var session))
+            return;
+
+        var record = session.TrackClient(remoteIp, userAgent, requestedRoute);
+        registry.UpsertClient(new StreamClientSnapshot(
+            record.ClientId, record.SessionId, record.RequestedRoute,
+            record.RemoteIp, record.UserAgent, record.ConnectedUtc,
+            BytesSent: 0, QueueDepth: 0));
+        registry.UpsertSession(session.ToSnapshot());
+    }
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled)
@@ -444,6 +457,17 @@ public sealed class GeneratedHlsSessionManager(
 
             var now = DateTimeOffset.UtcNow;
             var inactivity = TimeSpan.FromSeconds(_options.InactivityTimeoutSeconds);
+
+            foreach (var session in _sessions.Values)
+            {
+                var staleClients = session.SweepStaleClients(inactivity);
+                foreach (var client in staleClients)
+                    registry.RemoveClient(client.ClientId);
+
+                if (staleClients.Count > 0)
+                    registry.UpsertSession(session.ToSnapshot());
+            }
+
             var candidates = _sessions.Values
                 .Where(x => x.Process.HasExited || (now - x.LastAccessUtc) > inactivity)
                 .Select(x => x.SessionId)
@@ -458,6 +482,9 @@ public sealed class GeneratedHlsSessionManager(
     {
         if (!_sessions.TryRemove(sessionId, out var session))
             return;
+
+        foreach (var client in session.RemoveAllClients())
+            registry.RemoveClient(client.ClientId);
 
         registry.RemoveSession(sessionId);
 
@@ -685,6 +712,15 @@ public sealed class GeneratedHlsSessionManager(
         }
     }
 
+    private sealed record HlsClientRecord(
+        string ClientId,
+        string SessionId,
+        string RequestedRoute,
+        string? RemoteIp,
+        string? UserAgent,
+        DateTimeOffset ConnectedUtc,
+        DateTimeOffset LastAccessUtc);
+
     private sealed class GeneratedHlsSession(
         string sessionId,
         string displayName,
@@ -696,6 +732,7 @@ public sealed class GeneratedHlsSessionManager(
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private Task? _stderrPumpTask;
         private Task? _stdoutPumpTask;
+        private readonly ConcurrentDictionary<string, HlsClientRecord> _hlsClients = new(StringComparer.Ordinal);
 
         public string SessionId { get; } = sessionId;
 
@@ -713,6 +750,8 @@ public sealed class GeneratedHlsSessionManager(
 
         public DateTimeOffset LastAccessUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _lastAccessUnixMs));
+
+        public int HlsClientCount => _hlsClients.Count;
 
         public void SetPumpTasks(Task stderrPumpTask, Task stdoutPumpTask)
         {
@@ -737,14 +776,52 @@ public sealed class GeneratedHlsSessionManager(
         public void Touch()
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
+        public HlsClientRecord TrackClient(string? remoteIp, string? userAgent, string requestedRoute)
+        {
+            var clientKey = $"{remoteIp}\x1f{userAgent}";
+            var now = DateTimeOffset.UtcNow;
+
+            return _hlsClients.AddOrUpdate(
+                clientKey,
+                _ => new HlsClientRecord(
+                    Guid.NewGuid().ToString("N"), SessionId, requestedRoute,
+                    remoteIp, userAgent, now, now),
+                (_, existing) => existing with { LastAccessUtc = now, RequestedRoute = requestedRoute });
+        }
+
+        public List<HlsClientRecord> SweepStaleClients(TimeSpan timeout)
+        {
+            var cutoff = DateTimeOffset.UtcNow - timeout;
+            var removed = new List<HlsClientRecord>();
+
+            foreach (var kvp in _hlsClients)
+            {
+                if (kvp.Value.LastAccessUtc < cutoff && _hlsClients.TryRemove(kvp.Key, out var record))
+                    removed.Add(record);
+            }
+
+            return removed;
+        }
+
+        public List<HlsClientRecord> RemoveAllClients()
+        {
+            var removed = new List<HlsClientRecord>();
+            foreach (var key in _hlsClients.Keys.ToArray())
+            {
+                if (_hlsClients.TryRemove(key, out var record))
+                    removed.Add(record);
+            }
+            return removed;
+        }
+
         public StreamSessionSnapshot ToSnapshot() => new(
             SessionId: SessionId,
             ProviderId: AdmissionKey?.ProviderId ?? string.Empty,
             ProviderChannelId: AdmissionKey?.ProviderChannelId ?? string.Empty,
             DisplayName: DisplayName,
             State: Process.HasExited ? SessionState.Faulted : SessionState.Live,
-            SubscriberCount: 0,
-            IsShared: false,
+            SubscriberCount: _hlsClients.Count,
+            IsShared: _hlsClients.Count > 1,
             BufferUsedBytes: 0,
             BufferMaxBytes: 0,
             StartedUtc: StartedUtc,

@@ -84,10 +84,126 @@ public sealed class GeneratedHlsSessionManagerTests
         await manager.StopAsync(CancellationToken.None);
     }
 
+    [TestMethod]
+    public async Task TrackClient_RegistersHlsClientInRegistry()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Track Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/test/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(1, clients);
+        Assert.AreEqual("192.168.1.100", clients[0].RemoteIp);
+        Assert.AreEqual("Mozilla/5.0 IPTVnator", clients[0].UserAgent);
+        Assert.AreEqual(handle.SessionId, clients[0].SessionId);
+
+        var sessions = registry.GetActiveSessions();
+        var session = sessions.Single(s => s.SessionId == handle.SessionId);
+        Assert.AreEqual(1, session.SubscriberCount);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TrackClient_SameClientUpdatesRatherThanDuplicates()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Dedup Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "192.168.1.100", "Mozilla/5.0", "/hls/generated/test/index.m3u8");
+        manager.TrackClient(handle.SessionId, "192.168.1.100", "Mozilla/5.0", "/hls/generated/test/index.m3u8");
+        manager.TrackClient(handle.SessionId, "192.168.1.100", "Mozilla/5.0", "/hls/generated/test/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(1, clients, "Same IP+UA should produce one tracked client, not duplicates.");
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TrackClient_DifferentClientsTrackedSeparately()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Multi Client Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/test/index.m3u8");
+        manager.TrackClient(handle.SessionId, "192.168.1.200", "Mozilla/5.0 Chrome", "/hls/generated/test/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(2, clients);
+
+        var sessions = registry.GetActiveSessions();
+        var session = sessions.Single(s => s.SessionId == handle.SessionId);
+        Assert.AreEqual(2, session.SubscriberCount);
+        Assert.IsTrue(session.IsShared);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task StopAsync_RemovesHlsClientsFromRegistry()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Cleanup Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "192.168.1.100", "Mozilla/5.0", "/hls/generated/test/index.m3u8");
+        Assert.HasCount(1, registry.GetActiveClients());
+
+        await manager.StopAsync(CancellationToken.None);
+
+        Assert.HasCount(0, registry.GetActiveClients(), "HLS clients should be removed when session is cleaned up.");
+    }
+
     private static GeneratedHlsSessionManager CreateManager(
         string root,
         string ffmpegPath,
-        int startupTimeoutSeconds)
+        int startupTimeoutSeconds,
+        StreamingRegistry? registry = null)
     {
         var options = Options.Create(new GeneratedHlsOptions
         {
@@ -103,7 +219,7 @@ public sealed class GeneratedHlsSessionManagerTests
             StartupStaleAgeHours = 1,
         });
 
-        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        registry ??= new StreamingRegistry(Options.Create(new StreamProxyOptions()));
         return new GeneratedHlsSessionManager(
             options,
             scopeFactory: null!,

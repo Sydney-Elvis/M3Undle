@@ -919,6 +919,12 @@ public static class CompatibilityEndpoints
             return;
         }
 
+        generatedHlsSessionManager.TrackClient(
+            sessionId,
+            context.Connection.RemoteIpAddress?.ToString(),
+            context.Request.Headers.UserAgent.ToString(),
+            context.Request.Path.Value ?? string.Empty);
+
         if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
         {
             string manifest;
