@@ -1,9 +1,14 @@
+using M3Undle.Web.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace M3Undle.Web.Data.Migrations
 {
+    [DbContext(typeof(ApplicationDbContext))]
+    [Migration("20260417113000_Alpha6_AdaptiveLockoutEscalation")]
     /// <inheritdoc />
     public partial class Alpha6_AdaptiveLockoutEscalation : Migration
     {
