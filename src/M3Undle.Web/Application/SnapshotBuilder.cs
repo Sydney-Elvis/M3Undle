@@ -1133,9 +1133,16 @@ public sealed class SnapshotBuilder(
             })
             .ToList();
 
+        var prevChannelNumbers = await LoadPreviousChannelNumbersAsync(profileId, cancellationToken);
+
         var outputChannels = dbChannels
             .Where(ch => !string.IsNullOrWhiteSpace(ch.TvgId))
-            .Select(ch => new OutputChannel(ch.ProviderChannelId, ch.TvgId!, ch.DisplayName, ch.LogoUrl))
+            .Select(ch => new OutputChannel(
+                ch.ProviderChannelId,
+                ch.TvgId!,
+                ch.DisplayName,
+                ch.LogoUrl,
+                prevChannelNumbers.TryGetValue(ch.ProviderChannelId, out var n) ? n : null))
             .ToList();
 
         // Compile
@@ -1298,6 +1305,27 @@ public sealed class SnapshotBuilder(
             .FirstOrDefaultAsync(cancellationToken);
 
         return snap?.XmltvPath;
+    }
+
+    private async Task<Dictionary<string, int>> LoadPreviousChannelNumbersAsync(
+        string profileId, CancellationToken cancellationToken)
+    {
+        var snap = await db.Snapshots
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (snap is null || !File.Exists(snap.ChannelIndexPath))
+            return [];
+
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+        await foreach (var entry in ChannelIndexStore.StreamAllAsync(snap.ChannelIndexPath, cancellationToken))
+        {
+            if (entry.TvgChno.HasValue && !string.IsNullOrEmpty(entry.ProviderChannelId))
+                result[entry.ProviderChannelId] = entry.TvgChno.Value;
+        }
+        return result;
     }
 
     private async Task<Dictionary<string, string>> SyncProviderGroupsAsync(
