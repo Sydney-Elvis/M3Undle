@@ -14,5 +14,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\M3Undle.Web\M3Undle.Web.csproj" />
+    <ProjectReference Include="..\M3Undle.FakeFfmpeg\M3Undle.FakeFfmpeg.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <OutputItemType>None</OutputItemType>
+    </ProjectReference>
   </ItemGroup>
 </Project>

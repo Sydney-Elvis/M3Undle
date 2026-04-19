@@ -32,14 +32,8 @@ public sealed class GeneratedHlsSessionManagerTests
     [TestMethod]
     public async Task CreateSessionAsync_WithFakeFfmpeg_ReturnsHandleAndServesManifestAsset()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.Inconclusive("Fake ffmpeg shell-script tests are Linux/macOS specific.");
-            return;
-        }
-
-        await using var ffmpeg = await FakeFfmpegScript.CreateAsync(writeManifest: true);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ScriptPath, startupTimeoutSeconds: 3);
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
 
         await manager.StartAsync(CancellationToken.None);
         Assert.IsTrue(manager.IsEffectivelyEnabled);
@@ -73,14 +67,8 @@ public sealed class GeneratedHlsSessionManagerTests
     [TestMethod]
     public async Task CreateSessionAsync_WhenManifestNeverAppears_ReturnsNull()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            Assert.Inconclusive("Fake ffmpeg shell-script tests are Linux/macOS specific.");
-            return;
-        }
-
-        await using var ffmpeg = await FakeFfmpegScript.CreateAsync(writeManifest: false);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ScriptPath, startupTimeoutSeconds: 1);
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: false);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 1);
 
         await manager.StartAsync(CancellationToken.None);
         Assert.IsTrue(manager.IsEffectivelyEnabled);
@@ -124,58 +112,62 @@ public sealed class GeneratedHlsSessionManagerTests
             NullLogger<GeneratedHlsSessionManager>.Instance);
     }
 
-    private sealed class FakeFfmpegScript : IAsyncDisposable
+    // -------------------------------------------------------------------------
+    // Fake ffmpeg — cross-platform .NET console app (M3Undle.FakeFfmpeg project).
+    //
+    // Behavior is communicated via a flag file in the per-test temp root rather
+    // than an env var, so parallel test runs don't share any global state.
+    // The fake reads {root}/write.flag by walking up from the manifest path it
+    // receives as its last argument.
+    // -------------------------------------------------------------------------
+
+    private sealed class FakeFfmpegBinary : IAsyncDisposable
     {
-        private FakeFfmpegScript(string root, string scriptPath)
+        private FakeFfmpegBinary(string root, string exePath)
         {
             Root = root;
-            ScriptPath = scriptPath;
+            ExePath = exePath;
         }
 
         public string Root { get; }
-        public string ScriptPath { get; }
+        public string ExePath { get; }
 
-        public static async Task<FakeFfmpegScript> CreateAsync(bool writeManifest)
+        public static FakeFfmpegBinary Create(bool writeManifest)
         {
             var root = CreateTempDir();
-            var scriptPath = Path.Combine(root, "fake_ffmpeg.sh");
+            if (writeManifest)
+                File.WriteAllText(Path.Combine(root, "write.flag"), string.Empty);
 
-            var script = writeManifest
-                ? """
-                  #!/usr/bin/env bash
-                  set -eu
-                  if [ "${1:-}" = "-version" ]; then
-                    echo "ffmpeg version fake"
-                    exit 0
-                  fi
-                  manifest="${@: -1}"
-                  mkdir -p "$(dirname "$manifest")"
-                  printf '#EXTM3U\n#EXTINF:4.0,\nsegment_000001.ts\n' > "$manifest"
-                  printf 'segment' > "$(dirname "$manifest")/segment_000001.ts"
-                  while true; do
-                    sleep 1
-                  done
-                  """
-                : """
-                  #!/usr/bin/env bash
-                  set -eu
-                  if [ "${1:-}" = "-version" ]; then
-                    echo "ffmpeg version fake"
-                    exit 0
-                  fi
-                  # Simulate a startup hang where no manifest is produced.
-                  sleep 30
-                  """;
+            return new FakeFfmpegBinary(root, LocateExecutable());
+        }
 
-            await File.WriteAllTextAsync(scriptPath, script, CancellationToken.None);
-            if (!OperatingSystem.IsWindows())
-            {
-                File.SetUnixFileMode(
-                    scriptPath,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            }
+        private static string LocateExecutable()
+        {
+            // AppContext.BaseDirectory = .../tests/M3Undle.Web.Tests/bin/{Config}/{TFM}/
+            // M3Undle.FakeFfmpeg is a sibling project built to the same {Config}/{TFM}.
+            var exeName = OperatingSystem.IsWindows()
+                ? "M3Undle.FakeFfmpeg.exe"
+                : "M3Undle.FakeFfmpeg";
 
-            return new FakeFfmpegScript(root, scriptPath);
+            var tfmDir = new DirectoryInfo(
+                AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            var configDir = tfmDir.Parent!;                   // Debug / Release
+            var testsDir = configDir.Parent!.Parent!.Parent!; // tests/
+
+            var path = Path.Combine(
+                testsDir.FullName,
+                "M3Undle.FakeFfmpeg",
+                "bin",
+                configDir.Name,
+                tfmDir.Name,
+                exeName);
+
+            if (!File.Exists(path))
+                throw new FileNotFoundException(
+                    $"FakeFfmpeg executable not found at '{path}'. " +
+                    "Ensure M3Undle.FakeFfmpeg is built (it is a ProjectReference of this test project).");
+
+            return path;
         }
 
         public ValueTask DisposeAsync()
