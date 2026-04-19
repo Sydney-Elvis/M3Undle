@@ -20,13 +20,6 @@ namespace M3Undle.Web.Data.Migrations
                 table: "site_settings",
                 type: "TEXT",
                 nullable: true);
-
-            migrationBuilder.UpdateData(
-                table: "site_settings",
-                keyColumn: "id",
-                keyValue: 1,
-                columns: new[] { "hdhr_friendly_name" },
-                values: new object[] { null });
         }
 
         /// <inheritdoc />
