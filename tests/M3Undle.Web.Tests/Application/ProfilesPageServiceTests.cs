@@ -23,6 +23,8 @@ public sealed class ProfilesPageServiceTests
             refreshTrigger,
             new AppEventBus());
 
+        await SeedProfileProviderAsync(fixture, "p2");
+
         var error = await service.SetProfileActiveAsync("p2", CancellationToken.None);
 
         Assert.IsNull(error);
@@ -266,6 +268,30 @@ public sealed class ProfilesPageServiceTests
             });
         }
 
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task SeedProfileProviderAsync(TestFixture fixture, string profileId)
+    {
+        await using var db = fixture.CreateDbContext();
+        var now = DateTime.UtcNow;
+        var provider = new Provider
+        {
+            ProviderId = Guid.NewGuid().ToString(),
+            Name = "Test Provider",
+            Enabled = true,
+            PlaylistUrl = "http://example.com/playlist.m3u",
+            CreatedUtc = now,
+            UpdatedUtc = now,
+        };
+        db.Providers.Add(provider);
+        db.ProfileProviders.Add(new ProfileProvider
+        {
+            ProfileId = profileId,
+            ProviderId = provider.ProviderId,
+            Priority = 1,
+            Enabled = true,
+        });
         await db.SaveChangesAsync();
     }
 

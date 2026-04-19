@@ -34,7 +34,7 @@ public sealed class M3uSerializer : IM3USerializer
           .Append(xmltvUrl)
           .Append("\"\n");
 
-        foreach (var channel in lineup.Channels)
+        foreach (var channel in lineup.Channels.OrderBy(c => c.TvgChno ?? int.MaxValue))
         {
             sb.Append(BuildExtInf(channel));
             sb.Append('\n');
