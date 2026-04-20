@@ -43,6 +43,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long _totalBytesRelayed;
     private string? _pendingStopTrigger;
     private CancellationTokenSource? _idleCts;
+    private string? _lastIdleGraceRemoteIp;
 
     public ChannelStreamSession(
         StreamSourceDescriptor source,
@@ -81,6 +82,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     public int ExternalSubscriberCount => _subscribers.Values.Count(s => !s.IsInternal);
 
     public int InternalSubscriberCount => _subscribers.Values.Count(s => s.IsInternal);
+
+    public bool CanPreemptIdleGraceForRemoteIp(string? remoteIp)
+    {
+        if (string.IsNullOrWhiteSpace(remoteIp))
+            return false;
+
+        lock (_gate)
+        {
+            return _idleCts is not null
+                && string.Equals(_pendingStopTrigger, "idle_grace", StringComparison.Ordinal)
+                && ShouldScheduleIdleShutdownNoLock()
+                && string.Equals(_lastIdleGraceRemoteIp, remoteIp, StringComparison.OrdinalIgnoreCase);
+        }
+    }
 
     public async Task<SubscriberConnection> AttachSubscriberAsync(
         HttpContext context,
@@ -148,6 +163,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         {
             if (ShouldScheduleIdleShutdownNoLock())
             {
+                if (!subscriber.IsInternal)
+                    _lastIdleGraceRemoteIp = subscriber.RemoteIp;
+
                 LogStopTrigger(
                     ResolveDisconnectStopTrigger(reason),
                     subscriberDisconnectReason: reason.ToString());
@@ -532,6 +550,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _idleCts?.Cancel();
         _idleCts?.Dispose();
         _idleCts = null;
+        _lastIdleGraceRemoteIp = null;
         if (string.Equals(_pendingStopTrigger, "idle_grace", StringComparison.Ordinal))
             _pendingStopTrigger = null;
     }

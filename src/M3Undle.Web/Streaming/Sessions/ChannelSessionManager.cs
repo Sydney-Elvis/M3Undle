@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
@@ -23,6 +24,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, HlsAdmissionSlot> _hlsSlots = new();
+    private readonly Dictionary<ChannelSessionKey, Task> _pendingIdlePreemptions = [];
     private CancellationTokenSource? _hlsSweepCts;
     private Task? _hlsSweepTask;
     private const int DefaultAdmissionRetryAfterSeconds = 30;
@@ -109,72 +111,91 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
     public ValueTask<ChannelStreamSession> GetOrCreateAsync(StreamSourceDescriptor source, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
+        return GetOrCreateCoreAsync(source, ct);
+    }
+
+    private async ValueTask<ChannelStreamSession> GetOrCreateCoreAsync(StreamSourceDescriptor source, CancellationToken ct)
+    {
         var key = source.SessionKey;
 
-        lock (_admissionGate)
+        while (true)
         {
-            ThrowIfCoolingDown(key, source.DisplayName, logWarning: true);
+            ct.ThrowIfCancellationRequested();
+            Task? preemptionTask = null;
 
-            if (_sessions.TryGetValue(key, out var existing))
+            lock (_admissionGate)
             {
-                _logger.LogDebug(
-                    "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
-                    existing.SessionId,
-                    source.DisplayName,
-                    existing.SubscriberCount);
-                return ValueTask.FromResult(existing);
-            }
+                ThrowIfCoolingDown(key, source.DisplayName, logWarning: true);
 
-            EvictExpiredHlsSlotsLocked();
-            var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+                if (_sessions.TryGetValue(key, out var existing))
+                {
+                    _logger.LogDebug(
+                        "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
+                        existing.SessionId,
+                        source.DisplayName,
+                        existing.SubscriberCount);
+                    return existing;
+                }
 
-            var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
-            if (totalUpstreams >= maxSessions)
-            {
-                throw CreateAdmissionException(
-                    key,
-                    source.DisplayName,
-                    StreamAdmissionFailureKind.MaxConcurrentSessions,
-                    $"Max concurrent sessions ({maxSessions}) reached.",
-                    "server is at the maximum of {Limit} concurrent stream(s).",
-                    maxSessions);
-            }
+                EvictExpiredHlsSlotsLocked();
+                var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
 
-            var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
-            if (effectiveProviderCap is { } providerCap and > 0)
-            {
-                var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
-                if (providerUpstreams >= providerCap)
+                var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
+                if (totalUpstreams >= maxSessions)
                 {
                     throw CreateAdmissionException(
                         key,
                         source.DisplayName,
-                        StreamAdmissionFailureKind.ProviderLimit,
-                        $"Provider upstream limit ({providerCap}) reached.",
-                        "provider has reached its upstream limit of {Limit} stream(s).",
-                        providerCap);
+                        StreamAdmissionFailureKind.MaxConcurrentSessions,
+                        $"Max concurrent sessions ({maxSessions}) reached.",
+                        "server is at the maximum of {Limit} concurrent stream(s).",
+                        maxSessions);
+                }
+
+                var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
+                if (effectiveProviderCap is { } providerCap and > 0)
+                {
+                    var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                    if (providerUpstreams >= providerCap)
+                    {
+                        preemptionTask = TryBeginIdleRetunePreemptionLocked(source);
+                        if (preemptionTask is null)
+                        {
+                            throw CreateAdmissionException(
+                                key,
+                                source.DisplayName,
+                                StreamAdmissionFailureKind.ProviderLimit,
+                                $"Provider upstream limit ({providerCap}) reached.",
+                                "provider has reached its upstream limit of {Limit} stream(s).",
+                                providerCap);
+                        }
+                    }
+                }
+
+                if (preemptionTask is null)
+                {
+                    _logger.LogInformation(
+                        "Opening new stream session for '{DisplayName}' ({ActiveSessions} session(s) now active).",
+                        source.DisplayName,
+                        _sessions.Count + 1);
+
+                    var session = new ChannelStreamSession(
+                        source,
+                        _bufferOptions,
+                        _proxyOptions,
+                        _reconnectOptions,
+                        _upstreamConnector,
+                        _strikeStore,
+                        _registry,
+                        _loggerFactory.CreateLogger<ChannelStreamSession>(),
+                        RemoveIfClosedAsync);
+
+                    _sessions[key] = session;
+                    return session;
                 }
             }
 
-            _logger.LogInformation(
-                "Opening new stream session for '{DisplayName}' ({ActiveSessions} session(s) now active).",
-                source.DisplayName,
-                _sessions.Count + 1);
-
-            var session = new ChannelStreamSession(
-                source,
-                _bufferOptions,
-                _proxyOptions,
-                _reconnectOptions,
-                _upstreamConnector,
-                _strikeStore,
-                _registry,
-                _loggerFactory.CreateLogger<ChannelStreamSession>(),
-                RemoveIfClosedAsync);
-
-            _sessions[key] = session;
-            return ValueTask.FromResult(session);
+            await preemptionTask.WaitAsync(ct);
         }
     }
 
@@ -449,6 +470,55 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         var tsCount = _sessions.Keys.Count(x => x.ProviderId == providerId);
         var hlsCount = _hlsSlots.Keys.Count(x => x.ProviderId == providerId && !_sessions.ContainsKey(x));
         return tsCount + hlsCount;
+    }
+
+    private Task? TryBeginIdleRetunePreemptionLocked(StreamSourceDescriptor source)
+    {
+        var remoteIp = source.RemoteIp;
+        if (string.IsNullOrWhiteSpace(remoteIp))
+            return null;
+
+        var candidate = _sessions.Values.FirstOrDefault(session =>
+            !session.Key.Equals(source.SessionKey)
+            && string.Equals(session.Key.ProviderId, source.SessionKey.ProviderId, StringComparison.Ordinal)
+            && session.CanPreemptIdleGraceForRemoteIp(remoteIp));
+
+        if (candidate is null)
+            return null;
+
+        if (_pendingIdlePreemptions.TryGetValue(candidate.Key, out var existingTask))
+            return existingTask;
+
+        Task preemptionTask = null!;
+        preemptionTask = PreemptAsync();
+        _pendingIdlePreemptions[candidate.Key] = preemptionTask;
+        return preemptionTask;
+
+        async Task PreemptAsync()
+        {
+            try
+            {
+                _logger.LogInformation(
+                    "Preempting idle-grace session {SessionId} for {ProviderId}/{ProviderChannelId} so remote IP {RemoteIp} can retune to '{DisplayName}'.",
+                    candidate.SessionId,
+                    candidate.Key.ProviderId,
+                    candidate.Key.ProviderChannelId,
+                    remoteIp,
+                    source.DisplayName);
+                await candidate.StopAsync("retune_preempted");
+            }
+            finally
+            {
+                lock (_admissionGate)
+                {
+                    if (_pendingIdlePreemptions.TryGetValue(candidate.Key, out var current)
+                        && ReferenceEquals(current, preemptionTask))
+                    {
+                        _pendingIdlePreemptions.Remove(candidate.Key);
+                    }
+                }
+            }
+        }
     }
 
     private int CountUniqueHlsUpstreamsLocked()

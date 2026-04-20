@@ -352,6 +352,96 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ProviderTunerLimit_PreemptsIdleGraceForSameRemoteIpRetune()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(10),
+                ProviderMaxConcurrentUpstreams = 1,
+            });
+
+        var source1 = fixture.Source with
+        {
+            TunerLimit = 1,
+            RemoteIp = "10.0.0.10",
+            UserAgent = "test-client",
+        };
+        var source2 = source1 with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        var session1 = await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session1.AttachSubscriberAsync(CreateHttpContext(source1.RemoteIp), requestCts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
+
+        Assert.AreEqual(source2.SessionKey, session2.Key);
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(source1.SessionKey, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(source1.SessionKey, out _));
+
+        await session2.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ProviderTunerLimit_DoesNotPreemptIdleGraceForDifferentRemoteIp()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(10),
+                ProviderMaxConcurrentUpstreams = 1,
+            });
+
+        var source1 = fixture.Source with
+        {
+            TunerLimit = 1,
+            RemoteIp = "10.0.0.10",
+            UserAgent = "test-client",
+        };
+        var source2 = source1 with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            RemoteIp = "10.0.0.11",
+        };
+
+        var session1 = await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session1.AttachSubscriberAsync(CreateHttpContext(source1.RemoteIp), requestCts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None).AsTask());
+
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
+
+        await session1.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MaxConcurrentSessions_RejectsAdditionalSession()
     {
         // Checklist: Provider stream limits still reject new sessions correctly.
@@ -834,6 +924,15 @@ public sealed class ChannelSessionIntegrationTests
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
             await Task.Delay(20);
+    }
+
+    private static DefaultHttpContext CreateHttpContext(string? remoteIp)
+    {
+        var context = new DefaultHttpContext();
+        if (!string.IsNullOrWhiteSpace(remoteIp))
+            context.Connection.RemoteIpAddress = IPAddress.Parse(remoteIp);
+
+        return context;
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
