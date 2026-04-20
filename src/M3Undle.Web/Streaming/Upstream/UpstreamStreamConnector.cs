@@ -311,30 +311,51 @@ public sealed class UpstreamStreamConnector(
             catch { }
         }, CancellationToken.None);
 
-        // Brief startup check: if FFmpeg exits immediately the URL is bad
-        try { await Task.Delay(200, ct); }
-        catch (OperationCanceledException)
+        var startupBuffer = new byte[8 * 1024];
+        var stdout = process.StandardOutput.BaseStream;
+        int startupBytes;
+
+        try
         {
+            using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            startupCts.CancelAfter(TimeSpan.FromSeconds(10));
+            startupBytes = await stdout.ReadAsync(startupBuffer.AsMemory(), startupCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                "FFmpeg HLS relay for '{DisplayName}' produced no output within 10 s. Falling back to direct HTTP.",
+                displayName);
+            TryKillProcess(process);
+            process.Dispose();
+            return null;
+        }
+        catch
+        {
+            TryKillProcess(process);
+            process.Dispose();
+            throw;
+        }
+
+        if (startupBytes == 0)
+        {
+            logger.LogWarning(
+                "FFmpeg HLS relay for '{DisplayName}' exited with no output. Falling back to direct HTTP.",
+                displayName);
             TryKillProcess(process);
             process.Dispose();
             return null;
         }
 
-        if (process.HasExited)
-        {
-            logger.LogWarning(
-                "FFmpeg HLS relay for '{DisplayName}' exited immediately (exitCode={ExitCode}). Falling back to direct HTTP.",
-                displayName,
-                process.ExitCode);
-            process.Dispose();
-            return null;
-        }
-
         logger.LogInformation(
-            "FFmpeg HLS relay started for '{DisplayName}' (HLS→MPEGTS).",
-            displayName);
+            "FFmpeg HLS relay started for '{DisplayName}' (HLS→MPEGTS, {StartupBytes} startup bytes).",
+            displayName,
+            startupBytes);
 
-        return new UpstreamConnection(process, process.StandardOutput.BaseStream, "video/mp2t");
+        return new UpstreamConnection(
+            process,
+            new PrefixedStream(startupBuffer.AsMemory(0, startupBytes), stdout),
+            "video/mp2t");
     }
 
     private static void TryKillProcess(Process process)
@@ -375,6 +396,90 @@ public sealed class UpstreamStreamConnector(
         catch
         {
             return null;
+        }
+    }
+
+    private sealed class PrefixedStream(ReadOnlyMemory<byte> prefix, Stream inner) : Stream
+    {
+        private ReadOnlyMemory<byte> _prefix = prefix;
+        private readonly Stream _inner = inner;
+        private int _prefixOffset;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            ArgumentOutOfRangeException.ThrowIfNegative(offset);
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            if (buffer.Length - offset < count)
+                throw new ArgumentException("Offset and count must refer to a valid range in the buffer.");
+
+            if (_prefixOffset < _prefix.Length)
+            {
+                var bytesToCopy = Math.Min(count, _prefix.Length - _prefixOffset);
+                _prefix.Span.Slice(_prefixOffset, bytesToCopy).CopyTo(buffer.AsSpan(offset, bytesToCopy));
+                _prefixOffset += bytesToCopy;
+                return bytesToCopy;
+            }
+
+            return _inner.Read(buffer, offset, count);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            ArgumentOutOfRangeException.ThrowIfNegative(offset);
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            if (buffer.Length - offset < count)
+                throw new ArgumentException("Offset and count must refer to a valid range in the buffer.");
+
+            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_prefixOffset < _prefix.Length)
+            {
+                var bytesToCopy = Math.Min(buffer.Length, _prefix.Length - _prefixOffset);
+                _prefix.Span.Slice(_prefixOffset, bytesToCopy).CopyTo(buffer.Span[..bytesToCopy]);
+                _prefixOffset += bytesToCopy;
+                return ValueTask.FromResult(bytesToCopy);
+            }
+
+            return _inner.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask DisposeAsync() => _inner.DisposeAsync();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _inner.Dispose();
+
+            base.Dispose(disposing);
         }
     }
 }
