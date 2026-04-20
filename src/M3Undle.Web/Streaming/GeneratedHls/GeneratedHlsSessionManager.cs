@@ -998,6 +998,7 @@ public sealed class GeneratedHlsSessionManager(
             LastUpstreamByteUtc: LastAccessUtc,
             ReconnectAttempts: 0,
             LastFailureKind: null,
-            IsInternal: true);
+            IsInternal: true,
+            ParentStreamSessionId: ParentStreamSessionId);
     }
 }
