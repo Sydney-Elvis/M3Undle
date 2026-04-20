@@ -9,20 +9,20 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 namespace M3Undle.Web.Tests.Persistence;
 
 [TestClass]
-public sealed class Alpha6ActiveProfileMigrationTests
+public sealed class Alpha5SchemaMigrationTests
 {
-    private const string PreAlpha6Migration = "20260403182105_20260403180000_Alpha5_CustomGroups";
-    private const string Alpha6Migration = "20260404000000_Alpha6_ActiveProfile";
+    private const string PreAlpha5SchemaMigration = "20260314145015_Alpha4_Schema";
+    private const string Alpha5SchemaMigration = "20260322000000_Alpha5_Schema";
 
     [TestMethod]
-    public async Task Alpha6Migration_BackfillsActiveProfile_FromLegacyProviderActiveLink()
+    public async Task Alpha5SchemaMigration_BackfillsActiveProfile_FromLegacyProviderActiveLink()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         await using var db = CreateDb(connection);
         var migrator = db.Database.GetService<IMigrator>();
 
-        await migrator.MigrateAsync(PreAlpha6Migration);
+        await migrator.MigrateAsync(PreAlpha5SchemaMigration);
 
         var now = DateTime.UtcNow;
         await db.Database.ExecuteSqlRawAsync(
@@ -46,7 +46,7 @@ public sealed class Alpha6ActiveProfileMigrationTests
             """,
             "profile-1", "provider-1");
 
-        await migrator.MigrateAsync(Alpha6Migration);
+        await migrator.MigrateAsync(Alpha5SchemaMigration);
 
         var activeProfileId = await db.Profiles
             .AsNoTracking()
@@ -62,14 +62,14 @@ public sealed class Alpha6ActiveProfileMigrationTests
     }
 
     [TestMethod]
-    public async Task Alpha6Migration_EnforcesSingleActiveProfile_UniquePartialIndex()
+    public async Task Alpha5SchemaMigration_EnforcesSingleActiveProfile_UniquePartialIndex()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         await using var db = CreateDb(connection);
         var migrator = db.Database.GetService<IMigrator>();
 
-        await migrator.MigrateAsync(Alpha6Migration);
+        await migrator.MigrateAsync(Alpha5SchemaMigration);
 
         var now = DateTime.UtcNow;
         await db.Database.ExecuteSqlRawAsync(
