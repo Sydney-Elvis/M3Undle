@@ -676,7 +676,7 @@ public static class CompatibilityEndpoints
             }
 
             var pathBase = context.Request.PathBase.HasValue
-                ? context.Request.PathBase.Value!
+                ? context.Request.PathBase.Value!.TrimEnd('/')
                 : string.Empty;
             var generatedManifestUrl =
                 $"{pathBase}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";

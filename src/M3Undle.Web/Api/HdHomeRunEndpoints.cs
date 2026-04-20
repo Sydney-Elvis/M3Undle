@@ -16,8 +16,8 @@ public static class HdHomeRunEndpoints
         WriteIndented = false,
     };
 
-    private static string SanitizeForLog(string? value)
-        => string.IsNullOrEmpty(value) ? string.Empty : value.ReplaceLineEndings(" ");
+    private static string? SanitizeForLog(string? value)
+        => value is null ? null : value.Length == 0 ? string.Empty : value.ReplaceLineEndings(" ");
 
     public static IEndpointRouteBuilder MapHdHomeRunEndpoints(this IEndpointRouteBuilder app)
     {
