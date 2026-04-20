@@ -241,7 +241,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
                     await using var upstream = await _upstreamConnector.ConnectAsync(_source, _sessionCts.Token);
                     _contentType = upstream.ContentType;
-                    _cacheControl = upstream.Response.Headers.CacheControl?.ToString();
+                    _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
                     _headersReadyTcs.TrySetResult(true);
 
                     if (reconnectAttempt > 0)

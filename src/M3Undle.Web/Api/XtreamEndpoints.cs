@@ -476,8 +476,9 @@ public static class XtreamEndpoints
 
         var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs: resolved.SourceDescriptor?.ForceMpegTs ?? false);
 
+        // HLS slot reservation only applies to non-shared (native upstream HLS) sessions.
         ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
-        if (requiresHls && resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        if (requiresHls && !resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
             try
             {
@@ -508,27 +509,32 @@ public static class XtreamEndpoints
                 return;
             }
 
-            var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
-            if (hlsCandidates.Count > 0)
+            // Native upstream HLS only for non-shared sessions.
+            // Shared sessions use generated HLS wrapper to relay from the ring buffer.
+            if (!resolved.UseSharedSession)
             {
-                var xtreamUser = context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty;
-                var xtreamPass = context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty;
-                var segmentProxyBase =
-                    $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
-
-                var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
-                    hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
-
-                if (manifest is not null)
+                var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
+                if (hlsCandidates.Count > 0)
                 {
-                    hlsSlotReservation?.Dispose();
-                    logger.LogInformation(
-                        "Xtream native upstream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
-                        entry.DisplayName, streamId, streamKey);
-                    context.Response.ContentType = "application/vnd.apple.mpegurl";
-                    context.Response.Headers.CacheControl = "no-cache";
-                    await context.Response.WriteAsync(manifest, cancellationToken);
-                    return;
+                    var xtreamUser = context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty;
+                    var xtreamPass = context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty;
+                    var segmentProxyBase =
+                        $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
+
+                    var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                        hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                    if (manifest is not null)
+                    {
+                        hlsSlotReservation?.Dispose();
+                        logger.LogInformation(
+                            "Xtream native upstream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
+                            entry.DisplayName, streamId, streamKey);
+                        context.Response.ContentType = "application/vnd.apple.mpegurl";
+                        context.Response.Headers.CacheControl = "no-cache";
+                        await context.Response.WriteAsync(manifest, cancellationToken);
+                        return;
+                    }
                 }
             }
 
@@ -681,10 +687,12 @@ public static class XtreamEndpoints
             providerId = resolved.SourceDescriptor.ProviderId;
             useSharedSession = resolved.UseSharedSession;
 
-            if (useSharedSession)
+            // Only reserve HLS slot for non-shared (native upstream HLS) sessions.
+            if (!useSharedSession)
+            {
                 _ = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
-
-            channelSessionManager.TouchHlsSlot(resolved.SourceDescriptor.SessionKey);
+                channelSessionManager.TouchHlsSlot(resolved.SourceDescriptor.SessionKey);
+            }
         }
         catch (StreamAdmissionException ex)
         {

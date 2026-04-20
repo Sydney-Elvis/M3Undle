@@ -573,8 +573,10 @@ public static class CompatibilityEndpoints
         var forceTs = IsHdHomeRunTuneRoute(context.Request.Path) || (resolved.SourceDescriptor?.ForceMpegTs ?? false);
         var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs);
 
+        // HLS slot reservation only applies to non-shared (native upstream HLS) sessions.
+        // Shared sessions use generated HLS wrapper + ring buffer relay — no slot needed.
         ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
-        if (requiresHls && resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        if (requiresHls && !resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
             try
             {
@@ -608,27 +610,32 @@ public static class CompatibilityEndpoints
                 return;
             }
 
-            var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
-            if (hlsCandidates.Count > 0)
+            // Native upstream HLS is only used for non-shared sessions.
+            // For shared sessions, generated HLS wraps the ring buffer relay so all clients share one upstream.
+            if (!resolved.UseSharedSession)
             {
-                var baseUrl = GetBaseUrl(context);
-                var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
-                segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
-
-                var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
-                    hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
-
-                if (manifest is not null)
+                var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
+                if (hlsCandidates.Count > 0)
                 {
-                    hlsSlotReservation?.Dispose();
-                    logger.LogInformation(
-                        "Native upstream HLS delivery: channel={Channel} key={StreamKey}",
-                        entry.DisplayName,
-                        streamKey);
-                    context.Response.ContentType = "application/vnd.apple.mpegurl";
-                    context.Response.Headers.CacheControl = "no-cache";
-                    await context.Response.WriteAsync(manifest, cancellationToken);
-                    return;
+                    var baseUrl = GetBaseUrl(context);
+                    var segmentProxyBase = $"{baseUrl}/hls/{Uri.EscapeDataString(streamKey)}/proxy";
+                    segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
+
+                    var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                        hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                    if (manifest is not null)
+                    {
+                        hlsSlotReservation?.Dispose();
+                        logger.LogInformation(
+                            "Native upstream HLS delivery: channel={Channel} key={StreamKey}",
+                            entry.DisplayName,
+                            streamKey);
+                        context.Response.ContentType = "application/vnd.apple.mpegurl";
+                        context.Response.Headers.CacheControl = "no-cache";
+                        await context.Response.WriteAsync(manifest, cancellationToken);
+                        return;
+                    }
                 }
             }
 
@@ -745,7 +752,11 @@ public static class CompatibilityEndpoints
                         await tunerAcquire.PriorSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
                 }
 
-                var session = await channelSessionManager.GetOrCreateAsync(resolved.SourceDescriptor, cancellationToken);
+                var sessionSource = IsHdHomeRunTuneRoute(context.Request.Path)
+                    ? resolved.SourceDescriptor with { ForceMpegTs = true }
+                    : resolved.SourceDescriptor;
+
+                var session = await channelSessionManager.GetOrCreateAsync(sessionSource, cancellationToken);
                 subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
 
                 if (tunerReservation is not null)
@@ -754,12 +765,12 @@ public static class CompatibilityEndpoints
                         tunerReservation.VirtualTunerId,
                         tunerReservation.ReservationId,
                         tunerReservation.StreamKey,
-                        context.Request.Path.Value ?? resolved.SourceDescriptor.RequestedRoute));
+                        context.Request.Path.Value ?? sessionSource.RequestedRoute));
                     tunerSessionRetention = session.RetainExternalActivity();
                     hdHomeRunTunerManager.Activate(
                         tunerReservation,
                         subscriber,
-                        resolved.SourceDescriptor.DisplayName,
+                        sessionSource.DisplayName,
                         tunerSessionRetention);
                     tunerSessionRetention = null;
                     logger.LogInformation(
@@ -767,7 +778,7 @@ public static class CompatibilityEndpoints
                         tunerReservation.VirtualTunerId,
                         tunerReservation.ReservationId,
                         tunerReservation.StreamKey,
-                        resolved.SourceDescriptor.DisplayName,
+                        sessionSource.DisplayName,
                         subscriber.ClientId);
                 }
 
@@ -890,7 +901,6 @@ public static class CompatibilityEndpoints
         segmentProxyBase = segmentProxyBase.ApplyClientAccessQuery(context);
 
         string providerId;
-        ChannelSessionKey? admissionKey = null;
         StreamSourceDescriptor? sourceDescriptor = null;
         var useSharedSession = false;
         try
@@ -906,7 +916,6 @@ public static class CompatibilityEndpoints
             providerId = resolved.SourceDescriptor.ProviderId;
             sourceDescriptor = resolved.SourceDescriptor;
             useSharedSession = resolved.UseSharedSession;
-            admissionKey = resolved.SourceDescriptor.SessionKey;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -919,11 +928,14 @@ public static class CompatibilityEndpoints
             return;
         }
 
-        if (sourceDescriptor is not null)
+        // Only reserve an HLS slot for non-shared (native upstream HLS) sessions.
+        // Shared sessions relay through the ring buffer and don't hold a separate provider slot.
+        if (!useSharedSession && sourceDescriptor is not null)
         {
             try
             {
                 _ = channelSessionManager.ReserveHlsSlot(sourceDescriptor);
+                channelSessionManager.TouchHlsSlot(sourceDescriptor.SessionKey);
             }
             catch (StreamAdmissionException ex)
             {
@@ -932,10 +944,6 @@ public static class CompatibilityEndpoints
                 context.Response.StatusCode = ex.StatusCode;
                 return;
             }
-        }
-        else if (admissionKey is { } slotKey)
-        {
-            channelSessionManager.TouchHlsSlot(slotKey);
         }
 
         await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);

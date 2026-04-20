@@ -1041,6 +1041,7 @@ public sealed class ChannelSessionIntegrationTests
             var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
             var connector = new UpstreamStreamConnector(
                 httpClientFactory, scopeFactory, reconnectOpts,
+                Options.Create(new GeneratedHlsOptions()),
                 NullLogger<UpstreamStreamConnector>.Instance);
             var strikeStore = new UpstreamFailureStrikeStore();
             var admissionBackoffStore = timeProvider is null
