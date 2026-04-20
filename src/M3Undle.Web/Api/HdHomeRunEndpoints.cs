@@ -16,6 +16,9 @@ public static class HdHomeRunEndpoints
         WriteIndented = false,
     };
 
+    private static string SanitizeForLog(string? value)
+        => string.IsNullOrEmpty(value) ? string.Empty : value.ReplaceLineEndings(" ");
+
     public static IEndpointRouteBuilder MapHdHomeRunEndpoints(this IEndpointRouteBuilder app)
     {
         var client = app.MapClientSurface();
@@ -74,7 +77,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun discover.json served to {Client}. path={Path} deviceId={DeviceId} tunerCount={TunerCount} baseUrl={BaseUrl}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/discover.json",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/discover.json",
             device.DeviceId,
             device.TunerCount,
             baseUrl);
@@ -99,7 +102,7 @@ public static class HdHomeRunEndpoints
             logger.LogWarning(
                 "HDHomeRun lineup.json unavailable for {Client}. path={Path}",
                 DescribeClient(context),
-                context.Request.Path.Value ?? "/hdhr/lineup.json");
+                SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.json");
             return lineupResult.ErrorResult!;
         }
 
@@ -113,7 +116,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun lineup.json served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/lineup.json",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.json",
             lineupResult.Lineup.SnapshotId,
             payload.Count);
 
@@ -140,7 +143,7 @@ public static class HdHomeRunEndpoints
             logger.LogWarning(
                 "HDHomeRun lineup.xml unavailable for {Client}. path={Path}",
                 DescribeClient(context),
-                context.Request.Path.Value ?? "/hdhr/lineup.xml");
+                SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.xml");
             return lineupResult.ErrorResult!;
         }
 
@@ -174,7 +177,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun lineup.xml served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/lineup.xml",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.xml",
             lineup.SnapshotId,
             lineup.Channels.Count);
 
@@ -201,7 +204,7 @@ public static class HdHomeRunEndpoints
             logger.LogWarning(
                 "HDHomeRun lineup.m3u unavailable for {Client}. path={Path}",
                 DescribeClient(context),
-                context.Request.Path.Value ?? "/hdhr/lineup.m3u");
+                SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.m3u");
             return lineupResult.ErrorResult!;
         }
 
@@ -226,7 +229,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun lineup.m3u served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/lineup.m3u",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.m3u",
             lineup.SnapshotId,
             lineup.Channels.Count);
 
@@ -280,7 +283,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun lineup_status.json served to {Client}. path={Path} status={Status} channels={ChannelCount}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/lineup_status.json",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup_status.json",
             status,
             channelCount);
 
@@ -300,7 +303,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun lineup.post acknowledged for {Client}. path={Path} method={Method}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/lineup.post",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/lineup.post",
             context.Request.Method);
 
         return TypedResults.Text("OK", "text/plain; charset=utf-8");
@@ -358,7 +361,7 @@ public static class HdHomeRunEndpoints
         logger.LogInformation(
             "HDHomeRun device.xml served to {Client}. path={Path} deviceId={DeviceId}",
             DescribeClient(context),
-            context.Request.Path.Value ?? "/hdhr/device.xml",
+            SanitizeForLog(context.Request.Path.Value) ?? "/hdhr/device.xml",
             device.DeviceId);
 
         return TypedResults.Bytes(ms.ToArray(), "application/xml; charset=utf-8");

@@ -675,8 +675,11 @@ public static class CompatibilityEndpoints
                 return;
             }
 
+            var pathBase = context.Request.PathBase.HasValue
+                ? context.Request.PathBase.Value!
+                : string.Empty;
             var generatedManifestUrl =
-                $"{GetBaseUrl(context)}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
+                $"{pathBase}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
             generatedManifestUrl = generatedManifestUrl.ApplyClientAccessQuery(context);
 
             logger.LogInformation(

@@ -63,8 +63,6 @@
 }
 
 @code {
-    public const string LinkLoginCallbackAction = "LinkLoginCallback";
-
     private ApplicationUser? user;
     private IList<UserLoginInfo>? currentLogins;
     private IList<AuthenticationScheme>? otherLogins;
@@ -78,9 +76,6 @@
 
     [SupplyParameterFromForm]
     private string? ProviderKey { get; set; }
-
-    [SupplyParameterFromQuery]
-    private string? Action { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -104,9 +99,12 @@
 
         showRemoveButton = passwordHash is not null || currentLogins.Count > 1;
 
-        if (HttpMethods.IsGet(HttpContext.Request.Method) && Action == LinkLoginCallbackAction)
+        if (HttpMethods.IsGet(HttpContext.Request.Method))
         {
-            await OnGetLinkLoginCallbackAsync();
+            var userId = await UserManager.GetUserIdAsync(user);
+            var pendingLink = await SignInManager.GetExternalLoginInfoAsync(userId);
+            if (pendingLink is not null)
+                await OnGetLinkLoginCallbackAsync();
         }
     }
 
