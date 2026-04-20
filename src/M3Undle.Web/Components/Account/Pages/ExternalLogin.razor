@@ -45,8 +45,6 @@
 </div>
 
 @code {
-    public const string LoginCallbackAction = "LoginCallback";
-
     private string? message;
     private ExternalLoginInfo? externalLoginInfo;
 
@@ -61,9 +59,6 @@
 
     [SupplyParameterFromQuery]
     private string? ReturnUrl { get; set; }
-
-    [SupplyParameterFromQuery]
-    private string? Action { get; set; }
 
     private string? ProviderDisplayName => externalLoginInfo?.ProviderDisplayName;
 
@@ -88,15 +83,8 @@
 
         if (HttpMethods.IsGet(HttpContext.Request.Method))
         {
-            if (Action == LoginCallbackAction)
-            {
-                await OnLoginCallbackAsync();
-                return;
-            }
-
-            // We should only reach this page via the login callback, so redirect back to
-            // the login page if we get here some other way.
-            RedirectManager.RedirectTo("Account/Login");
+            await OnLoginCallbackAsync();
+            return;
         }
     }
 

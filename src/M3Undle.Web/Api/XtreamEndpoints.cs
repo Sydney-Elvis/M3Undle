@@ -571,8 +571,12 @@ public static class XtreamEndpoints
                 return;
             }
 
+            var pathBase = context.Request.PathBase.HasValue
+                ? context.Request.PathBase.Value!.TrimEnd('/')
+                : string.Empty;
             var generatedManifestUrl =
-                $"{GetBaseUrl(context)}/hls/generated/{Uri.EscapeDataString(context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty)}/{Uri.EscapeDataString(context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty)}/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
+                $"{pathBase}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
+            generatedManifestUrl = generatedManifestUrl.ApplyClientAccessQuery(context);
             context.Response.Redirect(generatedManifestUrl, permanent: false);
             return;
         }
