@@ -28,7 +28,11 @@ public sealed class WebhookAdapter(
                     if (headers is not null)
                     {
                         foreach (var (key, value) in headers)
+                        {
+                            if (key.AsSpan().ContainsAny('\r', '\n') || value.AsSpan().ContainsAny('\r', '\n'))
+                                continue;
                             client.DefaultRequestHeaders.TryAddWithoutValidation(key, value);
+                        }
                     }
                 }
                 catch (JsonException) { }

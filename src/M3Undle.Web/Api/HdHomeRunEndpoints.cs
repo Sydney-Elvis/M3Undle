@@ -27,6 +27,7 @@ public static class HdHomeRunEndpoints
         hdhr.MapGet("lineup.m3u", ServeLineupM3uAsync);
         hdhr.MapGet("lineup_status.json", ServeLineupStatusAsync);
         hdhr.MapGet("lineup.post", ServeLineupPost);
+        hdhr.MapPost("lineup.post", ServeLineupPost);
         hdhr.MapGet("device.xml", ServeDeviceXmlAsync);
 
         // Legacy aliases kept for HDHR client compatibility.
@@ -36,6 +37,7 @@ public static class HdHomeRunEndpoints
         client.MapGet("lineup.m3u", ServeLineupM3uAsync);
         client.MapGet("lineup_status.json", ServeLineupStatusAsync);
         client.MapGet("lineup.post", ServeLineupPost);
+        client.MapPost("lineup.post", ServeLineupPost);
         client.MapGet("device.xml", ServeDeviceXmlAsync);
 
         return app;

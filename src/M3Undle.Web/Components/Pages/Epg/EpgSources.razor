@@ -7,6 +7,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
+@inject ILogger<EpgSources> Logger
 @implements IDisposable
 
 <PageTitle>M3Undle — EPG Sources</PageTitle>
@@ -396,7 +397,10 @@ else
             _nextRefreshUtc = await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(_cts.Token);
         }
         catch (OperationCanceledException) { }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load refresh schedule");
+        }
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)

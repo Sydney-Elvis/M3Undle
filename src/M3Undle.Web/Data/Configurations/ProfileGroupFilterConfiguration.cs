@@ -15,7 +15,7 @@ public sealed class ProfileGroupFilterConfiguration : IEntityTypeConfiguration<P
         builder.Property(x => x.ProfileId).HasColumnName("profile_id").IsRequired();
         builder.Property(x => x.ProviderGroupId).HasColumnName("provider_group_id").IsRequired();
         builder.Property(x => x.Decision).HasColumnName("decision").IsRequired().HasDefaultValue("include");
-        builder.Property(x => x.ChannelMode).HasColumnName("channel_mode").IsRequired().HasDefaultValue("all");
+        builder.Property(x => x.ChannelMode).HasColumnName("channel_mode").IsRequired().HasDefaultValue("select");
         builder.Property(x => x.TrackingPolicy).HasColumnName("tracking_policy").IsRequired().HasDefaultValue("review");
         builder.Property(x => x.TrackingKeywords).HasColumnName("tracking_keywords");
         builder.Property(x => x.OutputName).HasColumnName("output_name");

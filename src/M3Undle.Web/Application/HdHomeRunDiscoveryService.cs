@@ -98,7 +98,7 @@ public sealed class HdHomeRunDiscoveryService(
                     var baseUrl = runtime.ResolvedBaseUrl;
                     var effectiveSearchTarget = string.Equals(searchTarget, SsdpAllType, StringComparison.OrdinalIgnoreCase)
                         ? SsdpMediaServerType
-                        : searchTarget;
+                        : searchTarget.ReplaceLineEndings(" ");
 
                     var hdhrBaseUrl = $"{baseUrl.TrimEnd('/')}/hdhr";
                     var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, hdhrBaseUrl);

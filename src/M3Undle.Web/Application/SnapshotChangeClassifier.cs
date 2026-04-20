@@ -38,11 +38,14 @@ public static class SnapshotChangeClassifier
         if (prev is null)
             return null;
 
-        if (!File.Exists(prev.ChannelIndexPath) || !File.Exists(newIdxPath))
+        var prevIdxPath = Path.ChangeExtension(prev.ChannelIndexPath, ".idx");
+        var newActualIdxPath = Path.ChangeExtension(newIdxPath, ".idx");
+
+        if (!File.Exists(prevIdxPath) || !File.Exists(newActualIdxPath))
             return null; // Can't compare — treat as unknown, caller will fire all notifications
 
-        var prevKeys = await ReadKeysAsync(prev.ChannelIndexPath.Replace(".ndjson", ".idx"), ct);
-        var newKeys  = await ReadKeysAsync(newIdxPath.Replace(".ndjson", ".idx"), ct);
+        var prevKeys = await ReadKeysAsync(prevIdxPath, ct);
+        var newKeys  = await ReadKeysAsync(newActualIdxPath, ct);
 
         int added   = newKeys.ExceptWith_Count(prevKeys);
         int removed = prevKeys.ExceptWith_Count(newKeys);
@@ -99,10 +102,13 @@ public static class SnapshotChangeClassifier
 
         var header = new byte[HeaderSize];
         await fs.ReadExactlyAsync(header, ct);
-        int count = (int)BinaryPrimitives.ReadUInt32LittleEndian(header);
+        uint rawCount = BinaryPrimitives.ReadUInt32LittleEndian(header);
 
-        if (count == 0)
+        long available = fs.Length - HeaderSize;
+        if (rawCount == 0 || rawCount > (uint)(available / RecordSize))
             return new KeySet([]);
+
+        int count = (int)rawCount;
 
         var recordBytes = new byte[count * RecordSize];
         await fs.ReadExactlyAsync(recordBytes, ct);

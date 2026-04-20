@@ -77,7 +77,18 @@ public sealed class RefreshScheduleService(
             .FirstOrDefaultAsync(ct);
 
         var baseline = lastSnapshot ?? DateTime.UtcNow;
-        return baseline.AddHours(settings.IntervalHours.Value);
+        var intervalHours = settings.IntervalHours.Value;
+        var next = baseline.AddHours(intervalHours);
+
+        var now = DateTime.UtcNow;
+        if (next < now)
+        {
+            var intervalTicks = TimeSpan.FromHours(intervalHours).Ticks;
+            var behind = now.Ticks - next.Ticks;
+            next = next.AddTicks(((behind / intervalTicks) + 1) * intervalTicks);
+        }
+
+        return next;
     }
 
     private static RefreshScheduleSettings Map(SiteSettings s) =>
