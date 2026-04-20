@@ -75,7 +75,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     public int SubscriberCount => _subscribers.Count;
 
-    public async Task<SubscriberConnection> AttachSubscriberAsync(HttpContext context, CancellationToken requestCt)
+    public int ExternalSubscriberCount => _subscribers.Values.Count(s => !s.IsInternal);
+
+    public async Task<SubscriberConnection> AttachSubscriberAsync(
+        HttpContext context,
+        CancellationToken requestCt,
+        bool isInternal = false)
     {
         BeginSubscriberAttach();
 
@@ -89,21 +94,23 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 requestedRoute: _source.RequestedRoute,
                 context: context,
                 queueCapacity: _bufferOptions.SubscriberQueueCapacity,
-                onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason));
+                onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason),
+                isInternal: isInternal);
 
             _subscribers[subscriber.ClientId] = subscriber;
 
             subscriber.InitializeResponse(_contentType, _cacheControl);
-            var snapshot = _buffer.CreateSnapshot();
-            _ = subscriber.StartAsync(snapshot, _sessionCts.Token);
-            _registry.UpsertClient(subscriber.Snapshot());
+            _ = subscriber.StartAsync(_buffer.CreateLiveEdgeSnapshot(), _sessionCts.Token);
+            if (!isInternal)
+                _registry.UpsertClient(subscriber.Snapshot());
             PublishSnapshots();
 
-            _logger.LogInformation(
-                "Client {RemoteIp} started watching '{DisplayName}' — {ViewerCount} viewer(s) on this stream.",
-                subscriber.RemoteIp ?? "unknown",
-                _source.DisplayName,
-                _subscribers.Count);
+            if (!isInternal)
+                _logger.LogInformation(
+                    "Client {RemoteIp} started watching '{DisplayName}' — {ExternalViewerCount} viewer(s) on this stream.",
+                    subscriber.RemoteIp ?? "unknown",
+                    _source.DisplayName,
+                    ExternalSubscriberCount);
 
             return subscriber;
         }
@@ -117,39 +124,43 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         if (_subscribers.TryRemove(subscriber.ClientId, out _))
         {
-            _registry.RemoveClient(subscriber.ClientId);
+            if (!subscriber.IsInternal)
+                _registry.RemoveClient(subscriber.ClientId);
         }
 
-        var remainingViewers = _subscribers.Count;
+        if (!subscriber.IsInternal)
+        {
+            var remainingExternal = ExternalSubscriberCount;
 
-        var logMessage = reason switch
-        {
-            SubscriberDisconnectReason.ClientAborted  => "stopped watching (disconnected normally)",
-            SubscriberDisconnectReason.SlowClient     => "was dropped — too far behind to keep up",
-            SubscriberDisconnectReason.WriteFailure   => "was dropped — network write error",
-            SubscriberDisconnectReason.SessionClosed  => "disconnected — stream session ended",
-            SubscriberDisconnectReason.Retuned        => "was replaced by a retune request",
-            SubscriberDisconnectReason.Completed      => "finished watching (stream ended cleanly)",
-            _                                          => $"disconnected (reason: {reason})",
-        };
+            var logMessage = reason switch
+            {
+                SubscriberDisconnectReason.ClientAborted  => "stopped watching (disconnected normally)",
+                SubscriberDisconnectReason.SlowClient     => "was dropped — too far behind to keep up",
+                SubscriberDisconnectReason.WriteFailure   => "was dropped — network write error",
+                SubscriberDisconnectReason.SessionClosed  => "disconnected — stream session ended",
+                SubscriberDisconnectReason.Retuned        => "was replaced by a retune request",
+                SubscriberDisconnectReason.Completed      => "finished watching (stream ended cleanly)",
+                _                                          => $"disconnected (reason: {reason})",
+            };
 
-        if (reason == SubscriberDisconnectReason.SlowClient)
-        {
-            _logger.LogWarning(
-                "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
-                subscriber.RemoteIp ?? "unknown",
-                logMessage,
-                _source.DisplayName,
-                remainingViewers);
-        }
-        else
-        {
-            _logger.LogInformation(
-                "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
-                subscriber.RemoteIp ?? "unknown",
-                logMessage,
-                _source.DisplayName,
-                remainingViewers);
+            if (reason == SubscriberDisconnectReason.SlowClient)
+            {
+                _logger.LogWarning(
+                    "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
+                    subscriber.RemoteIp ?? "unknown",
+                    logMessage,
+                    _source.DisplayName,
+                    remainingExternal);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
+                    subscriber.RemoteIp ?? "unknown",
+                    logMessage,
+                    _source.DisplayName,
+                    remainingExternal);
+            }
         }
 
         lock (_gate)
@@ -374,7 +385,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     continue;
                 }
 
-                _registry.UpsertClient(subscriber.Snapshot());
+                if (!subscriber.IsInternal)
+                    _registry.UpsertClient(subscriber.Snapshot());
             }
 
             if (slowSubscribers is not null)
@@ -520,7 +532,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     }
 
     private bool ShouldScheduleIdleShutdownNoLock()
-        => _subscribers.IsEmpty
+        => !_subscribers.Values.Any(s => !s.IsInternal)
             && _pendingSubscriberAttaches == 0
             && Volatile.Read(ref _stopRequested) == 0;
 
@@ -535,14 +547,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private void PublishSnapshots()
     {
+        var externalCount = ExternalSubscriberCount;
         var session = new StreamSessionSnapshot(
             SessionId: _sessionId,
             ProviderId: _source.ProviderId,
             ProviderChannelId: _source.ProviderChannelId,
             DisplayName: _source.DisplayName,
             State: _state,
-            SubscriberCount: _subscribers.Count,
-            IsShared: _subscribers.Count > 1,
+            SubscriberCount: externalCount,
+            IsShared: externalCount > 1,
             BufferUsedBytes: _buffer.UsedBytes,
             BufferMaxBytes: _buffer.MaxBytes,
             StartedUtc: _startedUtc,

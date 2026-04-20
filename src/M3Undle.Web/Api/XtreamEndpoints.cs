@@ -532,12 +532,23 @@ public static class XtreamEndpoints
                 }
             }
 
+            var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
+            string? generatedRelaySecret = null;
+            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out _))
+            {
+                var sk = resolved.SourceDescriptor.SessionKey;
+                generatedStreamUrl =
+                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
+                generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
+            }
+
             var generatedSession = await generatedHlsSessionManager.CreateSessionAsync(
                 new GeneratedHlsSessionRequest(
-                    StreamUrl: resolved.SourceDescriptor.StreamUrl,
+                    StreamUrl: generatedStreamUrl,
                     DisplayName: resolved.SourceDescriptor.DisplayName,
-                    ProviderId: resolved.SourceDescriptor.ProviderId,
-                    AdmissionKey: resolved.SourceDescriptor.SessionKey),
+                    ProviderId: generatedRelaySecret is null ? resolved.SourceDescriptor.ProviderId : null,
+                    AdmissionKey: resolved.SourceDescriptor.SessionKey,
+                    InternalRelaySecret: generatedRelaySecret),
                 cancellationToken);
 
             if (generatedSession is null)

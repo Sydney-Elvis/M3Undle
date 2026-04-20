@@ -192,9 +192,9 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_LateJoiner_ReceivesBufferedData()
+    public async Task Session_LateJoiner_StartsAtLiveEdge()
     {
-        // Checklist: Late joiners receive buffered data without breaking the active session.
+        // Late joiners attach at live position and receive only future chunks — no buffer replay.
         var handler = FakeStreamingHandler.StreamForever();
         await using var fixture = await SessionFixture.CreateAsync(handler);
 
@@ -218,6 +218,62 @@ public sealed class ChannelSessionIntegrationTests
 
         timeout.Cancel();
         await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_InternalSubscriber_DoesNotBlockIdleGrace()
+    {
+        // When only an internal subscriber remains, idle grace fires as if there are no subscribers.
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(300) });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var requestCts = new CancellationTokenSource();
+
+        var internalSubscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), requestCts.Token, isInternal: true);
+        await WaitUntilAsync(() => internalSubscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        // Session must NOT have shut down yet — idle grace only starts once there are zero external subscribers.
+        Assert.IsTrue(fixture.Manager.TryGet(session.Key, out _));
+
+        // Disconnect the internal subscriber — idle grace should now fire and close the session.
+        requestCts.Cancel();
+        await internalSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await internalSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+    }
+
+    [TestMethod]
+    public async Task Session_ExternalAndInternalSubscribers_ExternalCountCorrect()
+    {
+        // ExternalSubscriberCount excludes internal subscribers; idle grace waits for external count to reach zero.
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(300) });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var externalCts = new CancellationTokenSource();
+        var internalCts = new CancellationTokenSource();
+
+        var externalSub = await session.AttachSubscriberAsync(new DefaultHttpContext(), externalCts.Token);
+        var internalSub = await session.AttachSubscriberAsync(new DefaultHttpContext(), internalCts.Token, isInternal: true);
+
+        Assert.AreEqual(2, session.SubscriberCount);
+        Assert.AreEqual(1, session.ExternalSubscriberCount);
+
+        // Drop the external subscriber — idle grace should eventually fire because ExternalSubscriberCount drops to 0.
+        externalCts.Cancel();
+        await externalSub.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+
+        internalCts.Cancel();
     }
 
     [TestMethod]

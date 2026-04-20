@@ -8,5 +8,6 @@ public sealed record StreamClientSnapshot(
     string? UserAgent,
     DateTimeOffset ConnectedUtc,
     long BytesSent,
-    int QueueDepth);
+    int QueueDepth,
+    bool IsInternal = false);
 

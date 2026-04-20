@@ -15,5 +15,6 @@ public sealed record StreamSessionSnapshot(
     DateTimeOffset StartedUtc,
     DateTimeOffset? LastUpstreamByteUtc,
     int ReconnectAttempts,
-    string? LastFailureKind);
+    string? LastFailureKind,
+    bool IsInternal = false);
 

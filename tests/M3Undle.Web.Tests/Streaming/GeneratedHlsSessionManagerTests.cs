@@ -109,8 +109,9 @@ public sealed class GeneratedHlsSessionManagerTests
         Assert.AreEqual("Mozilla/5.0 IPTVnator", clients[0].UserAgent);
         Assert.AreEqual(handle.SessionId, clients[0].SessionId);
 
-        var sessions = registry.GetActiveSessions();
-        var session = sessions.Single(s => s.SessionId == handle.SessionId);
+        // Generated HLS sessions are internal — use TryGetSession (no IsInternal filter).
+        var session = registry.TryGetSession(handle.SessionId);
+        Assert.IsNotNull(session);
         Assert.AreEqual(1, session.SubscriberCount);
 
         await manager.StopAsync(CancellationToken.None);
@@ -166,8 +167,9 @@ public sealed class GeneratedHlsSessionManagerTests
         var clients = registry.GetActiveClients();
         Assert.HasCount(2, clients);
 
-        var sessions = registry.GetActiveSessions();
-        var session = sessions.Single(s => s.SessionId == handle.SessionId);
+        // Generated HLS sessions are internal — use TryGetSession (no IsInternal filter).
+        var session = registry.TryGetSession(handle.SessionId);
+        Assert.IsNotNull(session);
         Assert.AreEqual(2, session.SubscriberCount);
         Assert.IsTrue(session.IsShared);
 

@@ -18,7 +18,8 @@ public sealed record GeneratedHlsSessionRequest(
     string? ProviderId = null,
     string? ProviderUserAgent = null,
     string? ProviderHeadersJson = null,
-    ChannelSessionKey? AdmissionKey = null);
+    ChannelSessionKey? AdmissionKey = null,
+    string? InternalRelaySecret = null);
 
 public sealed record GeneratedHlsSessionHandle(
     string SessionId,
@@ -261,13 +262,6 @@ public sealed class GeneratedHlsSessionManager(
         string segmentPattern,
         CancellationToken ct)
     {
-        var (userAgent, headersJson) = await ResolveProviderMetadataAsync(
-            request.ProviderId,
-            request.ProviderUserAgent,
-            request.ProviderHeadersJson,
-            ct);
-
-        var headersArg = BuildFfmpegHeadersArgument(headersJson);
         var info = new ProcessStartInfo
         {
             FileName = _options.FfmpegPath,
@@ -283,16 +277,33 @@ public sealed class GeneratedHlsSessionManager(
         info.ArgumentList.Add("-loglevel");
         info.ArgumentList.Add("warning");
 
-        if (!string.IsNullOrWhiteSpace(userAgent))
+        if (!string.IsNullOrWhiteSpace(request.InternalRelaySecret))
         {
-            info.ArgumentList.Add("-user_agent");
-            info.ArgumentList.Add(userAgent);
-        }
-
-        if (!string.IsNullOrWhiteSpace(headersArg))
-        {
+            // Internal relay: authenticate with secret header, no provider credentials needed.
             info.ArgumentList.Add("-headers");
-            info.ArgumentList.Add(headersArg);
+            info.ArgumentList.Add($"X-M3Undle-Internal-Relay: {request.InternalRelaySecret}\r\n");
+        }
+        else
+        {
+            var (userAgent, headersJson) = await ResolveProviderMetadataAsync(
+                request.ProviderId,
+                request.ProviderUserAgent,
+                request.ProviderHeadersJson,
+                ct);
+
+            var headersArg = BuildFfmpegHeadersArgument(headersJson);
+
+            if (!string.IsNullOrWhiteSpace(userAgent))
+            {
+                info.ArgumentList.Add("-user_agent");
+                info.ArgumentList.Add(userAgent);
+            }
+
+            if (!string.IsNullOrWhiteSpace(headersArg))
+            {
+                info.ArgumentList.Add("-headers");
+                info.ArgumentList.Add(headersArg);
+            }
         }
 
         info.ArgumentList.Add("-i");
@@ -827,6 +838,7 @@ public sealed class GeneratedHlsSessionManager(
             StartedUtc: StartedUtc,
             LastUpstreamByteUtc: LastAccessUtc,
             ReconnectAttempts: 0,
-            LastFailureKind: null);
+            LastFailureKind: null,
+            IsInternal: true);
     }
 }

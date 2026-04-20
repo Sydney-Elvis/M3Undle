@@ -66,6 +66,10 @@ public static class CompatibilityEndpoints
         client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
         client.MapGet("hls/generated/{sessionId}/{*asset}", ServeGeneratedHlsAssetAsync);
 
+        // Internal relay: lets Generated HLS sessions read from the shared ring buffer instead
+        // of opening a second provider connection. Protected by startup-generated secret header.
+        app.MapGet("/internal/relay/{providerId}/{channelId}", ServeInternalRelayAsync).AllowAnonymous();
+
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
         app.MapGet("/health/ready", ServeReadinessAsync).AllowAnonymous();
 
@@ -628,12 +632,23 @@ public static class CompatibilityEndpoints
                 }
             }
 
+            var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
+            string? generatedRelaySecret = null;
+            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out _))
+            {
+                var sk = resolved.SourceDescriptor.SessionKey;
+                generatedStreamUrl =
+                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
+                generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
+            }
+
             var generatedSession = await generatedHlsSessionManager.CreateSessionAsync(
                 new GeneratedHlsSessionRequest(
-                    StreamUrl: resolved.SourceDescriptor.StreamUrl,
+                    StreamUrl: generatedStreamUrl,
                     DisplayName: resolved.SourceDescriptor.DisplayName,
-                    ProviderId: resolved.SourceDescriptor.ProviderId,
-                    AdmissionKey: resolved.SourceDescriptor.SessionKey),
+                    ProviderId: generatedRelaySecret is null ? resolved.SourceDescriptor.ProviderId : null,
+                    AdmissionKey: resolved.SourceDescriptor.SessionKey,
+                    InternalRelaySecret: generatedRelaySecret),
                 cancellationToken);
 
             if (generatedSession is null)
@@ -1150,6 +1165,58 @@ public static class CompatibilityEndpoints
             startedUtc = latestRun?.StartedUtc,
             completedUtc = latestRun?.FinishedUtc,
         }, JsonOptions);
+    }
+
+    private static async Task ServeInternalRelayAsync(
+        string providerId,
+        string channelId,
+        HttpContext context,
+        InternalRelaySecretService secretService,
+        ChannelSessionManager channelSessionManager,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        var logger = loggerFactory.CreateLogger("M3Undle.Web.Api.CompatibilityEndpoints");
+
+        if (!context.Request.Headers.TryGetValue("X-M3Undle-Internal-Relay", out var headerValue)
+            || headerValue.ToString() != secretService.Secret)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
+
+        var key = new ChannelSessionKey(providerId, channelId);
+        if (!channelSessionManager.TryGet(key, out var session) || session is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        try
+        {
+            var subscriber = await session.AttachSubscriberAsync(context, cancellationToken, isInternal: true);
+            await subscriber.Completion;
+        }
+        catch (StreamAdmissionException ex)
+        {
+            logger.LogWarning(
+                "Internal relay admission rejected for {ProviderId}/{ChannelId}: {Reason}",
+                providerId, channelId, ex.Message);
+            if (!context.Response.HasStarted)
+                context.Response.StatusCode = ex.StatusCode;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Internal relay failed for {ProviderId}/{ChannelId}.",
+                providerId, channelId);
+            if (!context.Response.HasStarted)
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        }
     }
 
     private static async Task ServeStatusAsync(

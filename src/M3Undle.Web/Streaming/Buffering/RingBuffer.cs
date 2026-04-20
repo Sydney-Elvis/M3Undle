@@ -89,6 +89,14 @@ public sealed class RingBuffer
         }
     }
 
+    public BufferSnapshot CreateLiveEdgeSnapshot()
+    {
+        lock (_gate)
+        {
+            return new BufferSnapshot(_generation, [], 0, _maxBytes);
+        }
+    }
+
     public void ResetGeneration()
     {
         lock (_gate)

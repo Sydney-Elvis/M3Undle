@@ -24,10 +24,12 @@ public sealed class SubscriberConnection
         string requestedRoute,
         HttpContext context,
         int queueCapacity,
-        Func<SubscriberConnection, SubscriberDisconnectReason, Task> onCompleted)
+        Func<SubscriberConnection, SubscriberDisconnectReason, Task> onCompleted,
+        bool isInternal = false)
     {
         SessionId = sessionId;
         RequestedRoute = requestedRoute;
+        IsInternal = isInternal;
         _context = context;
         _writer = context.Response.BodyWriter;
         _onCompleted = onCompleted;
@@ -52,6 +54,8 @@ public sealed class SubscriberConnection
     public string SessionId { get; }
 
     public string RequestedRoute { get; }
+
+    public bool IsInternal { get; }
 
     public DateTimeOffset ConnectedUtc { get; }
 
@@ -118,7 +122,8 @@ public sealed class SubscriberConnection
             UserAgent,
             ConnectedUtc,
             BytesSent,
-            QueueDepth);
+            QueueDepth,
+            IsInternal);
 
     private async Task PumpAsync(BufferSnapshot initialSnapshot, CancellationToken ct)
     {

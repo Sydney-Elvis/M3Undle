@@ -271,6 +271,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshSer
 builder.Services.AddHostedService<DownstreamNotificationService>();
 builder.Services.AddSingleton<HdHomeRunTunerManager>();
 builder.Services.AddSingleton<StreamingRegistry>();
+builder.Services.AddSingleton<InternalRelaySecretService>();
 builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
 builder.Services.AddSingleton<StreamAdmissionBackoffStore>();
 builder.Services.AddSingleton<UpstreamStreamConnector>();
