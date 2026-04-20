@@ -13,14 +13,14 @@ internal sealed class ClientEndpointAccessFilter(
     {
         var http = context.HttpContext;
         var resolved = await accessResolver.ResolveAsync(http, http.RequestAborted);
-        var requestPath = SanitizeForLog(http.Request.Path.Value);
+        var routeTemplate = GetRouteTemplate(http, "/client-endpoint");
 
         if (!resolved.IsSuccess)
         {
             using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Auth" });
             logger.LogWarning(
                 "Client endpoint access denied. path={Path} method={Method} reason={Reason} client={Client}",
-                requestPath,
+                routeTemplate,
                 http.Request.Method,
                 resolved.FailureReason,
                 http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
@@ -47,6 +47,8 @@ internal sealed class ClientEndpointAccessFilter(
         return TypedResults.Problem("Endpoint access resolution failed.", statusCode: StatusCodes.Status500InternalServerError);
     }
 
-    private static string SanitizeForLog(string? value)
-        => string.IsNullOrEmpty(value) ? string.Empty : value.ReplaceLineEndings(" ");
+    private static string GetRouteTemplate(HttpContext context, string fallback)
+        => context.GetEndpoint() is RouteEndpoint routeEndpoint
+            ? routeEndpoint.RoutePattern.RawText ?? fallback
+            : fallback;
 }
