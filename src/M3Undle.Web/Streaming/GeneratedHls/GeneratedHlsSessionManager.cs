@@ -204,6 +204,9 @@ public sealed class GeneratedHlsSessionManager(
         registry.UpsertSession(session.ToSnapshot());
 
         if (trackedClient.IsNewClient)
+            EvictRetunedClients(sessionId, remoteIp, userAgent, record.LastAccessUtc);
+
+        if (trackedClient.IsNewClient)
         {
             logger.LogInformation(
                 "Generated HLS client attached: SessionId={SessionId} ParentStreamSessionId={ParentStreamSessionId} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} RequestedRoute={RequestedRoute} Classification={Classification} HlsClientCount={HlsClientCount}",
@@ -215,6 +218,33 @@ public sealed class GeneratedHlsSessionManager(
                 record.RequestedRoute,
                 StreamLogClassification.ClassifySubscriber(isInternal: false, isObservedHlsClient: true),
                 session.HlsClientCount);
+        }
+    }
+
+    private void EvictRetunedClients(
+        string currentSessionId,
+        string? remoteIp,
+        string? userAgent,
+        DateTimeOffset observedAtUtc)
+    {
+        if (!GeneratedHlsSession.HasClientFingerprint(remoteIp, userAgent))
+            return;
+
+        var clientKey = GeneratedHlsSession.CreateClientKey(remoteIp, userAgent);
+        var graceSeconds = Math.Max(0, _options.RetuneEvictionGraceSeconds);
+        var cutoff = observedAtUtc - TimeSpan.FromSeconds(graceSeconds);
+
+        foreach (var otherSession in _sessions.Values)
+        {
+            if (string.Equals(otherSession.SessionId, currentSessionId, StringComparison.Ordinal))
+                continue;
+
+            if (!otherSession.TryEvictClient(clientKey, cutoff, out var evictedClient))
+                continue;
+
+            registry.RemoveClient(evictedClient.ClientId);
+            registry.UpsertSession(otherSession.ToSnapshot());
+            LogObservedHlsClientRemoved(otherSession, evictedClient, "retune_detected");
         }
     }
 
@@ -881,6 +911,7 @@ public sealed class GeneratedHlsSessionManager(
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private Task? _stderrPumpTask;
         private Task? _stdoutPumpTask;
+        private readonly object _clientSync = new();
         private readonly ConcurrentDictionary<string, HlsClientRecord> _hlsClients = new(StringComparer.Ordinal);
 
         public string SessionId { get; } = sessionId;
@@ -929,20 +960,24 @@ public sealed class GeneratedHlsSessionManager(
         public void Touch()
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
+        public static string CreateClientKey(string? remoteIp, string? userAgent)
+            => $"{remoteIp}\x1f{userAgent}";
+
+        public static bool HasClientFingerprint(string? remoteIp, string? userAgent)
+            => !string.IsNullOrWhiteSpace(remoteIp) || !string.IsNullOrWhiteSpace(userAgent);
+
         public TrackedHlsClient TrackClient(string? remoteIp, string? userAgent, string requestedRoute)
         {
-            var clientKey = $"{remoteIp}\x1f{userAgent}";
+            var clientKey = CreateClientKey(remoteIp, userAgent);
             var now = DateTimeOffset.UtcNow;
 
-            while (true)
+            lock (_clientSync)
             {
                 if (_hlsClients.TryGetValue(clientKey, out var existing))
                 {
                     var updated = existing with { LastAccessUtc = now, RequestedRoute = requestedRoute };
-                    if (_hlsClients.TryUpdate(clientKey, updated, existing))
-                        return new TrackedHlsClient(updated, IsNewClient: false);
-
-                    continue;
+                    _hlsClients[clientKey] = updated;
+                    return new TrackedHlsClient(updated, IsNewClient: false);
                 }
 
                 var created = new HlsClientRecord(
@@ -954,8 +989,29 @@ public sealed class GeneratedHlsSessionManager(
                     now,
                     now);
 
-                if (_hlsClients.TryAdd(clientKey, created))
-                    return new TrackedHlsClient(created, IsNewClient: true);
+                _hlsClients[clientKey] = created;
+                return new TrackedHlsClient(created, IsNewClient: true);
+            }
+        }
+
+        public bool TryEvictClient(string clientKey, DateTimeOffset cutoffUtc, out HlsClientRecord removed)
+        {
+            lock (_clientSync)
+            {
+                if (!_hlsClients.TryGetValue(clientKey, out var existing) || existing.LastAccessUtc > cutoffUtc)
+                {
+                    removed = default!;
+                    return false;
+                }
+
+                if (_hlsClients.TryRemove(clientKey, out var record))
+                {
+                    removed = record;
+                    return true;
+                }
+
+                removed = default!;
+                return false;
             }
         }
 
@@ -964,10 +1020,13 @@ public sealed class GeneratedHlsSessionManager(
             var cutoff = DateTimeOffset.UtcNow - timeout;
             var removed = new List<HlsClientRecord>();
 
-            foreach (var kvp in _hlsClients)
+            lock (_clientSync)
             {
-                if (kvp.Value.LastAccessUtc < cutoff && _hlsClients.TryRemove(kvp.Key, out var record))
-                    removed.Add(record);
+                foreach (var kvp in _hlsClients.ToArray())
+                {
+                    if (kvp.Value.LastAccessUtc < cutoff && _hlsClients.TryRemove(kvp.Key, out var record))
+                        removed.Add(record);
+                }
             }
 
             return removed;
@@ -976,11 +1035,15 @@ public sealed class GeneratedHlsSessionManager(
         public List<HlsClientRecord> RemoveAllClients()
         {
             var removed = new List<HlsClientRecord>();
-            foreach (var key in _hlsClients.Keys.ToArray())
+            lock (_clientSync)
             {
-                if (_hlsClients.TryRemove(key, out var record))
-                    removed.Add(record);
+                foreach (var key in _hlsClients.Keys.ToArray())
+                {
+                    if (_hlsClients.TryRemove(key, out var record))
+                        removed.Add(record);
+                }
             }
+
             return removed;
         }
 

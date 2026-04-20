@@ -177,6 +177,97 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task TrackClient_SameFingerprintOnDifferentSession_EvictsOlderSession()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(
+            ffmpeg.Root,
+            ffmpeg.ExePath,
+            startupTimeoutSeconds: 3,
+            registry: registry,
+            retuneEvictionGraceSeconds: 0);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var firstHandle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream-a.ts",
+                DisplayName: "Retune A"),
+            CancellationToken.None);
+
+        var secondHandle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream-b.ts",
+                DisplayName: "Retune B"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(firstHandle);
+        Assert.IsNotNull(secondHandle);
+
+        manager.TrackClient(firstHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/a/index.m3u8");
+        manager.TrackClient(secondHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/b/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(1, clients, "Retune should evict the older generated-HLS client immediately.");
+        Assert.AreEqual(secondHandle.SessionId, clients[0].SessionId);
+
+        var firstSession = registry.TryGetSession(firstHandle.SessionId);
+        var secondSession = registry.TryGetSession(secondHandle.SessionId);
+        Assert.IsNotNull(firstSession);
+        Assert.IsNotNull(secondSession);
+        Assert.AreEqual(0, firstSession.SubscriberCount);
+        Assert.AreEqual(1, secondSession.SubscriberCount);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TrackClient_SameFingerprintWithinGrace_DoesNotEvictOlderSession()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(
+            ffmpeg.Root,
+            ffmpeg.ExePath,
+            startupTimeoutSeconds: 3,
+            registry: registry,
+            retuneEvictionGraceSeconds: 5);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var firstHandle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream-a.ts",
+                DisplayName: "Grace A"),
+            CancellationToken.None);
+
+        var secondHandle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream-b.ts",
+                DisplayName: "Grace B"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(firstHandle);
+        Assert.IsNotNull(secondHandle);
+
+        manager.TrackClient(firstHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/a/index.m3u8");
+        manager.TrackClient(secondHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/b/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(2, clients, "Grace window should prevent immediate retune eviction.");
+
+        var firstSession = registry.TryGetSession(firstHandle.SessionId);
+        var secondSession = registry.TryGetSession(secondHandle.SessionId);
+        Assert.IsNotNull(firstSession);
+        Assert.IsNotNull(secondSession);
+        Assert.AreEqual(1, firstSession.SubscriberCount);
+        Assert.AreEqual(1, secondSession.SubscriberCount);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task StopAsync_RemovesHlsClientsFromRegistry()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
@@ -205,7 +296,8 @@ public sealed class GeneratedHlsSessionManagerTests
         string root,
         string ffmpegPath,
         int startupTimeoutSeconds,
-        StreamingRegistry? registry = null)
+        StreamingRegistry? registry = null,
+        int retuneEvictionGraceSeconds = 5)
     {
         var options = Options.Create(new GeneratedHlsOptions
         {
@@ -218,6 +310,7 @@ public sealed class GeneratedHlsSessionManagerTests
             StartupTimeoutSeconds = startupTimeoutSeconds,
             InactivityTimeoutSeconds = 120,
             CleanupIntervalSeconds = 120,
+            RetuneEvictionGraceSeconds = retuneEvictionGraceSeconds,
             StartupStaleAgeHours = 1,
         });
 
