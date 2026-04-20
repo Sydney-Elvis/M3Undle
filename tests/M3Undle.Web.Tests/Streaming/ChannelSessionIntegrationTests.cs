@@ -788,6 +788,33 @@ public sealed class ChannelSessionIntegrationTests
         await tsSession.DisposeAsync();
     }
 
+    [TestMethod]
+    public async Task Session_ExternalRetention_KeepsSessionAliveUntilDisposed()
+    {
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(200) });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var requestCts = new CancellationTokenSource();
+        var subscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), requestCts.Token);
+        using var retention = session.RetainExternalActivity();
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Task.Delay(350);
+        Assert.IsTrue(fixture.Manager.TryGet(session.Key, out _));
+
+        retention.Dispose();
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+    }
+
     private static async Task<TException> AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
     {
         try

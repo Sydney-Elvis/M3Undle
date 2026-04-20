@@ -534,9 +534,12 @@ public static class XtreamEndpoints
 
             var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
             string? generatedRelaySecret = null;
-            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out _))
+            string? parentStreamSessionId = null;
+            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out var parentSession)
+                && parentSession is not null)
             {
                 var sk = resolved.SourceDescriptor.SessionKey;
+                parentStreamSessionId = parentSession.SessionId;
                 generatedStreamUrl =
                     $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
                 generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
@@ -548,7 +551,9 @@ public static class XtreamEndpoints
                     DisplayName: resolved.SourceDescriptor.DisplayName,
                     ProviderId: generatedRelaySecret is null ? resolved.SourceDescriptor.ProviderId : null,
                     AdmissionKey: resolved.SourceDescriptor.SessionKey,
-                    InternalRelaySecret: generatedRelaySecret),
+                    InternalRelaySecret: generatedRelaySecret,
+                    ParentStreamSessionId: parentStreamSessionId,
+                    RequestedRoute: resolved.SourceDescriptor.RequestedRoute),
                 cancellationToken);
 
             if (generatedSession is null)

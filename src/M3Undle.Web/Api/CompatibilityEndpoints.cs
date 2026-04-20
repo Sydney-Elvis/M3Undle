@@ -634,9 +634,12 @@ public static class CompatibilityEndpoints
 
             var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
             string? generatedRelaySecret = null;
-            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out _))
+            string? parentStreamSessionId = null;
+            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out var parentSession)
+                && parentSession is not null)
             {
                 var sk = resolved.SourceDescriptor.SessionKey;
+                parentStreamSessionId = parentSession.SessionId;
                 generatedStreamUrl =
                     $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
                 generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
@@ -648,7 +651,9 @@ public static class CompatibilityEndpoints
                     DisplayName: resolved.SourceDescriptor.DisplayName,
                     ProviderId: generatedRelaySecret is null ? resolved.SourceDescriptor.ProviderId : null,
                     AdmissionKey: resolved.SourceDescriptor.SessionKey,
-                    InternalRelaySecret: generatedRelaySecret),
+                    InternalRelaySecret: generatedRelaySecret,
+                    ParentStreamSessionId: parentStreamSessionId,
+                    RequestedRoute: resolved.SourceDescriptor.RequestedRoute),
                 cancellationToken);
 
             if (generatedSession is null)
@@ -681,6 +686,7 @@ public static class CompatibilityEndpoints
         {
             HdHomeRunTunerReservation? tunerReservation = null;
             SubscriberConnection? subscriber = null;
+            IDisposable? tunerSessionRetention = null;
             try
             {
                 if (IsHdHomeRunTuneRoute(context.Request.Path))
@@ -744,10 +750,18 @@ public static class CompatibilityEndpoints
 
                 if (tunerReservation is not null)
                 {
+                    subscriber.AttachHdhrDiagnostics(new HdhrSubscriberDiagnostics(
+                        tunerReservation.VirtualTunerId,
+                        tunerReservation.ReservationId,
+                        tunerReservation.StreamKey,
+                        context.Request.Path.Value ?? resolved.SourceDescriptor.RequestedRoute));
+                    tunerSessionRetention = session.RetainExternalActivity();
                     hdHomeRunTunerManager.Activate(
                         tunerReservation,
                         subscriber,
-                        resolved.SourceDescriptor.DisplayName);
+                        resolved.SourceDescriptor.DisplayName,
+                        tunerSessionRetention);
+                    tunerSessionRetention = null;
                     logger.LogInformation(
                         "HDHR tuner activated: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} channel={Channel} clientId={ClientId}",
                         tunerReservation.VirtualTunerId,
@@ -804,15 +818,22 @@ public static class CompatibilityEndpoints
             }
             finally
             {
+                tunerSessionRetention?.Dispose();
+
                 if (tunerReservation is not null)
                 {
-                    hdHomeRunTunerManager.Release(tunerReservation.ReservationId, subscriber?.ClientId);
+                    var hdhrDisconnectGrace = ResolveHdhrDisconnectGrace(streamProxyOptions.Value);
+                    hdHomeRunTunerManager.ReleaseWithGrace(
+                        tunerReservation.ReservationId,
+                        hdhrDisconnectGrace,
+                        subscriber?.ClientId);
                     var leases = hdHomeRunTunerManager.GetActiveLeases();
                     logger.LogInformation(
-                        "HDHR tuner released: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} remainingLeaseCount={LeaseCount}",
+                        "HDHR tuner release scheduled: tunerId={TunerId} reservationId={ReservationId} streamKey={StreamKey} graceSeconds={GraceSeconds} activeLeaseCount={LeaseCount}",
                         tunerReservation.VirtualTunerId,
                         tunerReservation.ReservationId,
                         tunerReservation.StreamKey,
+                        Math.Max(0, (int)Math.Ceiling(hdhrDisconnectGrace.TotalSeconds)),
                         leases.Count);
                 }
             }
@@ -1313,6 +1334,16 @@ public static class CompatibilityEndpoints
             normalized = normalized[1..];
 
         return normalized;
+    }
+
+    private static TimeSpan ResolveHdhrDisconnectGrace(StreamProxyOptions options)
+    {
+        var minimumGrace = TimeSpan.FromSeconds(90);
+        var configuredGrace = options.IdleGrace < minimumGrace ? minimumGrace : options.IdleGrace;
+        if (options.IdleGraceHardCap > TimeSpan.Zero && configuredGrace > options.IdleGraceHardCap)
+            return options.IdleGraceHardCap;
+
+        return configuredGrace;
     }
 
     private static IResult ServeStreamsSingleSessionStatusAsync(string sessionId, StreamingRegistry registry)

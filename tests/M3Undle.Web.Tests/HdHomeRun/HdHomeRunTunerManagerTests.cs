@@ -236,6 +236,46 @@ public sealed class HdHomeRunTunerManagerTests
     }
 
     [TestMethod]
+    public async Task ReleaseWithGrace_KeepsLeaseUntilGraceExpires()
+    {
+        var manager = CreateManager(tunerCount: 1);
+        var reservation = manager.Acquire("tuner0", "ch-1").Reservation!;
+        var subscriber = CreateSubscriber();
+        var retention = new TrackingDisposable();
+
+        manager.Activate(reservation, subscriber, "Channel One", retention);
+        manager.ReleaseWithGrace(reservation.ReservationId, TimeSpan.FromMilliseconds(150), subscriber.ClientId);
+
+        Assert.HasCount(1, manager.GetActiveLeases());
+        Assert.AreEqual(0, retention.DisposeCount);
+
+        await WaitUntilAsync(() => manager.GetActiveLeases().Count == 0, TimeSpan.FromSeconds(2));
+        Assert.AreEqual(1, retention.DisposeCount);
+    }
+
+    [TestMethod]
+    public async Task Acquire_SameVirtualTuner_CancelsPendingGraceRelease()
+    {
+        var manager = CreateManager(tunerCount: 1);
+        var first = manager.Acquire("tuner0", "ch-1");
+        var firstSubscriber = CreateSubscriber();
+        var retention = new TrackingDisposable();
+
+        manager.Activate(first.Reservation!, firstSubscriber, "Channel One", retention);
+        manager.ReleaseWithGrace(first.Reservation!.ReservationId, TimeSpan.FromSeconds(1), firstSubscriber.ClientId);
+
+        var second = manager.Acquire("tuner0", "ch-2");
+
+        Assert.IsTrue(second.Succeeded);
+        Assert.AreSame(firstSubscriber, second.PriorSubscriber);
+        Assert.AreEqual(1, retention.DisposeCount);
+        Assert.AreEqual("ch-2", manager.GetActiveLeases().Single().StreamKey);
+
+        await Task.Delay(1200);
+        Assert.HasCount(1, manager.GetActiveLeases());
+    }
+
+    [TestMethod]
     public void IsValidTunerIndex_ReturnsCorrectResults()
     {
         var manager = CreateManager(tunerCount: 4);
@@ -280,4 +320,18 @@ public sealed class HdHomeRunTunerManagerTests
             context: new DefaultHttpContext(),
             queueCapacity: 4,
             onCompleted: (_, _) => Task.CompletedTask);
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (!condition() && DateTimeOffset.UtcNow < deadline)
+            await Task.Delay(20);
+    }
+
+    private sealed class TrackingDisposable : IDisposable
+    {
+        public int DisposeCount { get; private set; }
+
+        public void Dispose() => DisposeCount++;
+    }
 }

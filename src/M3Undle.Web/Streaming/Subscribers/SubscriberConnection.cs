@@ -5,6 +5,12 @@ using M3Undle.Web.Streaming.Observability;
 
 namespace M3Undle.Web.Streaming.Subscribers;
 
+public sealed record HdhrSubscriberDiagnostics(
+    string TunerId,
+    string ReservationId,
+    string StreamKey,
+    string VirtualPath);
+
 public sealed class SubscriberConnection
 {
     private readonly HttpContext _context;
@@ -18,6 +24,7 @@ public sealed class SubscriberConnection
     private Task? _pumpTask;
     private long _bytesSent;
     private int _queueDepth;
+    private HdhrSubscriberDiagnostics? _hdhrDiagnostics;
 
     public SubscriberConnection(
         string sessionId,
@@ -47,6 +54,7 @@ public sealed class SubscriberConnection
         ConnectedUtc = DateTimeOffset.UtcNow;
         RemoteIp = context.Connection.RemoteIpAddress?.ToString();
         UserAgent = context.Request.Headers.UserAgent.ToString();
+        RequestPath = context.Request.Path.Value ?? requestedRoute;
     }
 
     public string ClientId { get; }
@@ -55,6 +63,8 @@ public sealed class SubscriberConnection
 
     public string RequestedRoute { get; }
 
+    public string RequestPath { get; }
+
     public bool IsInternal { get; }
 
     public DateTimeOffset ConnectedUtc { get; }
@@ -62,6 +72,8 @@ public sealed class SubscriberConnection
     public string? RemoteIp { get; }
 
     public string? UserAgent { get; }
+
+    public HdhrSubscriberDiagnostics? HdhrDiagnostics => Volatile.Read(ref _hdhrDiagnostics);
 
     public long BytesSent => Interlocked.Read(ref _bytesSent);
 
@@ -112,6 +124,9 @@ public sealed class SubscriberConnection
         _outbound.Writer.TryComplete();
         return _onCompleted(this, reason);
     }
+
+    public void AttachHdhrDiagnostics(HdhrSubscriberDiagnostics diagnostics)
+        => Volatile.Write(ref _hdhrDiagnostics, diagnostics);
 
     public StreamClientSnapshot Snapshot()
         => new(

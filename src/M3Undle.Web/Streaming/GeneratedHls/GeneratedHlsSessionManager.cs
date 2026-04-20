@@ -19,7 +19,9 @@ public sealed record GeneratedHlsSessionRequest(
     string? ProviderUserAgent = null,
     string? ProviderHeadersJson = null,
     ChannelSessionKey? AdmissionKey = null,
-    string? InternalRelaySecret = null);
+    string? InternalRelaySecret = null,
+    string? ParentStreamSessionId = null,
+    string? RequestedRoute = null);
 
 public sealed record GeneratedHlsSessionHandle(
     string SessionId,
@@ -91,7 +93,9 @@ public sealed class GeneratedHlsSessionManager(
             sessionDir,
             manifestPath,
             process,
-            request.AdmissionKey);
+            request.AdmissionKey,
+            request.ParentStreamSessionId,
+            request.RequestedRoute);
 
         if (!_sessions.TryAdd(sessionId, session))
         {
@@ -110,12 +114,21 @@ public sealed class GeneratedHlsSessionManager(
         var ready = await WaitForManifestReadyAsync(session, ct);
         if (!ready)
         {
-            await RemoveSessionAsync(sessionId, "startup failed");
+            await RemoveSessionAsync(sessionId, "startup_failed");
             return null;
         }
 
         session.Touch();
         registry.UpsertSession(session.ToSnapshot());
+        logger.LogInformation(
+            "Generated HLS session created: SessionId={SessionId} DisplayName={DisplayName} ParentStreamSessionId={ParentStreamSessionId} AdmissionKey={AdmissionKey} TrackInStatus={TrackInStatus} Reused={Reused} ManifestPath={ManifestPath}",
+            session.SessionId,
+            session.DisplayName,
+            session.ParentStreamSessionId,
+            session.AdmissionKey?.ToString(),
+            true,
+            false,
+            session.ManifestPath);
         return new GeneratedHlsSessionHandle(sessionId, manifestPath);
     }
 
@@ -182,12 +195,27 @@ public sealed class GeneratedHlsSessionManager(
         if (!_sessions.TryGetValue(sessionId, out var session))
             return;
 
-        var record = session.TrackClient(remoteIp, userAgent, requestedRoute);
+        var trackedClient = session.TrackClient(remoteIp, userAgent, requestedRoute);
+        var record = trackedClient.Record;
         registry.UpsertClient(new StreamClientSnapshot(
             record.ClientId, record.SessionId, record.RequestedRoute,
             record.RemoteIp, record.UserAgent, record.ConnectedUtc,
             BytesSent: 0, QueueDepth: 0));
         registry.UpsertSession(session.ToSnapshot());
+
+        if (trackedClient.IsNewClient)
+        {
+            logger.LogInformation(
+                "Generated HLS client attached: SessionId={SessionId} ParentStreamSessionId={ParentStreamSessionId} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} RequestedRoute={RequestedRoute} Classification={Classification} HlsClientCount={HlsClientCount}",
+                session.SessionId,
+                session.ParentStreamSessionId,
+                record.ClientId,
+                record.RemoteIp,
+                record.UserAgent,
+                record.RequestedRoute,
+                StreamLogClassification.ClassifySubscriber(isInternal: false, isObservedHlsClient: true),
+                session.HlsClientCount);
+        }
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -244,7 +272,7 @@ public sealed class GeneratedHlsSessionManager(
 
         var sessionIds = _sessions.Keys.ToArray();
         foreach (var sessionId in sessionIds)
-            await RemoveSessionAsync(sessionId, "application shutdown");
+            await RemoveSessionAsync(sessionId, "application_shutdown");
     }
 
     public async ValueTask DisposeAsync()
@@ -473,19 +501,26 @@ public sealed class GeneratedHlsSessionManager(
             {
                 var staleClients = session.SweepStaleClients(inactivity);
                 foreach (var client in staleClients)
+                {
                     registry.RemoveClient(client.ClientId);
+                    LogObservedHlsClientRemoved(session, client, "stale_timeout");
+                }
 
                 if (staleClients.Count > 0)
                     registry.UpsertSession(session.ToSnapshot());
             }
 
             var candidates = _sessions.Values
-                .Where(x => x.Process.HasExited || (now - x.LastAccessUtc) > inactivity)
-                .Select(x => x.SessionId)
+                .Select(x => new
+                {
+                    x.SessionId,
+                    RemovalReason = x.Process.HasExited ? "process_exit" : (now - x.LastAccessUtc) > inactivity ? "inactivity_timeout" : null,
+                })
+                .Where(x => x.RemovalReason is not null)
                 .ToArray();
 
-            foreach (var sessionId in candidates)
-                await RemoveSessionAsync(sessionId, "inactivity or process exit");
+            foreach (var candidate in candidates)
+                await RemoveSessionAsync(candidate.SessionId, candidate.RemovalReason!);
         }
     }
 
@@ -495,7 +530,10 @@ public sealed class GeneratedHlsSessionManager(
             return;
 
         foreach (var client in session.RemoveAllClients())
+        {
             registry.RemoveClient(client.ClientId);
+            LogObservedHlsClientRemoved(session, client, "session_removed");
+        }
 
         registry.RemoveSession(sessionId);
 
@@ -514,12 +552,25 @@ public sealed class GeneratedHlsSessionManager(
         finally
         {
             await ObservePumpTasksAsync(session);
+            var artifactState = CaptureArtifactState(session);
+            var parentSessionActive = IsParentSessionActive(session);
             session.Process.Dispose();
             TryDeleteDirectory(session.WorkDirectory);
             logger.LogInformation(
-                "Generated HLS session removed: sessionId={SessionId} reason={Reason}",
+                "Generated HLS session removed: SessionId={SessionId} DisplayName={DisplayName} ParentStreamSessionId={ParentStreamSessionId} AdmissionKey={AdmissionKey} RemovalReason={RemovalReason} ParentSessionActive={ParentSessionActive} ManifestExists={ManifestExists} LastManifestWriteUtc={LastManifestWriteUtc} LastSegmentFileName={LastSegmentFileName} LastSegmentIndex={LastSegmentIndex} LastSegmentWriteUtc={LastSegmentWriteUtc} LastPlaylistActivityUtc={LastPlaylistActivityUtc} LastSegmentActivityUtc={LastSegmentActivityUtc}",
                 sessionId,
-                reason);
+                session.DisplayName,
+                session.ParentStreamSessionId,
+                session.AdmissionKey?.ToString(),
+                reason,
+                parentSessionActive,
+                artifactState.ManifestExists,
+                artifactState.LastManifestWriteUtc,
+                artifactState.LastSegmentFileName,
+                artifactState.LastSegmentIndex,
+                artifactState.LastSegmentWriteUtc,
+                artifactState.LastManifestWriteUtc,
+                artifactState.LastSegmentWriteUtc);
         }
     }
 
@@ -552,8 +603,9 @@ public sealed class GeneratedHlsSessionManager(
             {
                 logger.LogWarning(
                     faultedTask.Exception,
-                    "Generated HLS session {SessionId} FFmpeg {StreamName} pump failed.",
+                    "Generated HLS session {SessionId} parent={ParentStreamSessionId} FFmpeg {StreamName} pump failed.",
                     session.SessionId,
+                    session.ParentStreamSessionId,
                     streamName);
             },
             CancellationToken.None,
@@ -715,13 +767,97 @@ public sealed class GeneratedHlsSessionManager(
             if (isError)
             {
                 logger.LogDebug(
-                    "FFmpeg[{SessionId}] {DisplayName}: {Line}",
+                    "FFmpeg[{SessionId}] parent={ParentStreamSessionId} {DisplayName}: {Line}",
                     session.SessionId,
+                    session.ParentStreamSessionId,
                     session.DisplayName,
                     line);
             }
         }
     }
+
+    private void LogObservedHlsClientRemoved(GeneratedHlsSession session, HlsClientRecord client, string removalReason)
+    {
+        logger.LogInformation(
+            "Generated HLS client removed: SessionId={SessionId} ParentStreamSessionId={ParentStreamSessionId} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} RequestedRoute={RequestedRoute} Classification={Classification} RemovalReason={RemovalReason}",
+            session.SessionId,
+            session.ParentStreamSessionId,
+            client.ClientId,
+            client.RemoteIp,
+            client.UserAgent,
+            client.RequestedRoute,
+            StreamLogClassification.ClassifySubscriber(isInternal: false, isObservedHlsClient: true),
+            removalReason);
+    }
+
+    private bool IsParentSessionActive(GeneratedHlsSession session)
+    {
+        if (string.IsNullOrWhiteSpace(session.ParentStreamSessionId) || session.AdmissionKey is not { } key)
+            return false;
+
+        return channelSessionManager.TryGet(key, out var activeSession)
+               && activeSession is not null
+               && string.Equals(activeSession.SessionId, session.ParentStreamSessionId, StringComparison.Ordinal);
+    }
+
+    private static HlsArtifactState CaptureArtifactState(GeneratedHlsSession session)
+    {
+        var manifestExists = File.Exists(session.ManifestPath);
+        DateTimeOffset? lastManifestWriteUtc = null;
+        if (manifestExists)
+        {
+            var manifestInfo = new FileInfo(session.ManifestPath);
+            if (manifestInfo.Exists)
+                lastManifestWriteUtc = manifestInfo.LastWriteTimeUtc;
+        }
+
+        string? lastSegmentFileName = null;
+        int? lastSegmentIndex = null;
+        DateTimeOffset? lastSegmentWriteUtc = null;
+
+        if (Directory.Exists(session.WorkDirectory))
+        {
+            var latestSegment = Directory.EnumerateFiles(session.WorkDirectory, "segment_*.ts")
+                .Select(path => new FileInfo(path))
+                .Where(info => info.Exists)
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ThenByDescending(info => info.Name, StringComparer.Ordinal)
+                .FirstOrDefault();
+
+            if (latestSegment is not null)
+            {
+                lastSegmentFileName = latestSegment.Name;
+                lastSegmentWriteUtc = latestSegment.LastWriteTimeUtc;
+                lastSegmentIndex = TryParseSegmentIndex(latestSegment.Name);
+            }
+        }
+
+        return new HlsArtifactState(
+            manifestExists,
+            lastManifestWriteUtc,
+            lastSegmentFileName,
+            lastSegmentIndex,
+            lastSegmentWriteUtc);
+    }
+
+    private static int? TryParseSegmentIndex(string fileName)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var underscore = stem.LastIndexOf('_');
+        if (underscore < 0 || underscore == stem.Length - 1)
+            return null;
+
+        return int.TryParse(stem[(underscore + 1)..], out var index) ? index : null;
+    }
+
+    private sealed record HlsArtifactState(
+        bool ManifestExists,
+        DateTimeOffset? LastManifestWriteUtc,
+        string? LastSegmentFileName,
+        int? LastSegmentIndex,
+        DateTimeOffset? LastSegmentWriteUtc);
+
+    private sealed record TrackedHlsClient(HlsClientRecord Record, bool IsNewClient);
 
     private sealed record HlsClientRecord(
         string ClientId,
@@ -738,7 +874,9 @@ public sealed class GeneratedHlsSessionManager(
         string workDirectory,
         string manifestPath,
         Process process,
-        ChannelSessionKey? admissionKey = null)
+        ChannelSessionKey? admissionKey = null,
+        string? parentStreamSessionId = null,
+        string? requestedRoute = null)
     {
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private Task? _stderrPumpTask;
@@ -756,6 +894,10 @@ public sealed class GeneratedHlsSessionManager(
         public Process Process { get; } = process;
 
         public ChannelSessionKey? AdmissionKey { get; } = admissionKey;
+
+        public string? ParentStreamSessionId { get; } = parentStreamSessionId;
+
+        public string? RequestedRoute { get; } = requestedRoute;
 
         public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
 
@@ -787,17 +929,34 @@ public sealed class GeneratedHlsSessionManager(
         public void Touch()
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
-        public HlsClientRecord TrackClient(string? remoteIp, string? userAgent, string requestedRoute)
+        public TrackedHlsClient TrackClient(string? remoteIp, string? userAgent, string requestedRoute)
         {
             var clientKey = $"{remoteIp}\x1f{userAgent}";
             var now = DateTimeOffset.UtcNow;
 
-            return _hlsClients.AddOrUpdate(
-                clientKey,
-                _ => new HlsClientRecord(
-                    Guid.NewGuid().ToString("N"), SessionId, requestedRoute,
-                    remoteIp, userAgent, now, now),
-                (_, existing) => existing with { LastAccessUtc = now, RequestedRoute = requestedRoute });
+            while (true)
+            {
+                if (_hlsClients.TryGetValue(clientKey, out var existing))
+                {
+                    var updated = existing with { LastAccessUtc = now, RequestedRoute = requestedRoute };
+                    if (_hlsClients.TryUpdate(clientKey, updated, existing))
+                        return new TrackedHlsClient(updated, IsNewClient: false);
+
+                    continue;
+                }
+
+                var created = new HlsClientRecord(
+                    Guid.NewGuid().ToString("N"),
+                    SessionId,
+                    requestedRoute,
+                    remoteIp,
+                    userAgent,
+                    now,
+                    now);
+
+                if (_hlsClients.TryAdd(clientKey, created))
+                    return new TrackedHlsClient(created, IsNewClient: true);
+            }
         }
 
         public List<HlsClientRecord> SweepStaleClients(TimeSpan timeout)
