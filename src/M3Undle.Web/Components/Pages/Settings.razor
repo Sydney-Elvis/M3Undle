@@ -1,5 +1,7 @@
 @page "/settings"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@using M3Undle.Web.Contracts.Providers
 @using M3Undle.Web.Streaming.Configuration
 @using M3Undle.Web.Streaming.Observability
 @inject ISiteSettingsService SiteSettings
@@ -8,12 +10,78 @@
 @inject IApplicationRestartService ApplicationRestart
 @inject StreamingRegistry StreamingRegistry
 @inject IHdHomeRunSettingsService HdhrSettings
+@inject IGeneratedHlsSettingsService GeneratedHlsSettings
+@inject IRefreshScheduleService RefreshSchedule
+@inject IDownstreamIntegrationService DownstreamIntegrations
+@inject ProviderPageService ProviderPageService
+@inject IDialogService DialogService
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
 <MudText Typo="Typo.h5" Class="mb-4">Settings</MudText>
 
 <MudGrid Spacing="3">
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Refresh Schedule</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls how often M3Undle fetches new lineup and guide data from upstream providers.
+            </MudText>
+
+            @if (_loadingRefreshSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                <div class="mb-3">
+                    <RefreshIntervalSelect Value="@RefreshIntervalHoursAdapter"
+                                           ValueChanged="@(v => RefreshIntervalHoursAdapter = v)"
+                                           RecommendDefault="true" />
+                </div>
+
+                <MudSwitch T="bool" Label="Startup catch-up" @bind-Value="_refreshStartupCatchup"
+                           Color="Color.Primary" Class="mb-1" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                    When enabled, M3Undle will refresh on startup if the last published snapshot is stale.
+                </MudText>
+
+                @if (_nextRefreshUtc.HasValue)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                    </MudText>
+                }
+                else if (_refreshScheduleKind == "manual")
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Automatic refresh is disabled. Use the manual refresh button on the Dashboard.
+                    </MudText>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_refreshError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_refreshError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_refreshSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_refreshSuccess
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_savingRefreshSettings"
+                           OnClick="SaveRefreshScheduleAsync">
+                    @(_savingRefreshSettings ? "Saving..." : "Save Refresh Settings")
+                </MudButton>
+            }
+        </MudPaper>
+    </MudItem>
+
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1">
             <MudText Typo="Typo.h6" Class="mb-1">UI Security</MudText>
@@ -76,7 +144,7 @@
                 @if (!string.IsNullOrWhiteSpace(_activeProfileId))
                 {
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
-                        Bound profile: @_activeProfileId
+                        Bound profile: @(_activeProfileName ?? _activeProfileId)
                     </MudText>
                 }
 
@@ -191,6 +259,22 @@
                     </MudItem>
                     <MudItem xs="12" sm="6">
                         <div class="d-flex align-center gap-2">
+                            <MudTextField @bind-Value="_hdhrFriendlyName"
+                                          Label="Friendly Name"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Placeholder="M3Undle HDHomeRun"
+                                          Disabled="_hdhrDisabledByEnv"
+                                          HelperText="@($"Shown to HDHR clients. Effective: {_hdhrResolvedFriendlyName}")"
+                                          Class="flex-grow-1" />
+                            <MudTooltip Text="The name shown to apps that discover this device (e.g. Plex, Channels DVR, NextPVR). Leave blank to use the default 'M3Undle HDHomeRun'."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <div class="d-flex align-center gap-2">
                             <MudTextField @bind-Value="_hdhrAdvertisedBaseUrl"
                                           Label="Advertised Base URL"
                                           Variant="Variant.Outlined" Margin="Margin.Dense"
@@ -268,6 +352,10 @@
                     <MudItem xs="12" sm="4">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Tuner Count</MudText>
                         <MudText Typo="Typo.body2">@_appliedHdhrSettings?.EffectiveTunerCount</MudText>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Friendly Name</MudText>
+                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.ResolvedFriendlyName</MudText>
                     </MudItem>
                     <MudItem xs="12" sm="4">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Base URL</MudText>
@@ -550,6 +638,201 @@
             }
         </MudPaper>
     </MudItem>
+
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Browser Playback</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls HLS generation for browser and Electron clients. When a browser requests a stream
+                that is only available as MPEG-TS, M3Undle uses FFmpeg to convert it to HLS on the fly.
+                Changes require a restart.
+            </MudText>
+
+            @if (_loadingGenHlsSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                @if (!_genHlsFfmpegAvailable)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        <strong>FFmpeg not found</strong> — browser playback of TS-only streams is unavailable.
+                        @if (!string.IsNullOrWhiteSpace(_genHlsFfmpegUnavailableReason))
+                        {
+                            <br />@_genHlsFfmpegUnavailableReason
+                        }
+                        <br />Install FFmpeg and restart, or set the path below.
+                    </MudAlert>
+                }
+                else if (_genHlsEffectivelyEnabled)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        FFmpeg is available. Browser playback is active.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        Generated HLS is disabled. Browser clients will not receive HLS for TS-only streams.
+                    </MudAlert>
+                }
+
+                @if (_genHlsRestartRequired)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        Browser Playback settings have been saved but are not active yet. Restart M3Undle to apply them.
+                    </MudAlert>
+                }
+
+                <MudSwitch T="bool" Label="Enable generated HLS" @bind-Value="_genHlsEnabled" Class="mb-3"
+                           Color="Color.Primary" />
+
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="12" sm="6">
+                        <div class="d-flex align-center gap-2">
+                            <MudTextField @bind-Value="_genHlsFfmpegPath"
+                                          Label="FFmpeg Path"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          Placeholder="ffmpeg"
+                                          HelperText="@($"Active: {_genHlsConfiguredFfmpegPath}")"
+                                          Class="flex-grow-1" />
+                            <MudTooltip Text="Path to the FFmpeg executable. Leave blank to use the default ('ffmpeg' on PATH). Set an absolute path if FFmpeg is installed in a custom location."
+                                        Arrow="true" Placement="Placement.Top">
+                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                            </MudTooltip>
+                        </div>
+                    </MudItem>
+                </MudGrid>
+
+                @if (!string.IsNullOrWhiteSpace(_genHlsError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_genHlsError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_genHlsSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_genHlsSuccess
+                    </MudAlert>
+                }
+
+                <MudStack Row="true" Spacing="2">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="_savingGenHlsSettings || _restartingApplication"
+                               OnClick="SaveGenHlsSettingsAsync">
+                        @(_savingGenHlsSettings ? "Saving..." : "Save Browser Playback Settings")
+                    </MudButton>
+
+                    @if (_genHlsRestartRequired)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                   Disabled="_restartingApplication"
+                                   OnClick="RestartApplicationAsync">
+                            @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
+                        </MudButton>
+                    }
+                </MudStack>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                <MudText Typo="Typo.h6" Class="flex-grow-1">Downstream Integrations</MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="OpenAddIntegrationDialogAsync">
+                    Add Integration
+                </MudButton>
+            </MudStack>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                After a successful refresh, M3Undle can automatically notify connected media servers so they pick up new channels and guide data.
+            </MudText>
+
+            @if (_loadingIntegrations)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else if (_integrations.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    No integrations configured. Add one to enable automatic downstream notifications.
+                </MudText>
+            }
+            else
+            {
+                <MudTable Items="_integrations" Dense="true" Hover="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Type</MudTh>
+                        <MudTh>URL</MudTh>
+                        <MudTh>Triggers</MudTh>
+                        <MudTh>Status</MudTh>
+                        <MudTh></MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Name">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                @if (!context.Enabled)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                                }
+                                @context.Name
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Type">@IntegrationKindLabel(context.Kind)</MudTd>
+                        <MudTd DataLabel="URL">
+                            <MudText Typo="Typo.caption">@context.BaseUrl</MudText>
+                        </MudTd>
+                        <MudTd DataLabel="Triggers">
+                            <MudStack Row="true" Spacing="1">
+                                @if (context.TriggerOnLineupUpdate)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">Lineup</MudChip>
+                                }
+                                @if (context.TriggerOnGuideUpdate)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Secondary">Guide</MudChip>
+                                }
+                            </MudStack>
+                        </MudTd>
+                        <MudTd DataLabel="Status">
+                            @if (!string.IsNullOrWhiteSpace(context.LastNotifyError))
+                            {
+                                <MudTooltip Text="@context.LastNotifyError" Arrow="true">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Error</MudChip>
+                                </MudTooltip>
+                            }
+                            else if (context.LastNotifiedUtc.HasValue)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Success">
+                                    OK @context.LastNotifiedUtc.Value.ToLocalTime().ToString("d MMM h:mm tt")
+                                </MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Never notified</MudText>
+                            }
+                        </MudTd>
+                        <MudTd>
+                            <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                               OnClick="@(() => OpenEditIntegrationDialogAsync(context))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => DeleteIntegrationAsync(context))" />
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    </MudItem>
 </MudGrid>
 
 @code {
@@ -563,6 +846,8 @@
     private string _endpointPassword = string.Empty;
     private string _virtualTunerId = "hdhr-main";
     private string? _activeProfileId;
+    private string? _activeProfileName;
+    private List<ProfileListItemDto> _profiles = [];
     private string? _endpointError;
     private string? _endpointSuccess;
 
@@ -590,6 +875,8 @@
     private bool _hdhrRestartRequired;
     private bool _hdhrEnabled;
     private int? _hdhrTunerCountOverride;
+    private string? _hdhrFriendlyName;
+    private string _hdhrResolvedFriendlyName = string.Empty;
     private string? _hdhrAdvertisedBaseUrl;
     private bool _hdhrDiscoveryEnabled;
     private bool _hdhrSsdpEnabled;
@@ -603,12 +890,170 @@
     private bool _hdhrDisabledByEnv;
     private HdhrSettingsSnapshot? _appliedHdhrSettings;
 
+    private bool _loadingRefreshSettings;
+    private bool _savingRefreshSettings;
+    private string _refreshScheduleKind = "6h";
+    private bool _refreshStartupCatchup = true;
+    private DateTime? _nextRefreshUtc;
+    private string? _refreshError;
+    private string? _refreshSuccess;
+
+    private int? RefreshIntervalHoursAdapter
+    {
+        get => _refreshScheduleKind == "manual" ? null : int.TryParse(_refreshScheduleKind.TrimEnd('h'), out var h) ? h : (int?)null;
+        set => _refreshScheduleKind = value is null ? "manual" : $"{value}h";
+    }
+
+    private bool _loadingGenHlsSettings;
+    private bool _savingGenHlsSettings;
+    private bool _genHlsRestartRequired;
+    private bool _genHlsEnabled;
+    private string _genHlsFfmpegPath = string.Empty;
+    private bool _genHlsFfmpegAvailable;
+    private string? _genHlsFfmpegUnavailableReason;
+    private bool _genHlsEffectivelyEnabled;
+    private string _genHlsConfiguredFfmpegPath = "ffmpeg";
+    private string? _genHlsError;
+    private string? _genHlsSuccess;
+
     private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
+
+    private bool _loadingIntegrations;
+    private List<DownstreamIntegrationDto> _integrations = [];
+
+    private static string IntegrationKindLabel(string kind) => kind switch
+    {
+        "jellyfin" => "Jellyfin",
+        "emby" => "Emby",
+        "webhook" => "Webhook",
+        _ => kind,
+    };
 
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await Task.WhenAll(LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync());
+        await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync());
+    }
+
+    private async Task LoadIntegrationsAsync()
+    {
+        _loadingIntegrations = true;
+        try
+        {
+            _integrations = await DownstreamIntegrations.GetAllAsync(CancellationToken.None);
+        }
+        catch { }
+        finally
+        {
+            _loadingIntegrations = false;
+        }
+    }
+
+    private async Task OpenAddIntegrationDialogAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium };
+        var parameters = new DialogParameters<AddEditIntegrationDialog>
+        {
+            { x => x.OnSaved, EventCallback.Factory.Create(this, LoadIntegrationsAsync) },
+        };
+        await DialogService.ShowAsync<AddEditIntegrationDialog>("Add Integration", parameters, options);
+    }
+
+    private async Task OpenEditIntegrationDialogAsync(DownstreamIntegrationDto integration)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium };
+        var parameters = new DialogParameters<AddEditIntegrationDialog>
+        {
+            { x => x.Integration, integration },
+            { x => x.OnSaved, EventCallback.Factory.Create(this, LoadIntegrationsAsync) },
+        };
+        await DialogService.ShowAsync<AddEditIntegrationDialog>("Edit Integration", parameters, options);
+    }
+
+    private async Task DeleteIntegrationAsync(DownstreamIntegrationDto integration)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Integration",
+            $"Remove '{integration.Name}'? This cannot be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        var error = await DownstreamIntegrations.DeleteAsync(integration.DownstreamIntegrationId, CancellationToken.None);
+        if (error is not null)
+            await DialogService.ShowMessageBoxAsync("Error", error);
+        else
+            await LoadIntegrationsAsync();
+    }
+
+    private async Task LoadProfilesAsync()
+    {
+        try
+        {
+            var data = await ProviderPageService.GetPageDataAsync(CancellationToken.None);
+            _profiles = data.Profiles;
+            ResolveActiveProfileName();
+        }
+        catch { }
+    }
+
+    private void ResolveActiveProfileName()
+    {
+        if (string.IsNullOrWhiteSpace(_activeProfileId))
+        {
+            _activeProfileName = null;
+            return;
+        }
+        _activeProfileName = _profiles.FirstOrDefault(p => p.ProfileId == _activeProfileId)?.Name;
+    }
+
+    private async Task LoadRefreshScheduleAsync()
+    {
+        _loadingRefreshSettings = true;
+        _refreshError = null;
+        try
+        {
+            var settings = await RefreshSchedule.GetSettingsAsync(CancellationToken.None);
+            _refreshScheduleKind = settings.ScheduleKind;
+            _refreshStartupCatchup = settings.StartupCatchup;
+            _nextRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _refreshError = $"Failed to load refresh settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingRefreshSettings = false;
+        }
+    }
+
+    private async Task SaveRefreshScheduleAsync()
+    {
+        _savingRefreshSettings = true;
+        _refreshError = null;
+        _refreshSuccess = null;
+        try
+        {
+            var (succeeded, error) = await RefreshSchedule.UpdateAsync(
+                new RefreshScheduleSettings(_refreshScheduleKind, _refreshStartupCatchup), CancellationToken.None);
+
+            if (!succeeded)
+            {
+                _refreshError = error ?? "Failed to save refresh settings.";
+                return;
+            }
+
+            _nextRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(CancellationToken.None);
+            _refreshSuccess = "Refresh settings saved.";
+        }
+        catch (Exception ex)
+        {
+            _refreshError = $"Failed to save refresh settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingRefreshSettings = false;
+        }
     }
 
     private async Task LoadEndpointSecurityAsync()
@@ -807,6 +1252,7 @@
             var result = await HdhrSettings.UpdateAsync(new UpdateHdhrSettingsCommand(
                 Enabled: _hdhrEnabled,
                 TunerCountOverride: _hdhrTunerCountOverride,
+                FriendlyName: string.IsNullOrWhiteSpace(_hdhrFriendlyName) ? null : _hdhrFriendlyName.Trim(),
                 AdvertisedBaseUrl: string.IsNullOrWhiteSpace(_hdhrAdvertisedBaseUrl) ? null : _hdhrAdvertisedBaseUrl.Trim(),
                 DiscoveryEnabled: _hdhrDiscoveryEnabled,
                 SsdpEnabled: _hdhrSsdpEnabled,
@@ -840,6 +1286,8 @@
     {
         _hdhrEnabled = settings.Enabled;
         _hdhrTunerCountOverride = settings.TunerCountOverride;
+        _hdhrFriendlyName = settings.FriendlyName;
+        _hdhrResolvedFriendlyName = settings.ResolvedFriendlyName;
         _hdhrAdvertisedBaseUrl = settings.AdvertisedBaseUrl;
         _hdhrDiscoveryEnabled = settings.DiscoveryEnabled;
         _hdhrSsdpEnabled = settings.SsdpEnabled;
@@ -848,6 +1296,69 @@
         _hdhrProviderLimit = settings.ProviderTunerLimit;
         _hdhrIsStreamLimitEnforced = settings.IsStreamLimitEnforced;
         _hdhrResolvedBaseUrl = settings.ResolvedBaseUrl;
+    }
+
+    private async Task LoadGenHlsSettingsAsync()
+    {
+        _loadingGenHlsSettings = true;
+        _genHlsError = null;
+
+        try
+        {
+            var state = await GeneratedHlsSettings.GetSettingsAsync(CancellationToken.None);
+            _genHlsEnabled = state.Saved.Enabled;
+            _genHlsFfmpegPath = state.Saved.FfmpegPath ?? string.Empty;
+            _genHlsFfmpegAvailable = state.FfmpegAvailable;
+            _genHlsFfmpegUnavailableReason = state.FfmpegUnavailableReason;
+            _genHlsEffectivelyEnabled = state.EffectivelyEnabled;
+            _genHlsConfiguredFfmpegPath = state.ConfiguredFfmpegPath;
+            _genHlsRestartRequired = state.RestartRequired;
+        }
+        catch (Exception ex)
+        {
+            _genHlsError = $"Failed to load browser playback settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingGenHlsSettings = false;
+        }
+    }
+
+    private async Task SaveGenHlsSettingsAsync()
+    {
+        _savingGenHlsSettings = true;
+        _genHlsError = null;
+        _genHlsSuccess = null;
+
+        try
+        {
+            var result = await GeneratedHlsSettings.UpdateAsync(new UpdateGeneratedHlsSettingsCommand(
+                Enabled: _genHlsEnabled,
+                FfmpegPath: string.IsNullOrWhiteSpace(_genHlsFfmpegPath) ? null : _genHlsFfmpegPath.Trim()), CancellationToken.None);
+
+            if (!result.Succeeded)
+            {
+                _genHlsError = result.Error ?? "Failed to save browser playback settings.";
+                return;
+            }
+
+            _genHlsEnabled = result.Settings.Enabled;
+            _genHlsFfmpegPath = result.Settings.FfmpegPath ?? string.Empty;
+            _genHlsRestartRequired = result.RestartRequired;
+            _genHlsSuccess = result.Changed
+                ? "Browser playback settings saved. Restart M3Undle to apply them."
+                : result.RestartRequired
+                    ? "No changes detected. A restart is still pending from a previous save."
+                    : "No setting changes were detected.";
+        }
+        catch (Exception ex)
+        {
+            _genHlsError = $"Failed to save browser playback settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingGenHlsSettings = false;
+        }
     }
 
     private static string FormatMiB(int bytes)

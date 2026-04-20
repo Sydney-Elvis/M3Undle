@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject NavigationManager NavigationManager
+@inject IJSRuntime JS
 @inject M3Undle.Web.Application.AppEventBus EventBus
 @inject M3Undle.Web.Application.IRefreshTrigger RefreshTrigger
 @inject IDialogService DialogService
@@ -42,7 +43,7 @@
             {
                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
                     <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
-                    <MudText Typo="Typo.caption" Color="Color.Primary">Building snapshot…</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
                 </MudStack>
             }
             <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
@@ -76,7 +77,13 @@
                 @if (_channelStats.GroupsNew > 0)
                 {
                     <MudLink Href="channels/mapping" Style="font-size:0.70rem;" Color="Color.Info">
-                        @_channelStats.GroupsNew new
+                        @_channelStats.GroupsNew pending groups
+                    </MudLink>
+                }
+                @if (_channelStats.PendingChannelsNotified > 0)
+                {
+                    <MudLink Href="channels/review" Style="font-size:0.70rem;" Color="Color.Warning">
+                        @_channelStats.PendingChannelsNotified pending channels
                     </MudLink>
                 }
                 @if (_channelStats.ChannelsInOutput > 0)
@@ -96,7 +103,7 @@
     private ChannelMappingStatsDto? _channelStats;
     private bool _systemIsDark;
     private bool _isRefreshing;
-    private bool _pendingProviderSwitchNotification;
+
     private HdhrFooterStatus? _hdhrStatus;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
@@ -282,6 +289,7 @@
             _systemIsDark = await _themeProvider.GetSystemDarkModeAsync();
             _isDarkMode = _systemIsDark;
             await _themeProvider.WatchSystemDarkModeAsync(OnSystemDarkModeChanged);
+            await JS.InvokeVoidAsync("m3undleThemeBootstrap.clear");
             StateHasChanged();
         }
     }
@@ -309,25 +317,16 @@
                     await LoadHdhrStatusAsync();
                     await InvokeAsync(StateHasChanged);
 
-                    if (_pendingProviderSwitchNotification && evt.Succeeded)
-                    {
-                        _pendingProviderSwitchNotification = false;
-                        await InvokeAsync(() => DialogService.ShowMessageBox(
-                            "Active Provider Updated",
-                            "The new snapshot is ready. Your Media Players (Jellyfin, Plex, Emby, etc.) need to refresh or re-scan their channel list to pick up the updated lineup.",
-                            yesText: "Got It"));
-                    }
-                    else if (!evt.Succeeded && evt.ErrorSummary is not null)
+                    if (!evt.Succeeded && evt.ErrorSummary is not null)
                     {
                         await InvokeAsync(() => Snackbar.Add(
-                            $"Snapshot refresh failed: {evt.ErrorSummary}",
+                            $"Lineup refresh failed: {evt.ErrorSummary}",
                             Severity.Error,
                             options => { options.VisibleStateDuration = 8000; }));
                     }
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderActivated)
                 {
-                    _pendingProviderSwitchNotification = true;
                     await LoadHdhrStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)

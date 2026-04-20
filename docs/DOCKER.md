@@ -13,7 +13,7 @@ Create a directory for M3Undle, place a `compose.yaml` inside it, then run:
 ```bash
 mkdir m3undle && cd m3undle
 # create compose.yaml (see below)
-mkdir config data
+mkdir config data hls-work
 docker compose up -d
 ```
 
@@ -40,14 +40,19 @@ services:
       M3UNDLE_ENCRYPTION_KEY: "your-base64-32-byte-key"
       # Optional — enables the file browser when adding providers from local .m3u files.
       M3UNDLE_M3U_DIR: /m3u
+      # Optional but recommended — isolate generated HLS working files.
+      # Keep this on fast storage if possible.
+      M3Undle__Streaming__GeneratedHls__Directory: /hls-work
       # Uncomment to require login for the web UI:
       # M3UNDLE_AUTH_ENABLED: "true"
       # M3UNDLE_ADMIN_USER: admin
       # M3UNDLE_ADMIN_PASSWORD: "choose-a-strong-password"
+      # M3UNDLE_ADMIN_PASSWORD_RESET: "false" # set "true" once to recover a forgotten admin password
     volumes:
       - ./config:/config
       - ./data:/data
       - ./m3u:/m3u        # optional — only needed if using M3UNDLE_M3U_DIR
+      - ./hls-work:/hls-work # optional but recommended for generated browser HLS
     restart: unless-stopped
 ```
 
@@ -73,7 +78,7 @@ If you use HDHomeRun-compatible clients such as NextPVR, keep `5004:5004` publis
 ### docker run
 
 ```bash
-mkdir -p m3undle/config m3undle/data m3undle/m3u && cd m3undle
+mkdir -p m3undle/config m3undle/data m3undle/m3u m3undle/hls-work && cd m3undle
 
 docker run -d \
   --name m3undle \
@@ -82,9 +87,11 @@ docker run -d \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -e M3UNDLE_ENCRYPTION_KEY="your-base64-32-byte-key" \
+  -e M3Undle__Streaming__GeneratedHls__Directory=/hls-work \
   -v ./config:/config \
   -v ./data:/data \
   -v ./m3u:/m3u \
+  -v ./hls-work:/hls-work \
   --restart unless-stopped \
   ghcr.io/sydney-elvis/m3undle:alpha
 ```
@@ -98,6 +105,7 @@ docker run -d \
 | `/config` | Yes | `config.yaml` and `.env` credential file — files you edit |
 | `/data` | Yes | SQLite database, snapshots, log files — runtime state |
 | `/m3u` (or any path) | No | Local `.m3u` files browsable via the file browser. Set `M3UNDLE_M3U_DIR` to the container path. |
+| `/hls-work` (or any path) | Recommended | Generated rolling HLS playlists/segments for browser playback fallback. Set `M3Undle__Streaming__GeneratedHls__Directory` to match. |
 
 Both `/config` and `/data` are required for data to persist across container restarts.
 
@@ -111,14 +119,41 @@ If you prefer Docker-managed storage, named volumes work too — replace the bin
 volumes:
   - m3undle_config:/config
   - m3undle_data:/data
+  - m3undle_hlswork:/hls-work
 
 # add at the bottom of compose.yaml:
 volumes:
   m3undle_config:
   m3undle_data:
+  m3undle_hlswork:
 ```
 
 Named volumes avoid the ownership requirement on Linux and can give better I/O performance, but you can't browse the files directly from the host.
+
+### Generated HLS Storage Sizing
+
+Browser playback fallback (`?format=hls` or browser UA fallback) writes rolling HLS playlists/segments to the generated-HLS directory.
+
+Estimate required storage with:
+
+`required_bytes ~= concurrent_generated_hls_sessions * average_bitrate_bytes_per_second * retained_seconds`
+
+Equivalent Mbps form:
+
+`required_gb ~= concurrent_sessions * average_mbps * retained_seconds / 8 / 1024`
+
+Recommended planning:
+
+- Start with a **2x to 4x safety multiplier** over the raw estimate.
+- Small/home usage: allocate **2-5 GB**.
+- Multi-user usage: allocate **10-20 GB** or more depending on bitrate and concurrency.
+
+Examples:
+
+- 5 sessions at 8 Mbps, 60 seconds retained: raw ~300 MB, recommended **1-2 GB**.
+- 10 sessions at 12 Mbps, 90 seconds retained: raw ~1.35 GB, recommended **3-5 GB**.
+
+In v1 these playlists are rolling/sliding, session-scoped, and cleaned on session end/inactivity; full VOD retention is not used.
 
 ---
 
@@ -141,6 +176,15 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 
 ## Environment Variables
 
+Most Docker installs should use very few environment variables. If you are not sure whether you need one from the tables below, you probably do not.
+
+For HDHomeRun specifically, the normal workflow is:
+1. Start M3Undle with the default ports.
+2. Open the web UI.
+3. Adjust HDHomeRun behavior in **Settings → HDHomeRun**.
+
+Treat the HDHR environment variables below as advanced startup overrides. They are mainly useful for automation, bootstrap defaults, or forcing behavior in special Docker or reverse-proxy setups.
+
 ### Required / Recommended
 
 | Variable | Default | Description |
@@ -154,7 +198,14 @@ See [spec/config_spec.md](spec/config_spec.md) for the config file format.
 |---|---|---|
 | `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs. |
 | `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email. Used only on first startup when no account exists. |
-| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no admin account exists yet. Used only for the initial seed — changing this later has no effect (use Settings → Change Password instead). |
+| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no admin account exists yet. Also required when running one-time password recovery. |
+| `M3UNDLE_ADMIN_PASSWORD_RESET` | `false` | One-time recovery switch. Set to `true` to force-reset the existing admin password from `M3UNDLE_ADMIN_PASSWORD` on startup, then set back to `false`. |
+
+Password recovery workflow (lost admin password):
+1. Set `M3UNDLE_ADMIN_PASSWORD` to the new password.
+2. Set `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+3. Restart the container once and log in with the new password.
+4. Set `M3UNDLE_ADMIN_PASSWORD_RESET=false` and restart again.
 
 Endpoint security (M3U/XMLTV/stream/HDHR username/password auth) is managed in **Settings → Endpoint Security** and stored in the database.
 The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for tuner-slot ownership and retune behaviour.
@@ -170,23 +221,34 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 | Variable | Default | Description |
 |---|---|---|
 | `ASPNETCORE_HTTP_PORTS` | `5004;8080` | Ports the app listens on inside the container. `5004` is used for HDHomeRun-compatible tuning and `8080` for the web UI and general endpoints. |
-| `M3Undle__Refresh__IntervalHours` | `4` | How often the background refresh runs |
 | `M3Undle__Refresh__TimeoutMinutes` | `5` | Provider fetch timeout |
 | `M3Undle__Refresh__StartupDelaySeconds` | `30` | Delay before first refresh after startup |
 | `M3Undle__Snapshot__RetentionCount` | `3` | Number of snapshots to retain |
+| `M3Undle__Cors__ApplicationAllowedOrigins__0` | *(unset)* | First allowed CORS origin for the application surface (`/api`, UI, `/Account/*`). Add more with `__1`, `__2`, etc. |
+| `M3Undle__Streaming__GeneratedHls__Directory` | `/data/hls-work` (image default) | Directory used for generated rolling HLS session files (`index.m3u8` + segments). Set this to a dedicated mount (for example `/hls-work`) to isolate browser playback scratch storage. |
 | `M3UNDLE_DATA_DIR` | `/data` (in image) | Override the data directory (database, logs, snapshots). Rarely needed when using the standard Docker volume layout. |
 
 ### Optional — HDHomeRun
 
+Most users can skip this entire section.
+
+Use the web UI at **Settings → HDHomeRun** for normal setup and day-to-day changes. The environment variables below are optional advanced overrides, not required setup.
+
+Most HDHR behavior is configurable in **Settings → HDHomeRun**. The main exceptions are:
+- `M3UNDLE_HDHR_ENABLED`, which can force HDHR off at startup
+- `M3Undle__HdHomeRun__FriendlyName`, which is currently env/config only
+
 | Variable | Default | Description |
 |---|---|---|
-| `M3UNDLE_HDHR_ENABLED` | `true` | Master switch for all HDHomeRun endpoints. Set to `false` to disable HDHR completely. Can also be toggled in **Settings** in the web UI. |
-| `M3Undle__HdHomeRun__DiscoveryEnabled` | `false` | Enable SSDP and SiliconDust network discovery so clients like NextPVR, Jellyfin, and Emby find M3Undle automatically. Requires UDP ports (see [Docker Networking for HDHomeRun](#docker-networking-for-hdhr)). |
-| `M3Undle__HdHomeRun__SsdpEnabled` | `true` | Enable SSDP/UPnP listener (UDP 1900). Only active when `DiscoveryEnabled` is also `true`. |
-| `M3Undle__HdHomeRun__SiliconDustDiscoveryEnabled` | `true` | Enable SiliconDust proprietary discovery (UDP 65001). Only active when `DiscoveryEnabled` is also `true`. |
-| `M3Undle__HdHomeRun__TunerCount` | `1` | Number of virtual tuner slots to advertise. Increase if your DVR app needs parallel recordings. |
-| `M3Undle__HdHomeRun__AdvertisedBaseUrl` | *(auto-detect)* | Base URL returned in `discover.json` and discovery responses (e.g. `http://192.168.1.50:5004`). **Set this when running behind Docker NAT or a reverse proxy** — the container's auto-detected address often isn't reachable from the LAN. |
-| `M3Undle__HdHomeRun__FriendlyName` | `M3Undle HDHomeRun` | Device name shown in client apps. |
+| `M3UNDLE_HDHR_ENABLED` | `true` | Master switch for all HDHomeRun endpoints. Normally leave this unset. Set it to `false` only if you want to disable HDHR completely. This env var overrides the UI setting at startup. |
+| `M3Undle__HdHomeRun__DiscoveryEnabled` | `true` | Enables SSDP and SiliconDust network discovery. Normally change this in **Settings → HDHomeRun**. Only set it here if you want a startup default or managed deployment behavior. Requires UDP ports (see [Docker Networking for HDHomeRun](#docker-networking-for-hdhr)). |
+| `M3Undle__HdHomeRun__SsdpEnabled` | `true` | Controls the SSDP/UPnP listener on UDP 1900. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__SiliconDustDiscoveryEnabled` | `true` | Controls the SiliconDust discovery listener on UDP 65001. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__TunerCount` | `4` | Sets the fallback virtual tuner count when no provider limit or UI override is in effect. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__AdvertisedBaseUrl` | *(auto-detect)* | Base URL returned in `discover.json` and discovery responses (for example `http://192.168.1.50:5004`). Normally leave this blank and let M3Undle auto-detect it. Set it only for advanced Docker NAT, LAN discovery, or reverse-proxy scenarios. This can also be changed in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__FriendlyName` | `M3Undle HDHomeRun` | Device name shown in client apps. Rarely needed. This is currently an env/config-only setting, not a web UI field. |
+
+Quick rule: if you are running Docker on a normal home server, do not add HDHR env vars just because they exist. Bring the app up first, then use **Settings → HDHomeRun**. The main exception is `M3UNDLE_HDHR_ENABLED=false`, which is the one env var intended to force HDHR off at startup.
 
 ### Optional — Reverse Proxy
 
@@ -307,25 +369,32 @@ Port **8080** serves the web UI, M3U/XMLTV, Xtream Codes, and general compatibil
 
 Both ports are set in the Dockerfile — you do not need to add them manually.
 
-### Option A — Manual add (recommended for Docker)
+### Option A — Manual add (recommended)
 
-This is the simplest setup. No discovery ports, no special networking.
+This is the most reliable setup across all Docker networking modes and client applications. No discovery ports, no special networking.
 
 1. Keep `5004:5004` and `8080:8080` published in your compose file.
 2. In your DVR application, add a network tuner manually:
+   - **Jellyfin**: Dashboard → Live TV → Add Tuner Device → HD Homerun → enter `http://<host-ip>:5004` *(recommended — see note below)*
    - **NextPVR**: Settings → Tuners → Add → enter `http://<host-ip>:5004`
-   - **Jellyfin**: Dashboard → Live TV → Add Tuner Device → HD Homerun → enter `http://<host-ip>:5004`
    - **Emby**: Live TV → Add Tuner → HDHomeRun → enter `http://<host-ip>:5004`
    - **Plex**: Settings → Live TV & DVR → Set Up → enter `http://<host-ip>:5004`
 3. The client will connect, fetch `discover.json` and `lineup.json`, and show your channels.
 
-No extra environment variables are needed — HDHR is enabled by default.
+No extra environment variables are needed. HDHR is enabled by default, and the rest of the HDHR behavior can be adjusted later in **Settings → HDHomeRun**.
 
-### Option B — Auto-discovery
+> [!NOTE]
+> **Jellyfin users**: Manual add is the supported path for Jellyfin. Jellyfin's "Detect My Devices" auto-discovery may not find M3Undle in Docker bridge or NAT-like setups because some client autodetect flows connect to the responder IP on port 80 instead of using the advertised base URL on port 5004. Manual entry using `http://<host-ip>:5004` works reliably regardless of networking mode.
 
-If you want client apps to find M3Undle automatically (like a real HDHomeRun), you need to enable network discovery and publish the UDP ports.
+### Option B — Auto-discovery (best effort)
 
-1. Add to your `environment:` section:
+Auto-discovery lets some client apps find M3Undle automatically, similar to a real HDHomeRun. This works best on flat LAN or host-network deployments. In Docker bridge or NAT-like setups, discovery may not reach all clients — use [Option A](#option-a--manual-add-recommended) as the fallback.
+
+Not all clients handle discovery identically. Some (such as NextPVR) parse the advertised base URL from the discovery response and connect on the correct port. Others (such as Jellyfin) may ignore the advertised URL and attempt to connect to the responder IP on port 80, which fails when M3Undle serves HDHR on port 5004.
+
+In most cases, change discovery in **Settings → HDHomeRun** first and only use env vars here if you need a forced startup default.
+
+1. Discovery is enabled by default on a fresh install. If you have disabled it in **Settings → HDHomeRun** or want to force the startup default from Docker, add this to your `environment:` section:
    ```yaml
    M3Undle__HdHomeRun__DiscoveryEnabled: "true"
    ```
@@ -372,13 +441,13 @@ With `network_mode: host`, the container shares the host's network stack directl
 
 ### Tuner count
 
-The `TunerCount` setting (default: `1`) controls how many simultaneous streams the emulated tuner advertises. If your DVR records multiple channels at once, increase this:
+The `TunerCount` setting (default: `4`) controls how many simultaneous streams the emulated tuner advertises when no provider limit or UI override is in effect. Most users should change this in **Settings → HDHomeRun** if needed. If your deployment needs a startup default from Docker, set:
 
 ```yaml
 M3Undle__HdHomeRun__TunerCount: "4"
 ```
 
-The tuner count is also editable in the web UI under **Settings → HDHomeRun**.
+The tuner count is editable in the web UI under **Settings → HDHomeRun**.
 
 ### Disabling HDHR
 
@@ -389,6 +458,8 @@ M3UNDLE_HDHR_ENABLED: "false"
 ```
 
 This disables all HDHR endpoints and discovery. Port 5004 will still listen (it is set at the ASP.NET level) but will return 404 for HDHR routes.
+
+Because `M3UNDLE_HDHR_ENABLED` is a startup override, setting it to `false` also prevents normal HDHR management from the UI until you remove the env var and restart.
 
 ---
 
@@ -403,9 +474,9 @@ This disables all HDHR endpoints and discovery. Port 5004 will still listen (it 
 
 **Why multicast is tricky in Docker**: SSDP discovery uses UDP multicast on `239.255.255.250:1900`. Docker's bridge network creates a virtual network segment. Multicast packets from the container don't reach the physical LAN, and multicast queries from LAN clients don't reach the container. Publishing the port (`-p 1900:1900/udp`) only helps for unicast traffic — it does not bridge multicast.
 
-**Recommendation**: Use **manual add** (Option A) unless you have a specific reason to need auto-discovery. It works with any Docker networking mode and is the most reliable approach.
+**Recommendation**: Use **manual add** (Option A) unless you have a specific reason to need auto-discovery. It works with any Docker networking mode, any client application, and is the most reliable approach.
 
-**If you need auto-discovery**, use `network_mode: host` (Option C). It is the only straightforward option that reliably supports SSDP multicast across the LAN.
+**If you need auto-discovery**, use `network_mode: host` (Option C). It is the only straightforward option that reliably supports SSDP multicast across the LAN. Even with host networking, some clients may not follow the advertised base URL from discovery responses — manual add remains the most portable option.
 
 **`AdvertisedBaseUrl` explained**: When a client discovers M3Undle, the response includes a URL where the client should connect for tuning. If M3Undle is behind Docker NAT, it may auto-detect `172.17.0.x` as its address — which is unreachable from the LAN. Setting `AdvertisedBaseUrl` to `http://<your-host-ip>:5004` ensures clients get a reachable address. This is required for bridge networking with discovery; not needed with `network_mode: host`.
 

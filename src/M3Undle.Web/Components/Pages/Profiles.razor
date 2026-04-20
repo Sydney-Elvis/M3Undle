@@ -1,0 +1,358 @@
+@page "/profiles"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject ProfilesPageService ProfilesService
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>M3Undle — Profiles</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Profiles</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">Named lineups published from your providers.</MudText>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="OpenCreateDialogAsync">
+                New Profile
+            </MudButton>
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+<MudDialog @bind-Visible="_createDialogOpen" Options="_createDialogOptions">
+    <TitleContent>
+        <MudText Typo="Typo.h6">New Profile</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                Create a named lineup. You can then go to Channel Mapping, select this profile, and configure its channel selections independently.
+            </MudText>
+            <MudTextField @bind-Value="_createName"
+                          Label="Profile Name"
+                          Placeholder="e.g. Man Cave, Kids, Bedroom TV…"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true"
+                          MaxLength="100"
+                          HelperText="Must be unique." />
+            @if (_createError is not null)
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">@_createError</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseCreateDialog" Variant="Variant.Text">Cancel</MudButton>
+        <MudButton OnClick="SubmitCreateAsync"
+                   Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="@(_isCreating || string.IsNullOrWhiteSpace(_createName))">
+            @(_isCreating ? "Creating…" : "Create")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@if (_isLoading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">@_loadError</MudAlert>
+}
+else if (_profiles.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No profiles found. Profiles are created automatically when you add a provider, or use the <strong>New Profile</strong> button above.
+    </MudAlert>
+}
+else
+{
+    <MudGrid Spacing="3">
+        @foreach (var profile in _profiles)
+        {
+            <MudItem xs="12" md="6" lg="4">
+                <MudPaper Class="pa-4" Elevation="1" Style="cursor:pointer;"
+                          @onclick="@(() => Nav.NavigateTo($"profiles/{profile.ProfileId}"))">
+                    <MudStack Spacing="2">
+                        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.h6">@profile.Name</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Output: <strong>@profile.OutputName</strong>
+                                </MudText>
+                            </MudStack>
+                            <MudChip T="string" Size="Size.Small"
+                                     Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
+                                              : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
+                                              : Color.Default)"
+                                     Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
+                                              : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
+                                              : Icons.Material.Filled.RadioButtonUnchecked)">
+                                @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
+                                  : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
+                                  : "No output")
+                            </MudChip>
+                        </MudStack>
+
+                        <MudDivider />
+
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.FlexEnd">
+                            @if (profile.IsActive)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
+                                         Icon="@Icons.Material.Filled.Star">Active</MudChip>
+                            }
+                            else
+                            {
+                                <div @onclick:stopPropagation="true">
+                                    <MudTooltip Text="@(profile.Providers.Count == 0 ? "Add a provider before activating this profile" : "")"
+                                                Disabled="@(profile.Providers.Count > 0)">
+                                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                                   Disabled="@(_activatingProfileId is not null || profile.Providers.Count == 0)"
+                                                   OnClick="@(() => SetActiveAsync(profile))">
+                                            @if (_activatingProfileId == profile.ProfileId)
+                                            {
+                                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                                            }
+                                            @(_activatingProfileId == profile.ProfileId ? "Setting…" : "Set Active")
+                                        </MudButton>
+                                    </MudTooltip>
+                                </div>
+                            }
+                            <div @onclick:stopPropagation="true">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => ConfirmDeleteAsync(profile))" />
+                            </div>
+                        </MudStack>
+
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                            @if (profile.LiveCount > 0 || profile.LastPublishedUtc.HasValue)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Primary"
+                                         Icon="@Icons.Material.Filled.LiveTv">
+                                    @profile.LiveCount live
+                                </MudChip>
+                            }
+                            @if (profile.MovieCount > 0)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                                         Icon="@Icons.Material.Filled.Movie">
+                                    @profile.MovieCount movies
+                                </MudChip>
+                            }
+                            @if (profile.SeriesCount > 0)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                                         Icon="@Icons.Material.Filled.Tv">
+                                    @profile.SeriesCount series
+                                </MudChip>
+                            }
+                            @if (!profile.Enabled)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                            }
+                        </MudStack>
+
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Providers</MudText>
+                            @if (profile.Providers.Count == 0)
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Warning">No providers linked</MudText>
+                            }
+                            else
+                            {
+                                @foreach (var p in profile.Providers)
+                                {
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                        <MudText Typo="Typo.body2">@p.Name</MudText>
+                                        @if (!p.Enabled)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">(disabled)</MudText>
+                                        }
+                                    </MudStack>
+                                }
+                            }
+                        </MudStack>
+
+                        @if (profile.GroupsPendingReview > 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                                @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review
+                            </MudAlert>
+                        }
+                        @if (profile.ChannelsPendingReview > 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                                @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review
+                            </MudAlert>
+                        }
+
+                        @if (profile.LastPublishedUtc.HasValue)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Last published @profile.LastPublishedUtc.Value.ToString("u")
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Not yet published</MudText>
+                        }
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    private List<ProfilePageItemDto> _profiles = [];
+    private bool _isLoading;
+    private string? _loadError;
+
+    private string? _activatingProfileId;
+
+    private bool _createDialogOpen;
+    private string _createName = string.Empty;
+    private string? _createError;
+    private bool _isCreating;
+
+    private readonly DialogOptions _createDialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+        CloseOnEscapeKey = true,
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+
+        try
+        {
+            _profiles = await ProfilesService.GetProfilesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load profiles: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OpenCreateDialogAsync()
+    {
+        _createName = string.Empty;
+        _createError = null;
+        _createDialogOpen = true;
+    }
+
+    private void CloseCreateDialog()
+    {
+        _createDialogOpen = false;
+        _createError = null;
+    }
+
+    private async Task SubmitCreateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_createName)) return;
+
+        _isCreating = true;
+        _createError = null;
+
+        try
+        {
+            var (success, error, created) = await ProfilesService.CreateProfileAsync(_createName, CancellationToken.None);
+
+            if (!success)
+            {
+                _createError = error;
+                return;
+            }
+
+            _createDialogOpen = false;
+            Snackbar.Add($"Profile \"{created!.Name}\" created.", Severity.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _createError = $"Failed to create profile: {ex.Message}";
+        }
+        finally
+        {
+            _isCreating = false;
+        }
+    }
+
+    private async Task SetActiveAsync(ProfilePageItemDto profile)
+    {
+        _activatingProfileId = profile.ProfileId;
+        StateHasChanged();
+        try
+        {
+            var error = await ProfilesService.SetProfileActiveAsync(profile.ProfileId, CancellationToken.None);
+            if (error is not null)
+            {
+                Snackbar.Add(error, Severity.Error);
+                return;
+            }
+            Snackbar.Add($"Profile \"{profile.Name}\" is now active.", Severity.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to set profile active: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _activatingProfileId = null;
+        }
+    }
+
+    private async Task ConfirmDeleteAsync(ProfilePageItemDto profile)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Profile",
+            $"Delete \"{profile.Name}\"? This will permanently remove the profile, its channel mapping, and all published snapshots. Provider data is not affected.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var error = await ProfilesService.DeleteProfileAsync(profile.ProfileId, CancellationToken.None);
+            if (error is not null)
+            {
+                Snackbar.Add(error, Severity.Error);
+                return;
+            }
+            Snackbar.Add($"Profile \"{profile.Name}\" deleted.", Severity.Success);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete profile: {ex.Message}", Severity.Error);
+        }
+    }
+}

@@ -3,7 +3,7 @@
 This document defines the **shared configuration schema** used by the CLI, Blazor Server app, and Docker image. Keep it source‑of‑truth so all entry points behave identically.
 
 - **Formats supported:** YAML (preferred) and JSON
-- **Profiles:** Multiple named configurations may be defined for the CLI; select one via `--profile`. The service uses the active provider directly.
+- **Profiles:** Multiple named configurations may be defined for the CLI; select one via `--profile`. The service resolves published output from the active profile.
 - **Env substitution:** `%VAR%` placeholders inside string fields will be replaced with values from the `.env` file
 
 ---

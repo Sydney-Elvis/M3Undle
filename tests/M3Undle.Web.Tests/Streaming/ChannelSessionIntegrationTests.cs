@@ -192,9 +192,9 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_LateJoiner_ReceivesBufferedData()
+    public async Task Session_LateJoiner_StartsAtLiveEdge()
     {
-        // Checklist: Late joiners receive buffered data without breaking the active session.
+        // Late joiners attach at live position and receive only future chunks — no buffer replay.
         var handler = FakeStreamingHandler.StreamForever();
         await using var fixture = await SessionFixture.CreateAsync(handler);
 
@@ -218,6 +218,62 @@ public sealed class ChannelSessionIntegrationTests
 
         timeout.Cancel();
         await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_InternalSubscriber_DoesNotBlockIdleGrace()
+    {
+        // When only an internal subscriber remains, idle grace fires as if there are no subscribers.
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(300) });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var requestCts = new CancellationTokenSource();
+
+        var internalSubscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), requestCts.Token, isInternal: true);
+        await WaitUntilAsync(() => internalSubscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        // Session must NOT have shut down yet — idle grace only starts once there are zero external subscribers.
+        Assert.IsTrue(fixture.Manager.TryGet(session.Key, out _));
+
+        // Disconnect the internal subscriber — idle grace should now fire and close the session.
+        requestCts.Cancel();
+        await internalSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await internalSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+    }
+
+    [TestMethod]
+    public async Task Session_ExternalAndInternalSubscribers_ExternalCountCorrect()
+    {
+        // ExternalSubscriberCount excludes internal subscribers; idle grace waits for external count to reach zero.
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(300) });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var externalCts = new CancellationTokenSource();
+        var internalCts = new CancellationTokenSource();
+
+        var externalSub = await session.AttachSubscriberAsync(new DefaultHttpContext(), externalCts.Token);
+        var internalSub = await session.AttachSubscriberAsync(new DefaultHttpContext(), internalCts.Token, isInternal: true);
+
+        Assert.AreEqual(2, session.SubscriberCount);
+        Assert.AreEqual(1, session.ExternalSubscriberCount);
+
+        // Drop the external subscriber — idle grace should eventually fire because ExternalSubscriberCount drops to 0.
+        externalCts.Cancel();
+        await externalSub.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+
+        internalCts.Cancel();
     }
 
     [TestMethod]
@@ -296,6 +352,96 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ProviderTunerLimit_PreemptsIdleGraceForSameRemoteIpRetune()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(10),
+                ProviderMaxConcurrentUpstreams = 1,
+            });
+
+        var source1 = fixture.Source with
+        {
+            TunerLimit = 1,
+            RemoteIp = "10.0.0.10",
+            UserAgent = "test-client",
+        };
+        var source2 = source1 with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        var session1 = await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session1.AttachSubscriberAsync(CreateHttpContext(source1.RemoteIp), requestCts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
+
+        Assert.AreEqual(source2.SessionKey, session2.Key);
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(source1.SessionKey, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(source1.SessionKey, out _));
+
+        await session2.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ProviderTunerLimit_DoesNotPreemptIdleGraceForDifferentRemoteIp()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(10),
+                ProviderMaxConcurrentUpstreams = 1,
+            });
+
+        var source1 = fixture.Source with
+        {
+            TunerLimit = 1,
+            RemoteIp = "10.0.0.10",
+            UserAgent = "test-client",
+        };
+        var source2 = source1 with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            RemoteIp = "10.0.0.11",
+        };
+
+        var session1 = await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session1.AttachSubscriberAsync(CreateHttpContext(source1.RemoteIp), requestCts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None).AsTask());
+
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
+
+        await session1.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MaxConcurrentSessions_RejectsAdditionalSession()
     {
         // Checklist: Provider stream limits still reject new sessions correctly.
@@ -331,6 +477,434 @@ public sealed class ChannelSessionIntegrationTests
         }
     }
 
+    [TestMethod]
+    public async Task CheckAdmission_ThirdUniqueChannel_RejectedWhenProviderCapReached()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        // Fill the provider cap with two active sessions (TunerLimit = 2).
+        var source1 = fixture.Source with { TunerLimit = 2 };
+        var source2 = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 2,
+        };
+
+        await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
+
+        // A third unique channel from the same provider must be rejected.
+        var source3 = fixture.Source with
+        {
+            ProviderChannelId = "channel-3",
+            StreamUrl = "http://fake/stream-3",
+            DisplayName = "Test Channel 3",
+            RequestedRoute = "/live/key-3",
+            TunerLimit = 2,
+        };
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => Task.Run(() => fixture.Manager.CheckAdmission(source3)));
+
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, ex.StatusCode);
+    }
+
+    [TestMethod]
+    public async Task CheckAdmission_ExistingActiveChannel_AllowedRegardlessOfCap()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        // Fill the provider cap with two active sessions (TunerLimit = 2).
+        var source1 = fixture.Source with { TunerLimit = 2 };
+        var source2 = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 2,
+        };
+
+        await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
+
+        // Checking admission for a channel that is already active must not throw —
+        // it would join the existing session rather than open a new upstream.
+        fixture.Manager.CheckAdmission(source1);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_CountsTowardProviderCap()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source1 = fixture.Source with { TunerLimit = 2 };
+        var source2 = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 2,
+        };
+        var source3 = fixture.Source with
+        {
+            ProviderChannelId = "channel-3",
+            StreamUrl = "http://fake/stream-3",
+            DisplayName = "Test Channel 3",
+            RequestedRoute = "/live/key-3",
+            TunerLimit = 2,
+        };
+
+        using var slot1 = fixture.Manager.ReserveHlsSlot(source1);
+        using var slot2 = fixture.Manager.ReserveHlsSlot(source2);
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => Task.Run(() => fixture.Manager.ReserveHlsSlot(source3)));
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_CountsTowardMaxConcurrentSessions()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                MaxConcurrentSessions = 1,
+                IdleGrace = TimeSpan.FromSeconds(10),
+            });
+
+        using var slot1 = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var secondSource = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => Task.Run(() => fixture.Manager.ReserveHlsSlot(secondSource)));
+        Assert.AreEqual(StreamAdmissionFailureKind.MaxConcurrentSessions, ex.FailureKind);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_SameChannelAsActiveSession_Allowed()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source = fixture.Source with { TunerLimit = 1 };
+        await fixture.Manager.GetOrCreateAsync(source, CancellationToken.None);
+
+        // Reserving an HLS slot for the same channel joins the existing upstream — allowed.
+        using var slot = fixture.Manager.ReserveHlsSlot(source);
+        Assert.IsNotNull(slot);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_SameChannelAsExistingSlot_Allowed()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source = fixture.Source with { TunerLimit = 1 };
+        using var slot1 = fixture.Manager.ReserveHlsSlot(source);
+        using var slot2 = fixture.Manager.ReserveHlsSlot(source);
+        Assert.IsNotNull(slot2);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_ReleasedSlot_FreesCapacity()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source1 = fixture.Source with { TunerLimit = 1 };
+        var source2 = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 1,
+        };
+
+        var slot = fixture.Manager.ReserveHlsSlot(source1);
+        slot.Dispose();
+
+        // After release, the slot should be free.
+        using var slot2 = fixture.Manager.ReserveHlsSlot(source2);
+        Assert.IsNotNull(slot2);
+    }
+
+    [TestMethod]
+    public async Task MixedTsAndHls_ProviderCapEnforcedAcrossBoth()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source1 = fixture.Source with { TunerLimit = 2 };
+        await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+
+        var source2 = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 2,
+        };
+        using var hlsSlot = fixture.Manager.ReserveHlsSlot(source2);
+
+        // Third unique channel should be rejected even though cap was split TS + HLS.
+        var source3 = fixture.Source with
+        {
+            ProviderChannelId = "channel-3",
+            StreamUrl = "http://fake/stream-3",
+            DisplayName = "Test Channel 3",
+            RequestedRoute = "/live/key-3",
+            TunerLimit = 2,
+        };
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(source3, CancellationToken.None).AsTask());
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
+    }
+
+    [TestMethod]
+    public async Task MixedTsAndHls_HlsSlotBlocksTsSession()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source1 = fixture.Source with { TunerLimit = 1 };
+        using var hlsSlot = fixture.Manager.ReserveHlsSlot(source1);
+
+        var source2 = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            TunerLimit = 1,
+        };
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None).AsTask());
+        Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
+    }
+
+    [TestMethod]
+    public async Task CheckAdmission_SameChannelAsHlsSlot_Allowed()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source1 = fixture.Source with { TunerLimit = 1 };
+        using var hlsSlot = fixture.Manager.ReserveHlsSlot(source1);
+
+        // CheckAdmission for same channel as active HLS slot — should pass (join).
+        fixture.Manager.CheckAdmission(source1);
+    }
+
+    // ---------------------------------------------------------------------------
+    // HLS slot registry observability (regression for native upstream HLS blind spot)
+    // ---------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_PublishesSessionToRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var sessions = fixture.Registry.GetActiveSessions();
+        Assert.HasCount(1, sessions);
+        Assert.AreEqual(fixture.Source.DisplayName, sessions[0].DisplayName);
+        Assert.AreEqual(SessionState.Live, sessions[0].State);
+        // ProviderId and ProviderChannelId are normalized to uppercase by ChannelSessionKey.
+        Assert.AreEqual(slot.Key.ProviderId, sessions[0].ProviderId);
+        Assert.AreEqual(slot.Key.ProviderChannelId, sessions[0].ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_PublishesClientToRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var clients = fixture.Registry.GetActiveClients();
+        Assert.HasCount(1, clients);
+        Assert.AreEqual(fixture.Source.RequestedRoute, clients[0].RequestedRoute);
+        Assert.AreEqual(fixture.Source.RemoteIp, clients[0].RemoteIp);
+        Assert.AreEqual(fixture.Source.UserAgent, clients[0].UserAgent);
+    }
+
+    [TestMethod]
+    public async Task ReleaseHlsSlot_RemovesSessionFromRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
+
+        slot.Dispose();
+
+        Assert.IsEmpty(fixture.Registry.GetActiveSessions());
+    }
+
+    [TestMethod]
+    public async Task ReleaseHlsSlot_RemovesClientFromRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+        Assert.HasCount(1, fixture.Registry.GetActiveClients());
+
+        slot.Dispose();
+
+        Assert.IsEmpty(fixture.Registry.GetActiveClients());
+    }
+
+    [TestMethod]
+    public async Task SweepExpiredHlsSlots_RemovesExpiredReservationFromRegistry()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 04, 19, 18, 00, 00, TimeSpan.Zero));
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            timeProvider: timeProvider);
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source, ttl: TimeSpan.FromSeconds(1));
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
+        Assert.HasCount(1, fixture.Registry.GetActiveClients());
+
+        timeProvider.Advance(TimeSpan.FromSeconds(2));
+
+        var evicted = fixture.Manager.SweepExpiredHlsSlots();
+
+        Assert.AreEqual(1, evicted);
+        Assert.IsEmpty(fixture.Registry.GetActiveSessions());
+        Assert.IsEmpty(fixture.Registry.GetActiveClients());
+
+        slot.Dispose();
+    }
+
+    [TestMethod]
+    public async Task SweepExpiredHlsSlots_ExpiredSlotFreesCapacity()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 04, 19, 18, 00, 00, TimeSpan.Zero));
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                MaxConcurrentSessions = 1,
+                IdleGrace = TimeSpan.FromSeconds(10),
+            },
+            timeProvider: timeProvider);
+
+        var slot = fixture.Manager.ReserveHlsSlot(fixture.Source, ttl: TimeSpan.FromSeconds(1));
+        var secondSource = fixture.Source with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        timeProvider.Advance(TimeSpan.FromSeconds(2));
+        Assert.AreEqual(1, fixture.Manager.SweepExpiredHlsSlots());
+
+        using var slot2 = fixture.Manager.ReserveHlsSlot(secondSource);
+        Assert.AreEqual("CHANNEL-2", slot2.Key.ProviderChannelId);
+
+        slot.Dispose();
+    }
+
+    [TestMethod]
+    public async Task TouchHlsSlot_UpdatesLastUpstreamByteUtcInRegistry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var before = fixture.Registry.GetActiveSessions()[0].LastUpstreamByteUtc;
+        Assert.IsNull(before);
+
+        fixture.Manager.TouchHlsSlot(slot.Key);
+
+        var after = fixture.Registry.GetActiveSessions()[0].LastUpstreamByteUtc;
+        Assert.IsNotNull(after);
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_SameChannelTwice_SingleRegistryEntry()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        using var slot1 = fixture.Manager.ReserveHlsSlot(fixture.Source);
+        using var slot2 = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        // Both reservations share the same admission slot, so only one session in registry.
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
+    }
+
+    [TestMethod]
+    public async Task ReserveHlsSlot_WhenActiveSharedSessionExists_RegistryShowsSharedSession()
+    {
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+
+        // Start a shared TS session so the registry already has a session entry.
+        var tsSession = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var cts = new CancellationTokenSource();
+        await tsSession.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.Registry.GetActiveSessions().Any(s => s.SessionId == tsSession.SessionId),
+            TimeSpan.FromSeconds(5));
+
+        // Reserving an HLS slot for the same channel does not add a second registry entry.
+        using var hlsSlot = fixture.Manager.ReserveHlsSlot(fixture.Source);
+
+        var sessions = fixture.Registry.GetActiveSessions();
+        Assert.HasCount(1, sessions);
+        Assert.AreEqual(tsSession.SessionId, sessions[0].SessionId);
+
+        cts.Cancel();
+        await tsSession.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ExternalRetention_KeepsSessionAliveUntilDisposed()
+    {
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(200) });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var requestCts = new CancellationTokenSource();
+        var subscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), requestCts.Token);
+        using var retention = session.RetainExternalActivity();
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Task.Delay(350);
+        Assert.IsTrue(fixture.Manager.TryGet(session.Key, out _));
+
+        retention.Dispose();
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+        Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+    }
+
     private static async Task<TException> AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
     {
         try
@@ -350,6 +924,15 @@ public sealed class ChannelSessionIntegrationTests
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
             await Task.Delay(20);
+    }
+
+    private static DefaultHttpContext CreateHttpContext(string? remoteIp)
+    {
+        var context = new DefaultHttpContext();
+        if (!string.IsNullOrWhiteSpace(remoteIp))
+            context.Connection.RemoteIpAddress = IPAddress.Parse(remoteIp);
+
+        return context;
     }
 
     private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
@@ -501,7 +1084,6 @@ public sealed class ChannelSessionIntegrationTests
                 ProviderId = "provider-1",
                 Name = "Test Provider",
                 Enabled = true,
-                IsActive = true,
                 PlaylistUrl = "http://fake/playlist.m3u",
                 TimeoutSeconds = 30,
                 CreatedUtc = DateTime.UtcNow,
@@ -558,6 +1140,7 @@ public sealed class ChannelSessionIntegrationTests
             var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
             var connector = new UpstreamStreamConnector(
                 httpClientFactory, scopeFactory, reconnectOpts,
+                Options.Create(new GeneratedHlsOptions()),
                 NullLogger<UpstreamStreamConnector>.Instance);
             var strikeStore = new UpstreamFailureStrikeStore();
             var admissionBackoffStore = timeProvider is null
@@ -566,7 +1149,7 @@ public sealed class ChannelSessionIntegrationTests
             var registry = new StreamingRegistry(proxyOpts);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
-                NullLoggerFactory.Instance);
+                NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
 
             var source = new StreamSourceDescriptor(
                 ProfileId: "profile-1",
@@ -583,6 +1166,7 @@ public sealed class ChannelSessionIntegrationTests
 
         public async ValueTask DisposeAsync()
         {
+            await Manager.ResetAllAsync();
             await _serviceProvider.DisposeAsync();
             await _connection.DisposeAsync();
         }

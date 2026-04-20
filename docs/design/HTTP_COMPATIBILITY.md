@@ -138,6 +138,8 @@ GSE Player, and IPTV Smarters to connect using the endpoint-security username an
 
 Authentication is via query-string `username` and `password` parameters, matching the
 endpoint-security credentials configured in **Settings → Endpoint Security**.
+For security, `user_info.password` in `get_account_info` responses is always returned as an
+empty string (the credential is never reflected back in response payloads).
 
 Stream IDs returned in the list responses are stable 31-bit integers derived from the channel's
 stream key (MD5, first 4 bytes). Category IDs are derived the same way from the group title.

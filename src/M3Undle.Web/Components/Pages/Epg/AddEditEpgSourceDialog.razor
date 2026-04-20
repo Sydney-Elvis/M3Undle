@@ -43,6 +43,12 @@
                     <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_timeout" Min="5" Max="1800" Style="flex:1" />
                 </MudStack>
 
+                <RefreshIntervalSelect @bind-Value="_refreshIntervalHours"
+                                       Label="Refresh cadence"
+                                       NoneLabel="Follow global schedule"
+                                       HelperText="How often this source is re-fetched. Overrides the global refresh schedule for this source."
+                                       IncludeExtended="true" />
+
                 <MudSwitch @bind-Value="_enabled" Color="Color.Success" Label="Enabled" />
 
                 <MudExpansionPanels Elevation="0">
@@ -84,6 +90,7 @@
     private bool _enabled = true;
     private string? _userAgent;
     private string? _headersJson;
+    private int? _refreshIntervalHours;
     private bool _isSaving;
     private string? _error;
 
@@ -101,6 +108,7 @@
             _enabled = Source.Enabled;
             _userAgent = Source.UserAgent;
             _headersJson = Source.HeadersJson;
+            _refreshIntervalHours = Source.RefreshIntervalHours;
         }
     }
 
@@ -108,7 +116,7 @@
 
     private async Task SaveAsync()
     {
-        await _form.Validate();
+        await _form.ValidateAsync();
         if (!_form.IsValid) return;
 
         _isSaving = true;
@@ -128,6 +136,8 @@
                     TimeoutSeconds = _timeout,
                     UserAgent = _userAgent ?? string.Empty,
                     HeadersJson = _headersJson ?? string.Empty,
+                    RefreshIntervalHoursSet = true,
+                    RefreshIntervalHours = _refreshIntervalHours,
                 };
                 (_, error) = await EpgPageService.UpdateSourceAsync(Source!.EpgSourceId, req, CancellationToken.None);
             }
@@ -144,6 +154,7 @@
                     TimeoutSeconds = _timeout,
                     UserAgent = _userAgent,
                     HeadersJson = _headersJson,
+                    RefreshIntervalHours = _refreshIntervalHours,
                 };
                 (_, error) = await EpgPageService.CreateSourceAsync(req, CancellationToken.None);
             }

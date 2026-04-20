@@ -19,6 +19,14 @@ public sealed record HdHomeRunDeviceDescriptor(
     string FirmwareName,
     string FirmwareVersion);
 
+public sealed record HdHomeRunRuntimeSnapshot(
+    bool Enabled,
+    bool DiscoveryEnabled,
+    bool SsdpEnabled,
+    bool SiliconDustDiscoveryEnabled,
+    string ResolvedBaseUrl,
+    DateTime CapturedUtc);
+
 public sealed class HdHomeRunDeviceService(
     RuntimePaths runtimePaths,
     IOptions<HdHomeRunOptions> options,
@@ -42,6 +50,19 @@ public sealed class HdHomeRunDeviceService(
 
     private volatile HdHomeRunIdentityFile? _cachedIdentity;
     private volatile string? _cachedBaseUrl;
+    private volatile HdHomeRunRuntimeSnapshot? _runtimeSnapshot;
+
+    public void CaptureRuntimeSnapshot()
+    {
+        if (_runtimeSnapshot is not null)
+            return;
+
+        var snapshot = BuildRuntimeSnapshot();
+        Interlocked.CompareExchange(ref _runtimeSnapshot, snapshot, null);
+    }
+
+    public HdHomeRunRuntimeSnapshot GetRuntimeSnapshot()
+        => _runtimeSnapshot ?? BuildRuntimeSnapshot();
 
     public bool IsEnabled
     {
@@ -96,12 +117,22 @@ public sealed class HdHomeRunDeviceService(
         return new HdHomeRunDeviceDescriptor(
             DeviceId: identity.DeviceId,
             DeviceAuth: identity.DeviceAuth,
-            FriendlyName: identity.FriendlyName,
+            FriendlyName: ResolveFriendlyName(),
             ModelNumber: identity.ModelNumber,
             TunerCount: ResolveTunerCount(),
             Manufacturer: options.Value.Manufacturer,
             FirmwareName: options.Value.FirmwareName,
             FirmwareVersion: options.Value.FirmwareVersion);
+    }
+
+    public string ResolveFriendlyName()
+    {
+        var dbValue = QueryDbSetting(s => s.HdhrFriendlyName);
+        if (!string.IsNullOrWhiteSpace(dbValue))
+            return dbValue.Trim();
+        return string.IsNullOrWhiteSpace(options.Value.FriendlyName)
+            ? "M3Undle HDHomeRun"
+            : options.Value.FriendlyName.Trim();
     }
 
     internal async Task<HdHomeRunIdentityFile> GetIdentityAsync(CancellationToken cancellationToken)
@@ -163,7 +194,11 @@ public sealed class HdHomeRunDeviceService(
     private string? GetAdvertisedBaseUrlSetting()
     {
         var dbValue = QueryDbSetting(s => s.HdhrAdvertisedBaseUrl);
-        if (!string.IsNullOrWhiteSpace(dbValue))
+        // Only prefer the DB value if it would actually survive NormalizeAdvertisedBaseUrl.
+        // If the DB holds a loopback/invalid URL (e.g. http://127.0.0.1:8080 saved by mistake),
+        // NormalizeAdvertisedBaseUrl would return null and the caller would fall through to LAN
+        // IP detection, silently bypassing the env-var / options value. Guard against that here.
+        if (!string.IsNullOrWhiteSpace(dbValue) && NormalizeAdvertisedBaseUrl(dbValue) is not null)
             return dbValue;
 
         return options.Value.AdvertisedBaseUrl;
@@ -171,13 +206,25 @@ public sealed class HdHomeRunDeviceService(
 
     private int ResolveTunerCount() => tunerCountResolver.ResolveTunerCount();
 
+    private HdHomeRunRuntimeSnapshot BuildRuntimeSnapshot()
+        => new(
+            Enabled: IsEnabled,
+            DiscoveryEnabled: IsDiscoveryEnabled,
+            SsdpEnabled: IsSsdpEnabled,
+            SiliconDustDiscoveryEnabled: IsSiliconDustDiscoveryEnabled,
+            ResolvedBaseUrl: ResolveBaseUrl(),
+            CapturedUtc: DateTime.UtcNow);
+
     private bool GetDbBoolSetting(Func<Data.Entities.SiteSettings, bool> dbSelector, bool defaultValue)
     {
         try
         {
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
-            var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+            var settings = db.SiteSettings
+                .AsNoTracking()
+                .OrderBy(x => x.Id)
+                .FirstOrDefault();
             if (settings is not null)
                 return dbSelector(settings);
         }
@@ -195,7 +242,10 @@ public sealed class HdHomeRunDeviceService(
         {
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<Data.ApplicationDbContext>();
-            var settings = db.SiteSettings.AsNoTracking().FirstOrDefault();
+            var settings = db.SiteSettings
+                .AsNoTracking()
+                .OrderBy(x => x.Id)
+                .FirstOrDefault();
             return settings is not null ? selector(settings) : default;
         }
         catch

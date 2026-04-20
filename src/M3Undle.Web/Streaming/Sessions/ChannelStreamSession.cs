@@ -39,7 +39,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private int _closeNotified;
     private int _pendingSubscriberAttaches;
     private int _stopRequested;
+    private int _retainedExternalActivityCount;
+    private long _totalBytesRelayed;
+    private string? _pendingStopTrigger;
     private CancellationTokenSource? _idleCts;
+    private string? _lastIdleGraceRemoteIp;
 
     public ChannelStreamSession(
         StreamSourceDescriptor source,
@@ -75,7 +79,28 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     public int SubscriberCount => _subscribers.Count;
 
-    public async Task<SubscriberConnection> AttachSubscriberAsync(HttpContext context, CancellationToken requestCt)
+    public int ExternalSubscriberCount => _subscribers.Values.Count(s => !s.IsInternal);
+
+    public int InternalSubscriberCount => _subscribers.Values.Count(s => s.IsInternal);
+
+    public bool CanPreemptIdleGraceForRemoteIp(string? remoteIp)
+    {
+        if (string.IsNullOrWhiteSpace(remoteIp))
+            return false;
+
+        lock (_gate)
+        {
+            return _idleCts is not null
+                && string.Equals(_pendingStopTrigger, "idle_grace", StringComparison.Ordinal)
+                && ShouldScheduleIdleShutdownNoLock()
+                && string.Equals(_lastIdleGraceRemoteIp, remoteIp, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public async Task<SubscriberConnection> AttachSubscriberAsync(
+        HttpContext context,
+        CancellationToken requestCt,
+        bool isInternal = false)
     {
         BeginSubscriberAttach();
 
@@ -89,21 +114,17 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 requestedRoute: _source.RequestedRoute,
                 context: context,
                 queueCapacity: _bufferOptions.SubscriberQueueCapacity,
-                onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason));
+                onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason),
+                isInternal: isInternal);
 
             _subscribers[subscriber.ClientId] = subscriber;
 
             subscriber.InitializeResponse(_contentType, _cacheControl);
-            var snapshot = _buffer.CreateSnapshot();
-            _ = subscriber.StartAsync(snapshot, _sessionCts.Token);
-            _registry.UpsertClient(subscriber.Snapshot());
+            _ = subscriber.StartAsync(_buffer.CreateLiveEdgeSnapshot(), _sessionCts.Token);
+            if (!isInternal)
+                _registry.UpsertClient(subscriber.Snapshot());
             PublishSnapshots();
-
-            _logger.LogInformation(
-                "Client {RemoteIp} started watching '{DisplayName}' — {ViewerCount} viewer(s) on this stream.",
-                subscriber.RemoteIp ?? "unknown",
-                _source.DisplayName,
-                _subscribers.Count);
+            LogSubscriberAttached(subscriber);
 
             return subscriber;
         }
@@ -113,61 +134,61 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
     }
 
+    public IDisposable RetainExternalActivity()
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _stopRequested) == 1 || Volatile.Read(ref _closeNotified) == 1)
+                return NoopDisposable.Instance;
+
+            _retainedExternalActivityCount++;
+            CancelIdleShutdownNoLock();
+        }
+
+        PublishSnapshots();
+        return new ExternalActivityRetention(this);
+    }
+
     public Task RemoveSubscriberAsync(SubscriberConnection subscriber, SubscriberDisconnectReason reason)
     {
         if (_subscribers.TryRemove(subscriber.ClientId, out _))
         {
-            _registry.RemoveClient(subscriber.ClientId);
+            if (!subscriber.IsInternal)
+                _registry.RemoveClient(subscriber.ClientId);
         }
 
-        var remainingViewers = _subscribers.Count;
-
-        var logMessage = reason switch
-        {
-            SubscriberDisconnectReason.ClientAborted  => "stopped watching (disconnected normally)",
-            SubscriberDisconnectReason.SlowClient     => "was dropped — too far behind to keep up",
-            SubscriberDisconnectReason.WriteFailure   => "was dropped — network write error",
-            SubscriberDisconnectReason.SessionClosed  => "disconnected — stream session ended",
-            SubscriberDisconnectReason.Retuned        => "was replaced by a retune request",
-            SubscriberDisconnectReason.Completed      => "finished watching (stream ended cleanly)",
-            _                                          => $"disconnected (reason: {reason})",
-        };
-
-        if (reason == SubscriberDisconnectReason.SlowClient)
-        {
-            _logger.LogWarning(
-                "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
-                subscriber.RemoteIp ?? "unknown",
-                logMessage,
-                _source.DisplayName,
-                remainingViewers);
-        }
-        else
-        {
-            _logger.LogInformation(
-                "Client {RemoteIp} {LogMessage} on '{DisplayName}'. {ViewerCount} viewer(s) remaining.",
-                subscriber.RemoteIp ?? "unknown",
-                logMessage,
-                _source.DisplayName,
-                remainingViewers);
-        }
+        LogSubscriberRemoved(subscriber, reason);
 
         lock (_gate)
         {
             if (ShouldScheduleIdleShutdownNoLock())
+            {
+                if (!subscriber.IsInternal)
+                    _lastIdleGraceRemoteIp = subscriber.RemoteIp;
+
+                LogStopTrigger(
+                    ResolveDisconnectStopTrigger(reason),
+                    subscriberDisconnectReason: reason.ToString());
                 ScheduleIdleShutdownNoLock();
+            }
         }
 
         PublishSnapshots();
         return Task.CompletedTask;
     }
 
-    public async Task StopAsync()
+    public async Task StopAsync(string stopTrigger = "session_closed")
     {
         if (Interlocked.Exchange(ref _stopRequested, 1) == 1)
             return;
 
-        CancelIdleShutdown();
+        lock (_gate)
+        {
+            _pendingStopTrigger = stopTrigger;
+            CancelIdleShutdownNoLock();
+        }
+
+        LogStopTrigger(stopTrigger);
         _sessionCts.Cancel();
 
         var subscribers = _subscribers.Values.ToArray();
@@ -190,7 +211,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
+        await StopAsync("shutdown");
         _sessionCts.Dispose();
     }
 
@@ -238,7 +259,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
                     await using var upstream = await _upstreamConnector.ConnectAsync(_source, _sessionCts.Token);
                     _contentType = upstream.ContentType;
-                    _cacheControl = upstream.Response.Headers.CacheControl?.ToString();
+                    _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
                     _headersReadyTcs.TrySetResult(true);
 
                     if (reconnectAttempt > 0)
@@ -280,6 +301,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     _lastFailureKind = kind.ToString();
                     _reconnectAttempts++;
                     reconnectAttempt++;
+                    LogUpstreamFailure(kind);
                     _logger.LogWarning(
                         "Session {SessionId} upstream failure kind={FailureKind} attempt={Attempt}.",
                         _sessionId,
@@ -297,6 +319,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         if (!_headersReadyTcs.Task.IsCompleted)
                             _headersReadyTcs.TrySetException(ex);
 
+                        MarkPendingStopTrigger("upstream_fault");
+                        LogStopTrigger("upstream_fault", subscriberDisconnectReason: kind.ToString());
                         SetState(SessionState.Faulted);
                         await ForceCloseSubscribersAsync();
                         break;
@@ -308,6 +332,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     {
                         _strikeStore.RecordStrike(Key, _reconnectOptions.StrikeCooldown);
                         _headersReadyTcs.TrySetException(new TimeoutException("Reconnect outage window exhausted."));
+                        MarkPendingStopTrigger("upstream_fault");
+                        LogStopTrigger("upstream_fault", subscriberDisconnectReason: "outage_window_exhausted");
                         SetState(SessionState.Faulted);
                         await ForceCloseSubscribersAsync();
                         _logger.LogWarning(
@@ -360,6 +386,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             }
 
             _lastUpstreamByteUtc = DateTimeOffset.UtcNow;
+            Interlocked.Add(ref _totalBytesRelayed, bytesRead);
             using var published = _buffer.Write(readBuffer.AsMemory(0, bytesRead));
             List<SubscriberConnection>? slowSubscribers = null;
 
@@ -374,7 +401,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     continue;
                 }
 
-                _registry.UpsertClient(subscriber.Snapshot());
+                if (!subscriber.IsInternal)
+                    _registry.UpsertClient(subscriber.Snapshot());
             }
 
             if (slowSubscribers is not null)
@@ -457,10 +485,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         if (_idleGrace <= TimeSpan.Zero)
         {
-            _ = StopSafelyAsync();
+            _pendingStopTrigger = "idle_grace";
+            LogStopTrigger("idle_grace");
+            _ = StopSafelyAsync("idle_grace");
             return;
         }
 
+        _pendingStopTrigger = "idle_grace";
         _idleCts?.Cancel();
         _idleCts?.Dispose();
         _idleCts = new CancellationTokenSource();
@@ -471,6 +502,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         {
             try
             {
+                LogStopTrigger("idle_grace", delay: _idleGrace);
                 await Task.Delay(_idleGrace, token);
 
                 lock (_gate)
@@ -479,7 +511,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         return;
                 }
 
-                await StopSafelyAsync();
+                LogStopTrigger("idle_grace");
+                await StopSafelyAsync("idle_grace");
             }
             catch (OperationCanceledException)
             {
@@ -492,11 +525,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }, token);
     }
 
-    private async Task StopSafelyAsync()
+    private async Task StopSafelyAsync(string stopTrigger)
     {
         try
         {
-            await StopAsync();
+            await StopAsync(stopTrigger);
         }
         catch (Exception ex)
         {
@@ -517,12 +550,35 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _idleCts?.Cancel();
         _idleCts?.Dispose();
         _idleCts = null;
+        _lastIdleGraceRemoteIp = null;
+        if (string.Equals(_pendingStopTrigger, "idle_grace", StringComparison.Ordinal))
+            _pendingStopTrigger = null;
     }
 
     private bool ShouldScheduleIdleShutdownNoLock()
-        => _subscribers.IsEmpty
+        => !_subscribers.Values.Any(s => !s.IsInternal)
+            && _retainedExternalActivityCount == 0
             && _pendingSubscriberAttaches == 0
             && Volatile.Read(ref _stopRequested) == 0;
+
+    private void ReleaseExternalActivityRetention()
+    {
+        var shouldPublish = false;
+
+        lock (_gate)
+        {
+            if (_retainedExternalActivityCount > 0)
+                _retainedExternalActivityCount--;
+
+            if (ShouldScheduleIdleShutdownNoLock())
+                ScheduleIdleShutdownNoLock();
+
+            shouldPublish = Volatile.Read(ref _closeNotified) == 0;
+        }
+
+        if (shouldPublish)
+            PublishSnapshots();
+    }
 
     private static TimeSpan ResolveIdleGrace(StreamProxyOptions options)
     {
@@ -533,16 +589,165 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         return idleGrace;
     }
 
+    private void LogSubscriberAttached(SubscriberConnection subscriber)
+    {
+        _logger.LogInformation(
+            "Subscriber attached: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RequestPath={RequestPath} RouteClassification={RouteClassification} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} Classification={Classification} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} PendingAttachCount={PendingAttachCount}",
+            _sessionId,
+            _source.DisplayName,
+            _source.RequestedRoute,
+            subscriber.RequestPath,
+            RouteClassification,
+            subscriber.ClientId,
+            subscriber.RemoteIp,
+            subscriber.UserAgent,
+            StreamLogClassification.ClassifySubscriber(subscriber.IsInternal),
+            ExternalSubscriberCount,
+            InternalSubscriberCount,
+            Volatile.Read(ref _pendingSubscriberAttaches));
+    }
+
+    private void LogSubscriberRemoved(SubscriberConnection subscriber, SubscriberDisconnectReason reason)
+    {
+        var level = reason == SubscriberDisconnectReason.SlowClient ? LogLevel.Warning : LogLevel.Information;
+        _logger.Log(
+            level,
+            "Subscriber removed: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RequestPath={RequestPath} RouteClassification={RouteClassification} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} Classification={Classification} DisconnectReason={DisconnectReason} BytesSent={BytesSent} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} PendingAttachCount={PendingAttachCount}",
+            _sessionId,
+            _source.DisplayName,
+            _source.RequestedRoute,
+            subscriber.RequestPath,
+            RouteClassification,
+            subscriber.ClientId,
+            subscriber.RemoteIp,
+            subscriber.UserAgent,
+            StreamLogClassification.ClassifySubscriber(subscriber.IsInternal),
+            reason,
+            subscriber.BytesSent,
+            ExternalSubscriberCount,
+            InternalSubscriberCount,
+            Volatile.Read(ref _pendingSubscriberAttaches));
+
+        if (subscriber.HdhrDiagnostics is not null || string.Equals(RouteClassification, StreamLogClassification.HdhrRoute, StringComparison.Ordinal))
+            LogHdhrDisconnectDiagnostics(subscriber, reason);
+    }
+
+    private void LogHdhrDisconnectDiagnostics(SubscriberConnection subscriber, SubscriberDisconnectReason reason)
+    {
+        var diagnostics = subscriber.HdhrDiagnostics;
+        var now = DateTimeOffset.UtcNow;
+        var timeSinceLastUpstreamByte = GetTimeSinceLastUpstreamByte(now);
+
+        _logger.LogInformation(
+            "HDHR disconnect diagnostics: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RouteClassification={RouteClassification} TunerId={TunerId} ReservationId={ReservationId} StreamKey={StreamKey} VirtualPath={VirtualPath} RemoteIp={RemoteIp} DisconnectReason={DisconnectReason} BytesSent={BytesSent} LastUpstreamByteUtc={LastUpstreamByteUtc} UpstreamRecentlyActive={UpstreamRecentlyActive} TimeSinceLastUpstreamByteMs={TimeSinceLastUpstreamByteMs} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount}",
+            _sessionId,
+            _source.DisplayName,
+            _source.RequestedRoute,
+            RouteClassification,
+            diagnostics?.TunerId,
+            diagnostics?.ReservationId,
+            diagnostics?.StreamKey,
+            diagnostics?.VirtualPath ?? subscriber.RequestPath,
+            subscriber.RemoteIp,
+            reason,
+            subscriber.BytesSent,
+            _lastUpstreamByteUtc,
+            WasUpstreamRecentlyActive(now),
+            timeSinceLastUpstreamByte?.TotalMilliseconds,
+            ExternalSubscriberCount,
+            InternalSubscriberCount);
+    }
+
+    private void LogUpstreamFailure(UpstreamFailureKind kind)
+    {
+        if (kind != UpstreamFailureKind.EndOfStream)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var timeSinceLastUpstreamByte = GetTimeSinceLastUpstreamByte(now);
+        string? pendingStopTrigger;
+
+        lock (_gate)
+        {
+            pendingStopTrigger = GetPendingStopTriggerNoLock();
+        }
+
+        _logger.LogWarning(
+            "Upstream EOF context: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RouteClassification={RouteClassification} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} TimeSinceLastUpstreamByteMs={TimeSinceLastUpstreamByteMs} TotalBytesRelayed={TotalBytesRelayed} PendingStopTrigger={PendingStopTrigger}",
+            _sessionId,
+            _source.DisplayName,
+            _source.RequestedRoute,
+            RouteClassification,
+            ExternalSubscriberCount,
+            InternalSubscriberCount,
+            timeSinceLastUpstreamByte?.TotalMilliseconds,
+            Interlocked.Read(ref _totalBytesRelayed),
+            pendingStopTrigger);
+    }
+
+    private void LogStopTrigger(string stopTrigger, string? subscriberDisconnectReason = null, TimeSpan? delay = null)
+    {
+        _logger.LogInformation(
+            "Stream stop trigger: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RouteClassification={RouteClassification} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} PendingAttachCount={PendingAttachCount} StopTrigger={StopTrigger} SubscriberDisconnectReason={SubscriberDisconnectReason} DelayMs={DelayMs}",
+            _sessionId,
+            _source.DisplayName,
+            _source.RequestedRoute,
+            RouteClassification,
+            ExternalSubscriberCount,
+            InternalSubscriberCount,
+            Volatile.Read(ref _pendingSubscriberAttaches),
+            stopTrigger,
+            subscriberDisconnectReason,
+            delay?.TotalMilliseconds);
+    }
+
+    private void MarkPendingStopTrigger(string stopTrigger)
+    {
+        lock (_gate)
+        {
+            _pendingStopTrigger = stopTrigger;
+        }
+    }
+
+    private string? GetPendingStopTriggerNoLock()
+    {
+        if (!string.IsNullOrWhiteSpace(_pendingStopTrigger))
+            return _pendingStopTrigger;
+
+        if (_idleCts is not null)
+            return "idle_grace";
+
+        return Volatile.Read(ref _stopRequested) == 1
+            ? "session_closed"
+            : null;
+    }
+
+    private TimeSpan? GetTimeSinceLastUpstreamByte(DateTimeOffset now)
+        => _lastUpstreamByteUtc is { } last ? now - last : null;
+
+    private bool WasUpstreamRecentlyActive(DateTimeOffset now)
+        => GetTimeSinceLastUpstreamByte(now) is { } age
+           && age <= _reconnectOptions.ReadStallTimeout;
+
+    private static string ResolveDisconnectStopTrigger(SubscriberDisconnectReason reason)
+        => reason switch
+        {
+            SubscriberDisconnectReason.Retuned => "retune",
+            SubscriberDisconnectReason.SessionClosed => "session_closed",
+            _ => "client_disconnect",
+        };
+
     private void PublishSnapshots()
     {
+        var externalCount = ExternalSubscriberCount;
         var session = new StreamSessionSnapshot(
             SessionId: _sessionId,
             ProviderId: _source.ProviderId,
             ProviderChannelId: _source.ProviderChannelId,
             DisplayName: _source.DisplayName,
             State: _state,
-            SubscriberCount: _subscribers.Count,
-            IsShared: _subscribers.Count > 1,
+            SubscriberCount: externalCount,
+            IsShared: externalCount > 1,
             BufferUsedBytes: _buffer.UsedBytes,
             BufferMaxBytes: _buffer.MaxBytes,
             StartedUtc: _startedUtc,
@@ -572,5 +777,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _sessionId,
             _state);
         await _onClosed(Key, this);
+    }
+
+    private string RouteClassification => StreamLogClassification.ClassifyRoute(_source.RequestedRoute);
+
+    private sealed class ExternalActivityRetention(ChannelStreamSession session) : IDisposable
+    {
+        private ChannelStreamSession? _session = session;
+
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref _session, null);
+            current?.ReleaseExternalActivityRetention();
+        }
+    }
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public static NoopDisposable Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
     }
 }

@@ -1,5 +1,10 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using Microsoft.EntityFrameworkCore;
@@ -11,9 +16,11 @@ public sealed class UpstreamStreamConnector(
     IHttpClientFactory httpClientFactory,
     IServiceScopeFactory scopeFactory,
     IOptions<ReconnectOptions> reconnectOptions,
+    IOptions<GeneratedHlsOptions> hlsOptions,
     ILogger<UpstreamStreamConnector> logger)
 {
     private readonly ReconnectOptions _reconnectOptions = reconnectOptions.Value;
+    private readonly GeneratedHlsOptions _hlsOptions = hlsOptions.Value;
 
     public async Task<UpstreamConnection> ConnectAsync(StreamSourceDescriptor source, CancellationToken ct)
     {
@@ -47,6 +54,25 @@ public sealed class UpstreamStreamConnector(
             if (!string.IsNullOrWhiteSpace(refreshedStreamUrl))
                 effectiveStreamUrl = refreshedStreamUrl;
         }
+
+        var hlsCandidates = source.ForceMpegTs
+            ? HlsDetection.GetHlsCandidates(effectiveStreamUrl)
+            : [];
+
+        if (source.ForceMpegTs && hlsCandidates.Count > 0 && !string.IsNullOrWhiteSpace(_hlsOptions.FfmpegPath))
+        {
+            var ffmpegConn = await TryFfmpegHlsRelayAsync(hlsCandidates[0], provider, source.DisplayName, ct);
+            if (ffmpegConn is not null)
+                return ffmpegConn;
+
+            logger.LogWarning(
+                "FFmpeg HLS relay startup failed for '{DisplayName}' using candidate '{HlsUrl}'. Falling back to direct HTTP.",
+                source.DisplayName,
+                hlsCandidates[0]);
+        }
+
+        if (source.ForceMpegTs)
+            effectiveStreamUrl = RewriteUrlForMpegTs(effectiveStreamUrl);
 
         var client = httpClientFactory.CreateClient("stream-relay");
         ProviderFetcher.ApplyHeadersFromJson(client, provider.HeadersJson);
@@ -129,6 +155,45 @@ public sealed class UpstreamStreamConnector(
         }
     }
 
+    internal static string RewriteUrlForMpegTs(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return url;
+
+        var path = uri.AbsolutePath;
+        if (path.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            var stripped = path[..^5];
+            uri = new UriBuilder(uri) { Path = stripped }.Uri;
+        }
+
+        var query = uri.Query;
+        if (string.IsNullOrEmpty(query))
+            return uri.ToString();
+
+        var pairs = query.TrimStart('?').Split('&');
+        var modified = false;
+        for (var i = 0; i < pairs.Length; i++)
+        {
+            var kv = pairs[i].Split('=', 2);
+            if (kv.Length != 2) continue;
+            var key = Uri.UnescapeDataString(kv[0]);
+            if (!key.Equals("output", StringComparison.OrdinalIgnoreCase)) continue;
+            var value = Uri.UnescapeDataString(kv[1]);
+            if (value.Equals("m3u8", StringComparison.OrdinalIgnoreCase) ||
+                value.Equals("hls", StringComparison.OrdinalIgnoreCase))
+            {
+                pairs[i] = $"{kv[0]}=ts";
+                modified = true;
+            }
+        }
+
+        if (!modified)
+            return uri.ToString();
+
+        return new UriBuilder(uri) { Query = string.Join("&", pairs) }.Uri.ToString();
+    }
+
     public UpstreamFailureKind Classify(Exception ex, int? statusCode = null)
     {
         if (ex is UpstreamConnectException connectException)
@@ -150,5 +215,271 @@ public sealed class UpstreamStreamConnector(
         }
 
         return UpstreamFailureKind.Unknown;
+    }
+
+    private async Task<UpstreamConnection?> TryFfmpegHlsRelayAsync(
+        string hlsUrl,
+        Provider provider,
+        string displayName,
+        CancellationToken ct)
+    {
+        var ffmpegPath = _hlsOptions.FfmpegPath;
+
+        var info = new ProcessStartInfo
+        {
+            FileName = ffmpegPath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        info.ArgumentList.Add("-hide_banner");
+        info.ArgumentList.Add("-nostdin");
+        info.ArgumentList.Add("-loglevel");
+        info.ArgumentList.Add("warning");
+        info.ArgumentList.Add("-reconnect");
+        info.ArgumentList.Add("1");
+        info.ArgumentList.Add("-reconnect_at_eof");
+        info.ArgumentList.Add("1");
+        info.ArgumentList.Add("-reconnect_streamed");
+        info.ArgumentList.Add("1");
+        info.ArgumentList.Add("-fflags");
+        info.ArgumentList.Add("+genpts+discardcorrupt");
+
+        if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+        {
+            info.ArgumentList.Add("-user_agent");
+            info.ArgumentList.Add(provider.UserAgent);
+        }
+
+        var headersArg = BuildFfmpegHeadersArgument(
+            provider.HeadersJson,
+            excludeUserAgent: !string.IsNullOrWhiteSpace(provider.UserAgent));
+        if (!string.IsNullOrWhiteSpace(headersArg))
+        {
+            info.ArgumentList.Add("-headers");
+            info.ArgumentList.Add(headersArg);
+        }
+
+        info.ArgumentList.Add("-i");
+        info.ArgumentList.Add(hlsUrl);
+        info.ArgumentList.Add("-map");
+        info.ArgumentList.Add("0:v?");
+        info.ArgumentList.Add("-map");
+        info.ArgumentList.Add("0:a?");
+        info.ArgumentList.Add("-c");
+        info.ArgumentList.Add("copy");
+        info.ArgumentList.Add("-muxpreload");
+        info.ArgumentList.Add("0");
+        info.ArgumentList.Add("-muxdelay");
+        info.ArgumentList.Add("0");
+        info.ArgumentList.Add("-mpegts_flags");
+        info.ArgumentList.Add("+resend_headers");
+        info.ArgumentList.Add("-f");
+        info.ArgumentList.Add("mpegts");
+        info.ArgumentList.Add("pipe:1");
+
+        Process process;
+        try
+        {
+            process = new Process { StartInfo = info };
+            if (!process.Start())
+            {
+                process.Dispose();
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "FFmpeg HLS relay process start failed for '{DisplayName}'.", displayName);
+            return null;
+        }
+
+        // Drain stderr so the process does not block on a full stderr buffer
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!process.HasExited)
+                {
+                    var line = await process.StandardError.ReadLineAsync();
+                    if (line is null) break;
+                    logger.LogDebug("FFmpeg/HLS-relay[{DisplayName}]: {Line}", displayName, line);
+                }
+            }
+            catch { }
+        }, CancellationToken.None);
+
+        var startupBuffer = new byte[8 * 1024];
+        var stdout = process.StandardOutput.BaseStream;
+        int startupBytes;
+
+        try
+        {
+            using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            startupCts.CancelAfter(TimeSpan.FromSeconds(10));
+            startupBytes = await stdout.ReadAsync(startupBuffer.AsMemory(), startupCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(
+                "FFmpeg HLS relay for '{DisplayName}' produced no output within 10 s. Falling back to direct HTTP.",
+                displayName);
+            TryKillProcess(process);
+            process.Dispose();
+            return null;
+        }
+        catch
+        {
+            TryKillProcess(process);
+            process.Dispose();
+            throw;
+        }
+
+        if (startupBytes == 0)
+        {
+            logger.LogWarning(
+                "FFmpeg HLS relay for '{DisplayName}' exited with no output. Falling back to direct HTTP.",
+                displayName);
+            TryKillProcess(process);
+            process.Dispose();
+            return null;
+        }
+
+        logger.LogInformation(
+            "FFmpeg HLS relay started for '{DisplayName}' (HLS→MPEGTS, {StartupBytes} startup bytes).",
+            displayName,
+            startupBytes);
+
+        return new UpstreamConnection(
+            process,
+            new PrefixedStream(startupBuffer.AsMemory(0, startupBytes), stdout),
+            "video/mp2t");
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); } catch { }
+    }
+
+    private static string? BuildFfmpegHeadersArgument(string? headersJson, bool excludeUserAgent)
+    {
+        if (string.IsNullOrWhiteSpace(headersJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(headersJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var builder = new StringBuilder();
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String)
+                    continue;
+
+                var value = property.Value.GetString();
+                if (string.IsNullOrWhiteSpace(value))
+                    continue;
+
+                if (excludeUserAgent
+                    && property.Name.Equals("User-Agent", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                builder.Append(property.Name).Append(": ").Append(value).Append("\r\n");
+            }
+
+            return builder.Length == 0 ? null : builder.ToString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private sealed class PrefixedStream(ReadOnlyMemory<byte> prefix, Stream inner) : Stream
+    {
+        private ReadOnlyMemory<byte> _prefix = prefix;
+        private readonly Stream _inner = inner;
+        private int _prefixOffset;
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            ArgumentOutOfRangeException.ThrowIfNegative(offset);
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            if (buffer.Length - offset < count)
+                throw new ArgumentException("Offset and count must refer to a valid range in the buffer.");
+
+            if (_prefixOffset < _prefix.Length)
+            {
+                var bytesToCopy = Math.Min(count, _prefix.Length - _prefixOffset);
+                _prefix.Span.Slice(_prefixOffset, bytesToCopy).CopyTo(buffer.AsSpan(offset, bytesToCopy));
+                _prefixOffset += bytesToCopy;
+                return bytesToCopy;
+            }
+
+            return _inner.Read(buffer, offset, count);
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            ArgumentOutOfRangeException.ThrowIfNegative(offset);
+            ArgumentOutOfRangeException.ThrowIfNegative(count);
+
+            if (buffer.Length - offset < count)
+                throw new ArgumentException("Offset and count must refer to a valid range in the buffer.");
+
+            return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_prefixOffset < _prefix.Length)
+            {
+                var bytesToCopy = Math.Min(buffer.Length, _prefix.Length - _prefixOffset);
+                _prefix.Span.Slice(_prefixOffset, bytesToCopy).CopyTo(buffer.Span[..bytesToCopy]);
+                _prefixOffset += bytesToCopy;
+                return ValueTask.FromResult(bytesToCopy);
+            }
+
+            return _inner.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask DisposeAsync() => _inner.DisposeAsync();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _inner.Dispose();
+
+            base.Dispose(disposing);
+        }
     }
 }

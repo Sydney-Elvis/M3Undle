@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
@@ -37,18 +39,22 @@ public static class XtreamEndpoints
         WriteIndented = false,
     };
 
+    // Matches "Show Name S01 E01", "Show Name S01E01", "Show Name - S01E01", etc.
+    private static readonly Regex SeriesNameRegex =
+        new(@"^(.*?)\s+[Ss](\d{1,2})[\s\-]*[Ee]?(\d+)", RegexOptions.Compiled);
+
     public static IEndpointRouteBuilder MapXtreamEndpoints(this IEndpointRouteBuilder app)
     {
         // player_api.php and get.php use query-string auth — handled by MapClientSurface
         var client = app.MapClientSurface();
         client.MapGet("player_api.php", ServePlayerApiAsync);
-        client.MapPost("player_api.php", ServePlayerApiAsync);
         client.MapGet("get.php", ServeGetM3uAsync);
 
         // Xtream path-embedded-credential streaming: /live/{user}/{pass}/{id}[.ext]
         // These use a dedicated filter that reads credentials from the route values.
         var xtream = app.MapGroup(string.Empty);
         xtream.AddEndpointFilter<XtreamPathCredentialFilter>();
+        xtream.ExcludeFromDescription();
 
         xtream.MapGet("live/{xtreamUser}/{xtreamPass}/{streamId}", ServeXtreamStreamAsync);
         xtream.MapGet("live/{xtreamUser}/{xtreamPass}/{streamId}/{*tail}", ServeXtreamStreamAsync);
@@ -57,6 +63,7 @@ public static class XtreamEndpoints
         xtream.MapGet("series/{xtreamUser}/{xtreamPass}/{streamId}", ServeXtreamStreamAsync);
         xtream.MapGet("series/{xtreamUser}/{xtreamPass}/{streamId}/{*tail}", ServeXtreamStreamAsync);
         xtream.MapGet("hls/{xtreamUser}/{xtreamPass}/{streamKey}/proxy", ServeXtreamHlsProxyAsync);
+        xtream.MapGet("hls/generated/{xtreamUser}/{xtreamPass}/{sessionId}/{*asset}", ServeGeneratedXtreamHlsAssetAsync);
 
         return app;
     }
@@ -91,7 +98,8 @@ public static class XtreamEndpoints
             "get_series_categories" => BuildCategoriesResult(lineup, "series"),
             "get_live_streams"      => BuildStreamsResult(context, lineup, "live"),
             "get_vod_streams"       => BuildStreamsResult(context, lineup, "vod"),
-            "get_series"            => BuildStreamsResult(context, lineup, "series"),
+            "get_series"            => BuildSeriesListResult(context, lineup),
+            "get_series_info"       => BuildSeriesInfoResult(context, lineup),
             _                       => Results.Json(Array.Empty<object>(), JsonOptions),
         };
     }
@@ -105,7 +113,9 @@ public static class XtreamEndpoints
             user_info = new
             {
                 username = access.Credential.Username,
-                password = access.UrlCredential?.Password ?? string.Empty,
+                // Deliberately never echo endpoint credentials back in account-info responses.
+                // The field remains present for shape compatibility, but value is always redacted.
+                password = string.Empty,
                 message = string.Empty,
                 auth = 1,
                 status = "Active",
@@ -218,6 +228,138 @@ public static class XtreamEndpoints
         return Results.Json(streams, JsonOptions);
     }
 
+    /// <summary>
+    /// Returns one entry per unique series title (grouped from individual episodes),
+    /// matching how the standard Xtream Codes API serves the series list.
+    /// </summary>
+    private static IResult BuildSeriesListResult(HttpContext context, RenderedLineup lineup)
+    {
+        var categoryFilter = context.Request.Query["category_id"].ToString();
+        var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
+
+        var seriesChannels = lineup.Channels
+            .Where(c => c.ContentType == "series");
+
+        if (!string.IsNullOrEmpty(categoryFilter))
+            seriesChannels = seriesChannels.Where(c =>
+                CategoryId(c.GroupTitle ?? "Uncategorized").ToString() == categoryFilter);
+
+        var seriesList = seriesChannels
+            .GroupBy(c => ExtractSeriesName(c.DisplayName))
+            .Select((g, i) =>
+            {
+                var first = g.First();
+                return (object)new
+                {
+                    num              = i + 1,
+                    name             = g.Key,
+                    series_id        = SeriesId(g.Key),
+                    cover            = first.LogoUrl ?? string.Empty,
+                    plot             = string.Empty,
+                    cast             = string.Empty,
+                    director         = string.Empty,
+                    genre            = first.GroupTitle ?? string.Empty,
+                    releaseDate      = string.Empty,
+                    last_modified    = added,
+                    rating           = string.Empty,
+                    rating_5based    = 0,
+                    backdrop_path    = Array.Empty<string>(),
+                    youtube_trailer  = string.Empty,
+                    episode_run_time = string.Empty,
+                    category_id      = CategoryId(first.GroupTitle ?? "Uncategorized").ToString(),
+                };
+            })
+            .ToArray();
+
+        return Results.Json(seriesList, JsonOptions);
+    }
+
+    /// <summary>
+    /// Returns full series info with episodes grouped by season for a given series_id,
+    /// matching the standard Xtream Codes get_series_info response shape.
+    /// </summary>
+    private static IResult BuildSeriesInfoResult(HttpContext context, RenderedLineup lineup)
+    {
+        var seriesIdParam = context.Request.Query["series_id"].ToString();
+        if (!int.TryParse(seriesIdParam, out var requestedSeriesId))
+            return Results.Json(new { }, JsonOptions);
+
+        var access   = context.GetResolvedClientAccess();
+        var baseUrl  = GetBaseUrl(context);
+        var username = access.Credential.Username;
+        var password = access.UrlCredential?.Password ?? string.Empty;
+        var added    = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
+
+        var match = lineup.Channels
+            .Where(c => c.ContentType == "series")
+            .GroupBy(c => ExtractSeriesName(c.DisplayName))
+            .FirstOrDefault(g => SeriesId(g.Key) == requestedSeriesId);
+
+        if (match is null)
+            return Results.Json(new { }, JsonOptions);
+
+        var seriesName = match.Key;
+        var first      = match.First();
+
+        var episodesBySeason = new Dictionary<string, List<object>>();
+        foreach (var ep in match.OrderBy(c => c.DisplayName))
+        {
+            var (season, epNum) = ExtractSeasonEpisode(ep.DisplayName);
+            var seasonKey = season.ToString();
+            if (!episodesBySeason.TryGetValue(seasonKey, out var list))
+            {
+                list = [];
+                episodesBySeason[seasonKey] = list;
+            }
+
+            var streamId = XtreamStreamIdCache.ToStreamId(ep.StreamKey);
+            list.Add(new
+            {
+                id                  = streamId.ToString(),
+                episode_num         = epNum,
+                title               = ep.DisplayName,
+                container_extension = "mkv",
+                added,
+                season,
+                direct_source       = $"{baseUrl}/series/{username}/{password}/{streamId}.mkv",
+            });
+        }
+
+        var seasons = episodesBySeason.Keys
+            .Select(k => new
+            {
+                season_number = int.Parse(k),
+                name          = $"Season {k}",
+                cover         = string.Empty,
+            })
+            .OrderBy(s => s.season_number)
+            .ToArray();
+
+        var response = new
+        {
+            info = new
+            {
+                name             = seriesName,
+                cover            = first.LogoUrl ?? string.Empty,
+                plot             = string.Empty,
+                cast             = string.Empty,
+                director         = string.Empty,
+                genre            = first.GroupTitle ?? string.Empty,
+                releaseDate      = string.Empty,
+                rating           = string.Empty,
+                rating_5based    = 0,
+                backdrop_path    = Array.Empty<string>(),
+                youtube_trailer  = string.Empty,
+                episode_run_time = string.Empty,
+                category_id      = CategoryId(first.GroupTitle ?? "Uncategorized").ToString(),
+            },
+            episodes = episodesBySeason,
+            seasons,
+        };
+
+        return Results.Json(response, JsonOptions);
+    }
+
     // -------------------------------------------------------------------------
     // get.php — Xtream-style M3U playlist
     // -------------------------------------------------------------------------
@@ -257,6 +399,7 @@ public static class XtreamEndpoints
         ChannelSessionManager channelSessionManager,
         IHttpClientFactory httpClientFactory,
         HlsProxyService hlsProxyService,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
         ILoggerFactory loggerFactory,
         IOptions<StreamProxyOptions> streamProxyOptions,
         CancellationToken cancellationToken)
@@ -331,44 +474,111 @@ public static class XtreamEndpoints
         logger.LogInformation("Xtream stream tune-in: channel={Channel} id={StreamId} client={Client}",
             entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
 
+        var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs: resolved.SourceDescriptor?.ForceMpegTs ?? false);
+
+        // HLS slot reservation only applies to non-shared (native upstream HLS) sessions.
+        ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
+        if (requiresHls && !resolved.UseSharedSession && resolved.SourceDescriptor is not null)
+        {
+            try
+            {
+                hlsSlotReservation = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
+            }
+            catch (StreamAdmissionException ex)
+            {
+                logger.LogWarning(
+                    "Xtream HLS live stream admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
+                    resolved.SourceDescriptor.ProviderId,
+                    resolved.SourceDescriptor.ProviderChannelId,
+                    ex.Message);
+                if (ex.RetryAfterSeconds is { } retry)
+                    context.Response.Headers["Retry-After"] = retry.ToString();
+                context.Response.StatusCode = ex.StatusCode;
+                return;
+            }
+        }
+
+        if (requiresHls)
+        {
+            if (resolved.SourceDescriptor is null)
+            {
+                hlsSlotReservation?.Dispose();
+                await StreamErrorResponse.WriteHtmlErrorAsync(
+                    context.Response, StatusCodes.Status503ServiceUnavailable,
+                    "HLS delivery is unavailable for this stream.", cancellationToken);
+                return;
+            }
+
+            // Native upstream HLS only for non-shared sessions.
+            // Shared sessions use generated HLS wrapper to relay from the ring buffer.
+            if (!resolved.UseSharedSession)
+            {
+                var hlsCandidates = HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl);
+                if (hlsCandidates.Count > 0)
+                {
+                    var xtreamUser = context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty;
+                    var xtreamPass = context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty;
+                    var segmentProxyBase =
+                        $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
+
+                    var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
+                        hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
+
+                    if (manifest is not null)
+                    {
+                        hlsSlotReservation?.Dispose();
+                        logger.LogInformation(
+                            "Xtream native upstream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
+                            entry.DisplayName, streamId, streamKey);
+                        context.Response.ContentType = "application/vnd.apple.mpegurl";
+                        context.Response.Headers.CacheControl = "no-cache";
+                        await context.Response.WriteAsync(manifest, cancellationToken);
+                        return;
+                    }
+                }
+            }
+
+            var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
+            string? generatedRelaySecret = null;
+            string? parentStreamSessionId = null;
+            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out var parentSession)
+                && parentSession is not null)
+            {
+                var sk = resolved.SourceDescriptor.SessionKey;
+                parentStreamSessionId = parentSession.SessionId;
+                generatedStreamUrl =
+                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
+                generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
+            }
+
+            var generatedSession = await generatedHlsSessionManager.CreateSessionAsync(
+                new GeneratedHlsSessionRequest(
+                    StreamUrl: generatedStreamUrl,
+                    DisplayName: resolved.SourceDescriptor.DisplayName,
+                    ProviderId: generatedRelaySecret is null ? resolved.SourceDescriptor.ProviderId : null,
+                    AdmissionKey: resolved.SourceDescriptor.SessionKey,
+                    InternalRelaySecret: generatedRelaySecret,
+                    ParentStreamSessionId: parentStreamSessionId,
+                    RequestedRoute: resolved.SourceDescriptor.RequestedRoute),
+                cancellationToken);
+
+            if (generatedSession is null)
+            {
+                hlsSlotReservation?.Dispose();
+                await StreamErrorResponse.WriteHtmlErrorAsync(
+                    context.Response, StatusCodes.Status503ServiceUnavailable,
+                    "Generated HLS is unavailable for this stream.", cancellationToken);
+                return;
+            }
+
+            var generatedManifestUrl =
+                $"{GetBaseUrl(context)}/hls/generated/{Uri.EscapeDataString(context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty)}/{Uri.EscapeDataString(context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty)}/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
+            context.Response.Redirect(generatedManifestUrl, permanent: false);
+            return;
+        }
+
         if (resolved.UseSharedSession && resolved.SourceDescriptor is not null)
         {
-            // Xtream clients request an explicit .ts extension for live streams.
-            // Skip HLS only when the client is a native app AND has requested .ts explicitly.
-            // Browser-based Xtream clients (IPTVnator, Electron apps) send a Mozilla User-Agent
-            // and cannot play raw TS — they must receive HLS regardless of the URL extension.
-            var isNativeAppTs = !IsBrowserClient(context)
-                && streamId.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
-
-            var hlsCandidates = !isNativeAppTs
-                ? HlsDetection.GetHlsCandidates(resolved.SourceDescriptor.StreamUrl)
-                : [];
-            if (hlsCandidates.Count > 0)
-            {
-                var xtreamUser = context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty;
-                var xtreamPass = context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty;
-                var segmentProxyBase =
-                    $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
-
-                var manifest = await hlsProxyService.FetchAndRewriteManifestAsync(
-                    hlsCandidates, resolved.SourceDescriptor, segmentProxyBase, cancellationToken);
-
-                if (manifest is not null)
-                {
-                    logger.LogInformation(
-                        "Xtream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
-                        entry.DisplayName, streamId, streamKey);
-                    context.Response.ContentType = "application/vnd.apple.mpegurl";
-                    context.Response.Headers.CacheControl = "no-cache";
-                    context.Response.Headers.AccessControlAllowOrigin = "*";
-                    await context.Response.WriteAsync(manifest, cancellationToken);
-                    return;
-                }
-
-                logger.LogInformation(
-                    "HLS not available for '{Channel}', falling back to TS session.",
-                    entry.DisplayName);
-            }
 
             SubscriberConnection? subscriber = null;
             try
@@ -425,13 +635,12 @@ public static class XtreamEndpoints
         HttpContext context,
         HlsProxyService hlsProxyService,
         StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
         ILoggerFactory loggerFactory,
         string? u,
         CancellationToken cancellationToken)
     {
         var logger = loggerFactory.CreateLogger("M3Undle.HlsProxy");
-
-        context.Response.Headers.AccessControlAllowOrigin = "*";
 
         if (string.IsNullOrWhiteSpace(u))
         {
@@ -465,6 +674,7 @@ public static class XtreamEndpoints
             $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(xtreamUser)}/{Uri.EscapeDataString(xtreamPass)}/{Uri.EscapeDataString(streamKey)}/proxy";
 
         string providerId;
+        var useSharedSession = false;
         try
         {
             var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
@@ -475,6 +685,25 @@ public static class XtreamEndpoints
             }
 
             providerId = resolved.SourceDescriptor.ProviderId;
+            useSharedSession = resolved.UseSharedSession;
+
+            // Only reserve HLS slot for non-shared (native upstream HLS) sessions.
+            if (!useSharedSession)
+            {
+                _ = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
+                channelSessionManager.TouchHlsSlot(resolved.SourceDescriptor.SessionKey);
+            }
+        }
+        catch (StreamAdmissionException ex)
+        {
+            logger.LogWarning(
+                "Xtream HLS proxy admission rejected for key={StreamKey}: {Reason}",
+                streamKey,
+                ex.Message);
+            if (ex.RetryAfterSeconds is { } retry)
+                context.Response.Headers["Retry-After"] = retry.ToString();
+            context.Response.StatusCode = ex.StatusCode;
+            return;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -487,6 +716,66 @@ public static class XtreamEndpoints
         }
 
         await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
+    }
+
+    private static async Task ServeGeneratedXtreamHlsAssetAsync(
+        string sessionId,
+        string asset,
+        HttpContext context,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
+        HlsManifestRewriter hlsManifestRewriter,
+        CancellationToken cancellationToken)
+    {
+        if (!generatedHlsSessionManager.TryResolveAssetPath(sessionId, asset, out var filePath, out var contentType))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        generatedHlsSessionManager.TrackClient(
+            sessionId,
+            context.Connection.RemoteIpAddress?.ToString(),
+            context.Request.Headers.UserAgent.ToString(),
+            context.Request.Path.Value ?? string.Empty);
+
+        if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
+        {
+            string manifest;
+            try
+            {
+                manifest = await File.ReadAllTextAsync(filePath, cancellationToken);
+            }
+            catch
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            var xtreamUser = Uri.EscapeDataString(context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty);
+            var xtreamPass = Uri.EscapeDataString(context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty);
+            var manifestUrl = new Uri($"{GetBaseUrl(context)}{context.Request.Path}");
+            var generatedAssetBase = $"{GetBaseUrl(context)}/hls/generated/{xtreamUser}/{xtreamPass}/{Uri.EscapeDataString(sessionId)}";
+
+            var rewritten = hlsManifestRewriter.Rewrite(
+                manifest,
+                manifestUrl,
+                uri =>
+                {
+                    var fileName = Path.GetFileName(uri.AbsolutePath);
+                    return string.IsNullOrWhiteSpace(fileName)
+                        ? uri.ToString()
+                        : $"{generatedAssetBase}/{Uri.EscapeDataString(fileName)}";
+                });
+
+            context.Response.ContentType = contentType;
+            context.Response.Headers.CacheControl = "no-cache";
+            await context.Response.WriteAsync(rewritten, cancellationToken);
+            return;
+        }
+
+        context.Response.ContentType = contentType;
+        context.Response.Headers.CacheControl = "no-cache";
+        await context.Response.SendFileAsync(filePath, cancellationToken);
     }
 
     private static async Task ServeDirectRelayAsync(
@@ -508,8 +797,7 @@ public static class XtreamEndpoints
         var provider = profileProvider is not null
             ? await db.Providers.AsNoTracking()
                 .FirstOrDefaultAsync(x => x.ProviderId == profileProvider.ProviderId && x.Enabled, cancellationToken)
-            : await db.Providers.AsNoTracking()
-                .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            : null;
 
         try
         {
@@ -576,15 +864,43 @@ public static class XtreamEndpoints
         return (int)(value & 0x7FFF_FFFF);
     }
 
+    /// <summary>Stable 31-bit numeric series ID derived from the series name.</summary>
+    private static int SeriesId(string seriesName)
+    {
+        var bytes = Encoding.UTF8.GetBytes("series:" + seriesName);
+        var hash = MD5.HashData(bytes);
+        var value = BitConverter.ToUInt32(hash, 0);
+        return (int)(value & 0x7FFF_FFFF);
+    }
+
+    /// <summary>
+    /// Extracts the series title from an episode display name by stripping the
+    /// season/episode marker (e.g. "Believers (2020) S01 E01" → "Believers (2020)").
+    /// Falls back to the full display name when no marker is found.
+    /// </summary>
+    private static string ExtractSeriesName(string displayName)
+    {
+        var m = SeriesNameRegex.Match(displayName);
+        return m.Success ? m.Groups[1].Value.Trim() : displayName;
+    }
+
+    /// <summary>
+    /// Extracts the season and episode numbers from a display name.
+    /// Returns (1, 1) when no pattern is found.
+    /// </summary>
+    private static (int Season, int Episode) ExtractSeasonEpisode(string displayName)
+    {
+        var m = SeriesNameRegex.Match(displayName);
+        if (m.Success
+            && int.TryParse(m.Groups[2].Value, out var season)
+            && int.TryParse(m.Groups[3].Value, out var episode))
+        {
+            return (season, episode);
+        }
+        return (1, 1);
+    }
+
     private static string GetBaseUrl(HttpContext context) =>
         $"{context.Request.Scheme}://{context.Request.Host}";
 
-    /// <summary>
-    /// Returns true when the request originates from a browser or Electron-based app.
-    /// These clients cannot decode raw MPEG-TS and require HLS delivery.
-    /// Native IPTV apps (TiviMate, IPTVator, Smarters) use non-browser User-Agent strings.
-    /// </summary>
-    private static bool IsBrowserClient(HttpContext context) =>
-        context.Request.Headers.UserAgent.ToString()
-            .Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
 }

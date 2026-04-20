@@ -3,9 +3,12 @@
 @using System.ComponentModel.DataAnnotations
 @using Microsoft.AspNetCore.Authentication
 @using Microsoft.AspNetCore.Identity
+@using M3Undle.Web.Application
 @using M3Undle.Web.Data
 
 @inject SignInManager<ApplicationUser> SignInManager
+@inject UserManager<ApplicationUser> UserManager
+@inject IAdaptiveLockoutService AdaptiveLockoutService
 @inject ILogger<Login> Logger
 @inject NavigationManager NavigationManager
 @inject IdentityRedirectManager RedirectManager
@@ -151,26 +154,59 @@
     {
         if (!editContext.Validate()) return;
 
-        var result = await SignInManager.PasswordSignInAsync(Input.Email, Input.Password, Input.RememberMe, lockoutOnFailure: false);
+        var userName = Input.Email.Trim();
+        var user = await UserManager.FindByNameAsync(userName);
+        var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        using var scope = Logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Auth" });
+
+        if (user is not null && await UserManager.IsLockedOutAsync(user))
+        {
+            Logger.LogWarning("UI login denied because the account is locked out. client={Client}", remoteIp);
+            RedirectManager.RedirectTo("Account/Lockout");
+            return;
+        }
+
+        var result = await SignInManager.PasswordSignInAsync(userName, Input.Password, Input.RememberMe, lockoutOnFailure: false);
 
         if (result.Succeeded)
         {
-            Logger.LogInformation("User logged in.");
+            if (user is not null)
+                await AdaptiveLockoutService.ResetAsync(user, HttpContext.RequestAborted);
+            Logger.LogInformation("UI login succeeded. client={Client}", remoteIp);
             RedirectManager.RedirectTo(ReturnUrl);
         }
         else if (result.RequiresTwoFactor)
         {
+            if (user is not null)
+                await AdaptiveLockoutService.ResetAsync(user, HttpContext.RequestAborted);
+            Logger.LogInformation("UI password accepted; two-factor challenge required. client={Client}", remoteIp);
             RedirectManager.RedirectTo(
                 "Account/LoginWith2fa",
                 new() { ["returnUrl"] = ReturnUrl, ["rememberMe"] = Input.RememberMe });
         }
         else if (result.IsLockedOut)
         {
-            Logger.LogWarning("User account locked out.");
+            Logger.LogWarning("UI login denied because the account is locked out. client={Client}", remoteIp);
             RedirectManager.RedirectTo("Account/Lockout");
         }
         else
         {
+            if (user is not null)
+            {
+                var lockout = await AdaptiveLockoutService.RegisterFailedPasswordAttemptAsync(user, HttpContext.RequestAborted);
+                if (lockout.LockoutApplied)
+                {
+                    Logger.LogWarning(
+                        "UI login denied due to repeated invalid credentials. client={Client} lockout={LockoutSeconds}s escalated={Escalated}",
+                        remoteIp,
+                        (int)lockout.LockoutDuration.GetValueOrDefault().TotalSeconds,
+                        lockout.Escalated);
+                    RedirectManager.RedirectTo("Account/Lockout");
+                    return;
+                }
+            }
+
+            Logger.LogWarning("UI login failed due to invalid credentials. client={Client}", remoteIp);
             errorMessage = "Error: Invalid username or password.";
         }
     }

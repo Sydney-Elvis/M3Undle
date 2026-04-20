@@ -14,7 +14,6 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.ProviderId).HasColumnName("provider_id");
         builder.Property(x => x.Name).HasColumnName("name").IsRequired();
         builder.Property(x => x.Enabled).HasColumnName("enabled").IsRequired();
-        builder.Property(x => x.IsActive).HasColumnName("is_active").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.PlaylistUrl).HasColumnName("playlist_url").IsRequired();
         builder.Property(x => x.XmltvUrl).HasColumnName("xmltv_url");
         builder.Property(x => x.HeadersJson).HasColumnName("headers_json");
@@ -30,14 +29,11 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.XtreamBaseUrl).HasColumnName("xtream_base_url");
         builder.Property(x => x.XtreamUsername).HasColumnName("xtream_username");
         builder.Property(x => x.XtreamEncryptedPassword).HasColumnName("xtream_encrypted_password");
+        builder.Property(x => x.ForceMpegTs).HasColumnName("force_mpegts").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.XtreamIncludeXmltv).HasColumnName("xtream_include_xmltv").IsRequired().HasDefaultValue(false);
 
         builder.HasIndex(x => x.Name).IsUnique();
         builder.HasIndex(x => x.Enabled).HasDatabaseName("idx_providers_enabled");
-        builder.HasIndex(x => x.IsActive)
-            .HasDatabaseName("idx_providers_is_active")
-            .HasFilter("is_active = 1")
-            .IsUnique();
     }
 }
 

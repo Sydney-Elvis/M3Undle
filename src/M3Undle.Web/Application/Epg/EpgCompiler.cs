@@ -68,7 +68,7 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
         // Track conflicts for the report (cap at 20 to keep the report small)
         var conflicts = new List<ProgrammeConflict>();
 
-        foreach (var ch in outputChannels)
+        foreach (var ch in outputChannels.OrderBy(c => c.TvgChno ?? int.MaxValue))
         {
             if (string.IsNullOrWhiteSpace(ch.TvgId))
                 continue;
@@ -127,6 +127,8 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
             writer.WriteStartElement("display-name");
             writer.WriteString(ch.DisplayName);
             writer.WriteEndElement();
+            if (ch.TvgChno.HasValue)
+                writer.WriteElementString("display-number", ch.TvgChno.Value.ToString());
             if (!string.IsNullOrWhiteSpace(ch.LogoUrl))
             {
                 writer.WriteStartElement("icon");
@@ -293,4 +295,5 @@ public sealed record OutputChannel(
     string ProviderChannelId,
     string TvgId,
     string DisplayName,
-    string? LogoUrl);
+    string? LogoUrl,
+    int? TvgChno = null);

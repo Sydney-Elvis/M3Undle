@@ -19,6 +19,8 @@ public sealed class EpgSourceDto
     public DateTime? LastSuccessUtc { get; set; }
     public DateTime? LastFailureUtc { get; set; }
     public string? LastErrorSummary { get; set; }
+    // null = follow global schedule; 6 | 12 | 24 | 48 | 168 = hours
+    public int? RefreshIntervalHours { get; set; }
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
@@ -34,6 +36,7 @@ public sealed class CreateEpgSourceRequest
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public int TimeoutSeconds { get; set; } = 30;
+    public int? RefreshIntervalHours { get; set; }
 }
 
 public sealed class UpdateEpgSourceRequest
@@ -45,18 +48,22 @@ public sealed class UpdateEpgSourceRequest
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public int? TimeoutSeconds { get; set; }
+    public bool RefreshIntervalHoursSet { get; set; }
+    public int? RefreshIntervalHours { get; set; }
 }
 
 public sealed class EpgSourceTestResult
 {
     public bool Success { get; set; }
     public string? Error { get; set; }
+    public string? ProviderId { get; set; }
     public int ChannelCount { get; set; }
     public int ProgrammeCount { get; set; }
     public DateTimeOffset? EarliestProgramme { get; set; }
     public DateTimeOffset? LatestProgramme { get; set; }
     public long Bytes { get; set; }
     public int ElapsedMs { get; set; }
+    public bool CachedXmlAvailable { get; set; }
 }
 
 // -------------------------------------------------------------------------

@@ -61,27 +61,14 @@ public sealed class ActiveProfileResolverTests
     }
 
     [TestMethod]
-    public async Task ResolveAsync_WhenNoPreferred_ReturnsActiveSnapshotProfile()
+    public async Task ResolveAsync_WhenNoPreferred_ReturnsEnabledActiveProfile()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         await using var db = CreateDb(connection);
         await db.Database.EnsureCreatedAsync();
 
-        db.Profiles.Add(MakeProfile("p1", "Alpha", enabled: true));
-        await db.SaveChangesAsync();
-
-        db.Snapshots.Add(new Snapshot
-        {
-            SnapshotId = "snap-1",
-            ProfileId = "p1",
-            Status = "active",
-            CreatedUtc = DateTime.UtcNow,
-            PlaylistPath = string.Empty,
-            XmltvPath = string.Empty,
-            ChannelIndexPath = string.Empty,
-            StatusJsonPath = string.Empty,
-        });
+        db.Profiles.Add(MakeProfile("p1", "Alpha", enabled: true, isActive: true));
         await db.SaveChangesAsync();
 
         var result = await new ActiveProfileResolver(db).ResolveActiveProfileIdAsync(null, CancellationToken.None);
@@ -90,20 +77,36 @@ public sealed class ActiveProfileResolverTests
     }
 
     [TestMethod]
-    public async Task ResolveAsync_WhenNoPreferredAndNoSnapshot_ReturnsFallbackEnabledProfileByName()
+    public async Task ResolveAsync_WhenNoPreferredAndNoEnabledActiveProfile_ReturnsNull()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         await using var db = CreateDb(connection);
         await db.Database.EnsureCreatedAsync();
 
-        db.Profiles.Add(MakeProfile("p-beta", "Beta", enabled: true));
-        db.Profiles.Add(MakeProfile("p-alpha", "Alpha", enabled: true));
+        db.Profiles.Add(MakeProfile("p-alpha", "Alpha", enabled: true, isActive: false));
+        db.Profiles.Add(MakeProfile("p-beta", "Beta", enabled: true, isActive: false));
         await db.SaveChangesAsync();
 
         var result = await new ActiveProfileResolver(db).ResolveActiveProfileIdAsync(null, CancellationToken.None);
 
-        Assert.AreEqual("p-alpha", result);
+        Assert.IsNull(result);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_WhenNoPreferredAndActiveProfileIsDisabled_ReturnsNull()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = CreateDb(connection);
+        await db.Database.EnsureCreatedAsync();
+
+        db.Profiles.Add(MakeProfile("p1", "Alpha", enabled: false, isActive: true));
+        await db.SaveChangesAsync();
+
+        var result = await new ActiveProfileResolver(db).ResolveActiveProfileIdAsync(null, CancellationToken.None);
+
+        Assert.IsNull(result);
     }
 
     [TestMethod]
@@ -127,11 +130,12 @@ public sealed class ActiveProfileResolverTests
         return new ApplicationDbContext(options);
     }
 
-    private static Profile MakeProfile(string id, string name, bool enabled) => new()
+    private static Profile MakeProfile(string id, string name, bool enabled, bool isActive = false) => new()
     {
         ProfileId = id,
         Name = name,
         Enabled = enabled,
+        IsActive = isActive,
         OutputName = name,
         MergeMode = "default",
         CreatedUtc = DateTime.UtcNow,

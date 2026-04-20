@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using M3Undle.Core.M3u;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
@@ -24,13 +25,65 @@ public sealed class SnapshotBuilder(
     RuntimePaths runtimePaths,
     IWebHostEnvironment env,
     IOptions<SnapshotOptions> snapshotOptions,
+    CustomGroupPageService customGroupService,
+    IRefreshScheduleService refreshScheduleService,
+    TimeProvider timeProvider,
     ILogger<SnapshotBuilder> logger)
 {
-    private sealed record GroupFilterConfig(string ProfileGroupFilterId, string OutputName, int? AutoNumStart, int? AutoNumEnd);
-    private sealed record ChannelOverride(string? OutputGroupName, int? ChannelNumber);
+    internal sealed record InterestRuleConfig(
+        string MatchType,
+        string MatchValue,
+        string Action);
 
-    // In-memory channel data used by BuildChannelIndex — sourced from DB provider_channels
-    private sealed record ChannelBuildData(
+    internal sealed record GroupFilterConfig(
+        string ProfileGroupFilterId,
+        string OutputName,
+        int? AutoNumStart,
+        int? AutoNumEnd,
+        int? SortOverride,
+        string GroupMode,
+        string TrackingPolicy,
+        string? TrackingKeywords,
+        IReadOnlyList<InterestRuleConfig>? InterestRules = null)
+    {
+        public GroupFilterConfig(
+            string ProfileGroupFilterId,
+            string OutputName,
+            int? AutoNumStart,
+            int? AutoNumEnd,
+            int? SortOverride)
+            : this(
+                ProfileGroupFilterId,
+                OutputName,
+                AutoNumStart,
+                AutoNumEnd,
+                SortOverride,
+                LineupReviewSemantics.GroupModeManualReview,
+                LineupReviewSemantics.TrackingPolicyReview,
+                null)
+        {
+        }
+
+        public GroupFilterConfig(
+            string ProfileGroupFilterId,
+            string OutputName,
+            int? AutoNumStart,
+            int? AutoNumEnd,
+            int? SortOverride,
+            string GroupMode)
+            : this(
+                ProfileGroupFilterId,
+                OutputName,
+                AutoNumStart,
+                AutoNumEnd,
+                SortOverride,
+                GroupMode,
+                LineupReviewSemantics.TrackingPolicyReview,
+                null)
+        {
+        }
+    }
+    internal sealed record ChannelBuildData(
         string ProviderChannelId,
         string? ProviderChannelKey,
         string DisplayName,
@@ -39,50 +92,133 @@ public sealed class SnapshotBuilder(
         string? GroupTitle,
         string? TvgId,
         string? TvgName,
-        string? LogoUrl);
+        string? LogoUrl,
+        bool IsEvent = false,
+        bool IsPlaceholder = false,
+        string? EventContentKey = null,
+        string? EventTitle = null,
+        string? EventSport = null,
+        string? EventLeague = null,
+        string? EventParticipantsJson = null);
+    internal sealed record ChannelOverride(
+        string State,
+        string? DisplayNameOverride,
+        string? OutputGroupName,
+        int? ChannelNumber,
+        string? TvgIdOverride)
+    {
+        public ChannelOverride(string? OutputGroupName, int? ChannelNumber, string? TvgIdOverride)
+            : this(LineupReviewSemantics.ChannelStateIncluded, null, OutputGroupName, ChannelNumber, TvgIdOverride)
+        {
+        }
+    }
 
-    /// <summary>Full refresh: fetch from provider, sync to DB, then build snapshot.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels)> RunAsync(CancellationToken cancellationToken)
+    /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
+    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunAsync(CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
-        // 1. Find active + enabled provider
-        var provider = await db.Providers
+        var providers = await db.Providers
             .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
+            .Where(x => x.Enabled)
+            .ToListAsync(cancellationToken);
 
-        if (provider is null)
+        if (providers.Count == 0)
         {
-            logger.LogInformation("Snapshot refresh skipped — no active+enabled provider found.");
-            return (false, null, []);
+            logger.LogInformation("Snapshot refresh skipped — no enabled providers found.");
+            return (false, null, new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>(), null, new HashSet<string>());
         }
 
-        // 2. Find associated profile (first enabled, lowest priority number)
-        var profileLink = await db.ProfileProviders
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
+        var channelsByProvider = new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
+        var aggregateProfileIds = new HashSet<string>();
+
+        var scheduleSettings = await refreshScheduleService.GetSettingsAsync(cancellationToken);
+        var globalIntervalHours = scheduleSettings.IntervalHours;
+
+        foreach (var provider in providers)
+        {
+            var (s, e, channels, cc, profileIds) = await RunForProviderAsync(provider, globalIntervalHours, cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+            if (channels.Count > 0) channelsByProvider[provider.ProviderId] = channels;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
+            aggregateProfileIds.UnionWith(profileIds);
+        }
+
+        return (anySucceeded, lastErrorSummary, channelsByProvider, aggregateChangeClass, aggregateProfileIds);
+    }
+
+    /// <summary>Build snapshots from cached channels for all enabled providers — no re-fetch.</summary>
+    public async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> BuildOnlyAsync(
+        IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> channelsByProvider,
+        CancellationToken cancellationToken)
+    {
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
+
+        var providers = await db.Providers
+            .AsNoTracking()
+            .Where(x => x.Enabled)
+            .ToListAsync(cancellationToken);
+
+        if (providers.Count == 0)
+        {
+            logger.LogInformation("Snapshot build skipped — no enabled providers found.");
+            return (false, null, null, new HashSet<string>());
+        }
+
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
+        var aggregateProfileIds = new HashSet<string>();
+
+        foreach (var provider in providers)
+        {
+            channelsByProvider.TryGetValue(provider.ProviderId, out var cachedChannels);
+            var (s, e, cc, profileIds) = await BuildOnlyForProviderAsync(provider, cachedChannels ?? [], cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
+            aggregateProfileIds.UnionWith(profileIds);
+        }
+
+        return (anySucceeded, lastErrorSummary, aggregateChangeClass, aggregateProfileIds);
+    }
+
+    private async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunForProviderAsync(
+        Provider provider, int? globalIntervalHours, CancellationToken cancellationToken)
+    {
+        // 1. Find all enabled profiles linked to this provider, ordered by priority
+        var allProfileLinks = await db.ProfileProviders
             .AsNoTracking()
             .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
             .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (profileLink is null)
+        if (allProfileLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot refresh skipped — active provider {ProviderId} is not linked to any enabled profile.", provider.ProviderId);
-            return (false, null, []);
+            logger.LogInformation("Snapshot refresh skipped — provider {ProviderId} is not linked to any enabled profile.", provider.ProviderId);
+            return (false, null, [], null, new HashSet<string>());
         }
 
-        var profileExists = await db.Profiles
+        var enabledProfileIds = await db.Profiles
             .AsNoTracking()
-            .AnyAsync(x => x.ProfileId == profileLink.ProfileId && x.Enabled, cancellationToken);
+            .Where(x => allProfileLinks.Select(l => l.ProfileId).Contains(x.ProfileId) && x.Enabled)
+            .Select(x => x.ProfileId)
+            .ToHashSetAsync(cancellationToken);
 
-        if (!profileExists)
+        var activeLinks = allProfileLinks.Where(l => enabledProfileIds.Contains(l.ProfileId)).ToList();
+        if (activeLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot refresh skipped — profile {ProfileId} is not enabled.", profileLink.ProfileId);
-            return (false, null, []);
+            logger.LogInformation("Snapshot refresh skipped — no enabled profiles linked to provider {ProviderId}.", provider.ProviderId);
+            return (false, null, [], null, new HashSet<string>());
         }
 
-        var profileId = profileLink.ProfileId;
+        var profileId = activeLinks[0].ProfileId;
 
-        // 3. Create FetchRun pre-saved as "running" (crash leaves it as "running", not "fail")
+        // 2. Create FetchRun pre-saved as "running" (crash leaves it as "running", not "fail")
         var now = DateTime.UtcNow;
         var fetchRun = new FetchRun
         {
@@ -95,9 +231,9 @@ public sealed class SnapshotBuilder(
         db.FetchRuns.Add(fetchRun);
         await db.SaveChangesAsync(cancellationToken);
 
-        logger.LogInformation("Starting snapshot refresh for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, profileId);
+        logger.LogInformation("Starting snapshot refresh for provider {ProviderId}, {ProfileCount} profile(s).", provider.ProviderId, activeLinks.Count);
 
-        // 4. Fetch playlist — failure is fatal (preserve last-known-good)
+        // 3. Fetch playlist — failure is fatal (preserve last-known-good)
         PlaylistFetchResult playlistResult;
         var sw = Stopwatch.StartNew();
         try
@@ -108,42 +244,50 @@ public sealed class SnapshotBuilder(
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
             await FailFetchRunAsync(fetchRun, ex.Message);
-            return (false, ex.Message, []);
+            return (false, ex.Message, [], null, new HashSet<string>());
         }
 
         logger.LogInformation("Playlist fetched in {Elapsed}ms — {ChannelCount} channels for provider {ProviderId}.",
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
         sw.Restart();
 
-        // 5 + 5b. EPG fetch (multi-source) + DB sync.
-        // Individual source failures are soft — we continue with whatever sources succeed.
-        // If the run CT fires it is surfaced after EPG fetch via ThrowIfCancellationRequested.
+        // 4. EPG fetch + DB sync
         string xmltvContent;
         long xmltvBytes = 0;
         var stage = "xmltv";
         try
         {
-            xmltvContent = await FetchAndCompileEpgAsync(provider, profileId, sw, cancellationToken);
+            xmltvContent = await FetchAndCompileEpgAsync(provider, profileId, sw, globalIntervalHours, cancellationToken);
             xmltvBytes = Encoding.UTF8.GetByteCount(xmltvContent);
-
-            // If the run CT fired during EPG fetch, surface it now before touching the DB.
             cancellationToken.ThrowIfCancellationRequested();
             sw.Restart();
 
-            // 5b. Sync provider groups to DB (ALL content types), sync live channels only to DB, then create hold+new filter rows for new groups.
             stage = "groups";
             var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
             logger.LogInformation("Groups synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
             sw.Restart();
 
             stage = "group-filters";
-            await SyncGroupFiltersAsync(profileId, provider.ProviderId, cancellationToken);
-            logger.LogInformation("Group filters synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            foreach (var link in activeLinks)
+                await SyncGroupFiltersAsync(link.ProfileId, provider.ProviderId, cancellationToken);
+            logger.LogInformation("Group filters synced in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
 
             stage = "channels";
             await SyncProviderChannelsAsync(profileId, provider.ProviderId, fetchRun.FetchRunId, playlistResult.Channels, groupNameToId, now, cancellationToken);
             logger.LogInformation("Channels synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            sw.Restart();
+
+            stage = "pending-review";
+            foreach (var link in activeLinks)
+                await SyncPendingChannelReviewsAsync(link.ProfileId, provider.ProviderId, now, cancellationToken);
+            logger.LogInformation("Pending channel review sync completed in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
+            sw.Restart();
+
+            stage = "custom-group-sync";
+            foreach (var link in activeLinks)
+                await customGroupService.SyncPendingChannelReviewsAsync(link.ProfileId, provider.ProviderId, now, cancellationToken);
+            logger.LogInformation("Custom group sync completed in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
         }
         catch (OperationCanceledException)
@@ -152,85 +296,103 @@ public sealed class SnapshotBuilder(
             throw;
         }
 
-        // 11. Mark FetchRun as ok
         fetchRun.FinishedUtc = DateTime.UtcNow;
         fetchRun.Status = "ok";
         fetchRun.ChannelCountSeen = playlistResult.Channels.Count;
         fetchRun.PlaylistBytes = (int)Math.Min(playlistResult.Bytes, int.MaxValue);
-        fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue); // compiled guide size
+        fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
         await db.SaveChangesAsync(cancellationToken);
 
-        // 6-10. Build snapshot from synced DB data (live) + in-memory VOD/series
-        var (succeeded, errorSummary) = await BuildSnapshotFromDbAsync(provider, profileId, xmltvContent, playlistResult.Channels, cancellationToken);
-
-        return (succeeded, errorSummary, playlistResult.Channels);
-    }
-
-    /// <summary>Build snapshot from already-synced DB data — no provider re-fetch.
-    /// Pass the channels from the last full refresh so VOD/series can be included without re-fetching.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary)> BuildOnlyAsync(IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
-    {
-        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
-
-        var provider = await db.Providers
-            .AsNoTracking()
-            .FirstOrDefaultAsync(x => x.IsActive && x.Enabled, cancellationToken);
-
-        if (provider is null)
+        // 5. Build snapshot for each linked profile
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
+        foreach (var link in activeLinks)
         {
-            logger.LogInformation("Snapshot build skipped — no active+enabled provider found.");
-            return (false, null);
+            var (s, e, cc) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, playlistResult.Channels, cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
         }
 
-        var profileLink = await db.ProfileProviders
+        var builtProfileIds = activeLinks.Select(l => l.ProfileId).ToHashSet();
+        return (anySucceeded, lastErrorSummary, playlistResult.Channels, aggregateChangeClass, builtProfileIds);
+    }
+
+    private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> BuildOnlyForProviderAsync(
+        Provider provider, IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
+    {
+        var allProfileLinks = await db.ProfileProviders
             .AsNoTracking()
             .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
             .OrderBy(x => x.Priority)
-            .FirstOrDefaultAsync(cancellationToken);
+            .ToListAsync(cancellationToken);
 
-        if (profileLink is null)
+        if (allProfileLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot build skipped — active provider {ProviderId} has no enabled profile.", provider.ProviderId);
-            return (false, null);
+            logger.LogInformation("Snapshot build skipped — provider {ProviderId} has no enabled profile link.", provider.ProviderId);
+            return (false, null, null, new HashSet<string>());
         }
 
-        var profileExists = await db.Profiles
+        var enabledProfileIds = await db.Profiles
             .AsNoTracking()
-            .AnyAsync(x => x.ProfileId == profileLink.ProfileId && x.Enabled, cancellationToken);
+            .Where(x => allProfileLinks.Select(l => l.ProfileId).Contains(x.ProfileId) && x.Enabled)
+            .Select(x => x.ProfileId)
+            .ToHashSetAsync(cancellationToken);
 
-        if (!profileExists)
+        var activeLinks = allProfileLinks.Where(l => enabledProfileIds.Contains(l.ProfileId)).ToList();
+        if (activeLinks.Count == 0)
         {
-            logger.LogInformation("Snapshot build skipped — profile {ProfileId} is not enabled.", profileLink.ProfileId);
-            return (false, null);
+            logger.LogInformation("Snapshot build skipped — no enabled profiles linked to provider {ProviderId}.", provider.ProviderId);
+            return (false, null, null, new HashSet<string>());
         }
 
-        // Load latest XMLTV from most recent active snapshot (reuse guide; a full refresh will update it)
-        var existingXmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
-        var latestSnapshot = await db.Snapshots
-            .AsNoTracking()
-            .Where(x => x.ProfileId == profileLink.ProfileId && x.Status == "active")
-            .OrderByDescending(x => x.CreatedUtc)
-            .FirstOrDefaultAsync(cancellationToken);
+        bool anySucceeded = false;
+        string? lastErrorSummary = null;
+        string? aggregateChangeClass = ChangeClasses.None;
 
-        if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
-            existingXmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
+        foreach (var link in activeLinks)
+        {
+            var xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+            var latestSnapshot = await db.Snapshots
+                .AsNoTracking()
+                .Where(x => x.ProfileId == link.ProfileId && x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstOrDefaultAsync(cancellationToken);
 
-        logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, profileLink.ProfileId);
+            if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
+                xmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
 
-        return await BuildSnapshotFromDbAsync(provider, profileLink.ProfileId, existingXmltvContent, providerChannels, cancellationToken);
+            logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
+
+            var (s, e, cc) = await BuildSnapshotFromDbAsync(provider, link.ProfileId, xmltvContent, providerChannels, cancellationToken);
+            if (s) anySucceeded = true;
+            if (e is not null) lastErrorSummary = e;
+            aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
+        }
+
+        var builtProfileIds = activeLinks.Select(l => l.ProfileId).ToHashSet();
+        return (anySucceeded, lastErrorSummary, aggregateChangeClass, builtProfileIds);
     }
 
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private async Task<(bool Succeeded, string? ErrorSummary)> BuildSnapshotFromDbAsync(
+    private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildSnapshotFromDbAsync(
         Provider provider,
         string profileId,
         string xmltvContent,
         IReadOnlyList<ParsedProviderChannel> providerChannels,
         CancellationToken cancellationToken)
     {
+        // Load the current active snapshot for this profile so we can classify the change
+        var prevSnapshot = await db.Snapshots
+            .AsNoTracking()
+            .Where(s => s.ProfileId == profileId && s.Status == "active")
+            .OrderByDescending(s => s.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
         // Load live channels from DB (VOD/series are not persisted — sourced from in-memory providerChannels)
         var dbChannels = await db.ProviderChannels
             .AsNoTracking()
@@ -246,7 +408,14 @@ public sealed class SnapshotBuilder(
             ch.GroupTitle,
             ch.TvgId,
             ch.TvgName,
-            ch.LogoUrl)).ToList();
+            ch.LogoUrl,
+            ch.IsEvent,
+            ch.IsPlaceholder,
+            ch.EventContentKey,
+            ch.EventTitle,
+            ch.EventSport,
+            ch.EventLeague,
+            ch.EventParticipantsJson)).ToList();
 
         // Append VOD/series from in-memory provider channels (not persisted to DB)
         if (provider.IncludeVod || provider.IncludeSeries)
@@ -269,29 +438,50 @@ public sealed class SnapshotBuilder(
             .Where(x => x.ProfileId == profileId && x.ProviderGroup.ProviderId == provider.ProviderId)
             .ToListAsync(cancellationToken);
 
+        // Load structured event interest rules for this profile (profile-wide + group-scoped)
+        var allInterestRules = await db.ProfileEventInterestRules
+            .AsNoTracking()
+            .Where(r => r.ProfileId == profileId && r.Enabled)
+            .OrderBy(r => r.Priority)
+            .ToListAsync(cancellationToken);
+
         var includedGroups = groupFilters
-            .Where(f => f.Decision != "exclude")
+            .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision))
             .ToDictionary(
             f => f.ProviderGroup.RawName,
-            f => new GroupFilterConfig(
-                f.ProfileGroupFilterId,
-                f.OutputName ?? f.ProviderGroup.RawName,
-                f.AutoNumStart,
-                f.AutoNumEnd),
+            f =>
+            {
+                // Include profile-wide rules + rules scoped to this specific group
+                var groupRules = allInterestRules
+                    .Where(r => r.ProviderGroupId is null || r.ProviderGroupId == f.ProviderGroupId)
+                    .Select(r => new InterestRuleConfig(r.MatchType, r.MatchValue, r.Action))
+                    .ToList();
+
+                return new GroupFilterConfig(
+                    f.ProfileGroupFilterId,
+                    f.OutputName ?? f.ProviderGroup.RawName,
+                    f.AutoNumStart,
+                    f.AutoNumEnd,
+                    f.SortOverride,
+                    LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode),
+                    LineupReviewSemantics.NormalizeTrackingPolicy(f.TrackingPolicy),
+                    f.TrackingKeywords,
+                    groupRules);
+            },
             StringComparer.Ordinal);
 
-        // Load per-channel selections — always "select" mode now
-        var selectModeFilterIds = includedGroups.Values
+        // Load per-channel overrides/state for all included filters.
+        var includedFilterIds = includedGroups.Values
             .Select(g => g.ProfileGroupFilterId)
             .ToList();
 
         Dictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId = [];
-        if (selectModeFilterIds.Count > 0)
+        if (includedFilterIds.Count > 0)
         {
             var selections = await db.ProfileGroupChannelFilters
                 .AsNoTracking()
                 .Include(x => x.ProviderChannel)
-                .Where(x => selectModeFilterIds.Contains(x.ProfileGroupFilterId))
+                .Where(x => includedFilterIds.Contains(x.ProfileGroupFilterId))
                 .ToListAsync(cancellationToken);
 
             channelOverridesByFilterId = selections
@@ -299,12 +489,90 @@ public sealed class SnapshotBuilder(
                 .ToDictionary(
                     g => g.Key,
                     g => g
+                        .Where(x => !string.IsNullOrWhiteSpace(x.ProviderChannel.StreamUrl))
                         .GroupBy(x => x.ProviderChannel.StreamUrl, StringComparer.Ordinal)
                         .ToDictionary(
-                            sg => sg.Key,
-                            sg => sg.Select(x => new ChannelOverride(x.OutputGroupName, x.ChannelNumber)).First(),
+                            sg => sg.Key!,
+                            sg => sg.Select(x => new ChannelOverride(
+                                LineupReviewSemantics.NormalizeChannelState(x.State),
+                                x.DisplayNameOverride,
+                                x.OutputGroupName,
+                                x.ChannelNumber,
+                                x.TvgIdOverride)).First(),
                             StringComparer.Ordinal));
         }
+
+        // Load included custom groups for this profile and append their channels
+        var customGroups = await db.ProfileCustomGroups
+            .AsNoTracking()
+            .Include(x => x.Channels).ThenInclude(c => c.ProviderChannel)
+            .Where(x => x.ProfileId == profileId
+                        && x.Decision == LineupReviewSemantics.GroupDecisionInclude)
+            .ToListAsync(cancellationToken);
+
+        // Use a separate key prefix so custom group output names never collide with provider group raw names
+        const string CustomGroupKeyPrefix = "\u0002cg\u001f";
+        var customGroupOverrides = new Dictionary<string, Dictionary<string, ChannelOverride>>(StringComparer.Ordinal);
+
+        foreach (var cg in customGroups)
+        {
+            var cgKey = CustomGroupKeyPrefix + cg.CustomGroupId;
+            var mode = LineupReviewSemantics.NormalizeGroupMode(cg.ChannelMode);
+            var policy = LineupReviewSemantics.NormalizeTrackingPolicy(cg.TrackingPolicy);
+
+            if (!includedGroups.ContainsKey(cgKey))
+            {
+                includedGroups[cgKey] = new GroupFilterConfig(
+                    cg.CustomGroupId,
+                    cg.Name,
+                    cg.AutoNumStart,
+                    cg.AutoNumEnd,
+                    cg.SortOverride,
+                    mode,
+                    policy,
+                    cg.TrackingKeywords);
+            }
+
+            var overrideMap = new Dictionary<string, ChannelOverride>(StringComparer.Ordinal);
+            foreach (var row in cg.Channels)
+            {
+                var ch = row.ProviderChannel;
+                if (string.IsNullOrWhiteSpace(ch.StreamUrl))
+                    continue;
+                overrideMap[ch.StreamUrl] = new ChannelOverride(
+                    LineupReviewSemantics.NormalizeChannelState(row.State),
+                    row.DisplayNameOverride,
+                    null,
+                    row.ChannelNumber,
+                    row.TvgIdOverride);
+
+                // Inject the provider channel as a build-data entry keyed under the custom group name
+                if (!channels.Any(c => c.ProviderChannelId == ch.ProviderChannelId && c.GroupTitle == cgKey))
+                {
+                    channels.Add(new ChannelBuildData(
+                        ch.ProviderChannelId,
+                        ch.ProviderChannelKey,
+                        ch.DisplayName,
+                        ch.StreamUrl,
+                        ch.ContentType,
+                        cgKey,
+                        ch.TvgId,
+                        ch.TvgName,
+                        ch.LogoUrl,
+                        ch.IsEvent,
+                        ch.IsPlaceholder,
+                        ch.EventContentKey,
+                        ch.EventTitle,
+                        ch.EventSport,
+                        ch.EventLeague,
+                        ch.EventParticipantsJson));
+                }
+            }
+            customGroupOverrides[cg.CustomGroupId] = overrideMap;
+        }
+
+        foreach (var (cgId, overrideMap) in customGroupOverrides)
+            channelOverridesByFilterId[cgId] = overrideMap;
 
         var channelIndex = BuildChannelIndex(
             channels,
@@ -326,15 +594,39 @@ public sealed class SnapshotBuilder(
         await ChannelIndexStore.WriteAsync(channelIndexPath, channelIndexIdxPath, channelIndex, cancellationToken);
         await File.WriteAllTextAsync(xmltvPath, xmltvContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
 
-        int liveCount = 0, vodCount = 0, seriesCount = 0;
+        int liveCount = 0, vodCount = 0;
+        var seriesNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in channelIndex)
         {
             switch (LiveClassifier.ClassifyContent(e.StreamUrl))
             {
                 case "vod": vodCount++; break;
-                case "series": seriesCount++; break;
+                case "series": seriesNames.Add(ExtractSeriesName(e.DisplayName)); break;
                 default: liveCount++; break;
             }
+        }
+        int seriesCount = seriesNames.Count;
+
+        // Classify the change against the previous active snapshot
+        var changeClass = await SnapshotChangeClassifier.ClassifyAsync(prevSnapshot, channelIndexPath, xmltvPath, cancellationToken);
+
+        if (prevSnapshot is not null && changeClass == ChangeClasses.None)
+        {
+            try
+            {
+                if (Directory.Exists(snapshotDir))
+                    Directory.Delete(snapshotDir, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to delete no-op snapshot directory {Dir}.", snapshotDir);
+            }
+
+            logger.LogInformation(
+                "No published change detected for profile {ProfileId} — keeping existing active snapshot {SnapshotId}.",
+                profileId, prevSnapshot.SnapshotId);
+
+            return (true, null, changeClass);
         }
 
         var snapshot = new Snapshot
@@ -351,6 +643,7 @@ public sealed class SnapshotBuilder(
             LiveChannelCount = liveCount,
             VodChannelCount = vodCount,
             SeriesChannelCount = seriesCount,
+            ChangeClass = changeClass,
         };
         db.Snapshots.Add(snapshot);
         await db.SaveChangesAsync(cancellationToken);
@@ -360,13 +653,24 @@ public sealed class SnapshotBuilder(
 
         using var snapshotScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
         logger.LogInformation(
-            "Snapshot {SnapshotId} promoted to active — {ChannelCount} channels published.",
-            snapshotId, channelIndex.Count);
+            "Snapshot {SnapshotId} promoted to active — {ChannelCount} channels, change={ChangeClass}.",
+            snapshotId, channelIndex.Count, changeClass ?? "first_run");
 
-        return (true, null);
+        return (true, null, changeClass);
     }
 
-    private static List<ChannelIndexEntry> BuildChannelIndex(
+    internal const int OverflowRangeStart = 9000;
+
+    private static readonly Regex SeriesNameRegex =
+        new(@"^(.*?)\s+[Ss](\d{1,2})[\s\-]*[Ee]?(\d+)", RegexOptions.Compiled);
+
+    private static string ExtractSeriesName(string displayName)
+    {
+        var m = SeriesNameRegex.Match(displayName);
+        return m.Success ? m.Groups[1].Value.Trim() : displayName;
+    }
+
+    internal static List<ChannelIndexEntry> BuildChannelIndex(
         IReadOnlyList<ChannelBuildData> channels,
         string profileId,
         IReadOnlyDictionary<string, GroupFilterConfig> includedGroups,
@@ -378,7 +682,7 @@ public sealed class SnapshotBuilder(
         if (includedGroups.Count == 0 && !includeVod && !includeSeries)
             return [];
 
-        var pending = new List<(string OutputGroup, ChannelBuildData Channel, int? ExplicitNumber)>();
+        var pending = new List<(string OutputGroup, ChannelBuildData Channel, int? ExplicitNumber, string? TvgIdOverride, string? DisplayNameOverride)>();
 
         foreach (var channel in channels.Where(x => !string.IsNullOrWhiteSpace(x.StreamUrl)))
         {
@@ -405,37 +709,67 @@ public sealed class SnapshotBuilder(
                     : contentType == "vod" ? "Movies"
                     : "Live";
 
-                pending.Add((fallbackGroup, channel, null));
+                pending.Add((fallbackGroup, channel, null, null, null));
                 continue;
             }
 
-            // Live channels are opt-in via explicit included groups.
             if (!hasGroup || !includedGroups.TryGetValue(groupName!, out var filter))
                 continue;
 
-            if (!channelOverridesByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var overrides))
-                continue;
-            if (!overrides.TryGetValue(channel.StreamUrl ?? string.Empty, out var ov))
+            channelOverridesByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var overrides);
+            ChannelOverride? ov = null;
+            var hasOverride = overrides is not null
+                              && overrides.TryGetValue(channel.StreamUrl ?? string.Empty, out ov);
+
+            if (!ShouldIncludeLiveChannel(channel, filter, hasOverride, ov))
                 continue;
 
-            var effectiveGroup = string.IsNullOrWhiteSpace(ov.OutputGroupName)
-                ? filter.OutputName
-                : ov.OutputGroupName;
-            pending.Add((effectiveGroup, channel, ov.ChannelNumber));
+            var effectiveGroup = hasOverride && ov is not null && !string.IsNullOrWhiteSpace(ov.OutputGroupName)
+                ? ov.OutputGroupName
+                : filter.OutputName;
+            var effectiveNumber = hasOverride && ov is not null ? ov.ChannelNumber : null;
+            var effectiveTvgId = hasOverride && ov is not null ? ov.TvgIdOverride : null;
+            var effectiveDisplayName = hasOverride && ov is not null ? ov.DisplayNameOverride : null;
+
+            pending.Add((effectiveGroup, channel, effectiveNumber, effectiveTvgId, effectiveDisplayName));
         }
 
         var result = new List<ChannelIndexEntry>();
 
+        // Seed the globally-used set with every pinned number so auto-assignment
+        // skips them regardless of which group they belong to.
+        var assignedNumbers = new HashSet<int>(
+            pending
+                .Where(x => x.ExplicitNumber.HasValue)
+                .Select(x => x.ExplicitNumber!.Value));
+
+        int nextOverflow = OverflowRangeStart;
+
+        // Evaluate output groups in SortOverride order (nulls last), then alphabetical.
+        // This determines which group "wins" early numbers when ranges overlap.
         var byOutputGroup = pending
             .GroupBy(x => x.OutputGroup, StringComparer.Ordinal)
-            .OrderBy(g => g.Key, StringComparer.Ordinal);
+            .Select(g =>
+            {
+                var minSort = includedGroups.Values
+                    .Where(f => string.Equals(f.OutputName, g.Key, StringComparison.Ordinal))
+                    .Select(f => f.SortOverride)
+                    .Where(s => s.HasValue)
+                    .Select(s => s!.Value)
+                    .DefaultIfEmpty(int.MaxValue)
+                    .Min();
+                return (Group: g, SortKey: minSort);
+            })
+            .OrderBy(x => x.SortKey)
+            .ThenBy(x => x.Group.Key, StringComparer.Ordinal)
+            .Select(x => x.Group);
 
         foreach (var group in byOutputGroup)
         {
             var outputName = group.Key;
 
             var parentFilter = includedGroups.Values
-                .FirstOrDefault(f => f.OutputName == outputName);
+                .FirstOrDefault(f => string.Equals(f.OutputName, outputName, StringComparison.Ordinal));
 
             var withNum = group
                 .Where(x => x.ExplicitNumber.HasValue)
@@ -448,34 +782,129 @@ public sealed class SnapshotBuilder(
                 .ThenBy(x => x.Channel.StreamUrl, StringComparer.Ordinal)
                 .ToList();
 
-            foreach (var (_, channel, num) in withNum)
-                result.Add(BuildEntry(channel, outputName, num, profileId));
+            foreach (var (_, channel, num, tvgIdOverride, displayNameOverride) in withNum)
+                result.Add(BuildEntry(channel, outputName, num, profileId, tvgIdOverride, displayNameOverride));
 
             int? nextNum = parentFilter?.AutoNumStart;
             int? maxNum = parentFilter?.AutoNumEnd;
+            bool hasRange = nextNum.HasValue;
 
-            foreach (var (_, channel, _) in withoutNum)
+            foreach (var (_, channel, _, tvgIdOverride, displayNameOverride) in withoutNum)
             {
                 int? assignedNum = null;
+
                 if (nextNum.HasValue)
                 {
-                    assignedNum = nextNum;
-                    nextNum++;
-                    if (maxNum.HasValue && nextNum > maxNum)
-                        nextNum = null;
+                    // Skip numbers already claimed by pinned channels or earlier auto-assignments.
+                    while (nextNum.HasValue && assignedNumbers.Contains(nextNum.Value))
+                    {
+                        nextNum++;
+                        if (maxNum.HasValue && nextNum > maxNum)
+                        {
+                            nextNum = null;
+                            break;
+                        }
+                    }
+
+                    if (nextNum.HasValue)
+                    {
+                        assignedNum = nextNum.Value;
+                        assignedNumbers.Add(nextNum.Value);
+                        nextNum++;
+                        if (maxNum.HasValue && nextNum > maxNum)
+                            nextNum = null;
+                    }
                 }
-                result.Add(BuildEntry(channel, outputName, assignedNum, profileId));
+
+                // Range was configured but is exhausted — place in overflow rather than
+                // silently dropping the channel number.
+                if (assignedNum is null && hasRange)
+                {
+                    while (assignedNumbers.Contains(nextOverflow))
+                        nextOverflow++;
+                    assignedNum = nextOverflow;
+                    assignedNumbers.Add(nextOverflow);
+                    nextOverflow++;
+                }
+
+                result.Add(BuildEntry(channel, outputName, assignedNum, profileId, tvgIdOverride, displayNameOverride));
             }
         }
 
         return result;
     }
 
+    private static bool ShouldIncludeLiveChannel(
+        ChannelBuildData channel,
+        GroupFilterConfig filter,
+        bool hasOverride,
+        ChannelOverride? ov)
+    {
+        if (channel.IsPlaceholder)
+            return false;
+
+        if (hasOverride && ov is not null && ov.State == LineupReviewSemantics.ChannelStateExcluded)
+            return false;
+
+        if (filter.GroupMode == LineupReviewSemantics.GroupModeManualReview)
+            return hasOverride && ov is not null && ov.State == LineupReviewSemantics.ChannelStateIncluded;
+
+        // Explicit include always wins in auto-update mode.
+        if (hasOverride && ov is not null && ov.State == LineupReviewSemantics.ChannelStateIncluded)
+            return true;
+
+        // Pending channels in auto-update mode are not yet approved — exclude.
+        if (hasOverride && ov is not null && ov.State == LineupReviewSemantics.ChannelStatePending)
+            return false;
+
+        // Non-event channels preserve the existing auto-update behavior.
+        if (!channel.IsEvent && string.IsNullOrWhiteSpace(channel.EventContentKey))
+            return true;
+
+        if (LineupReviewSemantics.ShouldAutoAddAll(filter.TrackingPolicy))
+            return true;
+
+        if (LineupReviewSemantics.ShouldAutoAddPopulated(filter.TrackingPolicy))
+            return !string.IsNullOrWhiteSpace(channel.EventContentKey);
+
+        if (LineupReviewSemantics.ShouldAutoAddMatching(filter.TrackingPolicy))
+        {
+            // First check structured interest rules (suppress takes precedence, then auto_add)
+            if (filter.InterestRules is { Count: > 0 })
+            {
+                string?[] candidateTexts = [channel.DisplayName, channel.GroupTitle, channel.EventContentKey, channel.EventTitle, channel.EventSport, channel.EventLeague, channel.EventParticipantsJson];
+                foreach (var rule in filter.InterestRules)
+                {
+                    if (!LineupReviewSemantics.InterestRuleMatches(rule.MatchValue, candidateTexts))
+                        continue;
+
+                    if (rule.Action == LineupReviewSemantics.InterestActionSuppress)
+                        return false;
+                    if (rule.Action == LineupReviewSemantics.InterestActionAutoAdd)
+                        return true;
+                    // notify — surface but don't auto-add
+                }
+            }
+
+            // Fall back to free-text keyword matching
+            return LineupReviewSemantics.MatchesTrackingKeywords(
+                filter.TrackingKeywords,
+                channel.DisplayName,
+                channel.GroupTitle,
+                channel.EventContentKey);
+        }
+
+        // Event channels with review/notify policies are intentionally not auto-added.
+        return false;
+    }
+
     private static ChannelIndexEntry BuildEntry(
         ChannelBuildData channel,
         string? groupTitle,
         int? tvgChno,
-        string profileId)
+        string profileId,
+        string? tvgIdOverride = null,
+        string? displayNameOverride = null)
     {
         // Include stream URL + display/group context to avoid collapsing distinct items
         // that share tvg-id/URL across multiple provider groups.
@@ -485,8 +914,8 @@ public sealed class SnapshotBuilder(
 
         return new ChannelIndexEntry(
             StreamKey: DeriveStreamKey(stableKey, profileId),
-            DisplayName: channel.DisplayName,
-            TvgId: channel.TvgId,
+            DisplayName: string.IsNullOrWhiteSpace(displayNameOverride) ? channel.DisplayName : displayNameOverride,
+            TvgId: string.IsNullOrWhiteSpace(tvgIdOverride) ? channel.TvgId : tvgIdOverride,
             TvgName: channel.TvgName,
             LogoUrl: channel.LogoUrl,
             GroupTitle: groupTitle,
@@ -494,6 +923,19 @@ public sealed class SnapshotBuilder(
             ProviderChannelId: channel.ProviderChannelId,
             StreamUrl: channel.StreamUrl!);
     }
+
+    // -------------------------------------------------------------------------
+    // EPG cadence predicate (internal for unit testing)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Returns <c>true</c> when the cached EPG data for a source is still fresh and the
+    /// network fetch can be skipped.  The cache is fresh when the time since the last
+    /// successful fetch is less than <paramref name="intervalHours"/>.
+    /// </summary>
+    internal static bool IsEpgCacheFresh(DateTime? lastSuccessUtc, int intervalHours, DateTimeOffset utcNow)
+        => lastSuccessUtc.HasValue
+           && (utcNow.UtcDateTime - lastSuccessUtc.Value).TotalHours < intervalHours;
 
     // -------------------------------------------------------------------------
     // EPG fetch + compile
@@ -506,6 +948,7 @@ public sealed class SnapshotBuilder(
         Provider provider,
         string profileId,
         Stopwatch sw,
+        int? globalIntervalHours,
         CancellationToken cancellationToken)
     {
         // Load (or lazy-create) enabled EPG sources for this provider
@@ -531,10 +974,26 @@ public sealed class SnapshotBuilder(
         // Fetch all sources in parallel (soft-fail per source)
         var fetchTasks = sources.Select(async source =>
         {
-            var startedUtc = DateTime.UtcNow;
+            var utcNow = timeProvider.GetUtcNow();
+            var startedUtc = utcNow.UtcDateTime;
             var cacheFile = Path.Combine(epgCacheDir, $"{source.EpgSourceId}.xml");
-            var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
 
+            // Per-source cadence check: skip network fetch if still fresh
+            var effectiveInterval = source.RefreshIntervalHours ?? globalIntervalHours;
+            if (effectiveInterval.HasValue
+                && IsEpgCacheFresh(source.LastSuccessUtc, effectiveInterval.Value, utcNow)
+                && File.Exists(cacheFile))
+            {
+                logger.LogDebug(
+                    "EPG source {EpgSourceId} ({Name}): cadence not elapsed ({H}h since last success {Last:u}) — using cached data.",
+                    source.EpgSourceId, source.Name, effectiveInterval.Value, source.LastSuccessUtc!.Value);
+                var cachedXml = await File.ReadAllTextAsync(cacheFile, cancellationToken);
+                var cachedResult = new EpgSourceFetcher.FetchResult(
+                    null, "not_modified", 0, source.ETag, source.LastModifiedUtc, null);
+                return (Source: source, Result: cachedResult, Xml: (string?)cachedXml, StartedUtc: startedUtc);
+            }
+
+            var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
             return (Source: source, Result: result, Xml: xml, StartedUtc: startedUtc);
         }).ToList();
 
@@ -590,17 +1049,28 @@ public sealed class SnapshotBuilder(
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
-                        && x.ProviderGroup.ProviderId == provider.ProviderId
-                        && x.Decision != "exclude")
+                        && x.ProviderGroup.ProviderId == provider.ProviderId)
             .ToListAsync(cancellationToken);
 
-        var filterIdByGroupName = includedFilters
-            .ToDictionary(x => x.ProviderGroup.RawName, x => x.ProfileGroupFilterId, StringComparer.Ordinal);
+        var includedFilterLookup = includedFilters
+            .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision))
+            .ToDictionary(
+                f => f.ProviderGroup.RawName,
+                f => new GroupFilterConfig(
+                    f.ProfileGroupFilterId,
+                    f.OutputName ?? f.ProviderGroup.RawName,
+                    f.AutoNumStart,
+                    f.AutoNumEnd,
+                    f.SortOverride,
+                    LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode),
+                    LineupReviewSemantics.NormalizeTrackingPolicy(f.TrackingPolicy),
+                    f.TrackingKeywords),
+                StringComparer.Ordinal);
 
-        var selectedStreamUrlsByFilterId = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        if (includedFilters.Count > 0)
+        var filterSelectionsByFilterId = new Dictionary<string, Dictionary<string, ChannelOverride>>(StringComparer.Ordinal);
+        if (includedFilterLookup.Count > 0)
         {
-            var includedFilterIds = includedFilters.Select(f => f.ProfileGroupFilterId).ToList();
+            var includedFilterIds = includedFilterLookup.Values.Select(f => f.ProfileGroupFilterId).ToList();
 
             var selections = await db.ProfileGroupChannelFilters
                 .AsNoTracking()
@@ -608,28 +1078,71 @@ public sealed class SnapshotBuilder(
                 .Where(x => includedFilterIds.Contains(x.ProfileGroupFilterId))
                 .ToListAsync(cancellationToken);
 
-            selectedStreamUrlsByFilterId = selections
+            filterSelectionsByFilterId = selections
                 .GroupBy(x => x.ProfileGroupFilterId, StringComparer.Ordinal)
                 .ToDictionary(
                     g => g.Key,
                     g => g
-                        .Select(x => x.ProviderChannel.StreamUrl)
-                        .Where(url => !string.IsNullOrWhiteSpace(url))
-                        .ToHashSet(StringComparer.Ordinal),
+                        .Where(x => !string.IsNullOrWhiteSpace(x.ProviderChannel.StreamUrl))
+                        .GroupBy(x => x.ProviderChannel.StreamUrl!, StringComparer.Ordinal)
+                        .ToDictionary(
+                            sg => sg.Key,
+                            sg => sg.Select(x => new ChannelOverride(
+                                LineupReviewSemantics.NormalizeChannelState(x.State),
+                                x.DisplayNameOverride,
+                                x.OutputGroupName,
+                                x.ChannelNumber,
+                                x.TvgIdOverride)).First(),
+                            StringComparer.Ordinal),
                     StringComparer.Ordinal);
         }
 
         var dbChannels = liveChannels
-            .Where(ch => !string.IsNullOrWhiteSpace(ch.StreamUrl)
-                         && !string.IsNullOrWhiteSpace(ch.GroupTitle)
-                         && filterIdByGroupName.TryGetValue(ch.GroupTitle!, out var filterId)
-                         && selectedStreamUrlsByFilterId.TryGetValue(filterId, out var selectedUrls)
-                         && selectedUrls.Contains(ch.StreamUrl!))
+            .Where(ch =>
+            {
+                if (string.IsNullOrWhiteSpace(ch.StreamUrl) || string.IsNullOrWhiteSpace(ch.GroupTitle))
+                    return false;
+
+                if (!includedFilterLookup.TryGetValue(ch.GroupTitle!, out var filter))
+                    return false;
+
+                filterSelectionsByFilterId.TryGetValue(filter.ProfileGroupFilterId, out var streamStates);
+                ChannelOverride? ov = null;
+                var hasOverride = streamStates is not null
+                                  && streamStates.TryGetValue(ch.StreamUrl!, out ov);
+
+                var buildData = new ChannelBuildData(
+                    ch.ProviderChannelId,
+                    ch.ProviderChannelKey,
+                    ch.DisplayName,
+                    ch.StreamUrl,
+                    ch.ContentType,
+                    ch.GroupTitle,
+                    ch.TvgId,
+                    ch.TvgName,
+                    ch.LogoUrl,
+                    ch.IsEvent,
+                    ch.IsPlaceholder,
+                    ch.EventContentKey,
+                    ch.EventTitle,
+                    ch.EventSport,
+                    ch.EventLeague,
+                    ch.EventParticipantsJson);
+
+                return ShouldIncludeLiveChannel(buildData, filter, hasOverride, ov);
+            })
             .ToList();
+
+        var prevChannelNumbers = await LoadPreviousChannelNumbersAsync(profileId, cancellationToken);
 
         var outputChannels = dbChannels
             .Where(ch => !string.IsNullOrWhiteSpace(ch.TvgId))
-            .Select(ch => new OutputChannel(ch.ProviderChannelId, ch.TvgId!, ch.DisplayName, ch.LogoUrl))
+            .Select(ch => new OutputChannel(
+                ch.ProviderChannelId,
+                ch.TvgId!,
+                ch.DisplayName,
+                ch.LogoUrl,
+                prevChannelNumbers.TryGetValue(ch.ProviderChannelId, out var n) ? n : null))
             .ToList();
 
         // Compile
@@ -794,6 +1307,27 @@ public sealed class SnapshotBuilder(
         return snap?.XmltvPath;
     }
 
+    private async Task<Dictionary<string, int>> LoadPreviousChannelNumbersAsync(
+        string profileId, CancellationToken cancellationToken)
+    {
+        var snap = await db.Snapshots
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (snap is null || !File.Exists(snap.ChannelIndexPath))
+            return [];
+
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+        await foreach (var entry in ChannelIndexStore.StreamAllAsync(snap.ChannelIndexPath, cancellationToken))
+        {
+            if (entry.TvgChno.HasValue && !string.IsNullOrEmpty(entry.ProviderChannelId))
+                result[entry.ProviderChannelId] = entry.TvgChno.Value;
+        }
+        return result;
+    }
+
     private async Task<Dictionary<string, string>> SyncProviderGroupsAsync(
         string providerId,
         IReadOnlyList<ParsedProviderChannel> channels,
@@ -902,8 +1436,10 @@ public sealed class SnapshotBuilder(
                 ProfileGroupFilterId = Guid.NewGuid().ToString(),
                 ProfileId = profileId,
                 ProviderGroupId = id,
-                Decision = "hold",
+                Decision = LineupReviewSemantics.GroupDecisionInclude,
                 IsNew = true,
+                ChannelMode = LineupReviewSemantics.GroupModeManualReview,
+                TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
                 TrackNewChannels = false,
                 CreatedUtc = now,
                 UpdatedUtc = now,
@@ -914,8 +1450,102 @@ public sealed class SnapshotBuilder(
         {
             db.ProfileGroupFilters.AddRange(newFilters);
             await db.SaveChangesAsync(cancellationToken);
-            logger.LogInformation("Created {Count} new group filter(s) (hold+new) for profile {ProfileId}.", newFilters.Count, profileId);
+            logger.LogInformation("Created {Count} new group filter(s) (auto-included) for profile {ProfileId}.", newFilters.Count, profileId);
         }
+    }
+
+    private async Task SyncPendingChannelReviewsAsync(
+        string profileId,
+        string providerId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var manualReviewFilters = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Include(x => x.ProviderGroup)
+            .Where(x => x.ProfileId == profileId
+                        && x.ProviderGroup.ProviderId == providerId
+                        && x.ProviderGroup.ContentType == "live")
+            .ToListAsync(cancellationToken);
+
+        var candidateFilters = manualReviewFilters
+            .Where(f =>
+                LineupReviewSemantics.IsGroupIncluded(f.Decision)
+                && LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode) == LineupReviewSemantics.GroupModeManualReview
+                && LineupReviewSemantics.ShouldQueuePending(f.TrackingPolicy))
+            .ToList();
+
+        if (candidateFilters.Count == 0)
+            return;
+
+        var filterByProviderGroupId = candidateFilters
+            .ToDictionary(f => f.ProviderGroupId, StringComparer.Ordinal);
+
+        var providerGroupIds = filterByProviderGroupId.Keys.ToList();
+
+        var activeChannels = await db.ProviderChannels
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId
+                        && x.Active
+                        && x.ContentType == "live"
+                        && !x.IsPlaceholder
+                        && x.ProviderGroupId != null
+                        && providerGroupIds.Contains(x.ProviderGroupId!))
+            .Select(x => new
+            {
+                x.ProviderChannelId,
+                ProviderGroupId = x.ProviderGroupId!,
+            })
+            .ToListAsync(cancellationToken);
+
+        if (activeChannels.Count == 0)
+            return;
+
+        var filterIds = candidateFilters.Select(x => x.ProfileGroupFilterId).ToList();
+        var activeChannelIds = activeChannels.Select(x => x.ProviderChannelId).ToList();
+
+        var existing = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(x => filterIds.Contains(x.ProfileGroupFilterId)
+                        && activeChannelIds.Contains(x.ProviderChannelId))
+            .Select(x => new { x.ProfileGroupFilterId, x.ProviderChannelId })
+            .ToListAsync(cancellationToken);
+
+        var existingSet = existing
+            .Select(x => $"{x.ProfileGroupFilterId}:{x.ProviderChannelId}")
+            .ToHashSet(StringComparer.Ordinal);
+
+        var newRows = new List<ProfileGroupChannelFilter>();
+        foreach (var channel in activeChannels)
+        {
+            if (!filterByProviderGroupId.TryGetValue(channel.ProviderGroupId, out var filter))
+                continue;
+
+            var key = $"{filter.ProfileGroupFilterId}:{channel.ProviderChannelId}";
+            if (existingSet.Contains(key))
+                continue;
+
+            newRows.Add(new ProfileGroupChannelFilter
+            {
+                ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                ProviderChannelId = channel.ProviderChannelId,
+                State = LineupReviewSemantics.ChannelStatePending,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            });
+        }
+
+        if (newRows.Count == 0)
+            return;
+
+        db.ProfileGroupChannelFilters.AddRange(newRows);
+        await db.SaveChangesAsync(cancellationToken);
+        logger.LogInformation(
+            "Created {Count} pending channel review row(s) for profile {ProfileId}, provider {ProviderId}.",
+            newRows.Count,
+            profileId,
+            providerId);
     }
 
     private async Task SyncProviderChannelsAsync(
@@ -986,6 +1616,7 @@ public sealed class SnapshotBuilder(
 
             var groupId = ch.GroupTitle is not null && groupNameToId.TryGetValue(ch.GroupTitle, out var gid)
                 ? (string?)gid : null;
+            var eventClassification = EventChannelClassifier.Classify(ch.DisplayName, ch.GroupTitle);
 
             // Lazy: skip channels from excluded groups entirely.
             if (groupId is not null && excludedGroupIds.Contains(groupId)) continue;
@@ -1007,6 +1638,16 @@ public sealed class SnapshotBuilder(
                 entity.GroupTitle = ch.GroupTitle;
                 entity.ProviderGroupId = groupId;
                 entity.ContentType = contentType;
+                entity.IsEvent = eventClassification.IsEvent;
+                entity.IsPlaceholder = eventClassification.IsPlaceholder;
+                entity.EventSlotKey = eventClassification.EventSlotKey;
+                entity.EventContentKey = eventClassification.EventContentKey;
+                entity.EventTitle = eventClassification.EventTitle;
+                entity.EventSport = eventClassification.EventSport;
+                entity.EventLeague = eventClassification.EventLeague;
+                entity.EventParticipantsJson = eventClassification.EventParticipantsJson;
+                entity.EventStartUtc = null;
+                entity.EventEndUtc = null;
                 entity.LastSeenUtc = now;
                 entity.Active = true;
                 entity.LastFetchRunId = fetchRunId;
@@ -1028,6 +1669,16 @@ public sealed class SnapshotBuilder(
                     GroupTitle = ch.GroupTitle,
                     ProviderGroupId = groupId,
                     ContentType = contentType,
+                    IsEvent = eventClassification.IsEvent,
+                    IsPlaceholder = eventClassification.IsPlaceholder,
+                    EventSlotKey = eventClassification.EventSlotKey,
+                    EventContentKey = eventClassification.EventContentKey,
+                    EventTitle = eventClassification.EventTitle,
+                    EventSport = eventClassification.EventSport,
+                    EventLeague = eventClassification.EventLeague,
+                    EventParticipantsJson = eventClassification.EventParticipantsJson,
+                    EventStartUtc = null,
+                    EventEndUtc = null,
                     FirstSeenUtc = now,
                     LastSeenUtc = now,
                     Active = true,

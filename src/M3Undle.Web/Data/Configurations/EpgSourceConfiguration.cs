@@ -25,6 +25,7 @@ public sealed class EpgSourceConfiguration : IEntityTypeConfiguration<EpgSource>
         builder.Property(x => x.LastModifiedUtc).HasColumnName("last_modified_utc");
         builder.Property(x => x.LastSuccessUtc).HasColumnName("last_success_utc");
         builder.Property(x => x.LastFailureUtc).HasColumnName("last_failure_utc");
+        builder.Property(x => x.RefreshIntervalHours).HasColumnName("refresh_interval_hours");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
 

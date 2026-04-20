@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <!-- Stabilize MTP solution runs: prevent parallel test modules from contending on test assembly files. -->
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --max-parallel-test-modules 1</TestingPlatformCommandLineArguments>
+  </PropertyGroup>
+</Project>

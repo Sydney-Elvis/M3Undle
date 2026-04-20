@@ -3,12 +3,14 @@ using M3Undle.Core.M3u;
 using Microsoft.AspNetCore.Diagnostics;
 using M3Undle.Web.Api;
 using M3Undle.Web.Application;
+using M3Undle.Web.Application.Downstream;
 using M3Undle.Web.Components;
 using M3Undle.Web.Components.Account;
 using M3Undle.Web.Data;
 using M3Undle.Web.Logging;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
@@ -37,6 +39,8 @@ EnsureWebRootExists();
 
 var builder = WebApplication.CreateBuilder(args);
 var runtimePaths = RuntimePaths.Resolve(builder.Configuration, builder.Environment);
+const string MediaSurfaceCorsPolicy = "MediaSurfaceCors";
+const string ApplicationSurfaceCorsPolicy = "ApplicationSurfaceCors";
 
 if (Path.GetDirectoryName(runtimePaths.DatabasePath) is { Length: > 0 } dbDir)
     Directory.CreateDirectory(dbDir);
@@ -104,11 +108,24 @@ builder.Services.ConfigureApplicationCookie(options =>
 var sqliteInterceptor = new SqliteConnectionInterceptor();
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlite(runtimePaths.DatabaseConnectionString).AddInterceptors(sqliteInterceptor));
-builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+if (builder.Environment.IsDevelopment())
+    builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
+builder.Services.AddM3UndleOpenApi();
 builder.Services.AddValidation();
 builder.Services.AddHttpClient();
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(MediaSurfaceCorsPolicy, policy =>
+        policy.AllowAnyOrigin()
+            .WithMethods(HttpMethods.Get));
+
+    options.AddPolicy(ApplicationSurfaceCorsPolicy, policy =>
+        policy.SetIsOriginAllowed(origin => IsConfiguredApplicationOrigin(origin, builder.Configuration))
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
 builder.Services.AddScoped(sp =>
 {
     var navigation = sp.GetRequiredService<NavigationManager>();
@@ -134,28 +151,46 @@ builder.Services.AddHttpClient("epg", client =>
     AutomaticDecompression = System.Net.DecompressionMethods.All,
 });
 
+// Named HttpClient for downstream notifications (Jellyfin, Emby, webhooks)
+builder.Services.AddHttpClient("downstream", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+
 builder.Services.Configure<RefreshOptions>(builder.Configuration.GetSection("M3Undle:Refresh"));
 builder.Services.Configure<SnapshotOptions>(builder.Configuration.GetSection("M3Undle:Snapshot"));
+builder.Services.Configure<AdaptiveLockoutOptions>(builder.Configuration.GetSection("Identity:AdaptiveLockout"));
 builder.Services.Configure<HdHomeRunOptions>(builder.Configuration.GetSection("M3Undle:HdHomeRun"));
 builder.Services.Configure<ClientEndpointAccessOptions>(builder.Configuration.GetSection("M3Undle:EndpointAccess"));
 builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection("M3Undle:Streaming"));
 builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
 builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
+builder.Services.Configure<GeneratedHlsOptions>(builder.Configuration.GetSection("M3Undle:Streaming:GeneratedHls"));
 builder.Services.AddSingleton<IConfigureOptions<StreamProxyOptions>, StreamProxyDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<BufferOptions>, BufferDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<ReconnectOptions>, ReconnectDbOptionsConfigurator>();
+builder.Services.AddSingleton<IConfigureOptions<GeneratedHlsOptions>, GeneratedHlsDbOptionsConfigurator>();
 builder.Services.AddSingleton<IValidateOptions<StreamProxyOptions>, StreamProxyOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<BufferOptions>, BufferOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<ReconnectOptions>, ReconnectOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<GeneratedHlsOptions>, GeneratedHlsOptionsValidator>();
 builder.Services.AddOptions<StreamProxyOptions>().ValidateOnStart();
 builder.Services.AddOptions<BufferOptions>().ValidateOnStart();
 builder.Services.AddOptions<ReconnectOptions>().ValidateOnStart();
+builder.Services.AddOptions<GeneratedHlsOptions>().ValidateOnStart();
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
         configuredPath: options.Directory,
         dataDirectory: runtimePaths.DataDirectory,
         defaultRelativePath: "snapshots");
+});
+builder.Services.PostConfigure<GeneratedHlsOptions>(options =>
+{
+    options.Directory = RuntimePaths.ResolveDirectory(
+        configuredPath: options.Directory,
+        dataDirectory: runtimePaths.DataDirectory,
+        defaultRelativePath: "hls-work");
 });
 builder.Services.Configure<ReverseProxyOptions>(builder.Configuration.GetSection("M3Undle:ReverseProxy"));
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -188,6 +223,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     }
 });
 builder.Services.AddSingleton(runtimePaths);
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.XmltvParser>();
@@ -203,9 +239,16 @@ builder.Services.AddSingleton<HdHomeRunTunerCountResolver>();
 builder.Services.AddSingleton<HdHomeRunDeviceService>();
 builder.Services.AddHostedService<HdHomeRunDiscoveryService>();
 builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
+builder.Services.AddScoped<IAdaptiveLockoutService, AdaptiveLockoutService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
 builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
 builder.Services.AddScoped<IHdHomeRunSettingsService, HdHomeRunSettingsService>();
+builder.Services.AddScoped<IGeneratedHlsSettingsService, GeneratedHlsSettingsService>();
+builder.Services.AddScoped<IRefreshScheduleService, RefreshScheduleService>();
+builder.Services.AddScoped<IDownstreamIntegrationService, DownstreamIntegrationService>();
+builder.Services.AddSingleton<IDownstreamAdapter, JellyfinAdapter>();
+builder.Services.AddSingleton<IDownstreamAdapter, EmbyAdapter>();
+builder.Services.AddSingleton<IDownstreamAdapter, WebhookAdapter>();
 builder.Services.AddSingleton<IApplicationRestartService, ApplicationRestartService>();
 builder.Services.AddScoped<ICredentialValidator, DbCredentialValidator>();
 builder.Services.AddScoped<IProfileResolver, ActiveProfileResolver>();
@@ -215,18 +258,27 @@ builder.Services.AddScoped<XtreamPathCredentialFilter>();
 builder.Services.AddSingleton<XtreamStreamIdCache>();
 builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
+builder.Services.AddScoped<CustomGroupPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
 builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
+builder.Services.AddSingleton<DashboardStatsService>();
+builder.Services.AddSingleton<LineupStatusService>();
+builder.Services.AddSingleton<ProfilesPageService>();
 builder.Services.AddSingleton<SnapshotRefreshService>();
 builder.Services.AddSingleton<IRefreshTrigger>(sp => sp.GetRequiredService<SnapshotRefreshService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshService>());
+builder.Services.AddHostedService<DownstreamNotificationService>();
 builder.Services.AddSingleton<HdHomeRunTunerManager>();
 builder.Services.AddSingleton<StreamingRegistry>();
+builder.Services.AddSingleton<InternalRelaySecretService>();
 builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
 builder.Services.AddSingleton<StreamAdmissionBackoffStore>();
 builder.Services.AddSingleton<UpstreamStreamConnector>();
+builder.Services.AddSingleton<GeneratedHlsSessionManager>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<GeneratedHlsSessionManager>());
 builder.Services.AddSingleton<ChannelSessionManager>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ChannelSessionManager>());
 builder.Services.AddScoped<StreamRequestResolver>();
 builder.Services.AddSingleton<HlsManifestRewriter>();
 builder.Services.AddSingleton<HlsProxyService>();
@@ -240,6 +292,9 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
         options.Password.RequireUppercase = false;
         options.Password.RequireNonAlphanumeric = false;
         options.Password.RequiredLength = 6;
+        options.Lockout.AllowedForNewUsers = true;
+        options.Lockout.MaxFailedAccessAttempts = builder.Configuration.GetValue("Identity:Lockout:MaxFailedAccessAttempts", 5);
+        options.Lockout.DefaultLockoutTimeSpan = builder.Configuration.GetValue("Identity:Lockout:DefaultLockoutTimeSpan", TimeSpan.FromMinutes(5));
     })
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddSignInManager()
@@ -264,6 +319,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await RepairAlpha4MigrationHistoryAsync(db);
+    await RepairAlpha6SchemaAsync(db);
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 
@@ -302,6 +358,14 @@ app.Use(static async (ctx, next) =>
     await next(ctx);
 });
 
+app.UseRouting();
+app.UseWhen(
+    context => IsMediaSurfacePath(context.Request.Path),
+    branch => branch.UseCors(MediaSurfaceCorsPolicy));
+app.UseWhen(
+    context => IsApplicationSurfacePath(context.Request.Path),
+    branch => branch.UseCors(ApplicationSurfaceCorsPolicy));
+
 app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -315,40 +379,84 @@ app.MapRazorComponents<App>()
 app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
 app.MapChannelFilterApiEndpoints();
+app.MapCustomGroupApiEndpoints();
 app.MapChannelListApiEndpoints();
 app.MapSiteSettingsApiEndpoints();
 app.MapHdHomeRunEndpoints();
 app.MapCompatibilityEndpoints();
 app.MapXtreamEndpoints();
 app.MapEpgApiEndpoints();
-app.MapHealthChecks("/health");
+app.MapDashboardApiEndpoints();
+app.MapDownstreamApiEndpoints();
+app.MapHealthChecks("/health").ExcludeFromDescription();
+app.MapM3UndleOpenApiEndpoints(app.Environment);
 
 app.Run();
 
 static async Task SeedAdminAccountIfNeededAsync(IServiceProvider services)
 {
     var env = services.GetRequiredService<EnvironmentVariableService>();
-    var authEnabled = string.Equals(env.GetValue("M3UNDLE_AUTH_ENABLED")?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+    var authEnabled = IsFlagEnabled(env.GetValue("M3UNDLE_AUTH_ENABLED"));
     if (!authEnabled) return;
 
     await using var scope = services.CreateAsyncScope();
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    if (await db.Users.AsNoTracking().AnyAsync()) return;
+    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+    var logger = services.GetRequiredService<ILogger<Program>>();
+    var hasAnyUsers = await db.Users.AsNoTracking().AnyAsync();
 
     var adminUser = env.GetValue("M3UNDLE_ADMIN_USER")?.Trim() ?? "admin";
-    var adminPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
+    var resetRequested = IsFlagEnabled(env.GetValue("M3UNDLE_ADMIN_PASSWORD_RESET"));
+
+    if (!hasAnyUsers)
+    {
+        var adminPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
+            ?? throw new InvalidOperationException(
+                "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_AUTH_ENABLED=true and no admin account exists.");
+
+        var user = new ApplicationUser { UserName = adminUser, Email = adminUser, EmailConfirmed = true };
+        var createResult = await userManager.CreateAsync(user, adminPassword);
+        if (!createResult.Succeeded)
+            throw new InvalidOperationException(
+                $"Failed to create admin account: {string.Join(", ", createResult.Errors.Select(e => e.Description))}");
+
+        logger.LogInformation("Admin account created from environment variables.");
+        return;
+    }
+
+    if (!resetRequested) return;
+
+    var resetPassword = env.GetValue("M3UNDLE_ADMIN_PASSWORD")?.Trim()
         ?? throw new InvalidOperationException(
-            "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_AUTH_ENABLED=true and no admin account exists.");
+            "M3UNDLE_ADMIN_PASSWORD must be set when M3UNDLE_ADMIN_PASSWORD_RESET=true.");
 
-    var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
-    var user = new ApplicationUser { UserName = adminUser, Email = adminUser, EmailConfirmed = true };
-    var result = await userManager.CreateAsync(user, adminPassword);
-    if (!result.Succeeded)
+    var existingAdmin = await userManager.FindByNameAsync(adminUser)
+                        ?? await userManager.FindByEmailAsync(adminUser);
+    if (existingAdmin is null)
         throw new InvalidOperationException(
-            $"Failed to create admin account: {string.Join(", ", result.Errors.Select(e => e.Description))}");
+            $"M3UNDLE_ADMIN_PASSWORD_RESET=true but user '{adminUser}' was not found.");
 
-    services.GetRequiredService<ILogger<Program>>()
-        .LogInformation("Admin account created from environment variables.");
+    var resetToken = await userManager.GeneratePasswordResetTokenAsync(existingAdmin);
+    var resetResult = await userManager.ResetPasswordAsync(existingAdmin, resetToken, resetPassword);
+    if (!resetResult.Succeeded)
+        throw new InvalidOperationException(
+            $"Failed to reset admin password: {string.Join(", ", resetResult.Errors.Select(e => e.Description))}");
+
+    await userManager.ResetAccessFailedCountAsync(existingAdmin);
+    await userManager.SetLockoutEndDateAsync(existingAdmin, null);
+    if (existingAdmin.AdaptiveLockoutEscalated)
+    {
+        existingAdmin.AdaptiveLockoutEscalated = false;
+        var updateResult = await userManager.UpdateAsync(existingAdmin);
+        if (!updateResult.Succeeded)
+            throw new InvalidOperationException(
+                $"Admin password was reset but lockout state cleanup failed: {string.Join(", ", updateResult.Errors.Select(e => e.Description))}");
+    }
+
+    logger.LogWarning(
+        "Admin password reset from environment variables for user '{AdminUser}'. " +
+        "Set M3UNDLE_ADMIN_PASSWORD_RESET back to false after recovery.",
+        adminUser);
 }
 
 static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptions> context, int statusCode)
@@ -364,11 +472,17 @@ static Task HandleApiAuthRedirectAsync(RedirectContext<CookieAuthenticationOptio
 }
 
 static bool IsClientDeliveryPath(PathString path)
+    => IsMediaSurfacePath(path);
+
+static bool IsFlagEnabled(string? value)
+    => string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+
+static bool IsMediaSurfacePath(PathString path)
 {
-    // Preserve original status codes for machine-facing client endpoints (HDHR, stream, playlist, guide).
     return path.StartsWithSegments("/hdhr", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/tuner", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/tune", StringComparison.OrdinalIgnoreCase)
+           || path.StartsWithSegments("/auto", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/stream", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/live", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/movie", StringComparison.OrdinalIgnoreCase)
@@ -377,6 +491,8 @@ static bool IsClientDeliveryPath(PathString path)
            || path.StartsWithSegments("/hls", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/m3u", StringComparison.OrdinalIgnoreCase)
            || path.StartsWithSegments("/xmltv", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/player_api.php", StringComparison.OrdinalIgnoreCase)
+           || path.Equals("/get.php", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/discover.json", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/lineup.json", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/lineup.xml", StringComparison.OrdinalIgnoreCase)
@@ -384,6 +500,41 @@ static bool IsClientDeliveryPath(PathString path)
            || path.Equals("/lineup_status.json", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/lineup.post", StringComparison.OrdinalIgnoreCase)
            || path.Equals("/device.xml", StringComparison.OrdinalIgnoreCase);
+}
+
+static bool IsApplicationSurfacePath(PathString path)
+    => !IsMediaSurfacePath(path);
+
+static bool IsConfiguredApplicationOrigin(string origin, IConfiguration configuration)
+{
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var requestOrigin))
+        return false;
+
+    var allowedOrigins = configuration
+        .GetSection("M3Undle:Cors:ApplicationAllowedOrigins")
+        .Get<string[]>() ?? [];
+
+    var requestAuthority = requestOrigin.GetLeftPart(UriPartial.Authority);
+    foreach (var candidateGroup in allowedOrigins)
+    {
+        var candidates = (candidateGroup ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var candidate in candidates)
+        {
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var configuredOrigin))
+                continue;
+
+            if (string.Equals(
+                requestAuthority,
+                configuredOrigin.GetLeftPart(UriPartial.Authority),
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 static void EnsureWebRootExists()
@@ -458,6 +609,120 @@ static async Task RepairAlpha4MigrationHistoryAsync(ApplicationDbContext db)
     var pId = ins.CreateParameter();
     pId.ParameterName = "@id";
     pId.Value = "20260314145015_Alpha4_Schema";
+    ins.Parameters.Add(pId);
+    var pVer = ins.CreateParameter();
+    pVer.ParameterName = "@ver";
+    pVer.Value = "10.0.0";
+    ins.Parameters.Add(pVer);
+    await ins.ExecuteNonQueryAsync();
+
+    await tx.CommitAsync();
+}
+
+// Repairs databases that were upgraded through alpha.5 with a providers table that had
+// is_active removed outside of the normal migration path. Alpha6_ActiveProfile moves
+// is_active from providers to profiles, but its data-migration SQL references
+// providers.is_active which is already absent on these DBs, causing Migrate() to fail
+// with "no such column: p.is_active" and leaving profiles.is_active unset.
+//
+// When detected, this function manually applies the profiles-side schema change,
+// seeds a sensible active profile, and records Alpha6_ActiveProfile as applied so
+// Migrate() skips its broken data-migration step.
+static async Task RepairAlpha6SchemaAsync(ApplicationDbContext db)
+{
+    const string migrationId = "20260404000000_Alpha6_ActiveProfile";
+
+    var conn = db.Database.GetDbConnection();
+    if (conn.State != System.Data.ConnectionState.Open)
+        await conn.OpenAsync();
+
+    // Bail on a fresh DB — Migrate() will create everything from scratch.
+    await using var checkHistory = conn.CreateCommand();
+    checkHistory.CommandText =
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='__EFMigrationsHistory'";
+    if ((long)(await checkHistory.ExecuteScalarAsync())! == 0)
+        return;
+
+    // Already applied — nothing to repair.
+    await using var checkApplied = conn.CreateCommand();
+    checkApplied.CommandText =
+        "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = @id";
+    var p = checkApplied.CreateParameter();
+    p.ParameterName = "@id";
+    p.Value = migrationId;
+    checkApplied.Parameters.Add(p);
+    if ((long)(await checkApplied.ExecuteScalarAsync())! > 0)
+        return;
+
+    // No providers table yet — Migrate() will build the full schema.
+    await using var checkProviders = conn.CreateCommand();
+    checkProviders.CommandText =
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='providers'";
+    if ((long)(await checkProviders.ExecuteScalarAsync())! == 0)
+        return;
+
+    // If providers.is_active exists the normal Alpha6 migration will run fine.
+    await using var checkProviderCol = conn.CreateCommand();
+    checkProviderCol.CommandText =
+        "SELECT COUNT(*) FROM pragma_table_info('providers') WHERE name='is_active'";
+    if ((long)(await checkProviderCol.ExecuteScalarAsync())! > 0)
+        return;
+
+    // Broken state confirmed: providers.is_active is missing and Alpha6 has never been
+    // recorded. Manually apply the profiles-side changes and mark the migration applied.
+    await using var checkProfileCol = conn.CreateCommand();
+    checkProfileCol.CommandText =
+        "SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name='is_active'";
+    var profileColExists = (long)(await checkProfileCol.ExecuteScalarAsync())! > 0;
+
+    await using var tx = await conn.BeginTransactionAsync();
+
+    if (!profileColExists)
+    {
+        await using var addCol = conn.CreateCommand();
+        addCol.Transaction = tx;
+        addCol.CommandText =
+            "ALTER TABLE \"profiles\" ADD COLUMN \"is_active\" INTEGER NOT NULL DEFAULT 0";
+        await addCol.ExecuteNonQueryAsync();
+    }
+
+    // Mark the first enabled profile as active if none are flagged yet.
+    await using var setActive = conn.CreateCommand();
+    setActive.Transaction = tx;
+    setActive.CommandText = """
+        UPDATE profiles
+        SET is_active = 1
+        WHERE profile_id = (
+            SELECT profile_id FROM profiles WHERE enabled = 1 ORDER BY created_utc ASC LIMIT 1
+        )
+        AND NOT EXISTS (SELECT 1 FROM profiles WHERE is_active = 1)
+        """;
+    await setActive.ExecuteNonQueryAsync();
+
+    await using var checkIdx = conn.CreateCommand();
+    checkIdx.Transaction = tx;
+    checkIdx.CommandText =
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_profiles_is_active'";
+    var idxExists = (long)(await checkIdx.ExecuteScalarAsync())! > 0;
+
+    if (!idxExists)
+    {
+        await using var createIdx = conn.CreateCommand();
+        createIdx.Transaction = tx;
+        createIdx.CommandText =
+            "CREATE UNIQUE INDEX \"idx_profiles_is_active\" ON \"profiles\" (\"is_active\") " +
+            "WHERE is_active = 1";
+        await createIdx.ExecuteNonQueryAsync();
+    }
+
+    await using var ins = conn.CreateCommand();
+    ins.Transaction = tx;
+    ins.CommandText =
+        "INSERT OR IGNORE INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") " +
+        "VALUES (@id, @ver)";
+    var pId = ins.CreateParameter();
+    pId.ParameterName = "@id";
+    pId.Value = migrationId;
     ins.Parameters.Add(pId);
     var pVer = ins.CreateParameter();
     pVer.ParameterName = "@ver";

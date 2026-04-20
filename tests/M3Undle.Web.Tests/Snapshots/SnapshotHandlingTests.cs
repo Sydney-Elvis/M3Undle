@@ -6,6 +6,7 @@ using M3Undle.Web.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -312,7 +313,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -344,7 +345,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -379,14 +380,14 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
-    public async Task SnapshotBuilder_SecondFetch_ArchivesPreviousSnapshot()
+    public async Task SnapshotBuilder_SecondIdenticalFetch_DoesNotCreateNewSnapshot()
     {
         await using var fixture = await CreateFixtureAsync();
 
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -402,6 +403,69 @@ public sealed class SnapshotHandlingTests
             await using (var db2 = fixture.CreateDbContext())
             {
                 await CreateBuilder(db2, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var snapshots = await verify.Snapshots.OrderByDescending(x => x.CreatedUtc).ToListAsync();
+            Assert.HasCount(1, snapshots);
+            Assert.AreEqual("active", snapshots[0].Status);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_SecondChangedFetch_ArchivesPreviousSnapshot()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var configure = fixture.CreateDbContext())
+            {
+                var group = await configure.ProviderGroups.SingleAsync(x => x.ProviderId == "provider-1" && x.RawName == "News");
+                var filter = await configure.ProfileGroupFilters
+                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroupId == group.ProviderGroupId);
+
+                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                filter.OutputName = "News";
+                filter.ChannelMode = LineupReviewSemantics.GroupModeAutoUpdate;
+                filter.TrackingPolicy = LineupReviewSemantics.TrackingPolicyAutoAddAll;
+                filter.TrackNewChannels = false;
+                filter.UpdatedUtc = DateTime.UtcNow;
+
+                var channelRows = await configure.ProfileGroupChannelFilters
+                    .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                    .ToListAsync();
+
+                foreach (var channelRow in channelRows)
+                {
+                    channelRow.State = LineupReviewSemantics.ChannelStateIncluded;
+                    channelRow.UpdatedUtc = DateTime.UtcNow;
+                }
+
+                await configure.SaveChangesAsync();
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleUpdatedM3u, tempDir).RunAsync(CancellationToken.None);
             }
 
             await using var verify = fixture.CreateDbContext();
@@ -424,7 +488,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            var provider = NewProvider("provider-1", active: true);
+            var provider = NewProvider("provider-1");
             provider.IncludeVod = true;
             provider.IncludeSeries = true;
             setup.Providers.Add(provider);
@@ -451,7 +515,8 @@ public sealed class SnapshotHandlingTests
                 var newsFilter = await edit.ProfileGroupFilters
                     .Include(x => x.ProviderGroup)
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "News");
-                newsFilter.Decision = "hold";
+                newsFilter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                newsFilter.IsNew = false;
                 newsFilter.UpdatedUtc = DateTime.UtcNow;
 
                 var moviesFilter = await edit.ProfileGroupFilters
@@ -466,18 +531,13 @@ public sealed class SnapshotHandlingTests
                 seriesFilter.Decision = "exclude";
                 seriesFilter.UpdatedUtc = DateTime.UtcNow;
 
-                var newsChannels = await edit.ProviderChannels
-                    .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == "News" && x.ContentType == "live")
+                var newsChannels = await edit.ProfileGroupChannelFilters
+                    .Where(x => x.ProfileGroupFilterId == newsFilter.ProfileGroupFilterId)
                     .ToListAsync();
-                foreach (var ch in newsChannels)
+                foreach (var cf in newsChannels)
                 {
-                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                    {
-                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                        ProfileGroupFilterId = newsFilter.ProfileGroupFilterId,
-                        ProviderChannelId = ch.ProviderChannelId,
-                        CreatedUtc = DateTime.UtcNow,
-                    });
+                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
+                    cf.UpdatedUtc = DateTime.UtcNow;
                 }
 
                 await edit.SaveChangesAsync();
@@ -509,7 +569,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            var provider = NewProvider("provider-1", active: true);
+            var provider = NewProvider("provider-1");
             provider.IncludeVod = true;
             setup.Providers.Add(provider);
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
@@ -542,7 +602,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -562,21 +622,17 @@ public sealed class SnapshotHandlingTests
                 var filter = await edit.ProfileGroupFilters
                     .Include(x => x.ProviderGroup)
                     .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "USA FOX");
-                filter.Decision = "hold";
+                filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                filter.IsNew = false;
                 filter.UpdatedUtc = DateTime.UtcNow;
 
-                var foxChannels = await edit.ProviderChannels
-                    .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == "USA FOX" && x.ContentType == "live")
+                var foxChannels = await edit.ProfileGroupChannelFilters
+                    .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
                     .ToListAsync();
-                foreach (var ch in foxChannels)
+                foreach (var cf in foxChannels)
                 {
-                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                    {
-                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                        ProfileGroupFilterId = filter.ProfileGroupFilterId,
-                        ProviderChannelId = ch.ProviderChannelId,
-                        CreatedUtc = DateTime.UtcNow,
-                    });
+                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
+                    cf.UpdatedUtc = DateTime.UtcNow;
                 }
 
                 await edit.SaveChangesAsync();
@@ -609,7 +665,7 @@ public sealed class SnapshotHandlingTests
         await using (var setup = fixture.CreateDbContext())
         {
             setup.Profiles.Add(NewProfile("profile-1"));
-            setup.Providers.Add(NewProvider("provider-1", active: true));
+            setup.Providers.Add(NewProvider("provider-1"));
             setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
             await setup.SaveChangesAsync();
         }
@@ -631,22 +687,17 @@ public sealed class SnapshotHandlingTests
                     .ToListAsync();
                 foreach (var filter in filters)
                 {
-                    filter.Decision = "hold";
+                    filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
+                    filter.IsNew = false;
                     filter.UpdatedUtc = DateTime.UtcNow;
 
-                    var groupName = filter.ProviderGroup.RawName;
-                    var groupChannels = await edit.ProviderChannels
-                        .Where(x => x.ProviderId == "provider-1" && x.GroupTitle == groupName && x.ContentType == "live")
+                    var existingChannelFilters = await edit.ProfileGroupChannelFilters
+                        .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
                         .ToListAsync();
-                    foreach (var ch in groupChannels)
+                    foreach (var cf in existingChannelFilters)
                     {
-                        edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
-                        {
-                            ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
-                            ProfileGroupFilterId = filter.ProfileGroupFilterId,
-                            ProviderChannelId = ch.ProviderChannelId,
-                            CreatedUtc = DateTime.UtcNow,
-                        });
+                        cf.State = LineupReviewSemantics.ChannelStateIncluded;
+                        cf.UpdatedUtc = DateTime.UtcNow;
                     }
                 }
 
@@ -690,6 +741,11 @@ public sealed class SnapshotHandlingTests
     private const string SampleM3u =
         "#EXTM3U\n" +
         "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US\n" +
+        "http://example.com/stream/cnn\n";
+
+    private const string SampleUpdatedM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US HD\n" +
         "http://example.com/stream/cnn\n";
 
     private const string SampleMixedM3u =
@@ -751,9 +807,16 @@ public sealed class SnapshotHandlingTests
             NullLogger<M3Undle.Web.Application.Epg.EpgChannelMapper>.Instance);
         var epgCompiler = new M3Undle.Web.Application.Epg.EpgCompiler(
             NullLogger<M3Undle.Web.Application.Epg.EpgCompiler>.Instance);
+        var services = new ServiceCollection();
+        services.AddDbContext<ApplicationDbContext>(o => o.UseSqlite(db.Database.GetDbConnection()));
+        var sp = services.BuildServiceProvider();
+        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+        var customGroupService = new CustomGroupPageService(scopeFactory, new AppEventBus());
+        var refreshScheduleService = new M3Undle.Web.Tests.Stubs.NullRefreshScheduleService();
         return new SnapshotBuilder(
             db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
-            runtimePaths, env, Options.Create(new SnapshotOptions()), NullLogger<SnapshotBuilder>.Instance);
+            runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService,
+            refreshScheduleService, TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
     }
 
     private static async Task<TestFixture> CreateFixtureAsync()
@@ -781,12 +844,11 @@ public sealed class SnapshotHandlingTests
         UpdatedUtc = DateTime.UtcNow,
     };
 
-    private static Provider NewProvider(string id, bool active = false) => new()
+    private static Provider NewProvider(string id) => new()
     {
         ProviderId = id,
         Name = id,
         Enabled = true,
-        IsActive = active,
         PlaylistUrl = "http://example.com/playlist.m3u",
         XmltvUrl = "http://example.com/xmltv.xml",
         TimeoutSeconds = 20,

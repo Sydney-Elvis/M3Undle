@@ -4,33 +4,44 @@ A self-hosted lineup manager built for large provider catalogs.
 
 M3Undle helps you take control of massive provider playlists and publish clean, predictable lineups for DVR and media server environments.
 
-Designed for self-hosted systems like NextPVR, Jellyfin, or any client that consumes M3U + XMLTV.
+Designed for self-hosted systems like NextPVR, Jellyfin, Emby, or any client that consumes M3U + XMLTV.
+
+Plex should work via the HDHomeRun integration but cannot be validated without Plex Pass — testing is on hold until a Plex Pass is available.
 
 > [!IMPORTANT]
 > **Feature Status**
-> 
+>
 > **Included today**
 > - CLI tooling (provider fetch, group discovery, M3U/XMLTV filtering)
 > - Secure `.env` credential handling
 > - Database-backed provider configuration
-> - Provider switching with snapshot lifecycle
+> - Published lineup versioning with last-known-good lifecycle
 > - Group preview (read-only catalog browsing)
 > - Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
-> - Channel numbering assignment and group renaming at the output layer
-> - EPG source management with multi-source XMLTV merge, mapping, and guide publishing
+> - Group mode: manual review (`select`) or auto-update (`all`) per group
+> - Channel numbering assignment, pinning, reorder via Number Manager, and group rename at the output layer
+> - Custom `tvg-id` override per channel (lock-gated)
+> - New channels inbox / review queue with include/exclude and event card view
+> - Event tracking policies for PPV/event groups (`review`, `notify`, `auto_add_all`, `auto_add_populated`, `auto_add_matching`)
+> - Structured event interest rules (team/league/sport/fighter/promotion/series) with auto-add, notify, or suppress actions
+> - Custom groups — user-defined output groups populated from any provider group or individual channel search
+> - EPG source management with multi-source XMLTV merge, priority rules, per-source cadence, and guide publishing
+> - Profiles UI — named published lineups with provider membership, published history, and profile detail pages
+> - Active profile switching with real-time status feedback
+> - Dashboard redesign — health dashboard with Published Output, Published Profiles, Action Items, and Output URLs
+> - Downstream integrations — automatic notification to Jellyfin, Emby, or a generic webhook after meaningful lineup or guide changes
+> - Configurable refresh schedule (manual, 1h–24h) with startup catch-up behavior
+> - HLS browser playback compatibility layer (GeneratedHls + HLS manifest rewriter)
+> - CORS support for external network access
 > - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API, Xtream Codes API
 > - Shared live stream proxy with byte-bounded buffering, reconnect handling, and direct-relay fallback for VOD-style routes
-> - Web UI for provider management (Alpha)
 > - Stream monitoring UI and stream status endpoints
 > - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`) with tuner-slot enforcement keyed by `VirtualTunerId`
 >
-> **Forthcoming**
-> - Channel reorder (explicit sort position)
-> - Custom `tvg-id` override per channel
-> - Configurable refresh schedule in Settings UI
-> - New channels inbox / review queue
-> - Dynamic groups for rotating/event feeds
-> - Provider switch assistance
+> **Forthcoming (Alpha 6)**
+> - Per-provider gateway/VPN routing (Block and Fallback modes)
+> - Xtream Codes auto-detection at provider add time with explicit user mode selection
+> - System event badge (nav bar, in-memory, diagnostic visibility)
 
 ---
 
@@ -80,7 +91,7 @@ It:
 - Publishes compatibility endpoints expected by clients
 
 It is not just a playlist filter.
-It is a system for managing Playlist catalogs at scale.
+It is a system for managing playlist catalogs at scale.
 
 ---
 
@@ -102,18 +113,31 @@ See: `docs/CLI.md`
 
 ---
 
-### Service + Web UI (Alpha 4)
+### Service + Web UI (Alpha 5)
 
-The service layer is in **Alpha** — functional for daily-driver LAN use. See `docs/SERVICE.md` for the full feature list and design notes.
+The service layer is in **Alpha 5** — functional for daily-driver LAN use. See `docs/SERVICE.md` for the full feature list and design notes.
 
-Current Alpha capabilities include:
+Current Alpha 5 capabilities include:
 
 - Database-backed configuration
-- Provider switching with snapshot lifecycle
+- Published lineup versioning with last-known-good lifecycle
 - Group preview (read-only catalog browse)
 - Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
-- Channel numbering assignment and group rename at the output layer
-- EPG Sources UI and API for provider-linked guide sources, test fetches, and channel mapping
+- Group mode per group: `manual review` (select only approved channels) or `auto-update` (publish active channels automatically)
+- Channel numbering assignment, pinning, and reorder via Number Manager; group rename at the output layer
+- Custom `tvg-id` override per channel (lock-gated field in the channel edit dialog)
+- New channels inbox / review queue — pending channels surfaced per profile with include/exclude decisions; event card view groups pending channels by event content
+- Event tracking policies for volatile groups (PPV/sports grids): `review`, `notify`, `auto_add_all`, `auto_add_populated`, `auto_add_matching`
+- Structured recurring event interest rules (team/league/sport/fighter/promotion/series) with auto-add, notify, or suppress actions
+- Custom groups — user-defined output groups backed by individual channel picks or linked provider groups, with full mode and tracking-policy support
+- EPG Sources UI and API for provider-linked guide sources, test fetches, per-source cadence override, and channel mapping
+- Profiles page — list all named published lineups; profile detail shows provider membership, published history, and pending review counts
+- Active profile switching — switch the active output profile from the UI with requested/refreshing/completed/failed feedback states
+- Dashboard — health dashboard with Published Output (live/movie/series counts), Published Profiles tiles, Action Items (pending review counts), and Output URLs
+- Downstream integrations — automatic post-publish notification to Jellyfin, Emby, or a generic webhook; fires only when a meaningful lineup or guide change is detected; recent success/failure visible in Settings
+- Configurable refresh schedule in Settings UI (manual, 1h, 2h, 4h, 6h default, 12h, 24h) with startup catch-up behavior
+- HLS browser playback compatibility (GeneratedHls + HLS manifest rewriter for `?format=hls` and browser UA fallback)
+- CORS support for external network access
 - HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
 - HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
 - HDHomeRun tuner-slot enforcement and retune/reuse behaviour keyed by endpoint `VirtualTunerId`
@@ -124,9 +148,8 @@ Current Alpha capabilities include:
 - Stream monitoring UI plus `/status/streams`, `/status/streams/clients`, and `/status/streams/providers`
 - Stream enable/disable control in Settings and provider-level max concurrent stream limits
 - UI authentication (`M3UNDLE_AUTH_ENABLED`) and endpoint security with credential management
-- Web UI for provider management
 
-Planned work (Alpha 5 and beyond): channel reorder, custom tvg-id override, configurable refresh schedule, new channels inbox, dynamic groups for rotating/event feeds.
+Planned work (Alpha 6): per-provider gateway/VPN routing, Xtream Codes auto-detection at provider add time, system event badge.
 
 See: `docs/SERVICE.md`
 
@@ -149,8 +172,22 @@ Authentication is controlled entirely by environment variables — no UI toggle 
 | `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs |
 | `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email (used on first startup only) |
 | `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no account exists yet |
+| `M3UNDLE_ADMIN_PASSWORD_RESET` | `false` | Set to `true` to force-reset the existing admin password from `M3UNDLE_ADMIN_PASSWORD` on startup (recovery flow) |
 
-On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables. On subsequent startups the account already exists — changing the env vars does not affect the stored password (use **Settings → Change Password** instead).
+On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables.
+On subsequent startups the account already exists — changing env vars does not affect the stored password unless you explicitly enable recovery with `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+
+### Password Recovery (Forgot Password)
+
+If the admin password is lost and you cannot log in:
+
+1. Set `M3UNDLE_ADMIN_PASSWORD` to the new desired password.
+2. Set `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+3. Restart M3Undle once.
+4. Log in with the new password.
+5. Set `M3UNDLE_ADMIN_PASSWORD_RESET=false` (or remove it), then restart again.
+
+When reset mode runs, lockout counters are also cleared for the admin account.
 
 ### Behavior
 
@@ -180,7 +217,9 @@ Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/
 
 Port `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints. Both are always needed.
 
-For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for full HDHR setup options, Docker networking guidance, and all environment variables.
+For normal Docker use, you do not need to set any HDHomeRun environment variables. Start the container, then manage HDHomeRun from **Settings → HDHomeRun** in the web UI.
+
+For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for the advanced HDHR overrides, Docker networking guidance, and the few cases where an env var is still useful.
 
 ---
 
@@ -245,4 +284,4 @@ See `LICENSE` for details.
 
 **CLI:** Stable and usable.
 
-**Service + Web UI:** **Alpha 4** — functional for daily-driver LAN use. Not production-ready. Active development continues toward Alpha 5 and Beta.
+**Service + Web UI:** **Alpha 5** — functional for daily-driver LAN use. Not production-ready. Active development continues toward Alpha 6 and Beta.

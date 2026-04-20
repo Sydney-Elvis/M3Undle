@@ -32,6 +32,7 @@ public sealed class ProviderPageService(
                 OutputName = x.OutputName,
                 MergeMode = x.MergeMode,
                 Enabled = x.Enabled,
+                IsActive = x.IsActive,
             })
             .ToListAsync(cancellationToken);
 
@@ -191,7 +192,6 @@ public sealed class ProviderPageService(
             UserAgent = configProvider.UserAgent,
             TimeoutSeconds = configProvider.TimeoutSeconds,
             Enabled = configProvider.Enabled,
-            IsActive = false,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
@@ -202,21 +202,33 @@ public sealed class ProviderPageService(
         };
 
         db.Providers.Add(provider);
-        var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
-        var profile = new Profile
+        var reuseImportProfile = await FindUnlinkedProfileByNameAsync(db, configProvider.Name, cancellationToken);
+        string importProfileId;
+        if (reuseImportProfile is not null)
         {
-            ProfileId = Guid.NewGuid().ToString(),
-            Name = profileName,
-            OutputName = "m3undle",
-            MergeMode = "replace",
-            Enabled = true,
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
-        db.Profiles.Add(profile);
-        ApplyProviderProfiles(db, provider.ProviderId, [profile.ProfileId]);
+            importProfileId = reuseImportProfile.ProfileId;
+        }
+        else
+        {
+            var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
+            var profile = new Profile
+            {
+                ProfileId = Guid.NewGuid().ToString(),
+                Name = profileName,
+                OutputName = "m3undle",
+                MergeMode = "replace",
+                Enabled = true,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            };
+            db.Profiles.Add(profile);
+            importProfileId = profile.ProfileId;
+        }
+        ApplyProviderProfiles(db, provider.ProviderId, [importProfileId]);
 
         await db.SaveChangesAsync(cancellationToken);
+        await AutoActivateProfileIfNoneAsync(db, importProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);
         return (dto, null);
@@ -227,7 +239,24 @@ public sealed class ProviderPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var isXtream = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var hasPlaylistInputs =
+            !string.IsNullOrWhiteSpace(request.PlaylistUrl)
+            || !string.IsNullOrWhiteSpace(request.XmltvUrl)
+            || !string.IsNullOrWhiteSpace(request.HeadersJson)
+            || !string.IsNullOrWhiteSpace(request.UserAgent);
+        var hasXtreamBase = !string.IsNullOrWhiteSpace(request.XtreamBaseUrl);
+        var hasXtreamInputs = hasXtreamBase
+            || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+            || !string.IsNullOrWhiteSpace(request.XtreamPassword)
+            || request.XtreamIncludeXmltv;
+
+        if (hasPlaylistInputs && hasXtreamInputs)
+            return (null, "Playlist/file fields and Xtream fields are mutually exclusive.");
+
+        if (!hasXtreamBase && hasXtreamInputs)
+            return (null, "xtreamUsername/xtreamPassword/xtreamIncludeXmltv require xtreamBaseUrl.");
+
+        var isXtream = hasXtreamBase;
         var validationErrors = isXtream
             ? await ValidateXtreamProviderRequestAsync(db, request.Name, request.XtreamBaseUrl!, request.XtreamUsername, request.XtreamPassword, request.AssociateToProfileIds, null, cancellationToken)
             : await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, null, cancellationToken);
@@ -249,6 +278,7 @@ public sealed class ProviderPageService(
             MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
+            ForceMpegTs = request.ForceMpegTs,
             XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
             XtreamUsername = isXtream ? request.XtreamUsername?.Trim() : null,
             XtreamEncryptedPassword = isXtream ? encryption.Encrypt(request.XtreamPassword!) : null,
@@ -265,19 +295,28 @@ public sealed class ProviderPageService(
 
         if (profileIdsToApply is null or { Count: 0 })
         {
-            var profileName = await GetUniqueProfileNameAsync(db, request.Name.Trim(), cancellationToken);
-            var profile = new Profile
+            var baseName = request.Name.Trim();
+            var reuseProfile = await FindUnlinkedProfileByNameAsync(db, baseName, cancellationToken);
+            if (reuseProfile is not null)
             {
-                ProfileId = Guid.NewGuid().ToString(),
-                Name = profileName,
-                OutputName = "m3undle",
-                MergeMode = "replace",
-                Enabled = true,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-            db.Profiles.Add(profile);
-            profileIdsToApply = [profile.ProfileId];
+                profileIdsToApply = [reuseProfile.ProfileId];
+            }
+            else
+            {
+                var profileName = await GetUniqueProfileNameAsync(db, baseName, cancellationToken);
+                var profile = new Profile
+                {
+                    ProfileId = Guid.NewGuid().ToString(),
+                    Name = profileName,
+                    OutputName = "m3undle",
+                    MergeMode = "replace",
+                    Enabled = true,
+                    CreatedUtc = now,
+                    UpdatedUtc = now,
+                };
+                db.Profiles.Add(profile);
+                profileIdsToApply = [profile.ProfileId];
+            }
         }
 
         ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
@@ -289,6 +328,11 @@ public sealed class ProviderPageService(
         {
             return (null, "Provider could not be created due to a database conflict.");
         }
+
+        var linkedProfileId = profileIdsToApply.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(linkedProfileId))
+            await AutoActivateProfileIfNoneAsync(db, linkedProfileId, cancellationToken);
+        refreshTrigger.TriggerRefresh();
 
         var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
         eventBus.Publish(AppEventKind.ProviderChanged);
@@ -330,6 +374,7 @@ public sealed class ProviderPageService(
             OutputName = profile.OutputName,
             MergeMode = profile.MergeMode,
             Enabled = profile.Enabled,
+            IsActive = profile.IsActive,
         }, null);
     }
 
@@ -351,6 +396,13 @@ public sealed class ProviderPageService(
                 validationErrors["name"] = ["name is required."];
             if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl) && !IsValidHttpUrl(request.XtreamBaseUrl))
                 validationErrors["xtreamBaseUrl"] = ["xtreamBaseUrl must be an http/https URL."];
+            if (!string.IsNullOrWhiteSpace(request.PlaylistUrl)
+                || !string.IsNullOrWhiteSpace(request.XmltvUrl)
+                || !string.IsNullOrWhiteSpace(request.HeadersJson)
+                || !string.IsNullOrWhiteSpace(request.UserAgent))
+            {
+                validationErrors["providerMode"] = ["Xtream providers cannot be updated with playlist/file fields."];
+            }
             if (!string.IsNullOrWhiteSpace(request.Name))
             {
                 var dup = await db.Providers.AsNoTracking()
@@ -360,7 +412,19 @@ public sealed class ProviderPageService(
         }
         else
         {
-            validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(request.XtreamBaseUrl)
+                || !string.IsNullOrWhiteSpace(request.XtreamUsername)
+                || request.XtreamIncludeXmltv)
+            {
+                validationErrors = new Dictionary<string, string[]>
+                {
+                    ["providerMode"] = ["Playlist/file providers cannot be updated with Xtream fields."]
+                };
+            }
+            else
+            {
+                validationErrors = await ValidateProviderRequestAsync(db, request.Name, request.PlaylistUrl, request.XmltvUrl, request.HeadersJson, request.TimeoutSeconds, request.AssociateToProfileIds, providerId, cancellationToken);
+            }
         }
 
         if (validationErrors.Count > 0)
@@ -372,6 +436,7 @@ public sealed class ProviderPageService(
         provider.MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null;
         provider.IncludeVod = request.IncludeVod;
         provider.IncludeSeries = request.IncludeSeries;
+        provider.ForceMpegTs = request.ForceMpegTs;
         provider.UpdatedUtc = DateTime.UtcNow;
 
         if (isXtream)
@@ -440,25 +505,59 @@ public sealed class ProviderPageService(
         if (provider is null)
             return "Provider not found.";
 
-        var channelSources = await db.ChannelSources.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ChannelSources.RemoveRange(channelSources);
-
-        var providerChannels = await db.ProviderChannels.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ProviderChannels.RemoveRange(providerChannels);
-
-        var providerGroups = await db.ProviderGroups.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ProviderGroups.RemoveRange(providerGroups);
-
-        var fetchRuns = await db.FetchRuns.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.FetchRuns.RemoveRange(fetchRuns);
-
-        var profileProviders = await db.ProfileProviders.Where(x => x.ProviderId == providerId).ToListAsync(cancellationToken);
-        db.ProfileProviders.RemoveRange(profileProviders);
-
-        db.Providers.Remove(provider);
-        await db.SaveChangesAsync(cancellationToken);
-
         using var logScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
+        logger.LogInformation("Provider delete started: {ProviderId} '{Name}'.", providerId, provider.Name);
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        var deletedChannelSources = await db.ChannelSources
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} channel_sources removed={DeletedCount}.",
+            providerId,
+            deletedChannelSources);
+
+        var deletedProviderChannels = await db.ProviderChannels
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} provider_channels removed={DeletedCount}.",
+            providerId,
+            deletedProviderChannels);
+
+        var deletedProviderGroups = await db.ProviderGroups
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} provider_groups removed={DeletedCount}.",
+            providerId,
+            deletedProviderGroups);
+
+        var deletedFetchRuns = await db.FetchRuns
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} fetch_runs removed={DeletedCount}.",
+            providerId,
+            deletedFetchRuns);
+
+        var deletedProfileProviders = await db.ProfileProviders
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        logger.LogInformation(
+            "Provider delete progress: {ProviderId} profile_providers removed={DeletedCount}.",
+            providerId,
+            deletedProfileProviders);
+
+        var deletedProviders = await db.Providers
+            .Where(x => x.ProviderId == providerId)
+            .ExecuteDeleteAsync(cancellationToken);
+        if (deletedProviders == 0)
+            return "Provider not found.";
+
+        await transaction.CommitAsync(cancellationToken);
+
         logger.LogInformation("Provider deleted: {ProviderId} '{Name}'.", providerId, provider.Name);
         eventBus.Publish(AppEventKind.ProviderChanged);
 
@@ -481,48 +580,6 @@ public sealed class ProviderPageService(
         using var logScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
         logger.LogInformation("Provider {ProviderId} enabled={Enabled}.", providerId, provider.Enabled);
         eventBus.Publish(AppEventKind.ProviderChanged);
-
-        return null;
-    }
-
-    public async Task<string?> SetProviderActiveAsync(string providerId, bool isActive, CancellationToken cancellationToken)
-    {
-        if (refreshTrigger.IsRefreshing)
-            return "A snapshot refresh is currently in progress. Please wait for it to finish.";
-
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var exists = await db.Providers.AnyAsync(x => x.ProviderId == providerId, cancellationToken);
-        if (!exists)
-            return "Provider not found.";
-
-        var now = DateTime.UtcNow;
-
-        if (isActive)
-        {
-            await db.Providers
-                .Where(x => x.IsActive && x.ProviderId != providerId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(p => p.IsActive, false)
-                    .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
-        }
-
-        await db.Providers
-            .Where(x => x.ProviderId == providerId)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.IsActive, isActive)
-                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
-
-        using var logScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
-        logger.LogInformation("Provider {ProviderId} set active={IsActive}.", providerId, isActive);
-        eventBus.Publish(AppEventKind.ProviderChanged);
-
-        if (isActive)
-        {
-            eventBus.Publish(AppEventKind.ProviderActivated);
-            refreshTrigger.TriggerRefresh();
-        }
 
         return null;
     }
@@ -613,6 +670,27 @@ public sealed class ProviderPageService(
             return 10;
 
         return value is < 1 or > 50 ? null : value;
+    }
+
+    private async Task AutoActivateProfileIfNoneAsync(ApplicationDbContext db, string profileId, CancellationToken cancellationToken)
+    {
+        var hasActive = await db.Profiles
+            .AsNoTracking()
+            .AnyAsync(x => x.IsActive, cancellationToken);
+        if (hasActive)
+            return;
+
+        var now = DateTime.UtcNow;
+        var updated = await db.Profiles
+            .Where(x => x.ProfileId == profileId && x.Enabled)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.IsActive, true)
+                .SetProperty(p => p.UpdatedUtc, now), cancellationToken);
+        if (updated == 0)
+            return;
+
+        eventBus.Publish(AppEventKind.ProviderActivated);
+        refreshTrigger.TriggerRefresh();
     }
 
     private static async Task<Dictionary<string, string[]>> ValidateProviderRequestAsync(
@@ -727,6 +805,21 @@ public sealed class ProviderPageService(
         }
 
         return errors;
+    }
+
+    private static async Task<Profile?> FindUnlinkedProfileByNameAsync(ApplicationDbContext db, string name, CancellationToken cancellationToken)
+    {
+        var profile = await db.Profiles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Name == name, cancellationToken);
+
+        if (profile is null) return null;
+
+        var hasProviders = await db.ProfileProviders
+            .AsNoTracking()
+            .AnyAsync(pp => pp.ProfileId == profile.ProfileId, cancellationToken);
+
+        return hasProviders ? null : profile;
     }
 
     private static async Task<string> GetUniqueProfileNameAsync(ApplicationDbContext db, string baseName, CancellationToken cancellationToken)
@@ -938,11 +1031,11 @@ public sealed class ProviderPageService(
                     HeadersJson = provider.HeadersJson,
                     UserAgent = provider.UserAgent,
                     Enabled = provider.Enabled,
-                    IsActive = provider.IsActive,
                     TimeoutSeconds = provider.TimeoutSeconds,
                     MaxConcurrentStreams = provider.MaxConcurrentStreams,
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,
+                    ForceMpegTs = provider.ForceMpegTs,
                     AssociatedProfileIds = associatedProfileIds,
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,

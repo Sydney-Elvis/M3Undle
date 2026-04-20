@@ -81,7 +81,7 @@ public sealed class HlsProxyService(
                 sourceDescriptor.DisplayName,
                 upstreamM3u8Url);
 
-            var manifestUri = new Uri(upstreamM3u8Url);
+            var manifestUri = response.RequestMessage?.RequestUri ?? new Uri(upstreamM3u8Url);
             return manifestRewriter.Rewrite(content, manifestUri, segUri =>
                 BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString()));
         }
@@ -138,7 +138,7 @@ public sealed class HlsProxyService(
                 var content = await response.Content.ReadAsStringAsync(ct);
                 if (content.TrimStart().StartsWith("#EXTM3U", StringComparison.Ordinal))
                 {
-                    var manifestUri = new Uri(upstreamUrl);
+                    var manifestUri = response.RequestMessage?.RequestUri ?? new Uri(upstreamUrl);
                     var rewritten = manifestRewriter.Rewrite(content, manifestUri, segUri =>
                         BuildProxyUrl(segmentProxyBaseUrl, segUri.ToString()));
 

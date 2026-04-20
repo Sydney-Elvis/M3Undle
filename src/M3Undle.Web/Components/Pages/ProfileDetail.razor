@@ -1,0 +1,342 @@
+@page "/profiles/{ProfileId}"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject ProfilesPageService ProfilesService
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>M3Undle — Profile</PageTitle>
+
+@if (_isLoading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">@_loadError</MudAlert>
+}
+else if (_detail is null)
+{
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+        Profile not found. <MudLink Href="profiles">Back to Profiles</MudLink>
+    </MudAlert>
+}
+else
+{
+    var profile = _detail.Profile;
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-4" Wrap="Wrap.Wrap">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Size="Size.Small"
+                       OnClick="@(() => Nav.NavigateTo("profiles"))" />
+        <MudText Typo="Typo.h5">@profile.Name</MudText>
+        <MudChip T="string" Size="Size.Small"
+                 Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
+                          : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
+                          : Color.Default)">
+            @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
+              : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
+              : "No output")
+        </MudChip>
+        @if (profile.IsActive)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
+                     Icon="@Icons.Material.Filled.Star">Active</MudChip>
+        }
+        @if (!profile.Enabled)
+        {
+            <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+        }
+        <MudSpacer />
+        @if (!profile.IsActive)
+        {
+            <MudTooltip Text="@(profile.Providers.Count == 0 ? "Add a provider before activating this profile" : "")"
+                        Disabled="@(profile.Providers.Count > 0)">
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Success"
+                           Size="Size.Small"
+                           Disabled="@(profile.Providers.Count == 0)"
+                           OnClick="SetActiveAsync">
+                    Set Active
+                </MudButton>
+            </MudTooltip>
+        }
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.FilterList"
+                   Size="Size.Small"
+                   Href="@($"channels/mapping?profile={ProfileId}")">
+            Map Channels
+        </MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.LiveTv"
+                   Size="Size.Small"
+                   Href="@($"channels?profile={ProfileId}")">
+            View Channels
+        </MudButton>
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.Delete"
+                   Color="Color.Error"
+                   Size="Size.Small"
+                   OnClick="ConfirmDeleteAsync">
+            Delete
+        </MudButton>
+    </MudStack>
+
+    <MudGrid Spacing="3">
+        <!-- Identity -->
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.h6" Class="mb-3">Identity</MudText>
+                <MudStack Spacing="2">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Profile Name</MudText>
+                        <MudText Typo="Typo.body1">@profile.Name</MudText>
+                    </MudStack>
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Output Name</MudText>
+                        <MudText Typo="Typo.body1">@profile.OutputName</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            This is the stable identifier used in published URLs (e.g. /m3u/@(profile.OutputName).m3u)
+                        </MudText>
+                    </MudStack>
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Created</MudText>
+                        <MudText Typo="Typo.body2">@profile.CreatedUtc.ToString("u")</MudText>
+                    </MudStack>
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+
+        <!-- Published Output -->
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.h6" Class="mb-3">Published Output</MudText>
+                @if (profile.Providers.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                        No providers linked — link a provider to publish content.
+                    </MudAlert>
+                }
+                else if (profile.LastPublishedUtc.HasValue)
+                {
+                    <MudStack Spacing="2">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                            <MudChip T="string" Color="Color.Primary" Icon="@Icons.Material.Filled.LiveTv">
+                                @profile.LiveCount live
+                            </MudChip>
+                            <MudChip T="string" Color="@(profile.MovieCount > 0 ? Color.Info : Color.Default)"
+                                     Icon="@Icons.Material.Filled.Movie">
+                                @profile.MovieCount movies
+                            </MudChip>
+                            <MudChip T="string" Color="@(profile.SeriesCount > 0 ? Color.Info : Color.Default)"
+                                     Icon="@Icons.Material.Filled.Tv">
+                                @profile.SeriesCount series
+                            </MudChip>
+                        </MudStack>
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Last published</MudText>
+                            <MudText Typo="Typo.body2">@profile.LastPublishedUtc.Value.ToString("u")</MudText>
+                        </MudStack>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                        Not yet published — trigger a refresh to build the first output.
+                    </MudAlert>
+                }
+
+                @if (profile.GroupsPendingReview > 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                        @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review —
+                        <MudLink Href="@($"channels/mapping?profile={ProfileId}")">review now</MudLink>
+                    </MudAlert>
+                }
+                @if (profile.ChannelsPendingReview > 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                        @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review —
+                        <MudLink Href="@($"channels/review?profile={ProfileId}")">review now</MudLink>
+                    </MudAlert>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <!-- Providers -->
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                    <MudText Typo="Typo.h6">Providers</MudText>
+                    <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="providers" Size="Size.Small">
+                        Manage
+                    </MudButton>
+                </MudStack>
+
+                @if (profile.Providers.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                        No providers linked to this profile.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudSimpleTable Dense="true">
+                        <thead>
+                            <tr>
+                                <th>Provider</th>
+                                <th>Priority</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var p in profile.Providers)
+                            {
+                                <tr>
+                                    <td>@p.Name</td>
+                                    <td>@p.Priority</td>
+                                    <td>
+                                        @if (!p.Enabled)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Enabled</MudChip>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <!-- Published History -->
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.h6" Class="mb-3">Published History</MudText>
+
+                @if (_detail.History.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
+                        No published versions yet.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudSimpleTable Dense="true" Hover="true">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Status</th>
+                                <th>Live</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var snap in _detail.History)
+                            {
+                                <tr>
+                                    <td>
+                                        <MudText Typo="Typo.caption">@snap.CreatedUtc.ToString("u")</MudText>
+                                    </td>
+                                    <td>
+                                        <MudChip T="string" Size="Size.Small"
+                                                 Color="@(snap.Status == "active" ? Color.Success
+                                                          : snap.Status == "failed" ? Color.Error
+                                                          : Color.Default)">
+                                            @snap.Status
+                                        </MudChip>
+                                    </td>
+                                    <td>
+                                        <MudText Typo="Typo.caption">@snap.LiveChannelCount.ToString("N0")</MudText>
+                                    </td>
+                                    <td>
+                                        @if (!string.IsNullOrWhiteSpace(snap.ErrorSummary))
+                                        {
+                                            <MudTooltip Text="@snap.ErrorSummary">
+                                                <MudIcon Icon="@Icons.Material.Filled.ErrorOutline"
+                                                         Size="Size.Small" Color="Color.Error" />
+                                            </MudTooltip>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [Parameter]
+    public string ProfileId { get; set; } = string.Empty;
+
+    private ProfileDetailDto? _detail;
+    private bool _isLoading;
+    private string? _loadError;
+
+    private async Task SetActiveAsync()
+    {
+        var name = _detail?.Profile.Name ?? ProfileId;
+        try
+        {
+            var error = await ProfilesService.SetProfileActiveAsync(ProfileId, CancellationToken.None);
+            if (error is not null) { Snackbar.Add(error, Severity.Error); return; }
+            Snackbar.Add($"Profile \"{name}\" is now active.", Severity.Success);
+            _detail = await ProfilesService.GetProfileDetailAsync(ProfileId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to set profile active: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        var name = _detail?.Profile.Name ?? ProfileId;
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Profile",
+            $"Delete \"{name}\"? This will permanently remove the profile, its channel mapping, and all published snapshots. Provider data is not affected.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true) return;
+
+        try
+        {
+            var error = await ProfilesService.DeleteProfileAsync(ProfileId, CancellationToken.None);
+            if (error is not null) { Snackbar.Add(error, Severity.Error); return; }
+            Snackbar.Add($"Profile \"{name}\" deleted.", Severity.Success);
+            Nav.NavigateTo("profiles");
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to delete profile: {ex.Message}", Severity.Error);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isLoading = true;
+        _loadError = null;
+
+        try
+        {
+            _detail = await ProfilesService.GetProfileDetailAsync(ProfileId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load profile: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+}

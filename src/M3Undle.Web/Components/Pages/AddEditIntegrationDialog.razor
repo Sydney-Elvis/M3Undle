@@ -1,0 +1,195 @@
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject IDownstreamIntegrationService IntegrationService
+@inject ISnackbar Snackbar
+
+<MudDialog Style="min-width:640px">
+    <DialogContent>
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+        }
+
+        <MudForm @ref="_form">
+            <MudStack Spacing="3">
+                <MudTextField Label="Name" @bind-Value="_name"
+                              Required="true" RequiredError="Name is required."
+                              HelperText="A friendly label for this integration (e.g. Jellyfin Home)" />
+
+                @if (!IsEdit)
+                {
+                    <MudSelect T="string" Label="Type" @bind-Value="_kind"
+                               Required="true" RequiredError="Type is required."
+                               HelperText="The downstream client type">
+                        <MudSelectItem Value="@("jellyfin")">Jellyfin</MudSelectItem>
+                        <MudSelectItem Value="@("emby")">Emby</MudSelectItem>
+                        <MudSelectItem Value="@("webhook")">Generic Webhook</MudSelectItem>
+                    </MudSelect>
+                }
+                else
+                {
+                    <MudTextField Label="Type" Value="@KindLabel" ReadOnly="true" />
+                }
+
+                <MudTextField Label="Base URL" @bind-Value="_baseUrl"
+                              Required="true" RequiredError="Base URL is required."
+                              HelperText="@BaseUrlHelperText" />
+
+                @if (_kind == "jellyfin" || _kind == "emby")
+                {
+                    <MudTextField Label="@(IsEdit && _hasExistingApiKey ? "API Key (leave blank to keep existing)" : "API Key")"
+                                  @bind-Value="_apiKey"
+                                  InputType="InputType.Password"
+                                  Required="@(!IsEdit)"
+                                  RequiredError="API key is required."
+                                  HelperText="Your Jellyfin or Emby API key" />
+
+                    @if (IsEdit && _hasExistingApiKey)
+                    {
+                        <MudCheckBox @bind-Value="_clearApiKey" Label="Remove stored API key" Color="Color.Warning" />
+                    }
+                }
+                else if (_kind == "webhook")
+                {
+                    <MudTextField Label="Headers JSON (optional)" @bind-Value="_webhookHeadersJson"
+                                  Lines="3"
+                                  HelperText='Extra HTTP headers as JSON, e.g. {"Authorization":"Bearer token123"}' />
+                }
+
+                <MudText Typo="Typo.subtitle2" Class="mt-1">Trigger on</MudText>
+                <MudStack Row="true" Spacing="4">
+                    <MudCheckBox @bind-Value="_triggerOnLineupUpdate" Label="Lineup update" Color="Color.Primary" />
+                    <MudCheckBox @bind-Value="_triggerOnGuideUpdate" Label="Guide update" Color="Color.Primary" />
+                </MudStack>
+
+                <MudSwitch @bind-Value="_enabled" Color="Color.Success" Label="Enabled" />
+            </MudStack>
+        </MudForm>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="SaveAsync" Disabled="_isSaving">
+            @(_isSaving ? "Saving…" : (IsEdit ? "Save Changes" : "Add Integration"))
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public DownstreamIntegrationDto? Integration { get; set; }
+    [Parameter] public EventCallback OnSaved { get; set; }
+
+    private MudForm _form = default!;
+    private string _name = string.Empty;
+    private string _kind = "jellyfin";
+    private string _baseUrl = string.Empty;
+    private string? _apiKey;
+    private bool _clearApiKey;
+    private string? _webhookHeadersJson;
+    private bool _triggerOnLineupUpdate = true;
+    private bool _triggerOnGuideUpdate = true;
+    private bool _enabled = true;
+    private bool _hasExistingApiKey;
+    private bool _isSaving;
+    private string? _error;
+
+    private bool IsEdit => Integration is not null;
+
+    private string KindLabel => _kind switch
+    {
+        "jellyfin" => "Jellyfin",
+        "emby" => "Emby",
+        "webhook" => "Generic Webhook",
+        _ => _kind,
+    };
+
+    private string BaseUrlHelperText => _kind switch
+    {
+        "jellyfin" => "e.g. http://192.168.1.10:8096",
+        "emby" => "e.g. http://192.168.1.10:8096",
+        "webhook" => "Full URL to POST to on update",
+        _ => "Base URL of the client",
+    };
+
+    protected override void OnParametersSet()
+    {
+        if (Integration is not null)
+        {
+            _name = Integration.Name;
+            _kind = Integration.Kind;
+            _baseUrl = Integration.BaseUrl;
+            _webhookHeadersJson = Integration.WebhookHeadersJson;
+            _triggerOnLineupUpdate = Integration.TriggerOnLineupUpdate;
+            _triggerOnGuideUpdate = Integration.TriggerOnGuideUpdate;
+            _enabled = Integration.Enabled;
+            _hasExistingApiKey = Integration.HasApiKey;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SaveAsync()
+    {
+        await _form.ValidateAsync();
+        if (!_form.IsValid) return;
+
+        _isSaving = true;
+        _error = null;
+
+        try
+        {
+            string? error;
+            if (IsEdit)
+            {
+                var req = new UpdateDownstreamIntegrationRequest
+                {
+                    Name = _name,
+                    BaseUrl = _baseUrl,
+                    ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
+                    ClearApiKey = _clearApiKey,
+                    WebhookHeadersJson = _webhookHeadersJson,
+                    TriggerOnLineupUpdate = _triggerOnLineupUpdate,
+                    TriggerOnGuideUpdate = _triggerOnGuideUpdate,
+                    Enabled = _enabled,
+                };
+                (_, error) = await IntegrationService.UpdateAsync(Integration!.DownstreamIntegrationId, req, CancellationToken.None);
+            }
+            else
+            {
+                var req = new CreateDownstreamIntegrationRequest
+                {
+                    Name = _name,
+                    Kind = _kind,
+                    BaseUrl = _baseUrl,
+                    ApiKey = string.IsNullOrWhiteSpace(_apiKey) ? null : _apiKey,
+                    WebhookHeadersJson = _webhookHeadersJson,
+                    TriggerOnLineupUpdate = _triggerOnLineupUpdate,
+                    TriggerOnGuideUpdate = _triggerOnGuideUpdate,
+                    Enabled = _enabled,
+                };
+                (_, error) = await IntegrationService.CreateAsync(req, CancellationToken.None);
+            }
+
+            if (error is not null)
+            {
+                _error = error;
+                return;
+            }
+
+            Snackbar.Add(IsEdit ? "Integration updated." : "Integration added.", Severity.Success);
+            MudDialog.Close();
+            if (OnSaved.HasDelegate)
+                await OnSaved.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to save: {ex.Message}";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+}

@@ -23,7 +23,8 @@ Primary published endpoints:
 - Alpha 2: complete
 - Alpha 3: complete
 - Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; DVR client validation (Plex/Emby/Jellyfin) moved to Beta
-- Alpha 5: planned
+- Alpha 5: in progress — most items complete; active profile switching and lineup status in final polish
+- Alpha 6: planned — per-provider gateway/VPN support
 - Beta: hardening and release prep
 
 ## Release Milestones
@@ -45,7 +46,7 @@ Status: Complete.
 #### Provider Configuration UI
 - [x] List / add / edit providers
 - [x] Playlist URL + optional EPG URL
-- [x] Active toggle (one active provider at a time)
+- [x] Publish-target toggle (later replaced by the active-profile model)
 - [x] Associate provider to profile
 - [x] Inline profile creation from provider edit flow
 - [x] Auto-create profile on import
@@ -152,7 +153,6 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
   `GET /discover.json`, `GET /lineup.json`, `GET /lineup_status.json`, discovery service, device identity, lineup rendering tests
 - [x] Number of tuners setting in user-facing configuration
 - [x] Connection limiting via HDHomeRun tuner-slot enforcement keyed by `VirtualTunerId` from endpoint binding; same-tuner retunes replace prior subscriber instead of consuming another slot
-- [ ] End-to-end validation with Plex, Emby, and Jellyfin *(moved to Beta — see BETA_VALIDATION_CHECKLIST.md)*
 
 #### EPG Sources
 - [x] EPG source management UI + API (multiple sources per provider, test fetch, auto-map, manual mapping)
@@ -165,19 +165,45 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
 ### Alpha 5 — Remaining Features
 Goal: Finish remaining lineup-management features before Beta hardening.
 
-Status: Planned. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
+Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 
-- [ ] Channel reorder (explicit sort position) — #3
-- [ ] Custom `tvg-id` override per channel
-- [ ] Configurable refresh schedule in Settings UI
-- [ ] New channels inbox / review queue
-- [ ] Dynamic groups for rotating/event feeds
-- [ ] Provider switch assistance
-- [ ] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
-
+- [x] Channel reorder (explicit sort position via Number Manager) — #3
+- [x] Custom `tvg-id` override per channel (lock-gated field in channel edit dialog)
+- [x] Full channel numbering rules (see `../design/NUMBERING_RULES.md`)
+- [x] Dashboard redesign — health dashboard with Published Output, Published Profiles, Action Items, Output URLs sections
+- [x] Profiles UX — `/profiles` list page and profile detail page (display name, output name, provider membership, published history)
+- [x] Active profile switching — switch active profile from the UI with visible status feedback
+- [x] Terminology cleanup — snapshot language scrubbed from user-facing UI; lineup/published-version language throughout
+- [x] HLS playback for JavaScript/browser clients (GeneratedHls compatibility layer)
+- [x] CORS support for external network access
+- [x] Configurable refresh schedule in Settings UI — per-provider and global intervals via `RefreshScheduleService`
+- [x] New channels inbox / review queue
+- [x] Dynamic groups for rotating/event feeds
+- [x] Downstream integrations — notify Jellyfin/Emby when the lineup changes (webhook + native adapter); snapshot change classification to suppress notifications for no-op refreshes
+- [x] Lineup status service — real-time status display for active profile state and switching feedback
+  - [x] Active-profile-scoped status payload: include active profile identity, serving provider, published snapshot/version, last refresh result, and refresh/switch state
+  - [x] Correct status resolution: derive lineup state from the active profile's published snapshot, not any active snapshot in the database
+  - [x] Explicit switch lifecycle feedback: requested, refresh/build in progress, complete, failed while serving last known-good
+  - [x] Dashboard polish: show which profile is currently serving at the published output URLs and whether a switch is pending or degraded
+  - [x] `/status` and readiness semantics aligned with the active profile state
+  - [x] Regression coverage for multi-profile status cases: inactive profiles with retained snapshots, successful switch, failed switch, and no-active-profile state
 
 > See the Alpha 5 validation checklist for concrete acceptance criteria:
 > `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`
+
+### Alpha 6 — Per-Provider Gateway Support, Xtream Auto-Detection & System Events
+Goal: Per-provider gateway/VPN routing with Block and Fallback modes. Xtream Codes auto-detection at provider add time with explicit user mode selection. System event infrastructure with nav bar badge for diagnostic visibility. Gateway documentation and companion gateway project remain insiders features.
+
+Status: Planned.
+
+- [ ] Per-provider gateway/VPN routing (Block and Fallback modes)
+- [ ] Xtream Codes auto-detection at provider add time
+- [ ] System event badge (nav bar, in-memory, diagnostic)
+
+See implementation plans:
+- [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/AUTOMATION_LAB_INTEGRATION_PLAN.md) — automation lab integration (provider seed, readiness endpoints, streaming test scenarios)
+- [XTREM_PROVIDER_DETECTION.md](../../.ai_docs/XTREM_PROVIDER_DETECTION.md) — Xtream auto-detection
+- [EVENT_BADGE_SYSTEM.md](../../.ai_docs/EVENT_BADGE_SYSTEM.md) — system event badge
 
 ### Beta — Hardening & Release Prep
 Goal: No major feature additions. Stabilize, validate, and document.

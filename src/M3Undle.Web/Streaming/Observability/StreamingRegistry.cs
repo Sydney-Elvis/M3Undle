@@ -13,7 +13,11 @@ public sealed class StreamingRegistry(IOptions<StreamProxyOptions> options)
     private readonly ConcurrentQueue<(DateTimeOffset EndedUtc, StreamSessionSnapshot Snapshot)> _recentEnded = new();
 
     public IReadOnlyList<StreamSessionSnapshot> GetActiveSessions()
-        => _sessions.Values.OrderBy(x => x.StartedUtc).ToArray();
+        => _sessions.Values
+            .Where(x => !x.IsInternal)
+            .Select(AggregateVisibleSession)
+            .OrderBy(x => x.StartedUtc)
+            .ToArray();
 
     public IReadOnlyList<StreamSessionSnapshot> GetRecentEndedSessions()
     {
@@ -22,10 +26,12 @@ public sealed class StreamingRegistry(IOptions<StreamProxyOptions> options)
     }
 
     public StreamSessionSnapshot? TryGetSession(string sessionId)
-        => _sessions.TryGetValue(sessionId, out var snapshot) ? snapshot : null;
+        => _sessions.TryGetValue(sessionId, out var snapshot)
+            ? snapshot.IsInternal ? snapshot : AggregateVisibleSession(snapshot)
+            : null;
 
     public IReadOnlyList<StreamClientSnapshot> GetActiveClients()
-        => _clients.Values.OrderBy(x => x.ConnectedUtc).ToArray();
+        => _clients.Values.Where(x => !x.IsInternal).OrderBy(x => x.ConnectedUtc).ToArray();
 
     public IReadOnlyList<StreamProviderSnapshot> GetActiveProviderStreams()
         => _providers.Values.OrderBy(x => x.SessionId).ToArray();
@@ -40,7 +46,8 @@ public sealed class StreamingRegistry(IOptions<StreamProxyOptions> options)
     {
         if (_sessions.TryRemove(sessionId, out var snapshot))
         {
-            _recentEnded.Enqueue((DateTimeOffset.UtcNow, snapshot));
+            if (!snapshot.IsInternal)
+                _recentEnded.Enqueue((DateTimeOffset.UtcNow, snapshot));
         }
 
         _providers.TryRemove(sessionId, out _);
@@ -73,6 +80,25 @@ public sealed class StreamingRegistry(IOptions<StreamProxyOptions> options)
         {
             _recentEnded.TryDequeue(out _);
         }
+    }
+
+    private StreamSessionSnapshot AggregateVisibleSession(StreamSessionSnapshot snapshot)
+    {
+        var additionalSubscribers = _sessions.Values
+            .Where(x => x.IsInternal
+                && !string.IsNullOrWhiteSpace(x.ParentStreamSessionId)
+                && string.Equals(x.ParentStreamSessionId, snapshot.SessionId, StringComparison.Ordinal))
+            .Sum(x => x.SubscriberCount);
+
+        if (additionalSubscribers == 0)
+            return snapshot;
+
+        var totalSubscribers = snapshot.SubscriberCount + additionalSubscribers;
+        return snapshot with
+        {
+            SubscriberCount = totalSubscribers,
+            IsShared = totalSubscribers > 1,
+        };
     }
 }
 

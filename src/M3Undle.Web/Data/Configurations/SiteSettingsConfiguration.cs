@@ -66,9 +66,25 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.HdhrSiliconDustDiscoveryEnabled)
             .HasColumnName("hdhr_silicondust_discovery_enabled")
             .HasDefaultValue(true);
+        builder.Property(s => s.HdhrFriendlyName)
+            .HasColumnName("hdhr_friendly_name");
         builder.Property(s => s.HdhrSettingsRestartRequired)
             .HasColumnName("hdhr_settings_restart_required")
             .HasDefaultValue(false);
+        builder.Property(s => s.GeneratedHlsEnabled)
+            .HasColumnName("generated_hls_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.GeneratedHlsFfmpegPath)
+            .HasColumnName("generated_hls_ffmpeg_path");
+        builder.Property(s => s.GeneratedHlsSettingsRestartRequired)
+            .HasColumnName("generated_hls_settings_restart_required")
+            .HasDefaultValue(false);
+        builder.Property(s => s.RefreshScheduleKind)
+            .HasColumnName("refresh_schedule_kind")
+            .HasDefaultValue("6h");
+        builder.Property(s => s.RefreshStartupCatchup)
+            .HasColumnName("refresh_startup_catchup")
+            .HasDefaultValue(true);
 
         builder.HasData(new SiteSettings
         {
@@ -92,7 +108,13 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             HdhrDiscoveryEnabled = true,
             HdhrSsdpEnabled = true,
             HdhrSiliconDustDiscoveryEnabled = true,
+            HdhrFriendlyName = null,
             HdhrSettingsRestartRequired = false,
+            GeneratedHlsEnabled = true,
+            GeneratedHlsFfmpegPath = null,
+            GeneratedHlsSettingsRestartRequired = false,
+            RefreshScheduleKind = "6h",
+            RefreshStartupCatchup = true,
         });
     }
 }

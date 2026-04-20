@@ -22,6 +22,13 @@ public sealed class ProviderChannelConfiguration : IEntityTypeConfiguration<Prov
         builder.Property(x => x.GroupTitle).HasColumnName("group_title");
         builder.Property(x => x.ProviderGroupId).HasColumnName("provider_group_id");
         builder.Property(x => x.IsEvent).HasColumnName("is_event").IsRequired();
+        builder.Property(x => x.IsPlaceholder).HasColumnName("is_placeholder").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.EventSlotKey).HasColumnName("event_slot_key");
+        builder.Property(x => x.EventContentKey).HasColumnName("event_content_key");
+        builder.Property(x => x.EventTitle).HasColumnName("event_title");
+        builder.Property(x => x.EventSport).HasColumnName("event_sport");
+        builder.Property(x => x.EventLeague).HasColumnName("event_league");
+        builder.Property(x => x.EventParticipantsJson).HasColumnName("event_participants_json");
         builder.Property(x => x.EventStartUtc).HasColumnName("event_start_utc");
         builder.Property(x => x.EventEndUtc).HasColumnName("event_end_utc");
         builder.Property(x => x.FirstSeenUtc).HasColumnName("first_seen_utc").IsRequired();
@@ -40,6 +47,11 @@ public sealed class ProviderChannelConfiguration : IEntityTypeConfiguration<Prov
             .IsDescending(false, true);
         builder.HasIndex(x => new { x.ProviderId, x.IsEvent, x.EventStartUtc })
             .HasDatabaseName("idx_provider_channels_is_event");
+        builder.HasIndex(x => new { x.ProviderId, x.IsPlaceholder, x.Active })
+            .HasDatabaseName("idx_provider_channels_placeholder_active");
+        builder.HasIndex(x => new { x.ProviderId, x.EventContentKey })
+            .HasDatabaseName("idx_provider_channels_event_content")
+            .HasFilter("event_content_key IS NOT NULL");
 
         builder.HasOne(x => x.Provider)
             .WithMany(x => x.ProviderChannels)

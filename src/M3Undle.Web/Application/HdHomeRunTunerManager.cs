@@ -37,7 +37,10 @@ public sealed class HdHomeRunTunerManager(
         {
             _leases.TryGetValue(virtualTunerId, out var priorLease);
             if (priorLease is not null)
+            {
+                DisposeLeaseResources(priorLease);
                 _leases.Remove(virtualTunerId);
+            }
 
             var streamLimit = ResolveStreamLimit();
             if (streamLimit is not null && priorLease is null && _leases.Count >= streamLimit.Value)
@@ -55,7 +58,14 @@ public sealed class HdHomeRunTunerManager(
                 StreamKey: streamKey,
                 ReservedUtc: DateTimeOffset.UtcNow);
 
-            _leases[virtualTunerId] = new TunerLease(reservation, ChannelName: null, ClientId: null, ActivatedUtc: null, Subscriber: null);
+            _leases[virtualTunerId] = new TunerLease(
+                reservation,
+                ChannelName: null,
+                ClientId: null,
+                ActivatedUtc: null,
+                Subscriber: null,
+                SessionRetention: null,
+                PendingReleaseCts: null);
 
             return new HdHomeRunTunerAcquireResult(
                 Succeeded: true,
@@ -94,7 +104,14 @@ public sealed class HdHomeRunTunerManager(
                     StreamKey: streamKey,
                     ReservedUtc: DateTimeOffset.UtcNow);
 
-                _leases[tunerId] = new TunerLease(reservation, ChannelName: null, ClientId: null, ActivatedUtc: null, Subscriber: null);
+                _leases[tunerId] = new TunerLease(
+                    reservation,
+                    ChannelName: null,
+                    ClientId: null,
+                    ActivatedUtc: null,
+                    Subscriber: null,
+                    SessionRetention: null,
+                    PendingReleaseCts: null);
 
                 return new HdHomeRunTunerAcquireResult(
                     Succeeded: true,
@@ -116,15 +133,24 @@ public sealed class HdHomeRunTunerManager(
 
     internal static string FormatTunerId(int tunerIndex) => $"tuner{tunerIndex}";
 
-    public void Activate(HdHomeRunTunerReservation reservation, SubscriberConnection subscriber, string? channelName)
+    public void Activate(
+        HdHomeRunTunerReservation reservation,
+        SubscriberConnection subscriber,
+        string? channelName,
+        IDisposable? sessionRetention = null)
     {
         lock (_lock)
         {
             if (!_leases.TryGetValue(reservation.VirtualTunerId, out var lease) ||
                 lease.Reservation.ReservationId != reservation.ReservationId)
             {
+                sessionRetention?.Dispose();
                 return;
             }
+
+            lease.PendingReleaseCts?.Cancel();
+            lease.PendingReleaseCts?.Dispose();
+            lease.SessionRetention?.Dispose();
 
             _leases[reservation.VirtualTunerId] = lease with
             {
@@ -132,12 +158,17 @@ public sealed class HdHomeRunTunerManager(
                 ClientId = subscriber.ClientId,
                 ActivatedUtc = DateTimeOffset.UtcNow,
                 Subscriber = subscriber,
+                SessionRetention = sessionRetention,
+                PendingReleaseCts = null,
             };
         }
     }
 
     public void Release(string reservationId, string? clientId = null)
     {
+        IDisposable? retention = null;
+        CancellationTokenSource? pendingReleaseCts = null;
+
         lock (_lock)
         {
             var kvp = _leases.FirstOrDefault(x => x.Value.Reservation.ReservationId == reservationId);
@@ -148,7 +179,79 @@ public sealed class HdHomeRunTunerManager(
                 return;
 
             _leases.Remove(kvp.Key);
+            retention = kvp.Value.SessionRetention;
+            pendingReleaseCts = kvp.Value.PendingReleaseCts;
         }
+
+        pendingReleaseCts?.Cancel();
+        pendingReleaseCts?.Dispose();
+        retention?.Dispose();
+    }
+
+    public void ReleaseWithGrace(string reservationId, TimeSpan grace, string? clientId = null)
+    {
+        if (grace <= TimeSpan.Zero)
+        {
+            Release(reservationId, clientId);
+            return;
+        }
+
+        string? tunerId = null;
+        CancellationTokenSource? priorPendingReleaseCts = null;
+        CancellationTokenSource? nextPendingReleaseCts = null;
+
+        lock (_lock)
+        {
+            var kvp = _leases.FirstOrDefault(x => x.Value.Reservation.ReservationId == reservationId);
+            if (string.IsNullOrWhiteSpace(kvp.Key))
+                return;
+
+            if (clientId is not null && kvp.Value.ClientId is not null && !string.Equals(kvp.Value.ClientId, clientId, StringComparison.Ordinal))
+                return;
+
+            tunerId = kvp.Key;
+            priorPendingReleaseCts = kvp.Value.PendingReleaseCts;
+            nextPendingReleaseCts = new CancellationTokenSource();
+
+            _leases[tunerId] = kvp.Value with { PendingReleaseCts = nextPendingReleaseCts };
+        }
+
+        priorPendingReleaseCts?.Cancel();
+        priorPendingReleaseCts?.Dispose();
+
+        _ = Task.Run(async () =>
+        {
+            IDisposable? retention = null;
+
+            try
+            {
+                await Task.Delay(grace, nextPendingReleaseCts!.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            finally
+            {
+                nextPendingReleaseCts.Dispose();
+            }
+
+            lock (_lock)
+            {
+                if (tunerId is null
+                    || !_leases.TryGetValue(tunerId, out var current)
+                    || current.Reservation.ReservationId != reservationId
+                    || !ReferenceEquals(current.PendingReleaseCts, nextPendingReleaseCts))
+                {
+                    return;
+                }
+
+                _leases.Remove(tunerId);
+                retention = current.SessionRetention;
+            }
+
+            retention?.Dispose();
+        });
     }
 
     public IReadOnlyList<HdHomeRunTunerLeaseSnapshot> GetActiveLeases()
@@ -170,10 +273,19 @@ public sealed class HdHomeRunTunerManager(
 
     private int? ResolveStreamLimit() => tunerCountResolver.ResolveStreamLimit();
 
+    private static void DisposeLeaseResources(TunerLease lease)
+    {
+        lease.PendingReleaseCts?.Cancel();
+        lease.PendingReleaseCts?.Dispose();
+        lease.SessionRetention?.Dispose();
+    }
+
     private sealed record TunerLease(
         HdHomeRunTunerReservation Reservation,
         string? ChannelName,
         string? ClientId,
         DateTimeOffset? ActivatedUtc,
-        SubscriberConnection? Subscriber);
+        SubscriberConnection? Subscriber,
+        IDisposable? SessionRetention,
+        CancellationTokenSource? PendingReleaseCts);
 }

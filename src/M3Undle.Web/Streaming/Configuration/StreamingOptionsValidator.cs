@@ -64,3 +64,42 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
             : ValidateOptionsResult.Fail(errors);
     }
 }
+
+public sealed class GeneratedHlsOptionsValidator : IValidateOptions<GeneratedHlsOptions>
+{
+    public ValidateOptionsResult Validate(string? name, GeneratedHlsOptions options)
+    {
+        var errors = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(options.Directory))
+            errors.Add("Streaming:GeneratedHls:Directory must be set.");
+
+        if (string.IsNullOrWhiteSpace(options.FfmpegPath))
+            errors.Add("Streaming:GeneratedHls:FfmpegPath must be set.");
+
+        if (options.SegmentDurationSeconds <= 0)
+            errors.Add("Streaming:GeneratedHls:SegmentDurationSeconds must be greater than zero.");
+
+        if (options.PlaylistSize <= 0)
+            errors.Add("Streaming:GeneratedHls:PlaylistSize must be greater than zero.");
+
+        if (options.DeleteThreshold < 1)
+            errors.Add("Streaming:GeneratedHls:DeleteThreshold must be greater than or equal to 1.");
+
+        if (options.StartupTimeoutSeconds <= 0)
+            errors.Add("Streaming:GeneratedHls:StartupTimeoutSeconds must be greater than zero.");
+
+        if (options.InactivityTimeoutSeconds <= 0)
+            errors.Add("Streaming:GeneratedHls:InactivityTimeoutSeconds must be greater than zero.");
+
+        if (options.CleanupIntervalSeconds <= 0)
+            errors.Add("Streaming:GeneratedHls:CleanupIntervalSeconds must be greater than zero.");
+
+        if (options.StartupStaleAgeHours <= 0)
+            errors.Add("Streaming:GeneratedHls:StartupStaleAgeHours must be greater than zero.");
+
+        return errors.Count == 0
+            ? ValidateOptionsResult.Success
+            : ValidateOptionsResult.Fail(errors);
+    }
+}

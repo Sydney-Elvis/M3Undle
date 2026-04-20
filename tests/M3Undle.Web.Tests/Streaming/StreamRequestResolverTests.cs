@@ -31,7 +31,7 @@ public sealed class StreamRequestResolverTests
     }
 
     [TestMethod]
-    public async Task ResolveAsync_MovieRoute_StaysDirectRelay()
+    public async Task ResolveAsync_MovieRoute_StaysDirectRelay_AndStillProvidesSourceDescriptor()
     {
         await using var fixture = await TestFixture.CreateAsync();
         var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
@@ -41,7 +41,9 @@ public sealed class StreamRequestResolverTests
 
         Assert.IsTrue(result.IsSuccess);
         Assert.IsFalse(result.UseSharedSession);
-        Assert.IsNull(result.SourceDescriptor);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
         Assert.IsNotNull(result.Entry);
     }
 
@@ -56,6 +58,72 @@ public sealed class StreamRequestResolverTests
 
         Assert.IsTrue(result.IsSuccess);
         Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_HdhrPrefixedNativeTunerRoute_ReturnsSharedSessionDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/hdhr/tuner0/v101", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_HdhrAutoRoute_ReturnsSharedSessionDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/hdhr/auto/v1002", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_AutoRoute_ReturnsSharedSessionDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/auto/v1002", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsTrue(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_HlsProxyRoute_ReturnsDirectRelayWithDescriptor()
+    {
+        // Regression: /hls/{streamKey}/proxy was falling through to DirectRelay (no descriptor),
+        // causing ServeHlsProxyAsync to return 404 on every segment request.
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/hls/key-live/proxy", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsFalse(result.UseSharedSession);
         Assert.IsNotNull(result.SourceDescriptor);
         Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
         Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
@@ -121,7 +189,6 @@ public sealed class StreamRequestResolverTests
                 ProviderId = "provider-1",
                 Name = "Provider 1",
                 Enabled = true,
-                IsActive = true,
                 PlaylistUrl = "http://provider.test/playlist.m3u",
                 TimeoutSeconds = 30,
                 CreatedUtc = DateTime.UtcNow,

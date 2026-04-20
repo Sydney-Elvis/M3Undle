@@ -6,7 +6,6 @@ public sealed class ProviderListItemDto
 {
     public string ProviderId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
 }
 
 public sealed class ProfileListItemDto
@@ -16,6 +15,7 @@ public sealed class ProfileListItemDto
     public string OutputName { get; set; } = string.Empty;
     public string MergeMode { get; set; } = string.Empty;
     public bool Enabled { get; set; }
+    public bool IsActive { get; set; }
 }
 
 public sealed class ProviderLastRefreshDto
@@ -44,11 +44,11 @@ public sealed class ProviderDto
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public bool Enabled { get; set; }
-    public bool IsActive { get; set; }
     public int TimeoutSeconds { get; set; }
     public int? MaxConcurrentStreams { get; set; }
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+    public bool ForceMpegTs { get; set; }
     public List<string> AssociatedProfileIds { get; set; } = [];
     public ProviderLastRefreshDto? LastRefresh { get; set; }
     public List<ProviderLatestSnapshotDto> LatestSnapshots { get; set; } = [];
@@ -80,6 +80,7 @@ public sealed class CreateProviderRequest
     public bool Enabled { get; set; } = true;
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+    public bool ForceMpegTs { get; set; }
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
@@ -110,6 +111,7 @@ public sealed class UpdateProviderRequest
     public bool Enabled { get; set; }
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+    public bool ForceMpegTs { get; set; }
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
@@ -201,18 +203,6 @@ public sealed class RefreshPreviewRequest
     public string? GroupContains { get; set; }
 }
 
-public sealed class SetProviderActiveRequest
-{
-    public bool IsActive { get; set; }
-}
-
-public sealed class ProviderActiveResponse
-{
-    public string ProviderId { get; set; } = string.Empty;
-    public bool IsActive { get; set; }
-    public DateTime UpdatedUtc { get; set; }
-}
-
 public sealed class ConfigYamlProviderDto
 {
     public string Name { get; set; } = string.Empty;
@@ -231,6 +221,9 @@ public sealed class ImportConfigProviderRequest
 
     [Range(1, 100)]
     public int? MaxConcurrentStreams { get; set; }
+
+    public List<string>? AssociateToProfileIds { get; set; }
+    public bool ImportAsXtream { get; set; }
 }
 
 public sealed class CreateProfileRequest

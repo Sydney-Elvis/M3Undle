@@ -238,6 +238,7 @@ public static class HdHomeRunEndpoints
         HdHomeRunDeviceService deviceService,
         ILineupRenderer lineupRenderer,
         HdHomeRunLineupService lineupService,
+        IRefreshTrigger refreshTrigger,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
@@ -248,13 +249,20 @@ public static class HdHomeRunEndpoints
         using var scope = BeginHdhrScope(logger);
 
         var channelCount = 0;
+        var isRefreshing = refreshTrigger.IsRefreshing;
         var status = "No active snapshot";
 
         var lineupResult = await TryBuildHdhrLineupAsync(context, deviceService, lineupRenderer, lineupService, cancellationToken);
         if (lineupResult.Succeeded)
         {
             channelCount = lineupResult.Lineup!.Channels.Count;
-            status = $"Ready ({channelCount} channels)";
+            status = isRefreshing
+                ? $"Refreshing ({channelCount} channels)"
+                : $"Ready ({channelCount} channels)";
+        }
+        else if (isRefreshing)
+        {
+            status = "Scanning for channels";
         }
         else if (lineupResult.ErrorResult is IStatusCodeHttpResult { StatusCode: StatusCodes.Status503ServiceUnavailable })
         {
@@ -262,7 +270,7 @@ public static class HdHomeRunEndpoints
         }
 
         var payload = new LineupStatusResponse(
-            ScanInProgress: 0,
+            ScanInProgress: isRefreshing ? 1 : 0,
             ScanPossible: 1,
             Source: "Cable",
             SourceList: ["Cable"],

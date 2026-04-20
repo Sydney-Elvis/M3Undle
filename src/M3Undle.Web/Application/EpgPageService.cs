@@ -26,18 +26,35 @@ public sealed class EpgPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        return await db.Providers
+        var activeProfileId = await db.Profiles
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .Select(x => x.ProfileId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var query = db.Providers
             .AsNoTracking()
             .Where(x => x.Enabled)
-            .OrderByDescending(x => x.IsActive)  // active provider first
-            .ThenBy(x => x.Name)
+            .GroupJoin(
+                db.ProfileProviders.AsNoTracking()
+                    .Where(pp => pp.Enabled && pp.ProfileId == activeProfileId),
+                p => p.ProviderId,
+                pp => pp.ProviderId,
+                (p, links) => new
+                {
+                    Provider = p,
+                    Link = links.OrderBy(l => l.Priority).FirstOrDefault(),
+                })
+            .OrderBy(x => x.Link == null ? 1 : 0)
+            .ThenBy(x => x.Link!.Priority)
+            .ThenBy(x => x.Provider.Name)
             .Select(x => new ProviderListItemDto
             {
-                ProviderId = x.ProviderId,
-                Name = x.Name,
-                IsActive = x.IsActive,
-            })
-            .ToListAsync(cancellationToken);
+                ProviderId = x.Provider.ProviderId,
+                Name = x.Provider.Name,
+            });
+
+        return await query.ToListAsync(cancellationToken);
     }
 
     public async Task<List<EpgSourceDto>> GetSourcesAsync(string? providerId, CancellationToken cancellationToken)
@@ -118,6 +135,7 @@ public sealed class EpgPageService(
             HeadersJson = request.HeadersJson?.Trim(),
             UserAgent = request.UserAgent?.Trim(),
             TimeoutSeconds = request.TimeoutSeconds > 0 ? request.TimeoutSeconds : 30,
+            RefreshIntervalHours = request.RefreshIntervalHours,
             CreatedUtc = now,
             UpdatedUtc = now,
         };
@@ -145,6 +163,8 @@ public sealed class EpgPageService(
         if (request.UserAgent is not null) source.UserAgent = request.UserAgent.Trim();
         if (request.TimeoutSeconds.HasValue)
             source.TimeoutSeconds = request.TimeoutSeconds.Value > 0 ? request.TimeoutSeconds.Value : 30;
+        if (request.RefreshIntervalHoursSet)
+            source.RefreshIntervalHours = request.RefreshIntervalHours;
 
         source.UpdatedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
@@ -385,11 +405,12 @@ public sealed class EpgPageService(
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
         // Only show channels that are selected for output in this profile:
-        // ProfileGroupChannelFilter → ProfileGroupFilter where Decision == "hold" and ProfileId == profileId
+        // ProfileGroupChannelFilter → ProfileGroupFilter where group is included for this profile.
         var configuredChannelIds = await db.ProfileGroupChannelFilters
             .AsNoTracking()
             .Where(f => f.ProfileGroupFilter.ProfileId == profileId &&
-                        f.ProfileGroupFilter.Decision == "hold")
+                        f.State == LineupReviewSemantics.ChannelStateIncluded &&
+                        f.ProfileGroupFilter.Decision != LineupReviewSemantics.GroupDecisionExclude)
             .Select(f => f.ProviderChannelId)
             .Distinct()
             .ToListAsync(cancellationToken);
@@ -532,6 +553,7 @@ public sealed class EpgPageService(
         TimeoutSeconds = s.TimeoutSeconds,
         LastSuccessUtc = s.LastSuccessUtc,
         LastFailureUtc = s.LastFailureUtc,
+        RefreshIntervalHours = s.RefreshIntervalHours,
         CreatedUtc = s.CreatedUtc,
         UpdatedUtc = s.UpdatedUtc,
     };

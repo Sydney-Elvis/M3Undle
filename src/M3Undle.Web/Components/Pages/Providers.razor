@@ -16,7 +16,8 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary">Configure upstream playlists, associate a profile, and preview discovered groups/channels.</MudText>
         </MudStack>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
-                   OnClick="OpenAddDialogAsync">Add Provider</MudButton>
+                   OnClick="OpenAddDialogAsync"
+                   Disabled="@_isDeletingProvider">Add Provider</MudButton>
     </MudStack>
 </MudPaper>
 
@@ -25,7 +26,17 @@
     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
             <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-            <span>Snapshot refresh in progress — Delete, Set Active, and Preview are disabled until it completes.</span>
+            <span>Lineup refresh in progress — Delete and Preview are disabled until it completes.</span>
+        </MudStack>
+    </MudAlert>
+}
+
+@if (_isDeletingProvider)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            <span>Deleting provider "@_deletingProviderName" — this can take a while for large providers.</span>
         </MudStack>
     </MudAlert>
 }
@@ -38,7 +49,7 @@
 <MudPaper Class="pa-4" Elevation="1">
     <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
         <MudText Typo="Typo.h6">Configured Providers</MudText>
-        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="_isLoading">Reload</MudButton>
+        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="@(_isLoading || _isDeletingProvider)">Reload</MudButton>
     </MudStack>
 
     @if (_isLoading)
@@ -54,47 +65,64 @@
         <MudTable Items="_providers" Hover="true" Dense="true">
             <HeaderContent>
                 <MudTh>Name</MudTh>
+                <MudTh>Profile</MudTh>
                 <MudTh>Enabled</MudTh>
+                <MudTh>Max Streams</MudTh>
                 <MudTh>Last Refresh</MudTh>
-                <MudTh>Snapshots</MudTh>
-                <MudTh>Active</MudTh>
+                <MudTh>Published</MudTh>
+                <MudTh>Status</MudTh>
                 <MudTh>Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd>@context.Name</MudTd>
-                <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
-                <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
-                <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
                 <MudTd>
-                    @if (context.IsActive)
+                    @if (context.AssociatedProfileIds.Count == 0)
                     {
-                        @if (context.LastRefresh?.Status == "fail")
-                        {
-                            @if (context.LatestSnapshots.Any(s => s.Status == "active"))
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
-                            }
-                            else
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
-                            }
-                        }
-                        else
-                        {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled">Active</MudChip>
-                        }
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">None</MudText>
                     }
                     else
                     {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" OnClick="() => SetActiveAsync(context)" Disabled="@_isRefreshing">Set Active</MudButton>
+                        @foreach (var id in context.AssociatedProfileIds)
+                        {
+                            var profileName = _profiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id;
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined" Href="@($"/profiles/{id}")">@profileName</MudChip>
+                        }
+                    }
+                </MudTd>
+                <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
+                <MudTd>@(context.MaxConcurrentStreams?.ToString() ?? "—")</MudTd>
+                <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
+                <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
+                <MudTd>
+                    @if (context.LastRefresh?.Status == "fail")
+                    {
+                        @if (context.LatestSnapshots.Any(s => s.Status == "active"))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
+                        }
+                    }
+                    else if (context.LatestSnapshots.Any(s => s.Status == "active"))
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip>
                     }
                 </MudTd>
                 <MudTd>
                     <MudStack Row="true" Spacing="1">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" />
-                        <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" />
-                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@_isRefreshing" />
-                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@_isRefreshing">Preview</MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        @if (_deletingProviderId == context.ProviderId)
+                        {
+                            <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Error" />
+                        }
+                        else
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        }
+                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@IsProviderActionDisabled(context)">Preview</MudButton>
                     </MudStack>
                 </MudTd>
             </RowTemplate>
@@ -163,6 +191,10 @@
     private bool _isLoading;
     private bool _isRefreshing;
     private bool _isPreviewLoading;
+    private string? _previewLoadingProviderId;
+    private bool _isDeletingProvider;
+    private string? _deletingProviderId;
+    private string? _deletingProviderName;
     private int _previewSampleSize = 10;
     private string? _previewGroupFilter;
     private ProviderPreviewDto? _preview;
@@ -195,10 +227,10 @@
                 else if (evt.Kind == AppEventKind.RefreshCompleted)
                 {
                     _isRefreshing = false;
-                    if (!_isLoading)
+                    if (!_isLoading && !_isDeletingProvider)
                         await InvokeAsync(LoadAsync);
                 }
-                else if (!_isLoading)
+                else if (!_isLoading && !_isDeletingProvider)
                 {
                     await InvokeAsync(LoadAsync);
                 }
@@ -269,7 +301,10 @@
 
     private async Task DeleteAsync(ProviderDto provider)
     {
-        var confirmed = await DialogService.ShowMessageBox(
+        if (_isDeletingProvider)
+            return;
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
             "Delete Provider",
             $"Are you sure you want to delete \"{provider.Name}\"? This will permanently remove the provider and all associated data (fetch history, channel data, and profile links).",
             yesText: "Delete",
@@ -278,6 +313,10 @@
         if (confirmed != true) return;
 
         _error = null;
+        _isDeletingProvider = true;
+        _deletingProviderId = provider.ProviderId;
+        _deletingProviderName = provider.Name;
+        await InvokeAsync(StateHasChanged);
 
         try
         {
@@ -296,6 +335,12 @@
         catch (Exception ex)
         {
             _error = $"Failed to delete provider: {ex.Message}";
+        }
+        finally
+        {
+            _isDeletingProvider = false;
+            _deletingProviderId = null;
+            _deletingProviderName = null;
         }
     }
 
@@ -320,30 +365,10 @@
         }
     }
 
-    private async Task SetActiveAsync(ProviderDto provider)
-    {
-        _error = null;
-
-        try
-        {
-            var error = await ProviderPageService.SetProviderActiveAsync(provider.ProviderId, true, _cts.Token);
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                _error = error;
-                return;
-            }
-
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = $"Failed to set provider active: {ex.Message}";
-        }
-    }
-
     private async Task RefreshPreviewAsync(string providerId)
     {
         _isPreviewLoading = true;
+        _previewLoadingProviderId = providerId;
         _error = null;
 
         try
@@ -373,6 +398,7 @@
         finally
         {
             _isPreviewLoading = false;
+            _previewLoadingProviderId = null;
         }
     }
 
@@ -386,8 +412,11 @@
     private static string FormatSnapshots(List<ProviderLatestSnapshotDto> snapshots)
     {
         if (snapshots.Count == 0) return "None";
-        return string.Join(" | ", snapshots.Select(x => $"{x.ProfileId}:{x.Status}:{x.CreatedUtc:u}"));
+        return string.Join(" | ", snapshots.Select(x => $"{x.Status} @ {x.CreatedUtc:u}"));
     }
+
+    private bool IsProviderActionDisabled(ProviderDto provider)
+        => _isRefreshing || _isDeletingProvider || _isLoading || (_isPreviewLoading && _previewLoadingProviderId == provider.ProviderId);
 
 }
 

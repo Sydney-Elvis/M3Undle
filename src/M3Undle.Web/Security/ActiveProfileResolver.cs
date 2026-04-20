@@ -17,21 +17,11 @@ internal sealed class ActiveProfileResolver(ApplicationDbContext db) : IProfileR
             return preferredExists ? preferredProfileId : null;
         }
 
-        var snapshotProfileId = await db.Snapshots
+        var activeProfileId = await db.Profiles
             .AsNoTracking()
-            .Where(x => x.Status == "active")
-            .OrderByDescending(x => x.CreatedUtc)
+            .Where(x => x.IsActive && x.Enabled)
             .Select(x => x.ProfileId)
             .FirstOrDefaultAsync(cancellationToken);
-
-        if (!string.IsNullOrWhiteSpace(snapshotProfileId))
-            return snapshotProfileId;
-
-        return await db.Profiles
-            .AsNoTracking()
-            .Where(x => x.Enabled)
-            .OrderBy(x => x.Name)
-            .Select(x => x.ProfileId)
-            .FirstOrDefaultAsync(cancellationToken);
+        return string.IsNullOrWhiteSpace(activeProfileId) ? null : activeProfileId;
     }
 }

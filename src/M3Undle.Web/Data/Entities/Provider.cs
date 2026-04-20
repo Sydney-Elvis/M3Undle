@@ -5,7 +5,6 @@ public sealed class Provider
     public string ProviderId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public bool Enabled { get; set; }
-    public bool IsActive { get; set; }
     public string PlaylistUrl { get; set; } = string.Empty;
     public string? XmltvUrl { get; set; }
     public string? HeadersJson { get; set; }
@@ -20,6 +19,8 @@ public sealed class Provider
     public bool NeedsEnvVarSubstitution { get; set; }  // True if URL contains %VAR% placeholders
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
+
+    public bool ForceMpegTs { get; set; }
 
     // Xtream Codes API provider fields
     public string? XtreamBaseUrl { get; set; }

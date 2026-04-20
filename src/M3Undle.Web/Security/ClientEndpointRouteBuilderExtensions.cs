@@ -6,6 +6,7 @@ public static class ClientEndpointRouteBuilderExtensions
     {
         var group = app.MapGroup(string.Empty);
         group.AddEndpointFilter<ClientEndpointAccessFilter>();
+        group.ExcludeFromDescription();
         return group;
     }
 }

@@ -63,12 +63,11 @@ public sealed class HdHomeRunLineupService
     {
         var fallbackGuideNumber = 1000;
 
-        foreach (var channel in lineup.Channels)
+        foreach (var channel in lineup.Channels
+            .Where(c => c.ContentType == "live")
+            .OrderBy(c => c.TvgChno ?? int.MaxValue))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (channel.ContentType != "live")
-                continue;
 
             var guideNumber = channel.TvgChno.HasValue
                 ? channel.TvgChno.Value.ToString(CultureInfo.InvariantCulture)

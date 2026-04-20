@@ -14,18 +14,25 @@ namespace M3Undle.Web.Security;
 internal sealed class XtreamPathCredentialFilter(
     IEndpointSecurityService endpointSecurityService,
     ICredentialValidator credentialValidator,
-    IProfileResolver profileResolver)
+    IProfileResolver profileResolver,
+    ILogger<XtreamPathCredentialFilter> logger)
     : IEndpointFilter
 {
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var http = context.HttpContext;
+        using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Auth" });
 
         var username = (string?)http.GetRouteValue("xtreamUser") ?? string.Empty;
         var password = (string?)http.GetRouteValue("xtreamPass") ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
         {
+            logger.LogWarning(
+                "Xtream path authentication denied due to missing credentials. path={Path} method={Method} client={Client}",
+                http.Request.Path.Value,
+                http.Request.Method,
+                http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
             http.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return Results.Unauthorized();
         }
@@ -58,6 +65,11 @@ internal sealed class XtreamPathCredentialFilter(
             var credential = await credentialValidator.ValidateAsync(username, password, http.RequestAborted);
             if (credential is null)
             {
+                logger.LogWarning(
+                    "Xtream path authentication denied due to invalid credentials. path={Path} method={Method} client={Client}",
+                    http.Request.Path.Value,
+                    http.Request.Method,
+                    http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return Results.Unauthorized();
             }

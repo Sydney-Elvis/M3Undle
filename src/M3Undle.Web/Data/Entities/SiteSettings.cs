@@ -22,5 +22,13 @@ public sealed class SiteSettings
     public bool HdhrDiscoveryEnabled { get; set; } = true;
     public bool HdhrSsdpEnabled { get; set; } = true;
     public bool HdhrSiliconDustDiscoveryEnabled { get; set; } = true;
+    public string? HdhrFriendlyName { get; set; }
     public bool HdhrSettingsRestartRequired { get; set; }
+    public bool GeneratedHlsEnabled { get; set; } = true;
+    public string? GeneratedHlsFfmpegPath { get; set; }
+    public bool GeneratedHlsSettingsRestartRequired { get; set; }
+
+    // Refresh schedule — "manual" | "6h" | "12h" | "24h"
+    public string RefreshScheduleKind { get; set; } = "6h";
+    public bool RefreshStartupCatchup { get; set; } = true;
 }

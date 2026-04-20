@@ -8,6 +8,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <base href="/" />
+    <script>
+        window.m3undleThemeBootstrap = window.m3undleThemeBootstrap || {
+            clear: function () {
+                document.documentElement.removeAttribute('data-prehydrate-theme');
+            }
+        };
+
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.setAttribute('data-prehydrate-theme', 'dark');
+        }
+    </script>
     <ResourcePreloader />
     <link rel="stylesheet" href="@Assets["app.css"]" />
     <link rel="stylesheet" href="@Assets["M3Undle.Web.styles.css"]" />

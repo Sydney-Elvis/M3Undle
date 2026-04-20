@@ -16,6 +16,7 @@ internal sealed class ClientEndpointAccessFilter(
 
         if (!resolved.IsSuccess)
         {
+            using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Auth" });
             logger.LogWarning(
                 "Client endpoint access denied. path={Path} method={Method} reason={Reason} client={Client}",
                 http.Request.Path.Value,

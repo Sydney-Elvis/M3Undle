@@ -19,6 +19,8 @@ public sealed class EpgSource
     public DateTime? LastModifiedUtc { get; set; }
     public DateTime? LastSuccessUtc { get; set; }
     public DateTime? LastFailureUtc { get; set; }
+    // null = follow the global refresh schedule; 6 | 12 | 24 | 48 | 168 = override in hours
+    public int? RefreshIntervalHours { get; set; }
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 

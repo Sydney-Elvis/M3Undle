@@ -1,0 +1,48 @@
+@* Shared refresh-interval picker used in Settings (global schedule) and the EPG source dialog (per-source cadence). *@
+@* Value = null means the "no automatic refresh" option whose label is controlled by NoneLabel. *@
+
+<MudSelect T="int?"
+           Label="@Label"
+           Value="@Value"
+           ValueChanged="@ValueChanged"
+           Variant="Variant.Outlined"
+           Margin="Margin.Dense"
+           FullWidth="true"
+           HelperText="@HelperText"
+           ToStringFunc="@FormatValue">
+    <MudSelectItem T="int?" Value="@((int?)null)">@NoneLabel</MudSelectItem>
+    <MudSelectItem T="int?" Value="@((int?)1)">Every hour</MudSelectItem>
+    <MudSelectItem T="int?" Value="@((int?)2)">Every 2 hours</MudSelectItem>
+    <MudSelectItem T="int?" Value="@((int?)4)">Every 4 hours</MudSelectItem>
+    <MudSelectItem T="int?" Value="@((int?)6)">Every 6 hours@(RecommendDefault ? " (recommended)" : "")</MudSelectItem>
+    <MudSelectItem T="int?" Value="@((int?)12)">Every 12 hours</MudSelectItem>
+    <MudSelectItem T="int?" Value="@((int?)24)">Every 24 hours</MudSelectItem>
+    @if (IncludeExtended)
+    {
+        <MudSelectItem T="int?" Value="@((int?)48)">Every 48 hours</MudSelectItem>
+        <MudSelectItem T="int?" Value="@((int?)168)">Weekly</MudSelectItem>
+    }
+</MudSelect>
+
+@code {
+    [Parameter] public int? Value { get; set; }
+    [Parameter] public EventCallback<int?> ValueChanged { get; set; }
+
+    [Parameter] public string Label { get; set; } = "Refresh Schedule";
+    [Parameter] public string NoneLabel { get; set; } = "Manual only — refresh only when triggered";
+    [Parameter] public string? HelperText { get; set; }
+
+    /// <summary>Adds 48h and Weekly options — used for per-source cadence overrides.</summary>
+    [Parameter] public bool IncludeExtended { get; set; }
+
+    /// <summary>Appends "(recommended)" to the 6h option — used for the global schedule picker.</summary>
+    [Parameter] public bool RecommendDefault { get; set; }
+
+    private string FormatValue(int? v) => v switch
+    {
+        null => NoneLabel,
+        1 => "Every hour",
+        168 => "Weekly",
+        _ => $"Every {v} hours",
+    };
+}
