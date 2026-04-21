@@ -319,6 +319,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await RepairAlpha4MigrationHistoryAsync(db);
+    await StartupMigrationRepair.RepairAlpha5PartialSchemaAsync(db);
     await RepairAlpha6SchemaAsync(db);
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");

@@ -95,6 +95,44 @@ public sealed class Alpha5SchemaMigrationTests
         }
     }
 
+    [TestMethod]
+    public async Task StartupRepair_RecoversPartialAlpha5Schema_BeforeMigrateRetries()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = CreateDb(connection);
+        var migrator = db.Database.GetService<IMigrator>();
+
+        await migrator.MigrateAsync(PreAlpha5SchemaMigration);
+
+        await db.Database.ExecuteSqlRawAsync("DROP INDEX \"idx_providers_is_active\";");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"providers\" ADD COLUMN \"force_mpegts\" INTEGER NOT NULL DEFAULT 0;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"snapshots\" ADD COLUMN \"change_class\" TEXT NULL;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"site_settings\" ADD COLUMN \"generated_hls_enabled\" INTEGER NOT NULL DEFAULT 1;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"site_settings\" ADD COLUMN \"generated_hls_ffmpeg_path\" TEXT NULL;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"site_settings\" ADD COLUMN \"generated_hls_settings_restart_required\" INTEGER NOT NULL DEFAULT 0;");
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"site_settings\" ADD COLUMN \"hdhr_advertised_base_url\" TEXT NULL;");
+
+        await StartupMigrationRepair.RepairAlpha5PartialSchemaAsync(db);
+        await migrator.MigrateAsync();
+
+        await using var historyCommand = connection.CreateCommand();
+        historyCommand.CommandText = """
+            SELECT COUNT(*)
+            FROM "__EFMigrationsHistory"
+            WHERE "MigrationId" = '20260322000000_Alpha5_Schema';
+            """;
+        Assert.AreEqual(1, Convert.ToInt32(await historyCommand.ExecuteScalarAsync()));
+
+        await using var columnCommand = connection.CreateCommand();
+        columnCommand.CommandText = "SELECT COUNT(*) FROM pragma_table_info('site_settings') WHERE name = 'hdhr_advertised_base_url';";
+        Assert.AreEqual(1, Convert.ToInt32(await columnCommand.ExecuteScalarAsync()));
+
+        await using var tableCommand = connection.CreateCommand();
+        tableCommand.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'profile_custom_groups';";
+        Assert.AreEqual(1, Convert.ToInt32(await tableCommand.ExecuteScalarAsync()));
+    }
+
     private static ApplicationDbContext CreateDb(SqliteConnection connection)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
