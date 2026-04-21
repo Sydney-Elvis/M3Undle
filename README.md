@@ -39,7 +39,6 @@ Plex should work via the HDHomeRun integration but cannot be validated without P
 > - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`) with tuner-slot enforcement keyed by `VirtualTunerId`
 >
 > **Forthcoming (Alpha 6)**
-> - Per-provider gateway/VPN routing (Block and Fallback modes)
 > - Xtream Codes auto-detection at provider add time with explicit user mode selection
 > - System event badge (nav bar, in-memory, diagnostic visibility)
 
@@ -149,7 +148,7 @@ Current Alpha 5 capabilities include:
 - Stream enable/disable control in Settings and provider-level max concurrent stream limits
 - UI authentication (`M3UNDLE_AUTH_ENABLED`) and endpoint security with credential management
 
-Planned work (Alpha 6): per-provider gateway/VPN routing, Xtream Codes auto-detection at provider add time, system event badge.
+Planned work (Alpha 6): Xtream Codes auto-detection at provider add time, system event badge.
 
 See: `docs/SERVICE.md`
 

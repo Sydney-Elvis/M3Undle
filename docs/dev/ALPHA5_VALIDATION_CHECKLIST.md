@@ -17,24 +17,23 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 ## Refresh / Source Control
 
 - [x] Configurable refresh schedule in Settings UI
-- [ ] Real-time trigger + manual refresh with status — validate end-to-end: trigger from UI, confirm status updates while running, confirm completion feedback
-- [~] Persisted preferred refresh policy per profile — descoped to post-1.0.0 (#47; global schedule is sufficient for Alpha/Beta)
+- [x] Real-time trigger + manual refresh with status — validate end-to-end: trigger from UI, confirm status updates while running, confirm completion feedback
 - [x] Dashboard and `/status` resolve lineup state from the active profile only
 - [x] Active profile switching shows requested, refreshing, completed, and failed/last-known-good feedback states
 - [x] Multi-profile status regressions covered by tests
 
 ## HDHomeRun / DVR Client Scenario
 
-- [ ] Ensure HDHomeRun endpoints still valid after lineup changes
-- [ ] Verify `lineup.json`, `lineup.xml`, `lineup.m3u` in final lineup state
-- [ ] Tuner admission rules and retune semantics intact
+- [x] Ensure HDHomeRun endpoints still valid after lineup changes
+- [x] Verify `lineup.json`, `lineup.xml`, `lineup.m3u` in final lineup state
+- [x] Tuner admission rules and retune semantics intact
 
 ## Compatibility and Behavior
 
 - [x] HLS playback for JavaScript/browser clients (GeneratedHls compatibility layer + HlsManifestRewriter)
 - [x] CORS support for external network access
-- [ ] VOD / Series counts match UI & exported stats
-- [ ] IPTVnavtor groups and MacOS behavior validated
+- [x] VOD / Series counts match UI & exported stats
+- [x] IPTVnavtor groups and MacOS behavior validated
 
 ## Post-Review Hardening (2026-04-10)
 
@@ -60,5 +59,3 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 ## Documentation
 
 - [x] Update roadmap & user docs with Alpha 5 scope and status (dashboard redesign, profiles UX, terminology, HLS/CORS)
-- [ ] Add release notes for Alpha 5 features
-- [ ] Mark Beta transition criteria (after all Alpha checkboxes complete)
