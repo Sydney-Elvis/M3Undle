@@ -1,17 +1,21 @@
-namespace M3Undle.Core.Net;
+using M3Undle.Core;
+using M3Undle.Core.Net;
+using Spectre.Console;
 
-public sealed class SourceFetcher
+namespace M3Undle.Cli.Commands;
+
+internal sealed class InteractiveSourceFetcher
 {
     private readonly HttpClient _httpClient;
     private readonly TextWriter _diagnostics;
 
-    public SourceFetcher(HttpClient httpClient, TextWriter diagnostics)
+    public InteractiveSourceFetcher(HttpClient httpClient, TextWriter diagnostics)
     {
         _httpClient = httpClient;
         _diagnostics = diagnostics;
     }
 
-    public async Task<string> GetStringAsync(string source, CancellationToken cancellationToken)
+    public async Task<string> GetStringWithProgressAsync(string source, IAnsiConsole console, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(source))
         {
@@ -28,7 +32,7 @@ public sealed class SourceFetcher
                     await _diagnostics.WriteLineAsync($"Downloading {UrlRedactor.RedactUrl(uri)}...");
                 }
 
-                using var response = await _httpClient.GetAsync(uri, cancellationToken);
+                using var response = await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
                 if (_diagnostics != TextWriter.Null)
                 {
@@ -79,7 +83,48 @@ public sealed class SourceFetcher
                     throw new CliException(errorMessage, ExitCodes.NetworkError);
                 }
 
-                return await response.Content.ReadAsStringAsync(cancellationToken);
+                var total = response.Content.Headers.ContentLength ?? -1L;
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var ms = new MemoryStream();
+                var buffer = new byte[8192];
+                long read = 0;
+
+                var result = string.Empty;
+                await console.Progress()
+                    .AutoClear(true)
+                    .Columns(CreateColumns(total))
+                    .StartAsync(async ctx =>
+                    {
+                        var task = ctx.AddTask("Downloading", maxValue: total > 0 ? total : double.MaxValue);
+                        if (total <= 0)
+                        {
+                            task.IsIndeterminate = true;
+                            task.Description = "Downloading (0 B)";
+                        }
+
+                        int bytesRead;
+                        while ((bytesRead = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                        {
+                            ms.Write(buffer, 0, bytesRead);
+                            read += bytesRead;
+
+                            task.Increment(bytesRead);
+
+                            if (total > 0)
+                            {
+                                task.Value = read;
+                            }
+                            else
+                            {
+                                task.Description = $"Downloading ({FormatBytes(read)})";
+                            }
+                        }
+
+                        task.StopTask();
+                        result = System.Text.Encoding.UTF8.GetString(ms.ToArray());
+                    });
+
+                return result;
             }
             catch (CliException)
             {
@@ -118,5 +163,46 @@ public sealed class SourceFetcher
         {
             throw new CliException($"Failed to read file {source}: {ex.Message}", ExitCodes.IoError);
         }
+    }
+
+    private static ProgressColumn[] CreateColumns(long total)
+    {
+        if (total > 0)
+        {
+            return
+            [
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new DownloadedColumn(),
+                new TransferSpeedColumn()
+            ];
+        }
+
+        return
+        [
+            new TaskDescriptionColumn(),
+            new SpinnerColumn(),
+            new TransferSpeedColumn()
+        ];
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+        {
+            return $"{bytes} B";
+        }
+
+        string[] units = ["KB", "MB", "GB", "TB"];
+        double value = bytes;
+        var unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.Length - 1)
+        {
+            value /= 1024;
+            unitIndex++;
+        }
+
+        return $"{value:0.##} {units[unitIndex]}";
     }
 }

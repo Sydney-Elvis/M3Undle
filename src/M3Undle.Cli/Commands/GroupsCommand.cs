@@ -43,12 +43,13 @@ public sealed class GroupsCommand
         }
 
         var fetcher = new SourceFetcher(_httpClient, _diagnostics);
+        var interactiveFetcher = new InteractiveSourceFetcher(_httpClient, _diagnostics);
         
         // Detect if we should use interactive mode based on output redirection
         var isInteractive = !Console.IsOutputRedirected && !Console.IsErrorRedirected;
         
         var playlistContent = isInteractive
-            ? await fetcher.GetStringWithProgressAsync(context.PlaylistSource, _console, cancellationToken)
+            ? await interactiveFetcher.GetStringWithProgressAsync(context.PlaylistSource, _console, cancellationToken)
             : await fetcher.GetStringAsync(context.PlaylistSource, cancellationToken);
 
         PlaylistDocument document = null!;

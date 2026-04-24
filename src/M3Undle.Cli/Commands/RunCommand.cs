@@ -60,8 +60,9 @@ public sealed class RunCommand
         }
 
         var fetcher = new SourceFetcher(_httpClient, _diagnostics);
+        var interactiveFetcher = new InteractiveSourceFetcher(_httpClient, _diagnostics);
         var playlistContent = interactive
-            ? await fetcher.GetStringWithProgressAsync(context.PlaylistSource!, _console, cancellationToken)
+            ? await interactiveFetcher.GetStringWithProgressAsync(context.PlaylistSource!, _console, cancellationToken)
             : await fetcher.GetStringAsync(context.PlaylistSource!, cancellationToken);
 
         var document = await ParsePlaylistAsync(playlistContent, cancellationToken, interactive);
@@ -131,7 +132,7 @@ public sealed class RunCommand
         if (epgRequested)
         {
             var epgContent = interactive
-                ? await fetcher.GetStringWithProgressAsync(context.EpgSource!, _console, cancellationToken)
+                ? await interactiveFetcher.GetStringWithProgressAsync(context.EpgSource!, _console, cancellationToken)
                 : await fetcher.GetStringAsync(context.EpgSource!, cancellationToken);
 
             await WriteEpgWithOptionalStatusAsync(epgContent, epgOut, cancellationToken, interactive);
