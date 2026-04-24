@@ -13,7 +13,7 @@ Create a directory for M3Undle, place a `compose.yaml` inside it, then run:
 ```bash
 mkdir m3undle && cd m3undle
 # create compose.yaml (see below)
-mkdir config data hls-work
+mkdir config data playback
 docker compose up -d
 ```
 
@@ -42,7 +42,7 @@ services:
       M3UNDLE_M3U_DIR: /m3u
       # Optional but recommended — isolate generated HLS working files.
       # Keep this on fast storage if possible.
-      M3Undle__Streaming__GeneratedHls__Directory: /hls-work
+      M3Undle__Streaming__GeneratedHls__Directory: /playback
       # Uncomment to require login for the web UI:
       # M3UNDLE_AUTH_ENABLED: "true"
       # M3UNDLE_ADMIN_USER: admin
@@ -52,7 +52,7 @@ services:
       - ./config:/config
       - ./data:/data
       - ./m3u:/m3u        # optional — only needed if using M3UNDLE_M3U_DIR
-      - ./hls-work:/hls-work # optional but recommended for generated browser HLS
+      - ./playback:/playback # optional but recommended for generated browser playback
     restart: unless-stopped
 ```
 
@@ -63,11 +63,20 @@ PUID=1000
 PGID=1000
 ```
 
-Find your IDs on Linux with `id`:
+Find your numeric UID and GID with these commands:
 
 ```bash
+# Get your numeric UID and GID
+id -u        # prints your UID (e.g. 1000)
+id -g        # prints your GID (e.g. 1000)
+
+# For a specific user:
+id -u <username>
+id -g <username>
+
+# Sanitized example output:
 $ id
-uid=1000(jake) gid=1000(jake) groups=1000(jake),998(docker)
+uid=1000(<your-username>) gid=1000(<your-username>) groups=1000(<your-username>),998(docker)
 # PUID=1000  PGID=1000
 ```
 
@@ -78,7 +87,7 @@ If you use HDHomeRun-compatible clients such as NextPVR, keep `5004:5004` publis
 ### docker run
 
 ```bash
-mkdir -p m3undle/config m3undle/data m3undle/m3u m3undle/hls-work && cd m3undle
+mkdir -p m3undle/config m3undle/data m3undle/m3u m3undle/playback && cd m3undle
 
 docker run -d \
   --name m3undle \
@@ -87,11 +96,11 @@ docker run -d \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -e M3UNDLE_ENCRYPTION_KEY="your-base64-32-byte-key" \
-  -e M3Undle__Streaming__GeneratedHls__Directory=/hls-work \
+  -e M3Undle__Streaming__GeneratedHls__Directory=/playback \
   -v ./config:/config \
   -v ./data:/data \
   -v ./m3u:/m3u \
-  -v ./hls-work:/hls-work \
+  -v ./playback:/playback \
   --restart unless-stopped \
   ghcr.io/sydney-elvis/m3undle:alpha
 ```
@@ -105,7 +114,7 @@ docker run -d \
 | `/config` | Yes | `config.yaml` and `.env` credential file — files you edit |
 | `/data` | Yes | SQLite database, snapshots, log files — runtime state |
 | `/m3u` (or any path) | No | Local `.m3u` files browsable via the file browser. Set `M3UNDLE_M3U_DIR` to the container path. |
-| `/hls-work` (or any path) | Recommended | Generated rolling HLS playlists/segments for browser playback fallback. Set `M3Undle__Streaming__GeneratedHls__Directory` to match. |
+| `/playback` (or any path) | Recommended | Generated rolling HLS playlists/segments for browser playback fallback. Set `M3Undle__Streaming__GeneratedHls__Directory` to match. |
 
 Both `/config` and `/data` are required for data to persist across container restarts.
 
@@ -119,13 +128,13 @@ If you prefer Docker-managed storage, named volumes work too — replace the bin
 volumes:
   - m3undle_config:/config
   - m3undle_data:/data
-  - m3undle_hlswork:/hls-work
+  - m3undle_playback:/playback
 
 # add at the bottom of compose.yaml:
 volumes:
   m3undle_config:
   m3undle_data:
-  m3undle_hlswork:
+  m3undle_playback:
 ```
 
 Named volumes avoid the ownership requirement on Linux and can give better I/O performance, but you can't browse the files directly from the host.
@@ -225,7 +234,7 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 | `M3Undle__Refresh__StartupDelaySeconds` | `30` | Delay before first refresh after startup |
 | `M3Undle__Snapshot__RetentionCount` | `3` | Number of snapshots to retain |
 | `M3Undle__Cors__ApplicationAllowedOrigins__0` | *(unset)* | First allowed CORS origin for the application surface (`/api`, UI, `/Account/*`). Add more with `__1`, `__2`, etc. |
-| `M3Undle__Streaming__GeneratedHls__Directory` | `/data/hls-work` (image default) | Directory used for generated rolling HLS session files (`index.m3u8` + segments). Set this to a dedicated mount (for example `/hls-work`) to isolate browser playback scratch storage. |
+| `M3Undle__Streaming__GeneratedHls__Directory` | `/data/hls-work` (image default) | Directory used for generated rolling HLS session files (`index.m3u8` + segments). Set this to a dedicated mount (for example `/playback`) to isolate browser playback scratch storage. |
 | `M3UNDLE_DATA_DIR` | `/data` (in image) | Override the data directory (database, logs, snapshots). Rarely needed when using the standard Docker volume layout. |
 
 ### Optional — HDHomeRun

@@ -117,7 +117,7 @@ Controls whether the M3U, XMLTV, stream, and HDHomeRun client endpoints require 
 - See whether a credential is currently configured
 
 **Refresh Schedule**
-Controls how often M3Undle fetches updated lineup and guide data from providers. Options: Manual only, every 1h, 2h, 4h, 6h (default), 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
+Controls how often M3Undle fetches updated lineup and guide data from providers. Options: Manual only, every 1h, 2h, 4h (default), 6h, 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
 
 **Stream Proxy**
 Configures how M3Undle handles live stream relay. Settings are grouped into three areas:

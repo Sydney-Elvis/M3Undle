@@ -1,286 +1,278 @@
 # M3Undle
 
-A self-hosted lineup manager built for large provider catalogs.
+**Turn oversized IPTV provider lists into lineups your apps can actually use.**
 
-M3Undle helps you take control of massive provider playlists and publish clean, predictable lineups for DVR and media server environments.
+M3Undle is a self-hosted IPTV lineup manager and proxy for large M3U, XMLTV, Xtream, and HDHomeRun-style provider catalogs.
 
-Designed for self-hosted systems like NextPVR, Jellyfin, Emby, or any client that consumes M3U + XMLTV.
+It helps you filter out provider groups you do not care about, collect the channels you do want into your own groups, assign stable channel numbers, and publish a smaller lineup to DVRs, media servers, browser-based players, and IPTV apps.
 
-Plex should work via the HDHomeRun integration but cannot be validated without Plex Pass — testing is on hold until a Plex Pass is available.
+Works with clients such as NextPVR, Jellyfin, Emby, Plex, IPTVnator, IPTV Smarters, and other apps that consume M3U, XMLTV, Xtream, or HDHomeRun-compatible endpoints.
+
+![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/images/readme-dashboard.png)
 
 > [!IMPORTANT]
-> **Feature Status**
+> **Alpha Status**
 >
-> **Included today**
-> - CLI tooling (provider fetch, group discovery, M3U/XMLTV filtering)
-> - Secure `.env` credential handling
-> - Database-backed provider configuration
-> - Published lineup versioning with last-known-good lifecycle
-> - Group preview (read-only catalog browsing)
-> - Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
-> - Group mode: manual review (`select`) or auto-update (`all`) per group
-> - Channel numbering assignment, pinning, reorder via Number Manager, and group rename at the output layer
-> - Custom `tvg-id` override per channel (lock-gated)
-> - New channels inbox / review queue with include/exclude and event card view
-> - Event tracking policies for PPV/event groups (`review`, `notify`, `auto_add_all`, `auto_add_populated`, `auto_add_matching`)
-> - Structured event interest rules (team/league/sport/fighter/promotion/series) with auto-add, notify, or suppress actions
-> - Custom groups — user-defined output groups populated from any provider group or individual channel search
-> - EPG source management with multi-source XMLTV merge, priority rules, per-source cadence, and guide publishing
-> - Profiles UI — named published lineups with provider membership, published history, and profile detail pages
-> - Active profile switching with real-time status feedback
-> - Dashboard redesign — health dashboard with Published Output, Published Profiles, Action Items, and Output URLs
-> - Downstream integrations — automatic notification to Jellyfin, Emby, or a generic webhook after meaningful lineup or guide changes
-> - Configurable refresh schedule (manual, 1h–24h) with startup catch-up behavior
-> - HLS browser playback compatibility layer (GeneratedHls + HLS manifest rewriter)
-> - CORS support for external network access
-> - Compatibility endpoints: `/m3u/`, `/xmltv/`, `/stream/`, HDHomeRun HTTP API, Xtream Codes API
-> - Shared live stream proxy with byte-bounded buffering, reconnect handling, and direct-relay fallback for VOD-style routes
-> - Stream monitoring UI and stream status endpoints
-> - HDHomeRun tuner emulation endpoints (`/discover.json`, `/lineup.json`, `/tune/<streamKey>`) with tuner-slot enforcement keyed by `VirtualTunerId`
+> M3Undle is in the final alpha stage: the main workflow is implemented, most planned features are in place, and the remaining Alpha 6 work is focused on user experience, provider onboarding, profile and refresh behavior, stream stability, monitoring, client compatibility, and first-run documentation.
 >
-> **Forthcoming (Alpha 6)**
-> - Xtream Codes auto-detection at provider add time with explicit user mode selection
-> - System event badge (nav bar, in-memory, diagnostic visibility)
+> It is stable enough for real LAN testing and personal use, but it is still alpha software. Expect rough edges and possible provider or client-specific issues before beta.
 
----
+## Run it
 
-## Why M3Undle Exists
+M3Undle is published to GitHub Container Registry.
 
-Modern providers often deliver enormous catalogs — 10,000 to 50,000+ channels across multiple regions, languages, sports packages, and temporary event feeds.
+Pull the current alpha image:
 
-Most users only need a small, carefully selected subset of those channels.
+    docker pull ghcr.io/sydney-elvis/m3undle:alpha
 
-Managing that scale can be difficult:
+Create a working directory:
 
-- Massive group lists with mixed languages
-- Constantly rotating sports or event feeds
-- Temporary PPV channels
-- Duplicate regional variations
-- Unclear mapping between configuration and published output
-- Hard-to-understand numbering behavior
+    mkdir m3undle
+    cd m3undle
+    mkdir config
 
-M3Undle is designed to make large catalogs manageable.
+Create `compose.yaml`:
 
-It focuses on:
+    services:
+      m3undle:
+        image: ghcr.io/sydney-elvis/m3undle:alpha
+        container_name: m3undle
+        ports:
+          - "5004:5004"
+          - "8080:8080"
+        environment:
+          TZ: America/New_York
+          M3UNDLE_ENCRYPTION_KEY: "replace-with-a-base64-32-byte-key"
+          M3Undle__Streaming__GeneratedHls__Directory: /playback
+        volumes:
+          - ./config:/config
+          - m3undle_data:/data
+          - m3undle_playback:/playback
+        restart: unless-stopped
 
-- Clear group selection
-- Explicit inclusion rules
-- Controlled channel numbering
-- Stable channel identity
-- Transparent publishing
-- Predictable refresh behavior
+    volumes:
+      m3undle_data:
+      m3undle_playback:
 
-The goal is simple:
+Generate an encryption key:
 
-Give you control over what gets published — and make it understandable.
+    openssl rand -base64 32
 
----
+Paste the generated value into `M3UNDLE_ENCRYPTION_KEY`, then start M3Undle:
 
-## What M3Undle Is
+    docker compose up -d
 
-M3Undle is a lineup management system for playlist providers.
+Open the web UI:
 
-It:
+    http://<host>:8080
 
-- Connects to your provider
-- Normalizes channels into canonical identities
-- Allows you to define a controlled lineup
-- Preserves stream key stability
-- Protects DVR mappings from churn
-- Publishes compatibility endpoints expected by clients
+Port `8080` serves the web UI, M3U, XMLTV, Xtream, and general compatibility endpoints. Port `5004` serves HDHomeRun-compatible tuning.
 
-It is not just a playlist filter.
-It is a system for managing playlist catalogs at scale.
+The `config` folder is bind-mounted so configuration files stay easy to inspect and back up. Runtime state and browser playback working files use Docker-managed volumes.
 
----
+Use `alpha` for the latest alpha build. Pin a specific version, such as `v1.0.0-alpha.5`, if you want repeatable updates.
 
-## Components
+`latest` is not used during alpha or beta. It will be introduced no earlier than the release candidate track.
 
-### CLI (Available Now)
+For full Docker options, including local M3U file mounts, authentication, HDHomeRun discovery, and advanced networking, see [docs/DOCKER.md](docs/DOCKER.md).
 
-The CLI was the first component and remains useful for automation and scripting.
 
-It supports:
+## First workflow
 
-- Provider playlist fetching
-- Group discovery
-- M3U filtering
-- XMLTV filtering
-- Secure `.env` credential handling
+Start by reducing the provider catalog to something your clients should actually see.
 
-See: `docs/CLI.md`
+1. Add a provider.
+2. Exclude provider groups you do not want, such as international packages, duplicate regions, or categories you never watch.
+3. Create your own output group, such as `Locals`.
+4. Add selected channels from one or more provider groups into that output group.
+5. Number and order those channels the way you want them to appear.
+6. Publish the lineup.
+7. Point NextPVR, Jellyfin, Emby, Plex, IPTVnator, IPTV Smarters, or another client at the published output.
 
----
+Instead of making every client parse the full provider list, M3Undle publishes only the lineup you built.
 
-### Service + Web UI (Alpha 5)
+![Channel Mapping page with group filter applied, showing mapped and unmapped groups with channel counts](docs/images/readme-filter.png)
 
-The service layer is in **Alpha 5** — functional for daily-driver LAN use. See `docs/SERVICE.md` for the full feature list and design notes.
+![Custom Locals group with channel search showing selected local channels with assigned numbers](docs/images/readme-channel-search.png)
 
-Current Alpha 5 capabilities include:
+## What it does
 
-- Database-backed configuration
-- Published lineup versioning with last-known-good lifecycle
-- Group preview (read-only catalog browse)
-- Group inclusion/exclusion rules and channel filtering (keyword, regex, glob)
-- Group mode per group: `manual review` (select only approved channels) or `auto-update` (publish active channels automatically)
-- Channel numbering assignment, pinning, and reorder via Number Manager; group rename at the output layer
-- Custom `tvg-id` override per channel (lock-gated field in the channel edit dialog)
-- New channels inbox / review queue — pending channels surfaced per profile with include/exclude decisions; event card view groups pending channels by event content
-- Event tracking policies for volatile groups (PPV/sports grids): `review`, `notify`, `auto_add_all`, `auto_add_populated`, `auto_add_matching`
-- Structured recurring event interest rules (team/league/sport/fighter/promotion/series) with auto-add, notify, or suppress actions
-- Custom groups — user-defined output groups backed by individual channel picks or linked provider groups, with full mode and tracking-policy support
-- EPG Sources UI and API for provider-linked guide sources, test fetches, per-source cadence override, and channel mapping
-- Profiles page — list all named published lineups; profile detail shows provider membership, published history, and pending review counts
-- Active profile switching — switch the active output profile from the UI with requested/refreshing/completed/failed feedback states
-- Dashboard — health dashboard with Published Output (live/movie/series counts), Published Profiles tiles, Action Items (pending review counts), and Output URLs
-- Downstream integrations — automatic post-publish notification to Jellyfin, Emby, or a generic webhook; fires only when a meaningful lineup or guide change is detected; recent success/failure visible in Settings
-- Configurable refresh schedule in Settings UI (manual, 1h, 2h, 4h, 6h default, 12h, 24h) with startup catch-up behavior
-- HLS browser playback compatibility (GeneratedHls + HLS manifest rewriter for `?format=hls` and browser UA fallback)
-- CORS support for external network access
-- HTTP compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`)
-- HDHomeRun HTTP endpoints (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, `/lineup_status.json`, `/device.xml`)
-- HDHomeRun tuner-slot enforcement and retune/reuse behaviour keyed by endpoint `VirtualTunerId`
-- Xtream Codes API (`/player_api.php`, `/get.php`, path-credential stream URLs)
-- Shared live stream proxy for `/live`, `/stream`, `/tune`, and `/hdhr/tune`
-- Byte-bounded in-memory buffer for late joiners with reconnect handling and slow-subscriber eviction
-- Direct relay retained for `/movie`, `/vod`, and `/series`
-- Stream monitoring UI plus `/status/streams`, `/status/streams/clients`, and `/status/streams/providers`
-- Stream enable/disable control in Settings and provider-level max concurrent stream limits
-- UI authentication (`M3UNDLE_AUTH_ENABLED`) and endpoint security with credential management
+### Catalog cleanup
 
-Planned work (Alpha 6): Xtream Codes auto-detection at provider add time, system event badge.
+M3Undle lets you exclude provider groups you do not want, browse what remains, and filter channels by keyword, glob, or regex.
 
-See: `docs/SERVICE.md`
+### Custom lineups
 
----
+Create your own output groups, add selected channels from provider groups, rename groups for the published output, and control channel numbering, pinning, and order.
 
-## UI Authentication
+### Guide and mapping
 
-The web UI supports a simple local authentication model:
+Manage EPG sources, merge XMLTV data, set guide priority, override `tvg-id` values, and review new channels before they appear in the published lineup.
 
-- One access level only: authenticated or not authenticated
-- No roles or user tiers
-- Endpoint authentication is configured separately in the UI
+### Client outputs
 
-### Setup
+Publish the same managed lineup through M3U, XMLTV, HDHomeRun-compatible, and Xtream-compatible endpoints.
 
-Authentication is controlled entirely by environment variables — no UI toggle required.
+### Streaming
 
-| Variable | Default | Description |
-|---|---|---|
-| `M3UNDLE_AUTH_ENABLED` | `false` | Set to `true` to require login for the UI and management APIs |
-| `M3UNDLE_ADMIN_USER` | `admin` | Admin username/email (used on first startup only) |
-| `M3UNDLE_ADMIN_PASSWORD` | *(none)* | **Required** when `M3UNDLE_AUTH_ENABLED=true` and no account exists yet |
-| `M3UNDLE_ADMIN_PASSWORD_RESET` | `false` | Set to `true` to force-reset the existing admin password from `M3UNDLE_ADMIN_PASSWORD` on startup (recovery flow) |
+Proxy live streams through M3Undle, hide provider credentials from clients, share live streams across multiple downstream clients, and monitor active stream sessions.
 
-On first startup with `M3UNDLE_AUTH_ENABLED=true`, the admin account is created automatically from these variables.
-On subsequent startups the account already exists — changing env vars does not affect the stored password unless you explicitly enable recovery with `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
+![Stream Monitor showing two active sessions with buffer usage and three connected clients sharing streams](docs/images/readme-streams.png)
 
-### Password Recovery (Forgot Password)
+### Profiles and publishing
 
-If the admin password is lost and you cannot log in:
+Use named profiles, switch the active published profile, keep published history, and fall back to last-known-good output when needed.
 
-1. Set `M3UNDLE_ADMIN_PASSWORD` to the new desired password.
-2. Set `M3UNDLE_ADMIN_PASSWORD_RESET=true`.
-3. Restart M3Undle once.
-4. Log in with the new password.
-5. Set `M3UNDLE_ADMIN_PASSWORD_RESET=false` (or remove it), then restart again.
+### Administration
 
-When reset mode runs, lockout counters are also cleared for the admin account.
+Configure refresh schedules, endpoint security, optional UI authentication, downstream notifications, provider stream limits, and service behavior from the web UI or Docker configuration.
 
-### Behavior
+## Client endpoints
 
-- If `M3UNDLE_AUTH_ENABLED=false` (default), the UI and management APIs are open on your network.
-- If `M3UNDLE_AUTH_ENABLED=true`, the UI and `/api/v1/*` management APIs require login.
-- Compatibility endpoints can be secured independently from UI auth using **Settings → Endpoint Security**.
-- Endpoint credentials are stored hashed in the database and validated with stateless username/password auth.
-- `/status` and `/health` remain unauthenticated.
+After publishing a lineup, point your clients at M3Undle instead of the raw provider URL.
 
----
+| Client type | URL |
+|---|---|
+| M3U playlist | `http://<host>:8080/m3u/m3undle.m3u` |
+| XMLTV guide | `http://<host>:8080/xmltv/m3undle.xml` |
+| HDHomeRun-style tuner | `http://<host>:5004` |
+| Xtream-style API | `http://<host>:8080` |
 
-## Docker
+For HDHomeRun-style clients, manual tuner setup is usually the most reliable option. Use `http://<host>:5004`.
 
-```bash
-docker run -d \
-  --name m3undle \
-  -p 5004:5004 \
-  -p 8080:8080 \
-  -e TZ=America/New_York \
-  -v ./data:/data \
-  -v ./config:/config \
-  --restart unless-stopped \
-  ghcr.io/sydney-elvis/m3undle:alpha
-```
+For Xtream-style clients, add M3Undle as the server URL and use the endpoint credentials configured in M3Undle.
 
-Image: [`ghcr.io/sydney-elvis/m3undle`](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+## Minimal configuration
 
-Port `5004` is the HDHomeRun HTTP tuning port; `8080` serves the web UI, M3U, XMLTV, and compatibility endpoints. Both are always needed.
+Most settings can be changed later from the web UI. For a first run, only a few Docker settings matter.
 
-For normal Docker use, you do not need to set any HDHomeRun environment variables. Start the container, then manage HDHomeRun from **Settings → HDHomeRun** in the web UI.
+| Setting | Required | Default | Purpose |
+|---|---:|---|---|
+| `TZ` | No | Host/default timezone | Sets timestamps for logs and scheduled refresh behavior. |
+| `M3UNDLE_ENCRYPTION_KEY` | Required for Xtream providers | None | Encrypts stored Xtream provider passwords. Keep this value backed up. |
+| `/config` | Yes | None | Human-readable configuration files and optional provider credential placeholders. |
+| `/data` | Yes | None | Database, snapshots, logs, and runtime state. |
+| `/playback` | Recommended | `/data/hls-work` | Temporary browser playback files generated when M3Undle needs HLS output. |
+| `5004` | Recommended | `5004` | HDHomeRun-compatible tuning endpoint. |
+| `8080` | Yes | `8080` | Web UI and general client endpoints. |
 
-For HDHomeRun auto-discovery (optional), you also need UDP ports `1900` (SSDP) and `65001` (SiliconDust). See [`docs/DOCKER.md`](docs/DOCKER.md) for the advanced HDHR overrides, Docker networking guidance, and the few cases where an env var is still useful.
+The README example bind-mounts `./config` so it is easy to inspect and back up. Runtime data and playback working files use Docker-managed volumes.
 
----
+UI authentication and endpoint security are configured separately. The UI can be protected with environment variables, while client-facing endpoint credentials are managed inside M3Undle.
 
-## Compatibility Endpoints
+See [docs/DOCKER.md](docs/DOCKER.md) for advanced Docker options.
 
-M3Undle publishes endpoints compatible with common clients:
+## Security and usage notes
 
-- `/m3u/m3undle.m3u`
-- `/xmltv/m3undle.xml`
-- `/stream/<streamKey>`
-- `/live/<streamKey>`
-- `/tune/<streamKey>`
-- `/hdhr/discover.json`
-- `/hdhr/lineup.json`
-- `/hdhr/lineup.xml`
-- `/hdhr/lineup.m3u`
-- `/hdhr/lineup_status.json`
-- `/hdhr/device.xml`
-- `/hdhr/tune/<streamKey>`
+M3Undle is designed for self-hosted use on a trusted network.
 
-Live routes use the shared stream proxy and keep provider credentials hidden from clients. Movie, VOD, and series routes remain direct relay paths.
+For first-run testing, the web UI can run without authentication. Before exposing it outside your LAN, enable UI authentication, configure endpoint security, and put it behind a reverse proxy or firewall rules you trust.
 
-Operational stream visibility is available via the Streams page in the UI and the status endpoints `/status/streams`, `/status/streams/clients`, and `/status/streams/providers`.
+Client-facing endpoints are separate from the web UI. Use endpoint credentials for M3U, XMLTV, stream, HDHomeRun, and Xtream access when clients need to connect from outside a trusted network.
 
-Legacy HDHomeRun root aliases (`/discover.json`, `/lineup.json`, etc.) are still available for compatibility.
+Provider credentials should stay in M3Undle. Published stream URLs are proxied so clients do not need direct provider URLs.
 
-Automatic discovery support:
-- SSDP/UPnP (`UDP 1900`)
-- SiliconDust discovery (`UDP 65001`)
-- Discovery is disabled by default; manual add works without discovery — see [`docs/DOCKER.md`](docs/DOCKER.md) for setup steps
+Respect your provider stream limits. M3Undle can help share live streams and apply configured limits, but it cannot make an upstream provider allow more connections than your account supports.
 
-See: `docs/design/HTTP_COMPATIBILITY.md`
+You are responsible for the sources you configure and for following the terms that apply to those sources.
 
----
+## Troubleshooting
 
-## Design Principles
+Start with the container logs:
 
-- Explicit over implicit
-- Controlled over automatic
-- Transparent over opaque
-- Scalable for large provider catalogs
-- Self-hosted and privacy-respecting
+    docker logs m3undle --tail 200
 
----
+Check that the web UI is reachable:
 
-## Project Direction
+    curl -I http://<host>:8080
 
-The current focus is delivering a stable, fully usable self-hosted lineup manager.
+Check that the M3U endpoint is reachable:
 
-The roadmap will continue expanding M3Undle's lineup management and publishing capabilities as the project matures.
+    curl -I http://<host>:8080/m3u/m3undle.m3u
 
----
+Check that the XMLTV endpoint is reachable:
+
+    curl -I http://<host>:8080/xmltv/m3undle.xml
+
+Check the HDHomeRun discovery endpoint:
+
+    curl http://<host>:5004/discover.json
+
+Common first checks:
+
+| Problem | Check |
+|---|---|
+| Web UI does not load | Confirm the container is running and port `8080` is mapped. |
+| No channels appear in a client | Publish a lineup first, then check the M3U endpoint directly. |
+| XMLTV guide is missing | Confirm an EPG source is configured and the guide has been published. |
+| HDHomeRun client cannot find M3Undle | Add the tuner manually with `http://<host>:5004`. Auto-discovery depends on Docker networking and multicast. |
+| Xtream provider fails to save | Confirm `M3UNDLE_ENCRYPTION_KEY` is set and has not changed since the provider was added. |
+| Browser playback fails | Check stream status in the web UI and confirm the playback volume is mounted. |
+| Streams stop or fail to start | Check provider limits, active stream sessions, and container logs. |
+
+When reporting an issue, include the M3Undle version tag, Docker compose file with secrets removed, client name, endpoint type, and relevant logs.
+
+## Roadmap
+
+Current work is focused on finishing Alpha 6, then moving into beta testing.
+
+Planned release path:
+
+1. Alpha 6: final feature cleanup, diagnostics, monitoring, stream hardening, and UI polish.
+2. Beta: broader testing, documentation cleanup, client compatibility work, and bug fixes.
+3. Release candidate: final validation and packaging.
+4. v1.0.0: stable release.
+
+After v1.0.0, planned work moves toward more advanced provider handling:
+
+- multiple sources per profile
+- fallback sources
+- per-provider VPN
+
+## Support
+
+M3Undle is built as an open-source project and is currently focused on getting through alpha, beta, and v1.0.0.
+
+If you find it useful and want to support the work:
+
+<a href="https://buymeacoffee.com/jake1164s"><img src="docs/images/violet-button.png" alt="Buy Me A Coffee" width="200"></a>
+
+You can also [sponsor M3Undle on GitHub](https://github.com/sponsors/Sydney-Elvis).
+
+## Development and contributing
+
+M3Undle is built with .NET and the web UI is server-side Blazor.
+
+For now, contribution work is expected to be issue-driven. If you want to help, start with an open issue or file a new one describing the problem before opening a larger pull request.
+
+Basic local workflow:
+
+    git clone https://github.com/Sydney-Elvis/M3Undle.git
+    cd M3Undle
+    dotnet restore
+    dotnet build
+    dotnet test
+
+Before submitting a pull request:
+
+- keep changes focused
+- include tests when practical
+- avoid mixing formatting-only changes with functional changes
+- describe the client, provider type, and endpoint path involved if the change affects playback or compatibility
+
+More detailed contributor docs will be added as the project moves toward beta.
+
+## Disclaimer
+
+> [!IMPORTANT]
+> M3Undle does not provide playlists, streams, channels, guide data, subscriptions, or other media content.
+>
+> M3Undle is a self-hosted management and proxy tool. It only works with sources that you configure, such as provider URLs, local playlist files, XMLTV guide sources, and client credentials.
+>
+> You are responsible for the legality, licensing, and terms of use for any source you add to M3Undle. Do not use M3Undle to access, distribute, or restream content you are not authorized to use.
 
 ## License
 
-Project license: Apache License 2.0
-See `LICENSE` for details.
+M3Undle is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
 
----
 
-## Status
-
-**CLI:** Stable and usable.
-
-**Service + Web UI:** **Alpha 5** — functional for daily-driver LAN use. Not production-ready. Active development continues toward Alpha 6 and Beta.
