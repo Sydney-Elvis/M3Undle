@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace M3Undle.Web.Application.Epg;
+namespace M3Undle.Core.Epg;
 
 /// <summary>
 /// Stateless streaming XMLTV parser.
@@ -167,7 +167,7 @@ public sealed class XmltvParser
     // -------------------------------------------------------------------------
 
     // XMLTV timestamp format: YYYYMMDDHHmmss [+/-HHMM]
-    internal static bool TryParseXmltvTimestamp(string? value, out DateTimeOffset result)
+    public static bool TryParseXmltvTimestamp(string? value, out DateTimeOffset result)
     {
         result = default;
         if (string.IsNullOrWhiteSpace(value))

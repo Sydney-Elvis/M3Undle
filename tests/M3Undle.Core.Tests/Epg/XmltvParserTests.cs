@@ -1,7 +1,7 @@
-using M3Undle.Web.Application.Epg;
+using M3Undle.Core.Epg;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace M3Undle.Web.Tests.Epg;
+namespace M3Undle.Core.Tests.Epg;
 
 [TestClass]
 public sealed class XmltvParserTests

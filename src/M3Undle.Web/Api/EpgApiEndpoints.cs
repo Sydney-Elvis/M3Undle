@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using M3Undle.Core.Epg;
 using M3Undle.Web.Application;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Contracts.Epg;

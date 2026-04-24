@@ -1,3 +1,4 @@
+using M3Undle.Core.Epg;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;

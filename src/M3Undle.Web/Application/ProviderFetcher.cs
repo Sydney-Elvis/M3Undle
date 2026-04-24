@@ -1,5 +1,5 @@
-using System.Text.RegularExpressions;
 using M3Undle.Core.M3u;
+using M3Undle.Core.Providers;
 using M3Undle.Web.Data.Entities;
 
 namespace M3Undle.Web.Application;
@@ -15,9 +15,6 @@ public sealed class ProviderFetcher(
     SecretEncryptionService secretEncryption,
     ILogger<ProviderFetcher> logger)
 {
-    private static readonly Regex MetadataAttributeRegex =
-        new("(?<key>[A-Za-z0-9\\-]+)=\"(?<value>[^\"]*)\"", RegexOptions.Compiled);
-
     private static readonly string EmptyXmltvDocument =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
 
@@ -151,83 +148,25 @@ public sealed class ProviderFetcher(
 
     internal static ParsedProviderChannel ParseEntry(M3uEntry entry)
     {
-        var metadata = entry.MetadataLines.FirstOrDefault() ?? string.Empty;
-        var attributes = MetadataAttributeRegex.Matches(metadata)
-            .Select(match => (Key: match.Groups["key"].Value, Value: match.Groups["value"].Value))
-            .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(x => x.Key, x => x.First().Value, StringComparer.OrdinalIgnoreCase);
-
-        attributes.TryGetValue("tvg-id", out var tvgId);
-        attributes.TryGetValue("tvg-name", out var tvgName);
-        attributes.TryGetValue("tvg-logo", out var logoUrl);
-        attributes.TryGetValue("group-title", out var groupTitleAttr);
-
-        var groupTitle = !string.IsNullOrWhiteSpace(entry.Group)
-            ? entry.Group!.Trim()
-            : string.IsNullOrWhiteSpace(groupTitleAttr) ? null : groupTitleAttr.Trim();
-
-        var providerChannelKey = NormalizeProviderChannelKey(tvgId);
-        var displayName = string.IsNullOrWhiteSpace(entry.Title)
-            ? (string.IsNullOrWhiteSpace(tvgName) ? "Unnamed Channel" : tvgName.Trim())
-            : entry.Title.Trim();
+        var channel = ProviderChannelNormalizer.ParseEntry(entry);
 
         return new ParsedProviderChannel
         {
-            ProviderChannelKey = providerChannelKey,
-            DisplayName = displayName,
-            TvgId = string.IsNullOrWhiteSpace(tvgId) ? null : tvgId.Trim(),
-            TvgName = string.IsNullOrWhiteSpace(tvgName) ? null : tvgName.Trim(),
-            LogoUrl = string.IsNullOrWhiteSpace(logoUrl) ? null : logoUrl.Trim(),
-            StreamUrl = NormalizeStreamUrl(entry.Url!.Trim()),
-            GroupTitle = groupTitle,
+            ProviderChannelKey = channel.ProviderChannelKey,
+            DisplayName = channel.DisplayName,
+            TvgId = channel.TvgId,
+            TvgName = channel.TvgName,
+            LogoUrl = channel.LogoUrl,
+            StreamUrl = channel.StreamUrl,
+            GroupTitle = channel.GroupTitle,
         };
     }
 
     internal static string NormalizeStreamUrl(string url)
-    {
-        // Some providers emit https:// URLs on port 80 (the plain HTTP port).
-        // .NET HttpClient will attempt TLS on port 80 and fail immediately.
-        // Downgrade the scheme to http so the relay can connect.
-        if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) &&
-            Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-            uri.Port == 80)
-        {
-            return string.Concat("http://", url.AsSpan("https://".Length));
-        }
-
-        return url;
-    }
+        => ProviderChannelNormalizer.NormalizeStreamUrl(url);
 
     internal static void ApplyHeadersFromJson(HttpClient client, string? headersJson)
-    {
-        if (string.IsNullOrWhiteSpace(headersJson))
-        {
-            return;
-        }
-
-        using var document = System.Text.Json.JsonDocument.Parse(headersJson);
-        if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
-        {
-            return;
-        }
-
-        foreach (var property in document.RootElement.EnumerateObject())
-        {
-            if (property.Value.ValueKind != System.Text.Json.JsonValueKind.String)
-            {
-                continue;
-            }
-
-            var value = property.Value.GetString();
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                continue;
-            }
-
-            client.DefaultRequestHeaders.Remove(property.Name);
-            client.DefaultRequestHeaders.TryAddWithoutValidation(property.Name, value);
-        }
-    }
+        => ProviderRequestHeaders.ApplyTo(client, headersJson);
 
     private string ResolvePlaylistUrl(Provider provider)
     {
@@ -247,9 +186,7 @@ public sealed class ProviderFetcher(
             throw new ProviderFetchException($"Failed to decrypt Xtream password: {ex.Message}", ex);
         }
 
-        var username = Uri.EscapeDataString(provider.XtreamUsername ?? string.Empty);
-        var escapedPassword = Uri.EscapeDataString(password);
-        return $"{provider.XtreamBaseUrl}/get.php?username={username}&password={escapedPassword}&type=m3u_plus&output=ts";
+        return XtreamProviderUrls.BuildPlaylistUrl(provider.XtreamBaseUrl, provider.XtreamUsername, password);
     }
 
     private string? ResolveXmltvUrl(Provider provider)
@@ -273,9 +210,7 @@ public sealed class ProviderFetcher(
             return null;
         }
 
-        var username = Uri.EscapeDataString(provider.XtreamUsername ?? string.Empty);
-        var escapedPassword = Uri.EscapeDataString(password);
-        return $"{provider.XtreamBaseUrl}/xmltv.php?username={username}&password={escapedPassword}";
+        return XtreamProviderUrls.BuildXmltvUrl(provider.XtreamBaseUrl, provider.XtreamUsername, password);
     }
 
     private string SubstituteProviderUrl(string url)
@@ -292,7 +227,7 @@ public sealed class ProviderFetcher(
     }
 
     internal static string? NormalizeProviderChannelKey(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        => ProviderChannelNormalizer.NormalizeProviderChannelKey(value);
 }
 
 // -------------------------------------------------------------------------
@@ -331,4 +266,3 @@ public sealed class ProviderFetchException(string message, Exception? inner = nu
 
 public sealed class ProviderParseException(string message, Exception? inner = null)
     : Exception(message, inner);
-

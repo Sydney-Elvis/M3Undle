@@ -1,4 +1,4 @@
-namespace M3Undle.Web.Application.Epg;
+namespace M3Undle.Core.Epg;
 
 /// <summary>Channel metadata discovered within an XMLTV source.</summary>
 public sealed record EpgChannelRecord(

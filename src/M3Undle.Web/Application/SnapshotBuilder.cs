@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using M3Undle.Core.Epg;
 using M3Undle.Core.M3u;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;

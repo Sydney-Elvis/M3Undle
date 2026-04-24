@@ -1,5 +1,6 @@
 using System.Text;
 using System.Xml;
+using M3Undle.Core.Epg;
 using M3Undle.Web.Data.Entities;
 
 namespace M3Undle.Web.Application.Epg;
