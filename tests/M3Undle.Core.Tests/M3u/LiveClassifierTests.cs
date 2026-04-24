@@ -1,7 +1,7 @@
 using M3Undle.Core.M3u;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace M3Undle.Cli.Tests.M3u;
+namespace M3Undle.Core.Tests.M3u;
 
 [TestClass]
 public class LiveClassifierTests

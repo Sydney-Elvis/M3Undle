@@ -3,7 +3,7 @@ using System.Linq;
 using M3Undle.Core.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace M3Undle.Cli.Tests.IO;
+namespace M3Undle.Core.Tests.IO;
 
 [TestClass]
 public sealed class GroupSelectionFileTests

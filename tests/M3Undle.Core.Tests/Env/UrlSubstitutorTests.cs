@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using M3Undle.Core.Env;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace M3Undle.Cli.Tests.Env;
+namespace M3Undle.Core.Tests.Env;
 
 [TestClass]
 public class UrlSubstitutorTests

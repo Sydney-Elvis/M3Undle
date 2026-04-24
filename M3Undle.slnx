@@ -3,7 +3,7 @@
   <Project Path="src\M3Undle.Core\M3Undle.Core.csproj" />
   <Project Path="src\M3Undle.Web\M3Undle.Web.csproj" />
   <Project Path="tests\M3Undle.Cli.Tests\M3Undle.Cli.Tests.csproj" />
+  <Project Path="tests\M3Undle.Core.Tests\M3Undle.Core.Tests.csproj" />
   <Project Path="tests\M3Undle.FakeFfmpeg\M3Undle.FakeFfmpeg.csproj" />
   <Project Path="tests\M3Undle.Web.Tests\M3Undle.Web.Tests.csproj" />
 </Solution>
-

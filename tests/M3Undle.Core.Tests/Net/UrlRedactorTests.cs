@@ -2,7 +2,7 @@ using System;
 using M3Undle.Core.Net;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace M3Undle.Cli.Tests.Net;
+namespace M3Undle.Core.Tests.Net;
 
 [TestClass]
 public class UrlRedactorTests

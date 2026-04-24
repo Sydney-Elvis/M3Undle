@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using M3Undle.Core.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace M3Undle.Cli.Tests.IO;
+namespace M3Undle.Core.Tests.IO;
 
 [TestClass]
 public class TextFileWriterTests
