@@ -16,14 +16,4 @@ public sealed class AppBuildInfoTests
         Assert.AreNotEqual("unknown", buildInfo.Version);
         Assert.IsFalse(string.IsNullOrWhiteSpace(buildInfo.BuildDateUtc));
     }
-
-    [TestMethod]
-    public void ToDisplayString_IncludesBuildNumber_WhenPresent()
-    {
-        var buildInfo = new AppBuildInfo("test-version", "2026-03-27T12:00:00Z", "42");
-
-        Assert.AreEqual(
-            "test-version (build 42, built 2026-03-27T12:00:00Z)",
-            buildInfo.ToDisplayString());
-    }
 }

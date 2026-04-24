@@ -1,13 +1,12 @@
 using System;
 using System.Linq;
-using M3Undle.Cli;
 using M3Undle.Core;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 // Suppress MSTEST0032 for this file - we intentionally test constant values as documentation
 #pragma warning disable MSTEST0032
 
-namespace M3Undle.Cli.Tests;
+namespace M3Undle.Core.Tests;
 
 [TestClass]
 public class ExitCodesTests
@@ -76,4 +75,3 @@ public class ExitCodesTests
 }
 
 #pragma warning restore MSTEST0032
-

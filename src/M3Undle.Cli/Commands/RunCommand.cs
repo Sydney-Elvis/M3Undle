@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using Spectre.Console;
+using M3Undle.Core.Filtering;
 using M3Undle.Core.IO;
 using M3Undle.Core.M3u;
 using M3Undle.Core.Net;
@@ -11,8 +12,6 @@ namespace M3Undle.Cli.Commands;
 
 public sealed class RunCommand
 {
-    private const string UngroupedLabel = "(no group)";
-
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
     private readonly TextWriter _diagnostics;
@@ -110,7 +109,7 @@ public sealed class RunCommand
             ReportNewAndPendingGroups(context.GroupsFile!, playlistGroups, groupSelection, interactive);
         }
 
-        var filterResult = ApplyGroupFilters(allEntries, groupSelection);
+        var filterResult = PlaylistGroupFilter.Apply(allEntries, groupSelection);
 
         if (_diagnostics != TextWriter.Null)
         {
@@ -219,59 +218,6 @@ public sealed class RunCommand
 
         table.Border(TableBorder.Rounded);
         _console.Write(table);
-    }
-
-    private static FilterResult ApplyGroupFilters(
-        IReadOnlyList<M3uEntry> entries,
-        GroupSelectionFile.GroupSelection? groupSelection)
-    {
-        if (groupSelection is null)
-        {
-            var selected = new List<M3uEntry>(entries);
-            var counts = BuildGroupCounts(selected);
-            return new FilterResult(selected, counts, 0, 0);
-        }
-
-        var selectedEntries = new List<M3uEntry>();
-        var keepSet = groupSelection.Keep;
-        var allSet = groupSelection.All;
-        var droppedMissingGroup = 0;
-        var droppedExcluded = 0;
-
-        foreach (var entry in entries)
-        {
-            var group = entry.Group;
-
-            if (string.IsNullOrWhiteSpace(group))
-            {
-                droppedMissingGroup++;
-                continue;
-            }
-
-            if (allSet.Contains(group) && !keepSet.Contains(group))
-            {
-                droppedExcluded++;
-                continue;
-            }
-
-            selectedEntries.Add(entry);
-        }
-
-        var groupCounts = BuildGroupCounts(selectedEntries);
-        return new FilterResult(selectedEntries, groupCounts, droppedMissingGroup, droppedExcluded);
-    }
-
-    private static Dictionary<string, int> BuildGroupCounts(IEnumerable<M3uEntry> entries)
-    {
-        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries)
-        {
-            var key = string.IsNullOrWhiteSpace(entry.Group) ? UngroupedLabel : entry.Group!;
-            counts.TryGetValue(key, out var current);
-            counts[key] = current + 1;
-        }
-
-        return counts;
     }
 
     private void ReportNewAndPendingGroups(
@@ -400,10 +346,4 @@ public sealed class RunCommand
         }
     }
 
-    private sealed record FilterResult(
-        List<M3uEntry> Selected,
-        Dictionary<string, int> KeptGroups,
-        int DroppedWithoutGroup,
-        int DroppedExcluded);
 }
-
