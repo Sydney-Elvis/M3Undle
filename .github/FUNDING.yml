@@ -1,0 +1,5 @@
+# Enable GitHub Sponsors for this repository.
+# Add the same file to other repositories or to an org-level
+# `.github` repository to enable Sponsors across the organization.
+github:
+  - Sydney-Elvis
