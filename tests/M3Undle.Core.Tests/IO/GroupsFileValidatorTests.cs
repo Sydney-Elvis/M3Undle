@@ -345,6 +345,23 @@ News";
     }
 
     [TestMethod]
+    public void CreateHeader_AllLinesAreSameLength()
+    {
+        var header = GroupsFileValidator.CreateHeader();
+
+        const int expectedLength = 88;
+
+        for (var i = 0; i < header.Length - 1; i++)
+        {
+            var line = header[i];
+            Assert.AreEqual(expectedLength, line.Length,
+                $"Header line {i} has length {line.Length} but expected {expectedLength}: '{line}'");
+        }
+
+        Assert.AreEqual(string.Empty, header[^1]);
+    }
+
+    [TestMethod]
     public void GetCurrentVersion_ReturnsValidVersion()
     {
         var version = GroupsFileValidator.GetCurrentVersion();
@@ -359,4 +376,3 @@ News";
         Assert.IsTrue(int.TryParse(parts[2], out _), $"Build version '{parts[2]}' should be numeric");
     }
 }
-

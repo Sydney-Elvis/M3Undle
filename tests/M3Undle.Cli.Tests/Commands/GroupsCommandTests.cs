@@ -684,41 +684,6 @@ http://example.com/2";
         }
     }
 
-    [TestMethod]
-    public void CreateHeader_AllLinesAreSameLength()
-    {
-        var header = GroupsFileValidator.CreateHeader();
-        
-        // All header lines (excluding the empty line at the end) should be exactly 88 characters
-        const int expectedLength = 88;
-        
-        for (int i = 0; i < header.Length - 1; i++) // Skip the last empty line
-        {
-            var line = header[i];
-            Assert.AreEqual(expectedLength, line.Length, 
-                $"Header line {i} has length {line.Length} but expected {expectedLength}: '{line}'");
-        }
-        
-        // Last line should be empty
-        Assert.AreEqual(string.Empty, header[^1]);
-    }
-
-    [TestMethod]
-    public void GetCurrentVersion_IncludesBuildNumber()
-    {
-        var version = GroupsFileValidator.GetCurrentVersion();
-        
-        // Should have format X.Y.Z (e.g., 0.41.1)
-        var parts = version.Split('.');
-        Assert.HasCount(3, parts, $"Version '{version}' should have 3 parts (Major.Minor.Build)");
-        
-        // All parts should be numeric
-        foreach (var part in parts)
-        {
-            Assert.IsTrue(int.TryParse(part, out _), $"Version part '{part}' should be numeric");
-        }
-    }
-
     private static GroupsCommand CreateGroupsCommand(string playlistResponse)
     {
         var stdout = new StringWriter();
@@ -738,4 +703,3 @@ http://example.com/2";
             => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(_response) });
     }
 }
-
