@@ -1,6 +1,18 @@
+<div align="center">
+
 # M3Undle
 
 **Turn oversized IPTV provider lists into lineups your apps can actually use.**
+
+[![Build](https://img.shields.io/github/actions/workflow/status/Sydney-Elvis/M3Undle/dotnet.yml?branch=main&style=flat-square&label=build)](https://github.com/Sydney-Elvis/M3Undle/actions/workflows/dotnet.yml)
+[![Release](https://img.shields.io/github/v/release/Sydney-Elvis/M3Undle?include_prereleases&style=flat-square)](https://github.com/Sydney-Elvis/M3Undle/releases/latest)
+[![License](https://img.shields.io/github/license/Sydney-Elvis/M3Undle?style=flat-square)](LICENSE)
+
+[**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](https://github.com/Sydney-Elvis/M3Undle/releases) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+
+</div>
+
+---
 
 M3Undle is a self-hosted IPTV lineup manager and proxy for large M3U, XMLTV, Xtream, and HDHomeRun-style provider catalogs.
 
