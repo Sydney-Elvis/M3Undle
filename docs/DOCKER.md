@@ -13,7 +13,7 @@ Create a directory for M3Undle, place a `compose.yaml` inside it, then run:
 ```bash
 mkdir m3undle && cd m3undle
 # create compose.yaml (see below)
-mkdir config data playback
+mkdir config data
 docker compose up -d
 ```
 
@@ -38,11 +38,6 @@ services:
       #   Linux/macOS: openssl rand -base64 32
       #   Windows PowerShell: [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Max 256 }) -as [byte[]])
       M3UNDLE_ENCRYPTION_KEY: "your-base64-32-byte-key"
-      # Optional — enables the file browser when adding providers from local .m3u files.
-      M3UNDLE_M3U_DIR: /m3u
-      # Optional but recommended — isolate generated HLS working files.
-      # Keep this on fast storage if possible.
-      M3Undle__Streaming__GeneratedHls__Directory: /playback
       # Uncomment to require login for the web UI:
       # M3UNDLE_AUTH_ENABLED: "true"
       # M3UNDLE_ADMIN_USER: admin
@@ -51,8 +46,6 @@ services:
     volumes:
       - ./config:/config
       - ./data:/data
-      - ./m3u:/m3u        # optional — only needed if using M3UNDLE_M3U_DIR
-      - ./playback:/playback # optional but recommended for generated browser playback
     restart: unless-stopped
 ```
 
@@ -87,7 +80,7 @@ If you use HDHomeRun-compatible clients such as NextPVR, keep `5004:5004` publis
 ### docker run
 
 ```bash
-mkdir -p m3undle/config m3undle/data m3undle/m3u m3undle/playback && cd m3undle
+mkdir -p m3undle/config m3undle/data && cd m3undle
 
 docker run -d \
   --name m3undle \
@@ -96,11 +89,8 @@ docker run -d \
   -p 8080:8080 \
   -e TZ=America/New_York \
   -e M3UNDLE_ENCRYPTION_KEY="your-base64-32-byte-key" \
-  -e M3Undle__Streaming__GeneratedHls__Directory=/playback \
   -v ./config:/config \
   -v ./data:/data \
-  -v ./m3u:/m3u \
-  -v ./playback:/playback \
   --restart unless-stopped \
   ghcr.io/sydney-elvis/m3undle:alpha
 ```
@@ -112,9 +102,8 @@ docker run -d \
 | Mount | Required | Purpose |
 |---|---|---|
 | `/config` | Yes | `config.yaml` and `.env` credential file — files you edit |
-| `/data` | Yes | SQLite database, snapshots, log files — runtime state |
+| `/data` | Yes | SQLite database, snapshots, log files, runtime state, and generated browser playback files |
 | `/m3u` (or any path) | No | Local `.m3u` files browsable via the file browser. Set `M3UNDLE_M3U_DIR` to the container path. |
-| `/playback` (or any path) | Recommended | Generated rolling HLS playlists/segments for browser playback fallback. Set `M3Undle__Streaming__GeneratedHls__Directory` to match. |
 
 Both `/config` and `/data` are required for data to persist across container restarts.
 
@@ -128,20 +117,18 @@ If you prefer Docker-managed storage, named volumes work too — replace the bin
 volumes:
   - m3undle_config:/config
   - m3undle_data:/data
-  - m3undle_playback:/playback
 
 # add at the bottom of compose.yaml:
 volumes:
   m3undle_config:
   m3undle_data:
-  m3undle_playback:
 ```
 
 Named volumes avoid the ownership requirement on Linux and can give better I/O performance, but you can't browse the files directly from the host.
 
 ### Generated HLS Storage Sizing
 
-Browser playback fallback (`?format=hls` or browser UA fallback) writes rolling HLS playlists/segments to the generated-HLS directory.
+Browser playback fallback (`?format=hls` or browser UA fallback) writes rolling HLS playlists/segments under `/data/hls-work` by default.
 
 Estimate required storage with:
 
@@ -163,6 +150,15 @@ Examples:
 - 10 sessions at 12 Mbps, 90 seconds retained: raw ~1.35 GB, recommended **3-5 GB**.
 
 In v1 these playlists are rolling/sliding, session-scoped, and cleaned on session end/inactivity; full VOD retention is not used.
+
+If you expect heavy browser playback and want this scratch space on a separate disk, mount storage directly at the default internal path:
+
+```yaml
+volumes:
+  - ./config:/config
+  - ./data:/data
+  - ./hls-work:/data/hls-work
+```
 
 ---
 
@@ -234,7 +230,6 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 | `M3Undle__Refresh__StartupDelaySeconds` | `30` | Delay before first refresh after startup |
 | `M3Undle__Snapshot__RetentionCount` | `3` | Number of snapshots to retain |
 | `M3Undle__Cors__ApplicationAllowedOrigins__0` | *(unset)* | First allowed CORS origin for the application surface (`/api`, UI, `/Account/*`). Add more with `__1`, `__2`, etc. |
-| `M3Undle__Streaming__GeneratedHls__Directory` | `/data/hls-work` (image default) | Directory used for generated rolling HLS session files (`index.m3u8` + segments). Set this to a dedicated mount (for example `/playback`) to isolate browser playback scratch storage. |
 | `M3UNDLE_DATA_DIR` | `/data` (in image) | Override the data directory (database, logs, snapshots). Rarely needed when using the standard Docker volume layout. |
 
 ### Optional — HDHomeRun
@@ -267,13 +262,10 @@ Quick rule: if you are running Docker on a normal home server, do not add HDHR e
 | `M3Undle__ReverseProxy__TrustedProxies` | *(empty)* | Comma-separated list of trusted proxy IPs (e.g. `192.168.1.1`). Forwarded headers are only honoured from these IPs, `TrustedNetworks`, or loopback. |
 | `M3Undle__ReverseProxy__TrustedNetworks` | *(empty)* | Comma-separated CIDR blocks (e.g. `10.0.0.0/8`). |
 
-The following are set by the image and do not need to be overridden:
+The image sets this internal path so M3Undle can find `config.yaml` and `/config/.env` automatically:
 
 | Variable | Image Default |
 |---|---|
-| `ConnectionStrings__DefaultConnection` | `DataSource=/data/m3undle.db;Cache=Shared` |
-| `M3Undle__Logging__LogDirectory` | `/data/logs` |
-| `M3Undle__Snapshot__Directory` | `/data/snapshots` |
 | `M3UNDLE_CONFIG_DIR` | `/config` |
 
 ---

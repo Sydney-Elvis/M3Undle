@@ -33,19 +33,15 @@ RUN apt-get update \
 
 COPY --from=build /app/publish ./
 
-RUN mkdir -p /data /config /data/hls-work /hls-work
+RUN mkdir -p /data /config /data/hls-work
 
 ENV ASPNETCORE_URLS=http://+:5004;http://+:8080 \
     ASPNETCORE_HTTP_PORTS=5004;8080 \
     HOME=/data \
-    ConnectionStrings__DefaultConnection="DataSource=/data/m3undle.db;Cache=Shared" \
-    M3Undle__Logging__LogDirectory=/data/logs \
-    M3Undle__Snapshot__Directory=/data/snapshots \
-    M3Undle__Streaming__GeneratedHls__Directory=/data/hls-work \
     M3UNDLE_CONFIG_DIR=/config \
     M3UNDLE_M3U_DIR=/m3u_data
 
-VOLUME ["/data", "/config", "/hls-work"]
+VOLUME ["/data", "/config"]
 EXPOSE 5004 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

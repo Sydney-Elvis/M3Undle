@@ -55,16 +55,13 @@ Create `compose.yaml`:
         environment:
           TZ: America/New_York
           M3UNDLE_ENCRYPTION_KEY: "replace-with-a-base64-32-byte-key"
-          M3Undle__Streaming__GeneratedHls__Directory: /playback
         volumes:
           - ./config:/config
           - m3undle_data:/data
-          - m3undle_playback:/playback
         restart: unless-stopped
 
     volumes:
       m3undle_data:
-      m3undle_playback:
 
 Generate an encryption key:
 
@@ -80,7 +77,7 @@ Open the web UI:
 
 Port `8080` serves the web UI, M3U, XMLTV, Xtream, and general compatibility endpoints. Port `5004` serves HDHomeRun-compatible tuning.
 
-The `config` folder is bind-mounted so configuration files stay easy to inspect and back up. Runtime state and browser playback working files use Docker-managed volumes.
+The `config` folder is bind-mounted so configuration files stay easy to inspect and back up. Runtime state, logs, snapshots, and browser playback working files use the Docker-managed `m3undle_data` volume.
 
 Use `alpha` for the latest alpha build. Pin a specific version, such as `v1.0.0-alpha.5`, if you want repeatable updates.
 
@@ -163,12 +160,11 @@ Most settings can be changed later from the web UI. For a first run, only a few 
 | `TZ` | No | Host/default timezone | Sets timestamps for logs and scheduled refresh behavior. |
 | `M3UNDLE_ENCRYPTION_KEY` | Required for Xtream providers | None | Encrypts stored Xtream provider passwords. Keep this value backed up. |
 | `/config` | Yes | None | Human-readable configuration files and optional provider credential placeholders. |
-| `/data` | Yes | None | Database, snapshots, logs, and runtime state. |
-| `/playback` | Recommended | `/data/hls-work` | Temporary browser playback files generated when M3Undle needs HLS output. |
+| `/data` | Yes | None | Database, snapshots, logs, runtime state, and temporary browser playback files. |
 | `5004` | Recommended | `5004` | HDHomeRun-compatible tuning endpoint. |
 | `8080` | Yes | `8080` | Web UI and general client endpoints. |
 
-The README example bind-mounts `./config` so it is easy to inspect and back up. Runtime data and playback working files use Docker-managed volumes.
+The README example bind-mounts `./config` so it is easy to inspect and back up. Runtime data uses a Docker-managed volume.
 
 UI authentication and endpoint security are configured separately. The UI can be protected with environment variables, while client-facing endpoint credentials are managed inside M3Undle.
 
@@ -219,7 +215,7 @@ Common first checks:
 | XMLTV guide is missing | Confirm an EPG source is configured and the guide has been published. |
 | HDHomeRun client cannot find M3Undle | Add the tuner manually with `http://<host>:5004`. Auto-discovery depends on Docker networking and multicast. |
 | Xtream provider fails to save | Confirm `M3UNDLE_ENCRYPTION_KEY` is set and has not changed since the provider was added. |
-| Browser playback fails | Check stream status in the web UI and confirm the playback volume is mounted. |
+| Browser playback fails | Check stream status in the web UI and confirm the `/data` volume is writable. |
 | Streams stop or fail to start | Check provider limits, active stream sessions, and container logs. |
 
 When reporting an issue, include the M3Undle version tag, Docker compose file with secrets removed, client name, endpoint type, and relevant logs.
