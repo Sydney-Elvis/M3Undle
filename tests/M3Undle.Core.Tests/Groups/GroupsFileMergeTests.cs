@@ -80,6 +80,23 @@ public sealed class GroupsFileMergeTests
     }
 
     [TestMethod]
+    public void Merge_RecognisesExistingGroups_WhenFileHasNoHeader()
+    {
+        var existingLines = new[]
+        {
+            "#Sports",
+            "News",
+        };
+
+        var result = GroupsFileMerge.Merge(existingLines, ["Sports", "News", "Movies"], "1.2.3");
+
+        CollectionAssert.Contains(result.OutputLines.ToList(), "#Sports");
+        CollectionAssert.Contains(result.OutputLines.ToList(), "News");
+        CollectionAssert.Contains(result.OutputLines.ToList(), "##Movies");
+        CollectionAssert.AreEquivalent(new[] { "Movies" }, result.NewGroups.ToList());
+    }
+
+    [TestMethod]
     public void Merge_InsertsVersionLineAfterHeader_WhenMissing()
     {
         var existingLines = new[]

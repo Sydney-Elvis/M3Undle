@@ -167,7 +167,7 @@ public sealed class XmltvParser
     // -------------------------------------------------------------------------
 
     // XMLTV timestamp format: YYYYMMDDHHmmss [+/-HHMM]
-    public static bool TryParseXmltvTimestamp(string? value, out DateTimeOffset result)
+    internal static bool TryParseXmltvTimestamp(string? value, out DateTimeOffset result)
     {
         result = default;
         if (string.IsNullOrWhiteSpace(value))

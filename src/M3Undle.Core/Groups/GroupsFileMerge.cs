@@ -21,7 +21,6 @@ public static class GroupsFileMerge
 
         var existingGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var outputLines = new List<string>();
-        var headerProcessed = false;
         var hasVersionLine = false;
 
         foreach (var line in existingLines)
@@ -30,7 +29,6 @@ public static class GroupsFileMerge
             {
                 outputLines.Add(CreateVersionLine(currentVersion));
                 hasVersionLine = true;
-                headerProcessed = true;
                 continue;
             }
 
@@ -38,18 +36,14 @@ public static class GroupsFileMerge
 
             if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("######", StringComparison.Ordinal))
             {
-                headerProcessed = true;
                 continue;
             }
 
-            if (headerProcessed)
+            var trimmed = line.TrimStart();
+            var groupName = trimmed.TrimStart('#').Trim();
+            if (!string.IsNullOrWhiteSpace(groupName))
             {
-                var trimmed = line.TrimStart();
-                var groupName = trimmed.TrimStart('#').Trim();
-                if (!string.IsNullOrWhiteSpace(groupName))
-                {
-                    existingGroups.Add(groupName);
-                }
+                existingGroups.Add(groupName);
             }
         }
 
