@@ -1,3 +1,5 @@
+using M3Undle.Core.Events;
+using M3Undle.Core.Net;
 using M3Undle.Web.Application;
 using M3Undle.Web.Security;
 using M3Undle.Web.Contracts;
@@ -2136,22 +2138,7 @@ public static class ProviderApiEndpoints
     }
 
     internal static string? RedactStreamUrl(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value, UriKind.Absolute, out var uri))
-        {
-            return null;
-        }
-
-        var builder = new UriBuilder(uri)
-        {
-            UserName = string.Empty,
-            Password = string.Empty,
-            Query = string.Empty,
-            Fragment = string.Empty,
-        };
-
-        return builder.Uri.GetLeftPart(UriPartial.Path);
-    }
+        => UrlRedactor.RedactAbsoluteUrlOrNull(value);
 
     private sealed class PreviewChannelProjection
     {

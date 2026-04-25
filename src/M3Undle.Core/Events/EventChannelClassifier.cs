@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace M3Undle.Web.Application;
+namespace M3Undle.Core.Events;
 
-internal readonly record struct EventChannelClassification(
+public readonly record struct EventChannelClassification(
     bool IsEvent,
     bool IsPlaceholder,
     string? EventSlotKey,
@@ -13,7 +13,7 @@ internal readonly record struct EventChannelClassification(
     string? EventLeague,
     string? EventParticipantsJson);
 
-internal static partial class EventChannelClassifier
+public static partial class EventChannelClassifier
 {
     [GeneratedRegex(@"\s+")]
     private static partial Regex MultiSpaceRegex();

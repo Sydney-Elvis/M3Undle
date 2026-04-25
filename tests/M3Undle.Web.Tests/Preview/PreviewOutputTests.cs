@@ -117,50 +117,6 @@ public sealed class PreviewOutputTests
     }
 
     // -------------------------------------------------------------------------
-    // RedactStreamUrl
-    // -------------------------------------------------------------------------
-
-    [TestMethod]
-    public void RedactStreamUrl_Null_ReturnsNull()
-        => Assert.IsNull(ProviderApiEndpoints.RedactStreamUrl(null));
-
-    [TestMethod]
-    public void RedactStreamUrl_Empty_ReturnsNull()
-        => Assert.IsNull(ProviderApiEndpoints.RedactStreamUrl(""));
-
-    [TestMethod]
-    public void RedactStreamUrl_NotAUrl_ReturnsNull()
-        => Assert.IsNull(ProviderApiEndpoints.RedactStreamUrl("not-a-url"));
-
-    [TestMethod]
-    public void RedactStreamUrl_StripsQueryString()
-    {
-        var result = ProviderApiEndpoints.RedactStreamUrl("http://example.com/live/stream?user=alice&pass=secret");
-        Assert.AreEqual("http://example.com/live/stream", result);
-    }
-
-    [TestMethod]
-    public void RedactStreamUrl_StripsCredentials()
-    {
-        var result = ProviderApiEndpoints.RedactStreamUrl("http://user:password@example.com/stream");
-        Assert.AreEqual("http://example.com/stream", result);
-    }
-
-    [TestMethod]
-    public void RedactStreamUrl_StripsCredentialsAndQueryString()
-    {
-        var result = ProviderApiEndpoints.RedactStreamUrl("http://admin:secret@example.com/live?token=abc&output=ts");
-        Assert.AreEqual("http://example.com/live", result);
-    }
-
-    [TestMethod]
-    public void RedactStreamUrl_PlainUrl_ReturnedUnchanged()
-    {
-        var result = ProviderApiEndpoints.RedactStreamUrl("http://example.com/stream/channel1");
-        Assert.AreEqual("http://example.com/stream/channel1", result);
-    }
-
-    // -------------------------------------------------------------------------
     // Test helpers
     // -------------------------------------------------------------------------
 
@@ -224,4 +180,3 @@ public sealed class PreviewOutputTests
         public ValueTask DisposeAsync() => connection.DisposeAsync();
     }
 }
-

@@ -103,5 +103,38 @@ public class UrlRedactorTests
         var result = UrlRedactor.RedactUrl((Uri)null!);
         Assert.AreEqual(string.Empty, result);
     }
-}
 
+    [TestMethod]
+    public void RedactUrl_RemovesUserInfoCredentials()
+    {
+        var url = "http://user:password@example.com/stream";
+        var result = UrlRedactor.RedactUrl(url);
+        Assert.AreEqual("http://example.com/stream", result);
+    }
+
+    [TestMethod]
+    public void RedactAbsoluteUrlOrNull_Null_ReturnsNull()
+        => Assert.IsNull(UrlRedactor.RedactAbsoluteUrlOrNull(null));
+
+    [TestMethod]
+    public void RedactAbsoluteUrlOrNull_Empty_ReturnsNull()
+        => Assert.IsNull(UrlRedactor.RedactAbsoluteUrlOrNull(""));
+
+    [TestMethod]
+    public void RedactAbsoluteUrlOrNull_NotAUrl_ReturnsNull()
+        => Assert.IsNull(UrlRedactor.RedactAbsoluteUrlOrNull("not-a-url"));
+
+    [TestMethod]
+    public void RedactAbsoluteUrlOrNull_StripsQueryString()
+    {
+        var result = UrlRedactor.RedactAbsoluteUrlOrNull("http://example.com/live/stream?user=alice&pass=secret");
+        Assert.AreEqual("http://example.com/live/stream", result);
+    }
+
+    [TestMethod]
+    public void RedactAbsoluteUrlOrNull_StripsCredentialsAndQueryString()
+    {
+        var result = UrlRedactor.RedactAbsoluteUrlOrNull("http://admin:secret@example.com/live?token=abc&output=ts");
+        Assert.AreEqual("http://example.com/live", result);
+    }
+}

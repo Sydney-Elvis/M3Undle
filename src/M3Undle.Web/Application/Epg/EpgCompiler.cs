@@ -91,9 +91,7 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
                 if (!catalogue.ProgrammesByChannel.TryGetValue(mapping.XmltvChannelId, out var progs))
                     continue;
 
-                // Check coverage in the window
-                var hasCoverage = progs.Any(p => p.StartUtc < coverageWindow && p.StopUtc > now);
-                if (hasCoverage)
+                if (EpgCoverageAnalyzer.HasCoverage(progs, now, coverageWindow))
                 {
                     selectedMapping = mapping;
                     selectedCatalogue = catalogue;
