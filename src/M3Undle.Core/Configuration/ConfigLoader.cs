@@ -14,20 +14,20 @@ public static class ConfigLoader
     {
         if (!File.Exists(configPath))
         {
-            throw new CliException($"Config file not found: {configPath}", ExitCodes.ConfigError);
+            throw new CoreException($"Config file not found: {configPath}", ExitCodes.ConfigError);
         }
 
         var text = await File.ReadAllTextAsync(configPath, cancellationToken);
         if (string.IsNullOrWhiteSpace(text))
         {
-            throw new CliException($"Config file is empty: {configPath}", ExitCodes.ConfigError);
+            throw new CoreException($"Config file is empty: {configPath}", ExitCodes.ConfigError);
         }
 
         var config = ParseConfiguration(configPath, text);
 
         if (!config.Profiles.TryGetValue(profileName, out var profile))
         {
-            throw new CliException($"Profile '{profileName}' not found in config.", ExitCodes.ConfigError);
+            throw new CoreException($"Profile '{profileName}' not found in config.", ExitCodes.ConfigError);
         }
 
         var configDir = Path.GetDirectoryName(Path.GetFullPath(configPath)) ?? Environment.CurrentDirectory;
@@ -59,7 +59,7 @@ public static class ConfigLoader
         }
         catch (Exception ex)
         {
-            throw new CliException($"Failed to parse YAML config: {ex.Message}", ExitCodes.ConfigError);
+            throw new CoreException($"Failed to parse YAML config: {ex.Message}", ExitCodes.ConfigError);
         }
     }
 
@@ -72,7 +72,7 @@ public static class ConfigLoader
         }
         catch (Exception ex)
         {
-            throw new CliException($"Failed to parse JSON config: {ex.Message}", ExitCodes.ConfigError);
+            throw new CoreException($"Failed to parse JSON config: {ex.Message}", ExitCodes.ConfigError);
         }
     }
 

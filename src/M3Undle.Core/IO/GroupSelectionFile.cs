@@ -52,7 +52,7 @@ public static class GroupSelectionFile
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new CliException($"Failed to read groups file '{path}': {ex.Message}", ExitCodes.IoError);
+            throw new CoreException($"Failed to read groups file '{path}': {ex.Message}", ExitCodes.IoError);
         }
     }
 

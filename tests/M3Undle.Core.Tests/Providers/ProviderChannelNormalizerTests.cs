@@ -134,6 +134,13 @@ public sealed class ProviderChannelNormalizerTests
     }
 
     [TestMethod]
+    public void ParseEntry_NullUrl_Throws()
+    {
+        var entry = new M3uEntry(["#EXTINF:-1,Channel A"], null);
+        Assert.Throws<ArgumentException>(() => ProviderChannelNormalizer.ParseEntry(entry));
+    }
+
+    [TestMethod]
     public void NormalizeStreamUrl_HttpsOnPort80_DowngradesToHttp()
     {
         var result = ProviderChannelNormalizer.NormalizeStreamUrl("https://provider.example.com:80/live/stream/1");

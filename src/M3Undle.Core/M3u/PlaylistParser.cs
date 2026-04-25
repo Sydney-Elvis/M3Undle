@@ -6,7 +6,7 @@ public sealed class PlaylistParser
     {
         if (content is null)
         {
-            throw new CliException("Playlist content was null.", ExitCodes.ParseError);
+            throw new CoreException("Playlist content was null.", ExitCodes.ParseError);
         }
         cancellationToken.ThrowIfCancellationRequested();
         var lines = SplitLines(content);

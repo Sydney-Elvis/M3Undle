@@ -61,7 +61,7 @@ public static class EpgChannelMatcher
         return normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
     }
 
-    private static EpgChannelMatch? FindBestMatch(
+    internal static EpgChannelMatch? FindBestMatch(
         EpgChannelMatchCandidate channel,
         Dictionary<string, EpgChannelRecord> byExactId,
         Dictionary<string, EpgChannelRecord> byNormName,

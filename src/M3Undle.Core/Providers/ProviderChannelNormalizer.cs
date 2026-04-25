@@ -23,6 +23,11 @@ public static class ProviderChannelNormalizer
         attributes.TryGetValue("tvg-logo", out var logoUrl);
         attributes.TryGetValue("group-title", out var groupTitleAttr);
 
+        if (string.IsNullOrWhiteSpace(entry.Url))
+        {
+            throw new ArgumentException("M3U entry has no URL.", nameof(entry));
+        }
+
         var groupTitle = !string.IsNullOrWhiteSpace(entry.Group)
             ? entry.Group!.Trim()
             : string.IsNullOrWhiteSpace(groupTitleAttr) ? null : groupTitleAttr.Trim();
@@ -31,16 +36,14 @@ public static class ProviderChannelNormalizer
             ? (string.IsNullOrWhiteSpace(tvgName) ? "Unnamed Channel" : tvgName.Trim())
             : entry.Title.Trim();
 
-        return new NormalizedProviderChannel
-        {
-            ProviderChannelKey = NormalizeProviderChannelKey(tvgId),
-            DisplayName = displayName,
-            TvgId = string.IsNullOrWhiteSpace(tvgId) ? null : tvgId.Trim(),
-            TvgName = string.IsNullOrWhiteSpace(tvgName) ? null : tvgName.Trim(),
-            LogoUrl = string.IsNullOrWhiteSpace(logoUrl) ? null : logoUrl.Trim(),
-            StreamUrl = NormalizeStreamUrl(entry.Url?.Trim() ?? string.Empty),
-            GroupTitle = groupTitle,
-        };
+        return new NormalizedProviderChannel(
+            ProviderChannelKey: NormalizeProviderChannelKey(tvgId),
+            DisplayName: displayName,
+            TvgId: string.IsNullOrWhiteSpace(tvgId) ? null : tvgId.Trim(),
+            TvgName: string.IsNullOrWhiteSpace(tvgName) ? null : tvgName.Trim(),
+            LogoUrl: string.IsNullOrWhiteSpace(logoUrl) ? null : logoUrl.Trim(),
+            StreamUrl: NormalizeStreamUrl(entry.Url.Trim()),
+            GroupTitle: groupTitle);
     }
 
     public static string? NormalizeProviderChannelKey(string? value)

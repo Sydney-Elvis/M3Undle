@@ -41,7 +41,7 @@ public static class EnvFileLoader
         }
         catch (Exception ex)
         {
-            throw new CliException($"Failed to read .env file: {ex.Message}", ExitCodes.ConfigError);
+            throw new CoreException($"Failed to read .env file: {ex.Message}", ExitCodes.ConfigError);
         }
     }
 }

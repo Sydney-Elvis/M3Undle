@@ -61,6 +61,8 @@ public sealed class EpgChannelMapper(
             if (sourceChannels.Count == 0)
                 continue;
 
+            var index = new EpgChannelIndex(sourceChannels);
+
             foreach (var channel in providerChannels)
             {
                 var key = (channel.ProviderChannelId, catalogue.SourceId);
@@ -69,9 +71,8 @@ public sealed class EpgChannelMapper(
                 if (manualKeys.Contains(key))
                     continue;
 
-                var match = EpgChannelMatcher.FindBestMatch(
-                    new EpgChannelMatchCandidate(channel.DisplayName, channel.TvgId, channel.TvgName),
-                    sourceChannels);
+                var match = index.FindBestMatch(
+                    new EpgChannelMatchCandidate(channel.DisplayName, channel.TvgId, channel.TvgName));
                 if (match is null)
                     continue;
 

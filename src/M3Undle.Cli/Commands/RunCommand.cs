@@ -41,7 +41,7 @@ public sealed class RunCommand
     {
         if (string.IsNullOrEmpty(context.PlaylistSource))
         {
-            throw new CliException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
+            throw new CoreException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
         }
 
         var epgRequested = !string.IsNullOrEmpty(context.EpgSource);
@@ -50,7 +50,7 @@ public sealed class RunCommand
 
         if (epgRequested && string.IsNullOrEmpty(playlistOut) && string.IsNullOrEmpty(epgOut))
         {
-            throw new CliException("When an EPG is requested you must provide --out-playlist, --out-epg, or use '-' for stdout.", ExitCodes.ConfigError);
+            throw new CoreException("When an EPG is requested you must provide --out-playlist, --out-epg, or use '-' for stdout.", ExitCodes.ConfigError);
         }
 
         var interactive = ShouldUseInteractiveConsole(playlistOut, epgOut, epgRequested);

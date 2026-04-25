@@ -1,4 +1,3 @@
-using M3Undle.Core;
 using M3Undle.Core.Net;
 using Spectre.Console;
 
@@ -8,161 +7,65 @@ internal sealed class InteractiveSourceFetcher
 {
     private readonly HttpClient _httpClient;
     private readonly TextWriter _diagnostics;
+    private readonly SourceFetcher _sourceFetcher;
 
     public InteractiveSourceFetcher(HttpClient httpClient, TextWriter diagnostics)
     {
         _httpClient = httpClient;
         _diagnostics = diagnostics;
+        _sourceFetcher = new SourceFetcher(httpClient, diagnostics);
     }
 
     public async Task<string> GetStringWithProgressAsync(string source, IAnsiConsole console, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(source))
-        {
-            throw new CliException("Playlist URL was not provided.", ExitCodes.ConfigError);
-        }
-
         if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
             (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
         {
-            try
-            {
-                if (_diagnostics != TextWriter.Null)
-                {
-                    await _diagnostics.WriteLineAsync($"Downloading {UrlRedactor.RedactUrl(uri)}...");
-                }
+            using var response = await HttpFetcher.SendAndValidateAsync(
+                _httpClient, uri, _diagnostics, cancellationToken,
+                HttpCompletionOption.ResponseHeadersRead);
 
-                using var response = await _httpClient.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var total = response.Content.Headers.ContentLength ?? -1L;
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var ms = new MemoryStream();
+            var buffer = new byte[8192];
+            long read = 0;
 
-                if (_diagnostics != TextWriter.Null)
+            var result = string.Empty;
+            await console.Progress()
+                .AutoClear(true)
+                .Columns(CreateColumns(total))
+                .StartAsync(async ctx =>
                 {
-                    await _diagnostics.WriteLineAsync($"Response status: {(int)response.StatusCode} {response.ReasonPhrase}");
-                    await _diagnostics.WriteLineAsync($"Content-Type: {response.Content.Headers.ContentType}");
-                    await _diagnostics.WriteLineAsync($"Content-Length: {response.Content.Headers.ContentLength?.ToString() ?? "unknown"}");
-                }
-
-                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-                    response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                {
-                    throw new CliException($"Authentication failed when requesting {UrlRedactor.RedactUrl(uri)}", ExitCodes.AuthError);
-                }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var errorBody = string.Empty;
-                    try
+                    var task = ctx.AddTask("Downloading", maxValue: total > 0 ? total : double.MaxValue);
+                    if (total <= 0)
                     {
-                        errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
-
-                        if (_diagnostics != TextWriter.Null && !string.IsNullOrWhiteSpace(errorBody))
-                        {
-                            await _diagnostics.WriteLineAsync("=== Server Error Response Body ===");
-                            await _diagnostics.WriteLineAsync(errorBody);
-                            await _diagnostics.WriteLineAsync("=== End Server Error Response ===");
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(errorBody) && errorBody.Length > 500)
-                        {
-                            errorBody = errorBody[..500] + "...";
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        if (_diagnostics != TextWriter.Null)
-                        {
-                            await _diagnostics.WriteLineAsync($"Failed to read error response body: {ex.Message}");
-                        }
+                        task.IsIndeterminate = true;
+                        task.Description = "Downloading (0 B)";
                     }
 
-                    var errorMessage = $"Request to {UrlRedactor.RedactUrl(uri)} failed with status {(int)response.StatusCode} ({response.ReasonPhrase}).";
-                    if (!string.IsNullOrWhiteSpace(errorBody))
+                    int bytesRead;
+                    while ((bytesRead = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
                     {
-                        errorMessage += $"\nServer response: {errorBody}";
+                        ms.Write(buffer, 0, bytesRead);
+                        read += bytesRead;
+
+                        task.Increment(bytesRead);
+
+                        if (total > 0)
+                            task.Value = read;
+                        else
+                            task.Description = $"Downloading ({FormatBytes(read)})";
                     }
 
-                    throw new CliException(errorMessage, ExitCodes.NetworkError);
-                }
+                    task.StopTask();
+                    result = System.Text.Encoding.UTF8.GetString(ms.ToArray());
+                });
 
-                var total = response.Content.Headers.ContentLength ?? -1L;
-                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                using var ms = new MemoryStream();
-                var buffer = new byte[8192];
-                long read = 0;
-
-                var result = string.Empty;
-                await console.Progress()
-                    .AutoClear(true)
-                    .Columns(CreateColumns(total))
-                    .StartAsync(async ctx =>
-                    {
-                        var task = ctx.AddTask("Downloading", maxValue: total > 0 ? total : double.MaxValue);
-                        if (total <= 0)
-                        {
-                            task.IsIndeterminate = true;
-                            task.Description = "Downloading (0 B)";
-                        }
-
-                        int bytesRead;
-                        while ((bytesRead = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
-                        {
-                            ms.Write(buffer, 0, bytesRead);
-                            read += bytesRead;
-
-                            task.Increment(bytesRead);
-
-                            if (total > 0)
-                            {
-                                task.Value = read;
-                            }
-                            else
-                            {
-                                task.Description = $"Downloading ({FormatBytes(read)})";
-                            }
-                        }
-
-                        task.StopTask();
-                        result = System.Text.Encoding.UTF8.GetString(ms.ToArray());
-                    });
-
-                return result;
-            }
-            catch (CliException)
-            {
-                throw;
-            }
-            catch (TaskCanceledException ex)
-            {
-                if (_diagnostics != TextWriter.Null)
-                {
-                    await _diagnostics.WriteLineAsync($"Request timed out: {ex}");
-                }
-
-                throw new CliException($"Request to {UrlRedactor.RedactUrl(uri)} timed out: {ex.Message}", ExitCodes.NetworkError);
-            }
-            catch (HttpRequestException ex)
-            {
-                if (_diagnostics != TextWriter.Null)
-                {
-                    await _diagnostics.WriteLineAsync($"Request failed: {ex}");
-                }
-
-                throw new CliException($"Request to {UrlRedactor.RedactUrl(uri)} failed: {ex.Message}", ExitCodes.NetworkError);
-            }
+            return result;
         }
 
-        try
-        {
-            if (_diagnostics != TextWriter.Null)
-            {
-                await _diagnostics.WriteLineAsync($"Reading file {source}...");
-            }
-
-            return await File.ReadAllTextAsync(source, cancellationToken);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new CliException($"Failed to read file {source}: {ex.Message}", ExitCodes.IoError);
-        }
+        return await _sourceFetcher.GetStringAsync(source, cancellationToken);
     }
 
     private static ProgressColumn[] CreateColumns(long total)
@@ -190,9 +93,7 @@ internal sealed class InteractiveSourceFetcher
     private static string FormatBytes(long bytes)
     {
         if (bytes < 1024)
-        {
             return $"{bytes} B";
-        }
 
         string[] units = ["KB", "MB", "GB", "TB"];
         double value = bytes;

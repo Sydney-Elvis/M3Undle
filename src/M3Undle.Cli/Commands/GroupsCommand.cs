@@ -39,7 +39,7 @@ public sealed class GroupsCommand
     {
         if (string.IsNullOrEmpty(context.PlaylistSource))
         {
-            throw new CliException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
+            throw new CoreException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
         }
 
         var fetcher = new SourceFetcher(_httpClient, _diagnostics);
