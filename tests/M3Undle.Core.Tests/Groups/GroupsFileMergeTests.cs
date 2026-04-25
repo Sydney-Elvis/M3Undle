@@ -112,6 +112,8 @@ public sealed class GroupsFileMergeTests
         var lines = result.OutputLines.ToList();
 
         StringAssert.Contains(versionLine, "version 1.2.3");
-        Assert.IsLessThan(lines.IndexOf("#Sports"), lines.IndexOf(versionLine));
+        var versionLineIndex = lines.IndexOf(versionLine);
+        var sportsLineIndex = lines.IndexOf("#Sports");
+        Assert.IsLessThan(sportsLineIndex, versionLineIndex);
     }
 }
