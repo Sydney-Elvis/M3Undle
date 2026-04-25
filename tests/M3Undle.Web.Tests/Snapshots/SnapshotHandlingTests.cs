@@ -796,7 +796,7 @@ public sealed class SnapshotHandlingTests
             DatabaseConnectionString: $"Data Source={Path.Combine(tempDir, "m3undle.db")}",
             LogDirectory: tempDir,
             SnapshotDirectory: tempDir);
-        var xmltvParser = new M3Undle.Web.Application.Epg.XmltvParser();
+        var xmltvParser = new M3Undle.Core.Epg.XmltvParser();
         var epgSourceFetcher = new M3Undle.Web.Application.Epg.EpgSourceFetcher(
             factory,
             fetcher,

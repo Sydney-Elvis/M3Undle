@@ -16,8 +16,15 @@ public static class UrlRedactor
             return string.Empty;
         }
 
-        // Return only scheme://host:port/path (no query string or fragment)
-        return uri.GetLeftPart(UriPartial.Path);
+        var builder = new UriBuilder(uri)
+        {
+            UserName = string.Empty,
+            Password = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
+
+        return builder.Uri.GetLeftPart(UriPartial.Path);
     }
 
     /// <summary>
@@ -39,5 +46,14 @@ public static class UrlRedactor
         // If not a valid URI, return as-is (probably a file path)
         return url;
     }
-}
 
+    public static string? RedactAbsoluteUrlOrNull(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        return RedactUrl(uri);
+    }
+}

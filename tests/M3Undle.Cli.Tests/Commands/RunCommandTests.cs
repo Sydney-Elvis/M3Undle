@@ -22,7 +22,7 @@ public class RunCommandTests
     {
         var cmd = CreateRunCommand();
         var context = new CommandContext(CommandKind.Run, new CommandOptionSet(new Dictionary<string, List<string>>()), null, null, null, new Dictionary<string, string>(), null, null, null, null, null, null, false, false);
-        await Assert.ThrowsAsync<CliException>(() => cmd.ExecuteAsync(context, CancellationToken.None));
+        await Assert.ThrowsAsync<CoreException>(() => cmd.ExecuteAsync(context, CancellationToken.None));
     }
 
     [TestMethod]
@@ -30,7 +30,7 @@ public class RunCommandTests
     {
         var cmd = CreateRunCommand();
         var context = new CommandContext(CommandKind.Run, new CommandOptionSet(new Dictionary<string, List<string>>()), null, null, null, new Dictionary<string, string>(), "playlist", "epg", null, null, null, null, false, false);
-        await Assert.ThrowsAsync<CliException>(() => cmd.ExecuteAsync(context, CancellationToken.None));
+        await Assert.ThrowsAsync<CoreException>(() => cmd.ExecuteAsync(context, CancellationToken.None));
     }
 
     [TestMethod]
@@ -80,7 +80,7 @@ public class RunCommandTests
         var cmd = new RunCommand(stdout, stderr, diagnostics, httpClient, parser);
         var context = new CommandContext(CommandKind.Run, new CommandOptionSet(new Dictionary<string, List<string>>()), null, null, null, new Dictionary<string, string>(), "http://test", null, "invalidGroupsFile.txt", null, null, null, false, false);
         
-        var exception = await Assert.ThrowsAsync<CliException>(() => cmd.ExecuteAsync(context, CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<CoreException>(() => cmd.ExecuteAsync(context, CancellationToken.None));
         Assert.Contains("invalidGroupsFile.txt", exception.Message);
     }
 

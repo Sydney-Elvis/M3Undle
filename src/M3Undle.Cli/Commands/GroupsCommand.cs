@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using Spectre.Console;
+using M3Undle.Core.Groups;
 using M3Undle.Core.IO;
 using M3Undle.Core.M3u;
 using M3Undle.Core.Net;
@@ -38,16 +39,17 @@ public sealed class GroupsCommand
     {
         if (string.IsNullOrEmpty(context.PlaylistSource))
         {
-            throw new CliException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
+            throw new CoreException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
         }
 
         var fetcher = new SourceFetcher(_httpClient, _diagnostics);
+        var interactiveFetcher = new InteractiveSourceFetcher(_httpClient, _diagnostics);
         
         // Detect if we should use interactive mode based on output redirection
         var isInteractive = !Console.IsOutputRedirected && !Console.IsErrorRedirected;
         
         var playlistContent = isInteractive
-            ? await fetcher.GetStringWithProgressAsync(context.PlaylistSource, _console, cancellationToken)
+            ? await interactiveFetcher.GetStringWithProgressAsync(context.PlaylistSource, _console, cancellationToken)
             : await fetcher.GetStringAsync(context.PlaylistSource, cancellationToken);
 
         PlaylistDocument document = null!;
@@ -74,22 +76,13 @@ public sealed class GroupsCommand
             entries = entries.Where(e => LiveClassifier.IsLive(e.Url));
         }
 
-        var groups = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        SortedSet<string> groups = null!;
         if (isInteractive)
         {
             await _console.Status()
                 .StartAsync("Extracting groups...", async ctx =>
                 {
-                    await Task.Run(() =>
-                    {
-                        foreach (var entry in entries)
-                        {
-                            if (!string.IsNullOrEmpty(entry.Group))
-                            {
-                                groups.Add(entry.Group);
-                            }
-                        }
-                    }, cancellationToken);
+                    groups = await Task.Run(() => PlaylistGroupDiscovery.Discover(entries), cancellationToken);
                 });
         }
         else
@@ -98,13 +91,7 @@ public sealed class GroupsCommand
             {
                 await _diagnostics.WriteLineAsync("Extracting groups...");
             }
-            foreach (var entry in entries)
-            {
-                if (!string.IsNullOrEmpty(entry.Group))
-                {
-                    groups.Add(entry.Group);
-                }
-            }
+            groups = PlaylistGroupDiscovery.Discover(entries);
         }
 
         if (_diagnostics != TextWriter.Null)
@@ -175,7 +162,7 @@ public sealed class GroupsCommand
                 }
 
                 var currentVersion = GroupsFileValidator.GetCurrentVersion();
-                var result = await MergeWithExistingGroupsFileAsync(outPath, groups, cancellationToken);
+                var result = await MergeWithExistingGroupsFileAsync(outPath, groups, currentVersion, cancellationToken);
                 
                 // Check if version needs updating or if new groups were added
                 var versionChanged = fileVersion != null && fileVersion != currentVersion;
@@ -265,99 +252,13 @@ public sealed class GroupsCommand
         return ExitCodes.Success;
     }
 
-    private async Task<MergeResult> MergeWithExistingGroupsFileAsync(
+    private static async Task<GroupsFileMergeResult> MergeWithExistingGroupsFileAsync(
         string filePath, 
         SortedSet<string> discoveredGroups, 
+        string currentVersion,
         CancellationToken cancellationToken)
     {
         var existingLines = await File.ReadAllLinesAsync(filePath, cancellationToken);
-        var existingGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var outputLines = new List<string>();
-        var headerProcessed = false;
-        var hasVersionLine = false;
-
-        // Process existing file
-        foreach (var line in existingLines)
-        {
-            // Check if this is the version line
-            if (line.TrimStart().StartsWith("######  Created with bndl version ", StringComparison.Ordinal))
-            {
-                // Update version line to current version with proper padding
-                var currentVersion = GroupsFileValidator.GetCurrentVersion();
-                var versionLine = $"######  Created with bndl version {currentVersion}";
-                const int totalLength = 88;
-                const string trailer = " ######";
-                var paddedVersionLine = versionLine.PadRight(totalLength - trailer.Length) + trailer;
-                outputLines.Add(paddedVersionLine);
-                hasVersionLine = true;
-                headerProcessed = true;
-                continue;
-            }
-
-            outputLines.Add(line);
-            
-            // Skip header lines and empty lines
-            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("######"))
-            {
-                headerProcessed = true;
-                continue;
-            }
-
-            if (headerProcessed)
-            {
-                // Extract group name (with or without # or ## prefix)
-                var trimmed = line.TrimStart();
-                var groupName = trimmed.TrimStart('#').Trim();
-                if (!string.IsNullOrWhiteSpace(groupName))
-                {
-                    existingGroups.Add(groupName);
-                }
-            }
-        }
-
-        // If no version line was found, add one after the header
-        if (!hasVersionLine)
-        {
-            var currentVersion = GroupsFileValidator.GetCurrentVersion();
-            var versionLine = $"######  Created with bndl version {currentVersion}";
-            const int totalLength = 88;
-            const string trailer = " ######";
-            var paddedVersionLine = versionLine.PadRight(totalLength - trailer.Length) + trailer;
-            // Insert version line after the header lines
-            var insertIndex = 0;
-            for (int i = 0; i < outputLines.Count; i++)
-            {
-                if (outputLines[i].TrimStart().StartsWith("######"))
-                {
-                    insertIndex = i + 1;
-                }
-                else if (!string.IsNullOrWhiteSpace(outputLines[i]))
-                {
-                    break;
-                }
-            }
-            outputLines.Insert(insertIndex, paddedVersionLine);
-        }
-
-        // Find new groups
-        var newGroups = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in discoveredGroups)
-        {
-            if (!existingGroups.Contains(group))
-            {
-                newGroups.Add(group);
-            }
-        }
-
-        // Add new groups with ## prefix to mark them as new
-        foreach (var newGroup in newGroups)
-        {
-            outputLines.Add($"##{newGroup}");
-        }
-
-        return new MergeResult(outputLines, newGroups);
+        return GroupsFileMerge.Merge(existingLines, discoveredGroups, currentVersion);
     }
-
-    private sealed record MergeResult(List<string> OutputLines, SortedSet<string> NewGroups);
 }
-

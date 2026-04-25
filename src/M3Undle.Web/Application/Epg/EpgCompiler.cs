@@ -1,5 +1,6 @@
 using System.Text;
 using System.Xml;
+using M3Undle.Core.Epg;
 using M3Undle.Web.Data.Entities;
 
 namespace M3Undle.Web.Application.Epg;
@@ -90,9 +91,7 @@ public sealed class EpgCompiler(ILogger<EpgCompiler> logger)
                 if (!catalogue.ProgrammesByChannel.TryGetValue(mapping.XmltvChannelId, out var progs))
                     continue;
 
-                // Check coverage in the window
-                var hasCoverage = progs.Any(p => p.StartUtc < coverageWindow && p.StopUtc > now);
-                if (hasCoverage)
+                if (EpgCoverageAnalyzer.HasCoverage(progs, now, coverageWindow))
                 {
                     selectedMapping = mapping;
                     selectedCatalogue = catalogue;

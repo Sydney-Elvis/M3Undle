@@ -226,7 +226,7 @@ builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<ProviderFetcher>();
-builder.Services.AddSingleton<M3Undle.Web.Application.Epg.XmltvParser>();
+builder.Services.AddSingleton<M3Undle.Core.Epg.XmltvParser>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
 builder.Services.AddScoped<M3Undle.Web.Application.Epg.EpgChannelMapper>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgCompiler>();

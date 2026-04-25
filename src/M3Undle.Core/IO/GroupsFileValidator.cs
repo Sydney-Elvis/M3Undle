@@ -88,7 +88,7 @@ public static class GroupsFileValidator
                 counter++;
                 if (counter > 999) // Prevent infinite loop
                 {
-                    throw new CliException($"Too many backup files exist for {originalPath}", ExitCodes.IoError);
+                    throw new CoreException($"Too many backup files exist for {originalPath}", ExitCodes.IoError);
                 }
             }
             backupPath = Path.Combine(directory, $"{fileName}.bak{counter}");

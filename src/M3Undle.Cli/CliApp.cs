@@ -93,7 +93,7 @@ public sealed class CliApp : IDisposable
             UsagePrinter.PrintUsage(_stdout);
             return ExitCodes.ConfigError;
         }
-        catch (CliException ex)
+        catch (CoreException ex)
         {
             await _stderr.WriteLineAsync(ex.Message);
             return ex.ExitCode;

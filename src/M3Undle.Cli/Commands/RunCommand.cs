@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using Spectre.Console;
+using M3Undle.Core.Filtering;
 using M3Undle.Core.IO;
 using M3Undle.Core.M3u;
 using M3Undle.Core.Net;
@@ -11,8 +12,6 @@ namespace M3Undle.Cli.Commands;
 
 public sealed class RunCommand
 {
-    private const string UngroupedLabel = "(no group)";
-
     private readonly TextWriter _stdout;
     private readonly TextWriter _stderr;
     private readonly TextWriter _diagnostics;
@@ -42,7 +41,7 @@ public sealed class RunCommand
     {
         if (string.IsNullOrEmpty(context.PlaylistSource))
         {
-            throw new CliException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
+            throw new CoreException("Missing required: --playlist-url or --config with playlist", ExitCodes.ConfigError);
         }
 
         var epgRequested = !string.IsNullOrEmpty(context.EpgSource);
@@ -51,7 +50,7 @@ public sealed class RunCommand
 
         if (epgRequested && string.IsNullOrEmpty(playlistOut) && string.IsNullOrEmpty(epgOut))
         {
-            throw new CliException("When an EPG is requested you must provide --out-playlist, --out-epg, or use '-' for stdout.", ExitCodes.ConfigError);
+            throw new CoreException("When an EPG is requested you must provide --out-playlist, --out-epg, or use '-' for stdout.", ExitCodes.ConfigError);
         }
 
         var interactive = ShouldUseInteractiveConsole(playlistOut, epgOut, epgRequested);
@@ -61,8 +60,9 @@ public sealed class RunCommand
         }
 
         var fetcher = new SourceFetcher(_httpClient, _diagnostics);
+        var interactiveFetcher = new InteractiveSourceFetcher(_httpClient, _diagnostics);
         var playlistContent = interactive
-            ? await fetcher.GetStringWithProgressAsync(context.PlaylistSource!, _console, cancellationToken)
+            ? await interactiveFetcher.GetStringWithProgressAsync(context.PlaylistSource!, _console, cancellationToken)
             : await fetcher.GetStringAsync(context.PlaylistSource!, cancellationToken);
 
         var document = await ParsePlaylistAsync(playlistContent, cancellationToken, interactive);
@@ -110,7 +110,7 @@ public sealed class RunCommand
             ReportNewAndPendingGroups(context.GroupsFile!, playlistGroups, groupSelection, interactive);
         }
 
-        var filterResult = ApplyGroupFilters(allEntries, groupSelection);
+        var filterResult = PlaylistGroupFilter.Apply(allEntries, groupSelection);
 
         if (_diagnostics != TextWriter.Null)
         {
@@ -132,7 +132,7 @@ public sealed class RunCommand
         if (epgRequested)
         {
             var epgContent = interactive
-                ? await fetcher.GetStringWithProgressAsync(context.EpgSource!, _console, cancellationToken)
+                ? await interactiveFetcher.GetStringWithProgressAsync(context.EpgSource!, _console, cancellationToken)
                 : await fetcher.GetStringAsync(context.EpgSource!, cancellationToken);
 
             await WriteEpgWithOptionalStatusAsync(epgContent, epgOut, cancellationToken, interactive);
@@ -219,59 +219,6 @@ public sealed class RunCommand
 
         table.Border(TableBorder.Rounded);
         _console.Write(table);
-    }
-
-    private static FilterResult ApplyGroupFilters(
-        IReadOnlyList<M3uEntry> entries,
-        GroupSelectionFile.GroupSelection? groupSelection)
-    {
-        if (groupSelection is null)
-        {
-            var selected = new List<M3uEntry>(entries);
-            var counts = BuildGroupCounts(selected);
-            return new FilterResult(selected, counts, 0, 0);
-        }
-
-        var selectedEntries = new List<M3uEntry>();
-        var keepSet = groupSelection.Keep;
-        var allSet = groupSelection.All;
-        var droppedMissingGroup = 0;
-        var droppedExcluded = 0;
-
-        foreach (var entry in entries)
-        {
-            var group = entry.Group;
-
-            if (string.IsNullOrWhiteSpace(group))
-            {
-                droppedMissingGroup++;
-                continue;
-            }
-
-            if (allSet.Contains(group) && !keepSet.Contains(group))
-            {
-                droppedExcluded++;
-                continue;
-            }
-
-            selectedEntries.Add(entry);
-        }
-
-        var groupCounts = BuildGroupCounts(selectedEntries);
-        return new FilterResult(selectedEntries, groupCounts, droppedMissingGroup, droppedExcluded);
-    }
-
-    private static Dictionary<string, int> BuildGroupCounts(IEnumerable<M3uEntry> entries)
-    {
-        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries)
-        {
-            var key = string.IsNullOrWhiteSpace(entry.Group) ? UngroupedLabel : entry.Group!;
-            counts.TryGetValue(key, out var current);
-            counts[key] = current + 1;
-        }
-
-        return counts;
     }
 
     private void ReportNewAndPendingGroups(
@@ -400,10 +347,4 @@ public sealed class RunCommand
         }
     }
 
-    private sealed record FilterResult(
-        List<M3uEntry> Selected,
-        Dictionary<string, int> KeptGroups,
-        int DroppedWithoutGroup,
-        int DroppedExcluded);
 }
-
