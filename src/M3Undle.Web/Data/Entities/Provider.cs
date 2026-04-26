@@ -28,6 +28,9 @@ public sealed class Provider
     public string? XtreamEncryptedPassword { get; set; }
     public bool XtreamIncludeXmltv { get; set; }
 
+    // Set true when player_api.php probe succeeds for an M3U URL with embedded credentials
+    public bool XtreamDetectedCapable { get; set; }
+
     public ICollection<ProfileProvider> ProfileProviders { get; set; } = new List<ProfileProvider>();
     public ICollection<FetchRun> FetchRuns { get; set; } = new List<FetchRun>();
     public ICollection<ProviderGroup> ProviderGroups { get; set; } = new List<ProviderGroup>();

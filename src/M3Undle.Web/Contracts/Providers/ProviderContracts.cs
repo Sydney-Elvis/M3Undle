@@ -56,6 +56,7 @@ public sealed class ProviderDto
     public string? XtreamBaseUrl { get; set; }
     public string? XtreamUsername { get; set; }
     public bool XtreamIncludeXmltv { get; set; }
+    public bool XtreamDetectedCapable { get; set; }
     public bool IsXtreamProvider => XtreamBaseUrl is not null;
 }
 

@@ -253,7 +253,11 @@ public sealed class SnapshotBuilder(
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
         sw.Restart();
 
-        // 4. EPG fetch + DB sync
+        // 4. Probe Xtream API capability for M3U providers (non-fatal, updates flag in place)
+        if (provider.XtreamBaseUrl is null)
+            await UpdateXtreamCapabilityAsync(provider, cancellationToken);
+
+        // 5. EPG fetch + DB sync
         string xmltvContent;
         long xmltvBytes = 0;
         var stage = "xmltv";
@@ -305,7 +309,7 @@ public sealed class SnapshotBuilder(
         fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
         await db.SaveChangesAsync(cancellationToken);
 
-        // 5. Build snapshot for each linked profile
+        // 6. Build snapshot for each linked profile
         bool anySucceeded = false;
         string? lastErrorSummary = null;
         string? aggregateChangeClass = ChangeClasses.None;
@@ -380,6 +384,30 @@ public sealed class SnapshotBuilder(
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    private async Task UpdateXtreamCapabilityAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        var info = await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
+        var capable = info is not null;
+        if (capable == provider.XtreamDetectedCapable)
+            return;
+
+        await db.Providers
+            .Where(p => p.ProviderId == provider.ProviderId)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(p => p.XtreamDetectedCapable, capable),
+                CancellationToken.None);
+
+        if (capable)
+            logger.LogInformation(
+                "Xtream API capability detected for provider {ProviderId} (expires: {Expires}, status: {Status}, maxConn: {MaxConn}).",
+                provider.ProviderId,
+                info!.ExpiresUtc?.ToString("yyyy-MM-dd") ?? "unknown",
+                info.Status ?? "unknown",
+                info.MaxConnections?.ToString() ?? "unknown");
+        else
+            logger.LogInformation("Xtream API capability no longer detected for provider {ProviderId}.", provider.ProviderId);
+    }
 
     private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildSnapshotFromDbAsync(
         Provider provider,

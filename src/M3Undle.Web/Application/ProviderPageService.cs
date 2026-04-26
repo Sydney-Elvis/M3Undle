@@ -1040,6 +1040,7 @@ public sealed class ProviderPageService(
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,
                     XtreamIncludeXmltv = provider.XtreamIncludeXmltv,
+                    XtreamDetectedCapable = provider.XtreamDetectedCapable,
                     LastRefresh = latestRefresh is null
                         ? null
                         : new ProviderLastRefreshDto
