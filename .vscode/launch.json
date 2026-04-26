@@ -36,8 +36,8 @@
       },
       "dockerServerReadyAction": {
         "action": "openExternally",
-        "pattern": "\\bNow listening on:\\s+https?://\\S+:([0-9]+)",
-        "uriFormat": "http://localhost:%s/"
+        "pattern": "\\bNow listening on:\\s+https?://\\S+:8080\\b",
+        "uriFormat": "http://localhost:8080/"
       }
     },
     {
@@ -53,8 +53,8 @@
       },
       "dockerServerReadyAction": {
         "action": "openExternally",
-        "pattern": "\\bNow listening on:\\s+https?://\\S+:([0-9]+)",
-        "uriFormat": "http://localhost:%s/"
+        "pattern": "\\bNow listening on:\\s+https?://\\S+:8080\\b",
+        "uriFormat": "http://localhost:8080/"
       }
     },
     {
