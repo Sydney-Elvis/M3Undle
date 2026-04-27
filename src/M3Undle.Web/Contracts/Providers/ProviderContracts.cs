@@ -214,20 +214,6 @@ public sealed class ConfigYamlProviderDto
     public List<string> MissingEnvVars { get; set; } = [];
 }
 
-public sealed class ImportConfigProviderRequest
-{
-    [Required]
-    public string Name { get; set; } = string.Empty;
-    public bool IncludeVod { get; set; }
-    public bool IncludeSeries { get; set; }
-
-    [Range(1, 100)]
-    public int? MaxConcurrentStreams { get; set; }
-
-    public List<string>? AssociateToProfileIds { get; set; }
-    public bool ImportAsXtream { get; set; }
-}
-
 public sealed class CreateProfileRequest
 {
     [Required]
@@ -245,23 +231,16 @@ public sealed class ProviderHealthDto
     public DateTime? LastSuccessFetch { get; set; }
 }
 
-public sealed class ProbeConfigProviderRequest
-{
-    [Required]
-    public string Name { get; set; } = string.Empty;
-}
-
-public sealed class ProbeConfigProviderResultDto
-{
-    public bool Ok { get; set; }
-    public int? ChannelCount { get; set; }
-    public string? Error { get; set; }
-}
 
 public sealed class UpsertProviderResult
 {
     public string Action { get; set; } = string.Empty; // "created" or "updated"
     public ProviderDto Provider { get; set; } = new();
+}
+
+public sealed class UpgradeToXtreamRequest
+{
+    public bool XtreamIncludeXmltv { get; set; }
 }
 
 public sealed class SnapshotStatusDto

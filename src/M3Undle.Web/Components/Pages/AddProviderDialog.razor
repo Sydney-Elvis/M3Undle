@@ -30,6 +30,27 @@
                                 </MudTooltip>
                             </MudStack>
 
+                            @if (LooksLikeXtreamUrl(_urlModel.PlaylistUrl))
+                            {
+                                <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                                    <MudStack Spacing="1">
+                                        <MudText Typo="Typo.body2"><strong>Xtream API detected.</strong> Add as Xtream Codes for richer channel data, stable stream IDs, and subscription expiry tracking.</MudText>
+                                        <MudSwitch @bind-Value="_urlAddAsXtream" Color="Color.Info"
+                                                   Label="Add as Xtream Codes (recommended)"
+                                                   Disabled="!_encryptionAvailable" />
+                                        @if (_urlAddAsXtream)
+                                        {
+                                            <MudSwitch @bind-Value="_urlAddAsXtreamIncludeXmltv" Color="Color.Primary"
+                                                       Label="Include XMLTV guide from same server" />
+                                        }
+                                        @if (!_encryptionAvailable)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Warning">M3UNDLE_ENCRYPTION_KEY must be configured to add as Xtream Codes.</MudText>
+                                        }
+                                    </MudStack>
+                                </MudAlert>
+                            }
+
                             <MudTextField Label="XMLTV URL (optional)" @bind-Value="_urlModel.XmltvUrl"
                                           HelperText="http/https URL for EPG guide data" />
                             <MudTextField Label="User Agent (optional)" @bind-Value="_urlModel.UserAgent" />
@@ -195,11 +216,6 @@
             {
                 <MudTabPanel Text="Import" Icon="@Icons.Material.Filled.FileDownload">
                     <div class="pt-3">
-                        @if (!string.IsNullOrWhiteSpace(_importError))
-                        {
-                            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_importError</MudAlert>
-                        }
-
                         @if (_configProviders.Count == 0)
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
@@ -207,7 +223,6 @@
                         else
                         {
                             var selProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
-                            var selOpts = string.IsNullOrEmpty(_importSelectedName) ? null : GetImportOptions(_importSelectedName);
                             var selImported = !string.IsNullOrEmpty(_importSelectedName) && IsAlreadyImported(_importSelectedName);
                             var selMissing = selProvider?.MissingEnvVars.Count > 0;
 
@@ -240,19 +255,6 @@
                                                       Style="font-family:monospace; font-size:0.8rem;" />
                                     }
 
-                                    @if (LooksLikeXtreamUrl(selProvider.PlaylistUrl))
-                                    {
-                                        <MudSwitch @bind-Value="selOpts!.ImportAsXtream" Color="Color.Info"
-                                                   Label="Import as Xtream Codes (extract credentials and store encrypted)"
-                                                   Disabled="!_encryptionAvailable" />
-                                        @if (selOpts!.ImportAsXtream && !_encryptionAvailable)
-                                        {
-                                            <MudAlert Severity="Severity.Warning" Dense="true" Variant="Variant.Outlined">
-                                                M3UNDLE_ENCRYPTION_KEY is not set — cannot import as Xtream Codes until the key is configured.
-                                            </MudAlert>
-                                        }
-                                    }
-
                                     @if (selMissing)
                                     {
                                         <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
@@ -267,52 +269,10 @@
                                     }
                                     else
                                     {
-                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                                            @if (_probeStates.TryGetValue(selProvider.Name, out var probe))
-                                            {
-                                                if (probe.IsProbing)
-                                                {
-                                                    <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                                                    <MudText Typo="Typo.body2" Color="Color.Secondary">Testing…</MudText>
-                                                }
-                                                else if (probe.Ok == true)
-                                                {
-                                                    <MudChip T="string" Size="Size.Small" Color="Color.Success">@($"{probe.ChannelCount:N0} channels found")</MudChip>
-                                                }
-                                                else
-                                                {
-                                                    <MudTooltip Text="@probe.Error">
-                                                        <MudChip T="string" Size="Size.Small" Color="Color.Error">Test failed</MudChip>
-                                                    </MudTooltip>
-                                                }
-                                            }
-                                            else
-                                            {
-                                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Ready</MudChip>
-                                            }
-                                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
-                                                       Disabled="@IsProbing(selProvider.Name)"
-                                                       OnClick="() => ProbeAsync(selProvider.Name)">Test connection</MudButton>
-                                        </MudStack>
-
-                                        <MudNumericField T="int?" Label="Max concurrent streams (optional)"
-                                                         @bind-Value="selOpts!.MaxConcurrentStreams" Min="1" Max="100"
-                                                         HelperText="Leave blank to use the global setting" />
-
-                                        <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center">
-                                            <MudCheckBox T="bool" @bind-Value="selOpts!.IncludeVod" Label="Include VOD" />
-                                            <MudCheckBox T="bool" @bind-Value="selOpts!.IncludeSeries" Label="Include Series" />
-                                        </MudStack>
-
-                                        <MudSelect T="string" Label="Associated Profile"
-                                                   @bind-Value="selOpts!.ProfileId"
-                                                   ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(Auto-create from name)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
-                                            <MudSelectItem T="string" Value="@string.Empty">(Auto-create from name)</MudSelectItem>
-                                            @foreach (var p in AvailableProfiles)
-                                            {
-                                                <MudSelectItem T="string" Value="@p.ProfileId">@p.Name</MudSelectItem>
-                                            }
-                                        </MudSelect>
+                                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                                   OnClick="() => UseImportedProviderUrl(selProvider)">
+                                            Use this URL →
+                                        </MudButton>
                                     }
                                 }
                             </MudStack>
@@ -326,27 +286,7 @@
     <DialogActions>
         <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
         <MudSpacer />
-        @{
-            var selImportProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
-            var selImportOpts = string.IsNullOrEmpty(_importSelectedName) ? null : GetImportOptions(_importSelectedName);
-            var canImport = _activeTab == ImportTabIndex
-                && !string.IsNullOrEmpty(_importSelectedName)
-                && !IsAlreadyImported(_importSelectedName)
-                && (selImportProvider?.MissingEnvVars.Count ?? 1) == 0
-                && !(selImportOpts?.ImportAsXtream == true && !_encryptionAvailable);
-        }
-        @if (_activeTab == ImportTabIndex)
-        {
-            @if (canImport)
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           Disabled="@(_importingName is not null)"
-                           OnClick="@(() => ImportConfigAsync(_importSelectedName))">
-                    @(_importingName is not null ? "Importing…" : "Import")
-                </MudButton>
-            }
-        }
-        else
+        @if (_activeTab != ImportTabIndex)
         {
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        Disabled="@(IsSaveDisabled())"
@@ -379,6 +319,8 @@
 
     // URL tab
     private readonly ProviderFormModel _urlModel = new() { TimeoutSeconds = 120, Enabled = true };
+    private bool _urlAddAsXtream;
+    private bool _urlAddAsXtreamIncludeXmltv;
 
     // File tab
     private readonly ProviderFormModel _fileModel = new() { TimeoutSeconds = 120, Enabled = true };
@@ -390,13 +332,9 @@
     private readonly XtreamFormModel _xtreamModel = new() { TimeoutSeconds = 120, Enabled = true };
 
     // Import tab
-    private string? _importError;
-    private string? _importingName;
     private string _importSelectedName = string.Empty;
     private readonly List<ConfigYamlProviderDto> _configProviders = [];
     private readonly List<ProviderDto> _importedProviders = [];
-    private readonly Dictionary<string, ProbeState> _probeStates = new();
-    private readonly Dictionary<string, ImportOptions> _importOptions = new();
 
     private const string _urlHelperText =
         "Enter an http/https URL.\n\n" +
@@ -571,21 +509,49 @@
             if (_activeTab == 0)
             {
                 if (_urlForm is not null) { await _urlForm.ValidateAsync(); if (!_urlForm.IsValid) return; }
-                result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
+
+                if (_urlAddAsXtream && LooksLikeXtreamUrl(_urlModel.PlaylistUrl))
                 {
-                    Name = _urlModel.Name.Trim(),
-                    PlaylistUrl = _urlModel.PlaylistUrl.Trim(),
-                    XmltvUrl = NullIfEmpty(_urlModel.XmltvUrl),
-                    HeadersJson = NullIfEmpty(_urlModel.HeadersJson),
-                    UserAgent = NullIfEmpty(_urlModel.UserAgent),
-                    Enabled = _urlModel.Enabled,
-                    IncludeVod = _urlModel.IncludeVod,
-                    IncludeSeries = _urlModel.IncludeSeries,
-                    ForceMpegTs = _urlModel.ForceMpegTs,
-                    TimeoutSeconds = _urlModel.TimeoutSeconds,
-                    MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
-                    AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
-                }, CancellationToken.None);
+                    var creds = ProviderPageService.ParseXtreamUrl(_urlModel.PlaylistUrl.Trim());
+                    if (creds is null)
+                    {
+                        _error = "Unable to extract Xtream credentials from the URL. Ensure it includes username and password parameters.";
+                        return;
+                    }
+                    result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
+                    {
+                        Name = _urlModel.Name.Trim(),
+                        XtreamBaseUrl = creds.Value.BaseUrl,
+                        XtreamUsername = creds.Value.Username,
+                        XtreamPassword = creds.Value.Password,
+                        XtreamIncludeXmltv = _urlAddAsXtreamIncludeXmltv,
+                        Enabled = _urlModel.Enabled,
+                        IncludeVod = _urlModel.IncludeVod,
+                        IncludeSeries = _urlModel.IncludeSeries,
+                        ForceMpegTs = _urlModel.ForceMpegTs,
+                        TimeoutSeconds = _urlModel.TimeoutSeconds,
+                        MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
+                        AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
+                    }, CancellationToken.None);
+                }
+                else
+                {
+                    result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
+                    {
+                        Name = _urlModel.Name.Trim(),
+                        PlaylistUrl = _urlModel.PlaylistUrl.Trim(),
+                        XmltvUrl = NullIfEmpty(_urlModel.XmltvUrl),
+                        HeadersJson = NullIfEmpty(_urlModel.HeadersJson),
+                        UserAgent = NullIfEmpty(_urlModel.UserAgent),
+                        Enabled = _urlModel.Enabled,
+                        IncludeVod = _urlModel.IncludeVod,
+                        IncludeSeries = _urlModel.IncludeSeries,
+                        ForceMpegTs = _urlModel.ForceMpegTs,
+                        TimeoutSeconds = _urlModel.TimeoutSeconds,
+                        MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
+                        AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
+                    }, CancellationToken.None);
+                }
             }
             else if (_activeTab == 1)
             {
@@ -662,71 +628,16 @@
         && url.Contains("username=", StringComparison.OrdinalIgnoreCase)
         && url.Contains("password=", StringComparison.OrdinalIgnoreCase);
 
-    private ImportOptions GetImportOptions(string name)
-    {
-        if (!_importOptions.TryGetValue(name, out var opts))
-        {
-            opts = new ImportOptions();
-            _importOptions[name] = opts;
-        }
-        return opts;
-    }
-
     private bool IsAlreadyImported(string name) => _importedProviders.Any(p => p.Name == name);
-    private bool IsProbing(string name) => _probeStates.TryGetValue(name, out var s) && s.IsProbing;
 
-    private async Task ProbeAsync(string name)
+    private void UseImportedProviderUrl(ConfigYamlProviderDto provider)
     {
-        if (!_probeStates.TryGetValue(name, out var state))
-        {
-            state = new ProbeState();
-            _probeStates[name] = state;
-        }
-        state.IsProbing = true; state.Ok = null; state.ChannelCount = null; state.Error = null;
+        _urlModel.Name = provider.Name;
+        _urlModel.PlaylistUrl = provider.PlaylistUrl;
+        if (!string.IsNullOrWhiteSpace(provider.XmltvUrl))
+            _urlModel.XmltvUrl = provider.XmltvUrl;
+        _activeTab = 0;
         StateHasChanged();
-        try
-        {
-            var probe = await ProviderPageService.ProbeConfigProviderAsync(name, CancellationToken.None);
-            if (!string.IsNullOrWhiteSpace(probe.Error)) { state.Ok = false; state.Error = probe.Error; return; }
-            var result = probe.Result;
-            state.Ok = result?.Ok ?? false; state.ChannelCount = result?.ChannelCount; state.Error = result?.Error;
-        }
-        catch (Exception ex) { state.Ok = false; state.Error = ex.Message; }
-        finally { state.IsProbing = false; StateHasChanged(); }
-    }
-
-    private async Task ImportConfigAsync(string name)
-    {
-        _importError = null;
-        _importingName = name;
-        try
-        {
-            var opts = GetImportOptions(name);
-            var import = await ProviderPageService.ImportConfigProviderAsync(
-                new ImportConfigProviderRequest
-                {
-                    Name = name,
-                    IncludeVod = opts.IncludeVod,
-                    IncludeSeries = opts.IncludeSeries,
-                    MaxConcurrentStreams = opts.MaxConcurrentStreams,
-                    AssociateToProfileIds = ProfileIdList(opts.ProfileId),
-                    ImportAsXtream = opts.ImportAsXtream,
-                },
-                CancellationToken.None);
-            if (!string.IsNullOrWhiteSpace(import.Error)) { _importError = import.Error; return; }
-            var dto = import.Provider;
-            if (dto is not null)
-            {
-                _importedProviders.Add(dto);
-                var linkedProfileId = dto.AssociatedProfileIds.FirstOrDefault();
-                if (!string.IsNullOrEmpty(linkedProfileId))
-                    await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
-            }
-            await OnSaved.InvokeAsync();
-            MudDialog.Close(DialogResult.Ok(true));
-        }
-        catch (Exception ex) { _importError = $"Import failed: {ex.Message}"; }
-        finally { _importingName = null; StateHasChanged(); }
     }
 
     // ------------------------------------------------------------------
@@ -773,20 +684,5 @@
         public string ProfileId { get; set; } = string.Empty;
     }
 
-    private sealed class ProbeState
-    {
-        public bool IsProbing { get; set; }
-        public bool? Ok { get; set; }
-        public int? ChannelCount { get; set; }
-        public string? Error { get; set; }
-    }
-
-    private sealed class ImportOptions
-    {
-        public bool IncludeVod { get; set; } = true;
-        public bool IncludeSeries { get; set; } = true;
-        public int? MaxConcurrentStreams { get; set; }
-        public string ProfileId { get; set; } = string.Empty;
-        public bool ImportAsXtream { get; set; } = true;
-    }
 }
+

@@ -14,9 +14,6 @@ public sealed class Provider
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 
-    // Config source tracking
-    public string? ConfigSourcePath { get; set; }  // Path to config.yaml if imported from there
-    public bool NeedsEnvVarSubstitution { get; set; }  // True if URL contains %VAR% placeholders
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
 

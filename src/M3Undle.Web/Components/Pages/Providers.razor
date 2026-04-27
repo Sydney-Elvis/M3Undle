@@ -66,7 +66,6 @@
             <HeaderContent>
                 <MudTh>Name</MudTh>
                 <MudTh>Profile</MudTh>
-                <MudTh>Enabled</MudTh>
                 <MudTh>Max Streams</MudTh>
                 <MudTh>Last Refresh</MudTh>
                 <MudTh>Expires</MudTh>
@@ -75,7 +74,27 @@
                 <MudTh>Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd>@context.Name</MudTd>
+                <MudTd>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <span>@context.Name</span>
+                        @if (context.IsXtreamProvider)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Xtream</MudChip>
+                        }
+                        else if (context.PlaylistUrl?.StartsWith("file://", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">File</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">M3U</MudChip>
+                        }
+                        @if (!context.Enabled)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">Disabled</MudChip>
+                        }
+                    </MudStack>
+                </MudTd>
                 <MudTd>
                     @if (context.AssociatedProfileIds.Count == 0)
                     {
@@ -90,7 +109,6 @@
                         }
                     }
                 </MudTd>
-                <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
                 <MudTd>@(context.MaxConcurrentStreams?.ToString() ?? "—")</MudTd>
                 <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
                 <MudTd>@ExpiryCell(context.PlaylistExpiresUtc)</MudTd>

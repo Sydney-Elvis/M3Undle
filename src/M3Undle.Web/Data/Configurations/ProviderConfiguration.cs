@@ -22,8 +22,6 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.MaxConcurrentStreams).HasColumnName("max_concurrent_streams");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
-        builder.Property(x => x.ConfigSourcePath).HasColumnName("config_source_path");
-        builder.Property(x => x.NeedsEnvVarSubstitution).HasColumnName("needs_env_var_substitution").IsRequired();
         builder.Property(x => x.IncludeVod).HasColumnName("include_vod").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.IncludeSeries).HasColumnName("include_series").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.XtreamBaseUrl).HasColumnName("xtream_base_url");

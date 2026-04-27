@@ -125,114 +125,6 @@ public sealed class ProviderPageService(
         }).ToList();
     }
 
-    public async Task<(ProbeConfigProviderResultDto? Result, string? Error)> ProbeConfigProviderAsync(string name, CancellationToken cancellationToken)
-    {
-        var configProviders = await configService.LoadProvidersAsync();
-        var configProvider = configProviders.FirstOrDefault(p => p.Name == name);
-        if (configProvider is null)
-            return (null, $"Provider '{name}' not found in config.yaml");
-
-        var (isValid, missing) = envVarService.ValidateVariables(configProvider.PlaylistUrl);
-        if (!isValid)
-            return (null, $"Missing environment variables: {string.Join(", ", missing)}");
-
-        var probe = new Provider
-        {
-            ProviderId = "(probe)",
-            Name = configProvider.Name,
-            PlaylistUrl = configProvider.PlaylistUrl,
-            XmltvUrl = configProvider.XmltvUrl,
-            HeadersJson = configProvider.Headers is not null ? JsonSerializer.Serialize(configProvider.Headers) : null,
-            UserAgent = configProvider.UserAgent,
-            TimeoutSeconds = configProvider.TimeoutSeconds,
-            Enabled = true,
-            CreatedUtc = DateTime.UtcNow,
-            UpdatedUtc = DateTime.UtcNow,
-        };
-
-        try
-        {
-            var result = await fetcher.FetchPlaylistAsync(probe, cancellationToken);
-            return (new ProbeConfigProviderResultDto { Ok = true, ChannelCount = result.Channels.Count }, null);
-        }
-        catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException)
-        {
-            return (new ProbeConfigProviderResultDto { Ok = false, Error = ex.Message }, null);
-        }
-    }
-
-    public async Task<(ProviderDto? Provider, string? Error)> ImportConfigProviderAsync(
-        ImportConfigProviderRequest request,
-        CancellationToken cancellationToken)
-    {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var configProviders = await configService.LoadProvidersAsync();
-        var configProvider = configProviders.FirstOrDefault(p => p.Name == request.Name);
-        if (configProvider is null)
-            return (null, $"Provider '{request.Name}' not found in config.yaml");
-
-        var (isValid, missing) = envVarService.ValidateVariables(configProvider.PlaylistUrl);
-        if (!isValid)
-            return (null, $"Missing environment variables: {string.Join(", ", missing)}");
-
-        var existing = await db.Providers.AsNoTracking().FirstOrDefaultAsync(p => p.Name == configProvider.Name, cancellationToken);
-        if (existing is not null)
-            return (null, $"Provider '{configProvider.Name}' already exists");
-
-        var now = DateTime.UtcNow;
-        var provider = new Provider
-        {
-            ProviderId = Guid.NewGuid().ToString(),
-            Name = configProvider.Name,
-            PlaylistUrl = configProvider.PlaylistUrl,
-            XmltvUrl = configProvider.XmltvUrl,
-            HeadersJson = configProvider.Headers is not null ? JsonSerializer.Serialize(configProvider.Headers) : null,
-            UserAgent = configProvider.UserAgent,
-            TimeoutSeconds = configProvider.TimeoutSeconds,
-            Enabled = configProvider.Enabled,
-            IncludeVod = request.IncludeVod,
-            IncludeSeries = request.IncludeSeries,
-            MaxConcurrentStreams = request.MaxConcurrentStreams is > 0 ? request.MaxConcurrentStreams : null,
-            ConfigSourcePath = configProvider.SourcePath,
-            NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
-            CreatedUtc = now,
-            UpdatedUtc = now,
-        };
-
-        db.Providers.Add(provider);
-        var reuseImportProfile = await FindUnlinkedProfileByNameAsync(db, configProvider.Name, cancellationToken);
-        string importProfileId;
-        if (reuseImportProfile is not null)
-        {
-            importProfileId = reuseImportProfile.ProfileId;
-        }
-        else
-        {
-            var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
-            var profile = new Profile
-            {
-                ProfileId = Guid.NewGuid().ToString(),
-                Name = profileName,
-                OutputName = "m3undle",
-                MergeMode = "replace",
-                Enabled = true,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-            db.Profiles.Add(profile);
-            importProfileId = profile.ProfileId;
-        }
-        ApplyProviderProfiles(db, provider.ProviderId, [importProfileId]);
-
-        await db.SaveChangesAsync(cancellationToken);
-        await AutoActivateProfileIfNoneAsync(db, importProfileId, cancellationToken);
-        refreshTrigger.TriggerRefresh();
-        var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
-        eventBus.Publish(AppEventKind.ProviderChanged);
-        return (dto, null);
-    }
 
     public async Task<(ProviderDto? Provider, string? Error)> CreateProviderAsync(CreateProviderRequest request, CancellationToken cancellationToken)
     {
@@ -491,6 +383,49 @@ public sealed class ProviderPageService(
         provider.UpdatedUtc = DateTime.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
         return null;
+    }
+
+    public async Task<(ProviderDto? Provider, string? Error)> UpgradeProviderToXtreamAsync(
+        string providerId,
+        UpgradeToXtreamRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var provider = await db.Providers.SingleOrDefaultAsync(x => x.ProviderId == providerId, cancellationToken);
+        if (provider is null)
+            return (null, "Provider not found.");
+
+        if (provider.XtreamBaseUrl is not null)
+            return (null, "Provider is already configured as an Xtream Codes provider.");
+
+        if (!provider.XtreamDetectedCapable)
+            return (null, "This provider has not been detected as Xtream capable.");
+
+        if (!encryption.IsAvailable)
+            return (null, "M3UNDLE_ENCRYPTION_KEY is not configured. Set this environment variable to a Base64-encoded 32-byte value before upgrading to Xtream mode.");
+
+        var resolvedUrl = envVarService.SubstituteEnvVars(provider.PlaylistUrl);
+        if (!TryParseXtreamUrl(resolvedUrl, out var xtreamBaseUrl, out var xtreamUsername, out var xtreamPassword))
+            return (null, "Unable to extract Xtream credentials from the playlist URL. Ensure the URL follows the Xtream format with a username and password query parameter.");
+
+        provider.XtreamBaseUrl = xtreamBaseUrl;
+        provider.XtreamUsername = xtreamUsername;
+        provider.XtreamEncryptedPassword = encryption.Encrypt(xtreamPassword);
+        provider.XtreamIncludeXmltv = request.XtreamIncludeXmltv;
+        provider.PlaylistUrl = string.Empty;
+        provider.XmltvUrl = null;
+        provider.HeadersJson = null;
+        provider.UserAgent = null;
+        provider.UpdatedUtc = DateTime.UtcNow;
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        refreshTrigger.TriggerRefresh();
+        var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
+        eventBus.Publish(AppEventKind.ProviderChanged);
+        return (dto, null);
     }
 
     public async Task<string?> DeleteProviderAsync(string providerId, CancellationToken cancellationToken)
@@ -850,6 +785,41 @@ public sealed class ProviderPageService(
                 Enabled = true,
             });
         }
+    }
+
+    public (string BaseUrl, string Username, string Password)? ParseXtreamUrl(string url)
+    {
+        var resolved = envVarService.SubstituteEnvVars(url);
+        return TryParseXtreamUrl(resolved, out var baseUrl, out var username, out var password)
+            ? (baseUrl, username, password)
+            : null;
+    }
+
+    private static bool TryParseXtreamUrl(string url, out string baseUrl, out string username, out string password)
+    {
+        baseUrl = username = password = string.Empty;
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return false;
+
+        if (!uri.AbsolutePath.EndsWith("/get.php", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parameters = uri.Query.TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2))
+            .Where(p => p.Length == 2)
+            .ToDictionary(p => Uri.UnescapeDataString(p[0]), p => Uri.UnescapeDataString(p[1]), StringComparer.OrdinalIgnoreCase);
+
+        if (!parameters.TryGetValue("username", out var u) || string.IsNullOrEmpty(u))
+            return false;
+        if (!parameters.TryGetValue("password", out var p2) || string.IsNullOrEmpty(p2))
+            return false;
+
+        baseUrl = $"{uri.Scheme}://{uri.Authority}";
+        username = u;
+        password = p2;
+        return true;
     }
 
     private static bool IsValidHttpUrl(string value)
