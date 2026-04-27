@@ -15,6 +15,7 @@ public sealed class SnapshotRefreshService(
     IServiceScopeFactory scopeFactory,
     IOptions<RefreshOptions> refreshOptions,
     AppEventBus eventBus,
+    IEventService eventService,
     TimeProvider timeProvider,
     ILogger<SnapshotRefreshService> logger)
     : BackgroundService, IRefreshTrigger
@@ -347,6 +348,9 @@ public sealed class SnapshotRefreshService(
         _currentRunCts = runCts;
         runCts.CancelAfter(TimeSpan.FromMinutes(timeoutMinutes));
 
+        try { await eventService.CleanupOldEventsAsync(stoppingToken); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning(ex, "Event cleanup failed."); }
+
         logger.LogInformation("Snapshot refresh started.");
         eventBus.Publish(AppEventKind.RefreshStarted);
         bool succeeded = false;
@@ -362,6 +366,16 @@ public sealed class SnapshotRefreshService(
             if (channelsByProvider.Count > 0)
                 _cachedChannels = channelsByProvider;
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
+            if (cc == ChangeClasses.Breaking)
+            {
+                try
+                {
+                    await eventService.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.BreakingLineupChange,
+                        "Breaking lineup change detected",
+                        "More than 20% of channels changed — connected clients may need to rescan.");
+                }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to publish BreakingLineupChange event."); }
+            }
         }
         catch (OperationCanceledException) when (_cancelledByUser && !stoppingToken.IsCancellationRequested)
         {

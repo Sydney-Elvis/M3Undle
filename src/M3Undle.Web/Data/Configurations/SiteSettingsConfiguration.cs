@@ -1,4 +1,5 @@
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Application;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -85,6 +86,9 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.RefreshStartupCatchup)
             .HasColumnName("refresh_startup_catchup")
             .HasDefaultValue(true);
+        builder.Property(s => s.EventRetentionDays)
+            .HasColumnName("event_retention_days")
+            .HasDefaultValue(SystemEventSettings.DefaultRetentionDays);
 
         builder.HasData(new SiteSettings
         {
@@ -115,6 +119,7 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             GeneratedHlsSettingsRestartRequired = false,
             RefreshScheduleKind = "6h",
             RefreshStartupCatchup = true,
+            EventRetentionDays = SystemEventSettings.DefaultRetentionDays,
         });
     }
 }

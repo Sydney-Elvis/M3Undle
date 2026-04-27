@@ -4,6 +4,7 @@
 @inject IJSRuntime JS
 @inject M3Undle.Web.Application.AppEventBus EventBus
 @inject M3Undle.Web.Application.IRefreshTrigger RefreshTrigger
+@inject M3Undle.Web.Application.IEventService EventService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject M3Undle.Web.Application.IHdHomeRunSettingsService HdhrSettingsService
@@ -11,6 +12,7 @@
 @using System.Reflection
 @using System.Threading.Channels
 @using Microsoft.AspNetCore.Components.Authorization
+@using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
 @inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject M3Undle.Web.Application.ISiteSettingsService SiteSettings
@@ -46,11 +48,23 @@
                     <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
                 </MudStack>
             }
+            <MudTooltip Text="@(_eventSummary.Count == 0 ? "No system events" : $"{_eventSummary.Count} system event{(_eventSummary.Count == 1 ? "" : "s")}")"
+                        Placement="Placement.Bottom">
+                <MudBadge Content="@(_eventSummary.Count > 0 ? (object)_eventSummary.Count : null)"
+                          Color="@EventBadgeColor" Overlap="true" Bordered="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.Notifications"
+                                   Color="Color.Inherit"
+                                   Disabled="@(!_canViewEvents)"
+                                   OnClick="OpenEventPanel" />
+                </MudBadge>
+            </MudTooltip>
             <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
                 <MudIconButton Icon="@ThemeModeIcon" Color="Color.Inherit" OnClick="CycleThemeMode" />
             </MudTooltip>
             <LoginDisplay />
         </MudAppBar>
+
+        <SystemEventPanel @bind-Open="_eventPanelOpen" OnCountChanged="RefreshEventCountAsync" />
 
         <MudContainer MaxWidth="MaxWidth.False" Class="pa-6">
             @Body
@@ -103,6 +117,9 @@
     private ChannelMappingStatsDto? _channelStats;
     private bool _systemIsDark;
     private bool _isRefreshing;
+    private bool _eventPanelOpen;
+    private SystemEventSummary _eventSummary = new(0, null);
+    private bool _canViewEvents = true;
 
     private HdhrFooterStatus? _hdhrStatus;
     private IDisposable? _eventSubscription;
@@ -232,12 +249,17 @@
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
 
-        if (await CanAccessApiAsync())
+        var canAccess = await CanAccessApiAsync();
+        if (canAccess)
         {
             _ = LoadChannelStatsAsync();
             _ = LoadHdhrStatusAsync();
             _ = PollHdhrStatusAsync(_cts.Token);
         }
+
+        var authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+        _canViewEvents = !authEnabled || canAccess;
+        await RefreshEventCountAsync();
     }
 
     private async Task<bool> CanAccessApiAsync()
@@ -248,6 +270,23 @@
             return false;
         var state = await AuthStateTask;
         return state.User.Identity?.IsAuthenticated == true;
+    }
+
+    private Color EventBadgeColor => SystemEventBadgePresentation.ColorFor(_eventSummary);
+
+    private void OpenEventPanel()
+    {
+        _eventPanelOpen = true;
+    }
+
+    private async Task RefreshEventCountAsync()
+    {
+        try
+        {
+            _eventSummary = await EventService.GetSummaryAsync(_cts.Token);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task LoadChannelStatsAsync()
@@ -332,6 +371,10 @@
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)
                 {
                     await LoadHdhrStatusAsync();
+                }
+                else if (evt.Kind == M3Undle.Web.Application.AppEventKind.SystemEventPublished)
+                {
+                    await RefreshEventCountAsync();
                 }
             }
         }

@@ -225,6 +225,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<AppEventBus>();
+builder.Services.AddSingleton<IEventService, EventService>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddSingleton<M3Undle.Core.Epg.XmltvParser>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
@@ -315,18 +316,22 @@ app.Logger.LogInformation(
     buildInfo.BuildDateUtc ?? "unknown",
     buildInfo.BuildNumber ?? "n/a");
 
+List<string> appliedMigrations;
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await RepairAlpha4MigrationHistoryAsync(db);
     await StartupMigrationRepair.RepairAlpha5PartialSchemaAsync(db);
     await RepairAlpha6SchemaAsync(db);
+    appliedMigrations = db.Database.GetPendingMigrations().ToList();
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 
     var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
     await streamingSettings.ClearRestartRequiredAsync();
 }
+
+await PublishStartupEventsAsync(app, buildInfo, appliedMigrations);
 
 await SeedAdminAccountIfNeededAsync(app.Services);
 
@@ -732,6 +737,31 @@ static async Task RepairAlpha6SchemaAsync(ApplicationDbContext db)
     await ins.ExecuteNonQueryAsync();
 
     await tx.CommitAsync();
+}
+
+static async Task PublishStartupEventsAsync(WebApplication app, AppBuildInfo buildInfo, IReadOnlyCollection<string> appliedMigrations)
+{
+    try
+    {
+        var startupEvents = app.Services.GetRequiredService<IEventService>();
+        await startupEvents.PublishAsync(
+            SystemEventSeverity.Info,
+            SystemEventTypes.AppRestarted,
+            $"Application started (v{buildInfo.Version})");
+
+        if (appliedMigrations.Count > 0)
+        {
+            await startupEvents.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.DatabaseMigrationApplied,
+                $"{appliedMigrations.Count} database migration(s) applied on startup",
+                string.Join(", ", appliedMigrations.Select(m => m[(m.IndexOf('_') + 1)..])));
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Failed to publish startup system events.");
+    }
 }
 
 sealed class SqliteConnectionInterceptor : DbConnectionInterceptor

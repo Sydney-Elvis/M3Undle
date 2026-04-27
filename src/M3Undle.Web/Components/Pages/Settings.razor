@@ -14,6 +14,7 @@
 @inject IRefreshScheduleService RefreshSchedule
 @inject IDownstreamIntegrationService DownstreamIntegrations
 @inject ProviderPageService ProviderPageService
+@inject IEventService EventService
 @inject IDialogService DialogService
 
 <PageTitle>Settings — M3Undle</PageTitle>
@@ -833,6 +834,46 @@
             }
         </MudPaper>
     </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Event History</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                System events (provider failures, lineup changes, login attempts) are kept for this many days before being automatically removed.
+            </MudText>
+
+            @if (_loadingEventSettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                <MudNumericField T="int" Label="Retention days" @bind-Value="_eventRetentionDays"
+                                 Min="@SystemEventSettings.MinRetentionDays"
+                                 Max="@SystemEventSettings.MaxRetentionDays"
+                                 Class="mb-3" Style="max-width:180px;" />
+
+                @if (!string.IsNullOrWhiteSpace(_eventSettingsError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_eventSettingsError
+                    </MudAlert>
+                }
+                @if (!string.IsNullOrWhiteSpace(_eventSettingsSuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_eventSettingsSuccess
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_savingEventSettings"
+                           OnClick="SaveEventSettingsAsync">
+                    @(_savingEventSettings ? "Saving..." : "Save")
+                </MudButton>
+            }
+        </MudPaper>
+    </MudItem>
 </MudGrid>
 
 @code {
@@ -929,10 +970,44 @@
         _ => kind,
     };
 
+    private bool _loadingEventSettings;
+    private bool _savingEventSettings;
+    private int _eventRetentionDays = 7;
+    private string? _eventSettingsError;
+    private string? _eventSettingsSuccess;
+
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync());
+        await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync(), LoadEventSettingsAsync());
+    }
+
+    private async Task LoadEventSettingsAsync()
+    {
+        _loadingEventSettings = true;
+        try { _eventRetentionDays = await EventService.GetRetentionDaysAsync(); }
+        catch { }
+        finally { _loadingEventSettings = false; }
+    }
+
+    private async Task SaveEventSettingsAsync()
+    {
+        _savingEventSettings = true;
+        _eventSettingsError = null;
+        _eventSettingsSuccess = null;
+        try
+        {
+            await EventService.SetRetentionDaysAsync(_eventRetentionDays);
+            _eventSettingsSuccess = "Event settings saved.";
+        }
+        catch (Exception ex)
+        {
+            _eventSettingsError = $"Failed to save: {ex.Message}";
+        }
+        finally
+        {
+            _savingEventSettings = false;
+        }
     }
 
     private async Task LoadIntegrationsAsync()

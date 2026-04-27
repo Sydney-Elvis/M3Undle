@@ -29,6 +29,7 @@ public sealed class SnapshotBuilder(
     IOptions<SnapshotOptions> snapshotOptions,
     CustomGroupPageService customGroupService,
     IRefreshScheduleService refreshScheduleService,
+    IEventService eventService,
     TimeProvider timeProvider,
     ILogger<SnapshotBuilder> logger)
 {
@@ -143,7 +144,11 @@ public sealed class SnapshotBuilder(
         foreach (var provider in providers)
         {
             var (s, e, channels, cc, profileIds) = await RunForProviderAsync(provider, globalIntervalHours, cancellationToken);
-            if (s) anySucceeded = true;
+            if (s)
+            {
+                anySucceeded = true;
+                await PublishProviderBackOnlineIfNeededAsync(provider, cancellationToken);
+            }
             if (e is not null) lastErrorSummary = e;
             if (channels.Count > 0) channelsByProvider[provider.ProviderId] = channels;
             aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
@@ -246,6 +251,12 @@ public sealed class SnapshotBuilder(
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
             await FailFetchRunAsync(fetchRun, ex.Message);
+            await PublishSystemEventBestEffortAsync(
+                SystemEventSeverity.Error,
+                SystemEventTypes.ProviderFetchFailed,
+                $"Provider '{provider.Name}' fetch failed",
+                ex.Message,
+                providerId: provider.ProviderId);
             return (false, ex.Message, [], null, new HashSet<string>());
         }
 
@@ -1826,5 +1837,53 @@ public sealed class SnapshotBuilder(
         fetchRun.ErrorSummary = errorSummary;
         // Use CancellationToken.None — must persist even if run was cancelled
         await db.SaveChangesAsync(CancellationToken.None);
+    }
+
+    private async Task PublishProviderBackOnlineIfNeededAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var hasFailure = await eventService.HasEventAsync(
+                SystemEventTypes.ProviderFetchFailed,
+                providerId: provider.ProviderId,
+                ct: cancellationToken);
+            if (!hasFailure)
+                return;
+
+            var hasRecovery = await eventService.HasEventAsync(
+                SystemEventTypes.ProviderBackOnline,
+                providerId: provider.ProviderId,
+                ct: cancellationToken);
+            if (hasRecovery)
+                return;
+
+            await eventService.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.ProviderBackOnline,
+                $"Provider '{provider.Name}' is back online",
+                providerId: provider.ProviderId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to publish ProviderBackOnline event for provider {ProviderId}.", provider.ProviderId);
+        }
+    }
+
+    private async Task PublishSystemEventBestEffortAsync(
+        SystemEventSeverity severity,
+        string eventType,
+        string title,
+        string? detail = null,
+        string? providerId = null,
+        string? integrationId = null)
+    {
+        try
+        {
+            await eventService.PublishAsync(severity, eventType, title, detail, providerId, integrationId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to publish system event {EventType}.", eventType);
+        }
     }
 }

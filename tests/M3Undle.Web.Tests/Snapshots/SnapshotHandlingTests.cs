@@ -1,6 +1,7 @@
 using M3Undle.Core.M3u;
 using M3Undle.Web.Api;
 using M3Undle.Web.Application;
+using M3Undle.Web.Tests.Stubs;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
@@ -338,6 +339,44 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_FetchFailureEventPublishFails_StillReturnsFailedRefresh()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using var db = fixture.CreateDbContext();
+            var builder = CreateBuilder(
+                db,
+                HttpStatusCode.InternalServerError,
+                "upstream error",
+                tempDir,
+                new ThrowingEventService());
+
+            var result = await builder.RunAsync(CancellationToken.None);
+
+            await using var verify = fixture.CreateDbContext();
+            var fetchRun = await verify.FetchRuns.SingleAsync();
+            Assert.IsFalse(result.Succeeded);
+            Assert.AreEqual("fail", fetchRun.Status);
+            Assert.AreEqual(0, await verify.Snapshots.CountAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_FetchSucceeds_PromotesSnapshotToActive()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -372,6 +411,43 @@ public sealed class SnapshotHandlingTests
             Assert.IsFalse(
                 xmlBytes.Length >= 3 && xmlBytes[0] == 0xEF && xmlBytes[1] == 0xBB && xmlBytes[2] == 0xBF,
                 "Snapshot XMLTV should be UTF-8 without BOM.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_ProviderBackOnline_PublishesOnlyOnceForCurrentFailure()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var eventService = new RecoveryTrackingEventService();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleM3u, tempDir, eventService)
+                    .RunAsync(CancellationToken.None);
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleM3u, tempDir, eventService)
+                    .RunAsync(CancellationToken.None);
+            }
+
+            Assert.AreEqual(1, eventService.ProviderBackOnlinePublishCount);
         }
         finally
         {
@@ -778,7 +854,12 @@ public sealed class SnapshotHandlingTests
         "#EXTINF:-1 tvg-id=\"ny.shared\" group-title=\"USA ABC\",NY - NEW YORK\n" +
         "http://example.com/live/user/pass/901.ts\n";
 
-    private static SnapshotBuilder CreateBuilder(ApplicationDbContext db, HttpStatusCode statusCode, string content, string tempDir)
+    private static SnapshotBuilder CreateBuilder(
+        ApplicationDbContext db,
+        HttpStatusCode statusCode,
+        string content,
+        string tempDir,
+        IEventService? eventService = null)
     {
         var handler = new FakeHttpMessageHandler(statusCode, content);
         var factory = new FakeHttpClientFactory(handler);
@@ -816,7 +897,7 @@ public sealed class SnapshotHandlingTests
         return new SnapshotBuilder(
             db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
             runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService,
-            refreshScheduleService, TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
+            refreshScheduleService, eventService ?? new NullEventService(), TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
     }
 
     private static async Task<TestFixture> CreateFixtureAsync()
@@ -883,6 +964,89 @@ public sealed class SnapshotHandlingTests
     {
         public ApplicationDbContext CreateDbContext() => new(options);
         public ValueTask DisposeAsync() => connection.DisposeAsync();
+    }
+
+    private sealed class ThrowingEventService : IEventService
+    {
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+            => throw new InvalidOperationException("event store unavailable");
+
+        public Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SystemEvent>>([]);
+
+        public Task<int> GetCountAsync(CancellationToken ct = default)
+            => Task.FromResult(0);
+
+        public Task<SystemEventSummary> GetSummaryAsync(CancellationToken ct = default)
+            => Task.FromResult(new SystemEventSummary(0, null));
+
+        public Task DismissAsync(string eventId, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task DismissAllAsync(CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task CleanupOldEventsAsync(CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+            => Task.FromResult(false);
+
+        public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)
+            => Task.FromResult(SystemEventSettings.DefaultRetentionDays);
+
+        public Task SetRetentionDaysAsync(int days, CancellationToken ct = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class RecoveryTrackingEventService : IEventService
+    {
+        private bool _hasBackOnline;
+
+        public int ProviderBackOnlinePublishCount { get; private set; }
+
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+        {
+            if (eventType == SystemEventTypes.ProviderBackOnline)
+            {
+                _hasBackOnline = true;
+                ProviderBackOnlinePublishCount++;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SystemEvent>>([]);
+
+        public Task<int> GetCountAsync(CancellationToken ct = default)
+            => Task.FromResult(0);
+
+        public Task<SystemEventSummary> GetSummaryAsync(CancellationToken ct = default)
+            => Task.FromResult(new SystemEventSummary(0, null));
+
+        public Task DismissAsync(string eventId, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task DismissAllAsync(CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task CleanupOldEventsAsync(CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+            => Task.FromResult(eventType switch
+            {
+                SystemEventTypes.ProviderFetchFailed => true,
+                SystemEventTypes.ProviderBackOnline => _hasBackOnline,
+                _ => false,
+            });
+
+        public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)
+            => Task.FromResult(SystemEventSettings.DefaultRetentionDays);
+
+        public Task SetRetentionDaysAsync(int days, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private sealed class FakeHttpMessageHandler(HttpStatusCode statusCode, string content) : HttpMessageHandler

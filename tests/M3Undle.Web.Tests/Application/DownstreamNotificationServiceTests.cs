@@ -1,5 +1,6 @@
 using M3Undle.Web.Application;
 using M3Undle.Web.Application.Downstream;
+using M3Undle.Web.Tests.Stubs;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.Data.Sqlite;
@@ -44,6 +45,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -88,6 +90,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -126,11 +129,13 @@ public sealed class DownstreamNotificationServiceTests
         var adapter = new ErrorAdapter("webhook", "simulated downstream failure");
         var envVars = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
         var encryption = new SecretEncryptionService(envVars);
+        var eventService = new RecordingEventService();
         using var service = new DownstreamNotificationService(
             eventBus,
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            eventService,
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -153,6 +158,12 @@ public sealed class DownstreamNotificationServiceTests
             Assert.AreEqual("simulated downstream failure", row.LastNotifyError);
             Assert.IsNull(row.LastNotifiedUtc);
         }
+
+        Assert.HasCount(1, eventService.PublishedEvents);
+        var published = eventService.PublishedEvents.Single();
+        Assert.AreEqual(SystemEventTypes.DownstreamNotificationFailed, published.EventType);
+        Assert.AreEqual("int-error", published.IntegrationId);
+        Assert.AreEqual("simulated downstream failure", published.Detail);
     }
 
     [TestMethod]
@@ -187,6 +198,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -254,6 +266,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -317,6 +330,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -367,6 +381,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -429,6 +444,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -505,6 +521,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -563,6 +580,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -632,6 +650,7 @@ public sealed class DownstreamNotificationServiceTests
             fixture.ScopeFactory,
             [adapter],
             encryption,
+            new NullEventService(),
             NullLogger<DownstreamNotificationService>.Instance);
 
         await service.StartAsync(CancellationToken.None);
@@ -840,6 +859,63 @@ public sealed class DownstreamNotificationServiceTests
                     return;
             }
         }
+    }
+
+    private sealed record PublishedEvent(
+        SystemEventSeverity Severity,
+        string EventType,
+        string Title,
+        string? Detail,
+        string? ProviderId,
+        string? IntegrationId);
+
+    private sealed class RecordingEventService : IEventService
+    {
+        private readonly List<PublishedEvent> _publishedEvents = [];
+
+        public IReadOnlyList<PublishedEvent> PublishedEvents
+        {
+            get
+            {
+                lock (_publishedEvents)
+                    return [.. _publishedEvents];
+            }
+        }
+
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+        {
+            lock (_publishedEvents)
+                _publishedEvents.Add(new PublishedEvent(severity, eventType, title, detail, providerId, integrationId));
+
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SystemEvent>>([]);
+
+        public Task<int> GetCountAsync(CancellationToken ct = default)
+            => Task.FromResult(0);
+
+        public Task<SystemEventSummary> GetSummaryAsync(CancellationToken ct = default)
+            => Task.FromResult(new SystemEventSummary(0, null));
+
+        public Task DismissAsync(string eventId, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task DismissAllAsync(CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task CleanupOldEventsAsync(CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+            => Task.FromResult(false);
+
+        public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)
+            => Task.FromResult(SystemEventSettings.DefaultRetentionDays);
+
+        public Task SetRetentionDaysAsync(int days, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private static Profile SeedProfile(string profileId) => new()

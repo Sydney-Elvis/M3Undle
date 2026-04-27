@@ -20,6 +20,8 @@ public static class SiteSettingsApiEndpoints
         group.MapPut("/refresh-schedule", UpdateRefreshScheduleAsync).WithSummary("Update refresh schedule settings");
         group.MapGet("/hdhr", GetHdhrSettingsAsync).WithSummary("Get HDHomeRun settings");
         group.MapPut("/hdhr", UpdateHdhrSettingsAsync).WithSummary("Update HDHomeRun settings");
+        group.MapGet("/events", GetEventSettingsAsync).WithSummary("Get event settings");
+        group.MapPut("/events", UpdateEventSettingsAsync).WithSummary("Update event settings");
 
         return app;
     }
@@ -241,6 +243,29 @@ public static class SiteSettingsApiEndpoints
         bool DiscoveryEnabled,
         bool SsdpEnabled,
         bool SiliconDustDiscoveryEnabled);
+
+    private static async Task<Ok<EventSettingsResponse>> GetEventSettingsAsync(
+        IEventService eventService,
+        CancellationToken cancellationToken)
+    {
+        var days = await eventService.GetRetentionDaysAsync(cancellationToken);
+        return TypedResults.Ok(new EventSettingsResponse(days));
+    }
+
+    private static async Task<Results<Ok<EventSettingsResponse>, BadRequest<string>>> UpdateEventSettingsAsync(
+        EventSettingsRequest request,
+        IEventService eventService,
+        CancellationToken cancellationToken)
+    {
+        if (request.RetentionDays is < SystemEventSettings.MinRetentionDays or > SystemEventSettings.MaxRetentionDays)
+            return TypedResults.BadRequest(
+                $"Event retention days must be between {SystemEventSettings.MinRetentionDays} and {SystemEventSettings.MaxRetentionDays}.");
+        await eventService.SetRetentionDaysAsync(request.RetentionDays, cancellationToken);
+        return TypedResults.Ok(new EventSettingsResponse(request.RetentionDays));
+    }
+
+    private sealed record EventSettingsResponse(int RetentionDays);
+    private sealed record EventSettingsRequest(int RetentionDays);
 
     private sealed record HdhrSettingsResponse(
         bool Enabled,

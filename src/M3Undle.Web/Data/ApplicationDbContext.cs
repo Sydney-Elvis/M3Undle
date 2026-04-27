@@ -32,6 +32,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<ProfileCustomGroupProviderLink> ProfileCustomGroupProviderLinks => Set<ProfileCustomGroupProviderLink>();
     public DbSet<DownstreamIntegration> DownstreamIntegrations => Set<DownstreamIntegration>();
     public DbSet<ProfileEventInterestRule> ProfileEventInterestRules => Set<ProfileEventInterestRule>();
+    public DbSet<SystemEvent> SystemEvents => Set<SystemEvent>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

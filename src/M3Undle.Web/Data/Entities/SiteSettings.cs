@@ -31,4 +31,6 @@ public sealed class SiteSettings
     // Refresh schedule — "manual" | "6h" | "12h" | "24h"
     public string RefreshScheduleKind { get; set; } = "6h";
     public bool RefreshStartupCatchup { get; set; } = true;
+
+    public int EventRetentionDays { get; set; } = 7;
 }

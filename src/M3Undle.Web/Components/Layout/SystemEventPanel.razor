@@ -1,0 +1,131 @@
+@using M3Undle.Web.Application
+@using M3Undle.Web.Data.Entities
+@inject IEventService EventService
+
+<MudDrawer @bind-Open="Open" Anchor="Anchor.End" Variant="DrawerVariant.Temporary" Width="420px">
+    <MudDrawerHeader Style="padding: 12px 16px;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%;">
+            <MudText Typo="Typo.h6">System Events</MudText>
+            @if (_events.Count > 0)
+            {
+                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                           OnClick="ClearAllAsync">Clear all</MudButton>
+            }
+        </MudStack>
+    </MudDrawerHeader>
+
+    <MudDivider />
+
+    <div style="overflow-y: auto; flex: 1;">
+        @if (_loading)
+        {
+            <div class="pa-4">
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+            </div>
+        }
+        else if (_events.Count == 0)
+        {
+            <div class="pa-6" style="text-align: center;">
+                <MudText Typo="Typo.body2" Color="Color.Secondary">No recent events</MudText>
+            </div>
+        }
+        else
+        {
+            @foreach (var evt in _events)
+            {
+                <div style="border-bottom: 1px solid var(--mud-palette-divider); padding: 12px 16px;">
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@SeverityIcon(evt.Severity)" Color="@SeverityColor(evt.Severity)"
+                                 Size="Size.Small" Style="margin-top:2px; flex-shrink:0;" />
+                        <div style="flex:1; min-width:0;">
+                            <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween">
+                                <MudText Typo="Typo.body2" Style="font-weight:600;">@evt.Title</MudText>
+                                <MudTooltip Text="Dismiss" Placement="Placement.Left">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                                   Color="Color.Default" Style="margin:-4px -4px 0 4px; flex-shrink:0;"
+                                                   OnClick="() => DismissAsync(evt.SystemEventId)" />
+                                </MudTooltip>
+                            </MudStack>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @RelativeTime(evt.OccurredAt)
+                                @if (evt.OccurrenceCount > 1)
+                                {
+                                    <span> · @evt.OccurrenceCount occurrences</span>
+                                }
+                            </MudText>
+                            @if (!string.IsNullOrWhiteSpace(evt.Detail))
+                            {
+                                <MudText Typo="Typo.caption" Style="margin-top:4px; display:block; word-break:break-word;">
+                                    @evt.Detail
+                                </MudText>
+                            }
+                        </div>
+                    </MudStack>
+                </div>
+            }
+        }
+    </div>
+</MudDrawer>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public EventCallback OnCountChanged { get; set; }
+
+    private List<SystemEvent> _events = [];
+    private bool _loading;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Open)
+            await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        _events = [.. await EventService.GetAllAsync()];
+        _loading = false;
+        StateHasChanged();
+    }
+
+    private async Task DismissAsync(string id)
+    {
+        await EventService.DismissAsync(id);
+        _events.RemoveAll(e => e.SystemEventId == id);
+        await OnCountChanged.InvokeAsync();
+        StateHasChanged();
+    }
+
+    private async Task ClearAllAsync()
+    {
+        await EventService.DismissAllAsync();
+        _events.Clear();
+        await OnCountChanged.InvokeAsync();
+        StateHasChanged();
+    }
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff.TotalSeconds < 60) return "just now";
+        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+
+    private static string SeverityIcon(string severity) => severity switch
+    {
+        "Error" => Icons.Material.Filled.Error,
+        "Warning" => Icons.Material.Filled.Warning,
+        _ => Icons.Material.Filled.Info,
+    };
+
+    private static Color SeverityColor(string severity) => severity switch
+    {
+        "Error" => Color.Error,
+        "Warning" => Color.Warning,
+        _ => Color.Info,
+    };
+}
