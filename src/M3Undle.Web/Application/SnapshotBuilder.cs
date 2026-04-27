@@ -253,9 +253,11 @@ public sealed class SnapshotBuilder(
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
         sw.Restart();
 
-        // 4. Probe Xtream API capability for M3U providers (non-fatal, updates flag in place)
+        // 4. Probe Xtream API for capability/expiry (non-fatal, updates fields in place)
         if (provider.XtreamBaseUrl is null)
             await UpdateXtreamCapabilityAsync(provider, cancellationToken);
+        else
+            await UpdateXtreamExpiryAsync(provider, cancellationToken);
 
         // 5. EPG fetch + DB sync
         string xmltvContent;
@@ -389,24 +391,45 @@ public sealed class SnapshotBuilder(
     {
         var info = await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
         var capable = info is not null;
-        if (capable == provider.XtreamDetectedCapable)
+        var newExpiry = info is not null ? info.ExpiresUtc : provider.PlaylistExpiresUtc;
+
+        var capableChanged = capable != provider.XtreamDetectedCapable;
+        var expiryChanged = newExpiry != provider.PlaylistExpiresUtc;
+        if (!capableChanged && !expiryChanged)
+            return;
+
+        await db.Providers
+            .Where(p => p.ProviderId == provider.ProviderId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.XtreamDetectedCapable, capable)
+                .SetProperty(p => p.PlaylistExpiresUtc, newExpiry),
+                CancellationToken.None);
+
+        if (capableChanged)
+        {
+            if (capable)
+                logger.LogInformation(
+                    "Xtream API capability detected for provider {ProviderId} (expires: {Expires}, status: {Status}, maxConn: {MaxConn}).",
+                    provider.ProviderId,
+                    info!.ExpiresUtc?.ToString("yyyy-MM-dd") ?? "unknown",
+                    info.Status ?? "unknown",
+                    info.MaxConnections?.ToString() ?? "unknown");
+            else
+                logger.LogInformation("Xtream API capability no longer detected for provider {ProviderId}.", provider.ProviderId);
+        }
+    }
+
+    private async Task UpdateXtreamExpiryAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        var info = await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
+        if (info is null || info.ExpiresUtc == provider.PlaylistExpiresUtc)
             return;
 
         await db.Providers
             .Where(p => p.ProviderId == provider.ProviderId)
             .ExecuteUpdateAsync(
-                s => s.SetProperty(p => p.XtreamDetectedCapable, capable),
+                s => s.SetProperty(p => p.PlaylistExpiresUtc, info.ExpiresUtc),
                 CancellationToken.None);
-
-        if (capable)
-            logger.LogInformation(
-                "Xtream API capability detected for provider {ProviderId} (expires: {Expires}, status: {Status}, maxConn: {MaxConn}).",
-                provider.ProviderId,
-                info!.ExpiresUtc?.ToString("yyyy-MM-dd") ?? "unknown",
-                info.Status ?? "unknown",
-                info.MaxConnections?.ToString() ?? "unknown");
-        else
-            logger.LogInformation("Xtream API capability no longer detected for provider {ProviderId}.", provider.ProviderId);
     }
 
     private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildSnapshotFromDbAsync(

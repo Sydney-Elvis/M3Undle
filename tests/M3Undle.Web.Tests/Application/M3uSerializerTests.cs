@@ -108,7 +108,7 @@ public sealed class M3uSerializerTests
                     ContentType: "live"),
             ]);
 
-        await _serializer.WriteAsync(context, lineup, CancellationToken.None);
+        await _serializer.WriteAsync(context, lineup, null, CancellationToken.None);
 
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body);
@@ -117,7 +117,30 @@ public sealed class M3uSerializerTests
         Assert.AreEqual(Encoding.UTF8.GetByteCount(output), context.Response.ContentLength);
     }
 
-    private async Task<string> SerializeSingleChannelAsync(RenderedLineupChannel channel)
+    [TestMethod]
+    public async Task WriteAsync_NullExpiry_DoesNotEmitExpiresAttribute()
+    {
+        var output = await SerializeSingleChannelAsync(
+            new RenderedLineupChannel("k", "C", null, null, null, "G", null, "http://p.test/1", "live"),
+            playlistExpiresUtc: null);
+
+        var header = output.Split('\n')[0];
+        Assert.IsFalse(header.Contains("x-playlist-expires", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task WriteAsync_WithExpiry_EmitsXPlaylistExpiresAttributeOnHeaderLine()
+    {
+        var expiry = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+        var output = await SerializeSingleChannelAsync(
+            new RenderedLineupChannel("k", "C", null, null, null, "G", null, "http://p.test/1", "live"),
+            playlistExpiresUtc: expiry);
+
+        var header = output.Split('\n')[0];
+        StringAssert.Contains(header, "x-playlist-expires=\"2026-06-01T12:00:00Z\"");
+    }
+
+    private async Task<string> SerializeSingleChannelAsync(RenderedLineupChannel channel, DateTime? playlistExpiresUtc = null)
     {
         var context = new DefaultHttpContext();
         context.Request.Scheme = "http";
@@ -132,7 +155,7 @@ public sealed class M3uSerializerTests
             XmltvPath: "/tmp/m3undle.xml",
             Channels: [channel]);
 
-        await _serializer.WriteAsync(context, lineup, CancellationToken.None);
+        await _serializer.WriteAsync(context, lineup, playlistExpiresUtc, CancellationToken.None);
 
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body);

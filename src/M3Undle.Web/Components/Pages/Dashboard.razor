@@ -80,19 +80,23 @@
                             </MudStack>
                         </MudStack>
 
-                        @if (lineup.ActiveProvider is not null)
-                        {
-                            <MudStack Spacing="0">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Serving Provider</MudText>
-                                <MudText Typo="Typo.body1">@lineup.ActiveProvider.Name</MudText>
-                            </MudStack>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                No enabled provider linked to the active profile.
-                            </MudText>
-                        }
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Provider Expiration</MudText>
+                            @if (_dashboardStats?.ActiveProfileProviderExpiresUtc is { } expiresUtc)
+                            {
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Color="@ProviderExpirationChipColor(expiresUtc)"
+                                         Variant="Variant.Outlined"
+                                         Style="align-self: flex-start;">
+                                    @ProviderExpirationLabel(expiresUtc)
+                                </MudChip>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">Not detected</MudText>
+                            }
+                        </MudStack>
                     }
                     else
                     {
@@ -338,6 +342,17 @@
             <MudPaper Class="pa-4" Elevation="1">
                 <MudText Typo="Typo.h6" Class="mb-3">Action Items</MudText>
                 <MudStack Spacing="2">
+                    @foreach (var ep in _dashboardStats!.ExpiringProviders)
+                    {
+                        var daysLeft = (ep.ExpiresUtc - DateTime.UtcNow).TotalDays;
+                        var expSeverity = daysLeft <= 7 ? Severity.Error : Severity.Warning;
+                        var expLabel = daysLeft < 0
+                            ? $"Provider \"{ep.ProviderName}\" subscription expired on {ep.ExpiresUtc:yyyy-MM-dd} — streams may be down."
+                            : daysLeft < 1
+                            ? $"Provider \"{ep.ProviderName}\" subscription expires today ({ep.ExpiresUtc:yyyy-MM-dd}) — renew now."
+                            : $"Provider \"{ep.ProviderName}\" subscription expires in {(int)daysLeft + 1}d on {ep.ExpiresUtc:yyyy-MM-dd}.";
+                        <MudAlert Severity="@expSeverity" Variant="Variant.Outlined" Dense="true">@expLabel</MudAlert>
+                    }
                     @if (_dashboardStats!.GroupsPendingReview > 0)
                     {
                         <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
@@ -391,7 +406,8 @@
     private bool ShowRefreshing => _isRefreshing || _status?.IsRefreshing == true;
 
     private bool HasActionItems => _dashboardStats is not null &&
-        (_dashboardStats.GroupsPendingReview > 0 ||
+        (_dashboardStats.ExpiringProviders.Count > 0 ||
+         _dashboardStats.GroupsPendingReview > 0 ||
          _dashboardStats.ChannelsPendingReview > 0 ||
          _dashboardStats.RefreshFailed);
 
@@ -671,6 +687,22 @@
         LineupSwitchStates.Failed => Color.Warning,
         _ => Color.Default,
     };
+
+    private static Color ProviderExpirationChipColor(DateTime expiresUtc)
+    {
+        var daysLeft = (expiresUtc - DateTime.UtcNow).TotalDays;
+        return daysLeft <= 7 ? Color.Error
+            : daysLeft <= 30 ? Color.Warning
+            : Color.Info;
+    }
+
+    private static string ProviderExpirationLabel(DateTime expiresUtc)
+    {
+        var daysLeft = (expiresUtc - DateTime.UtcNow).TotalDays;
+        return daysLeft < 0 ? $"Expired {expiresUtc:yyyy-MM-dd}"
+            : daysLeft < 1 ? $"Expires today ({expiresUtc:yyyy-MM-dd})"
+            : $"Expires {expiresUtc:yyyy-MM-dd}";
+    }
 
     private async Task CancelRefreshAsync()
     {

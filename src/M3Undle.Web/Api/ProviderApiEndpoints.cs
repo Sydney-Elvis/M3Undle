@@ -1602,6 +1602,7 @@ public static class ProviderApiEndpoints
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,
                     XtreamIncludeXmltv = provider.XtreamIncludeXmltv,
+                    PlaylistExpiresUtc = provider.PlaylistExpiresUtc,
                     LastRefresh = latestRefresh is null
                         ? null
                         : new ProviderLastRefreshDto

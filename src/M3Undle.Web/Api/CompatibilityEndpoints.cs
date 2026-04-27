@@ -102,6 +102,7 @@ public static class CompatibilityEndpoints
         HttpContext context,
         ILineupRenderer lineupRenderer,
         IM3USerializer m3uSerializer,
+        ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
         try
@@ -117,7 +118,13 @@ public static class CompatibilityEndpoints
                 return;
             }
 
-            await m3uSerializer.WriteAsync(context, lineup, cancellationToken);
+            var minExpiry = await db.ProfileProviders
+                .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId)
+                .Join(db.Providers, pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
+                .Where(e => e != null)
+                .MinAsync(e => e, cancellationToken);
+
+            await m3uSerializer.WriteAsync(context, lineup, minExpiry, cancellationToken);
         }
         catch (Exception ex) when (ex is IOException or JsonException)
         {

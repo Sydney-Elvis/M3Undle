@@ -307,6 +307,7 @@ internal sealed class ProfilesPageService(
                     Name = pp.Provider.Name,
                     Priority = pp.Priority,
                     Enabled = pp.Enabled,
+                    PlaylistExpiresUtc = pp.Provider.PlaylistExpiresUtc,
                 })
                 .ToList();
 

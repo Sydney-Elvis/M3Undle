@@ -52,6 +52,21 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             .Select(x => (string?)x.ProfileId)
             .FirstOrDefaultAsync(ct);
 
+        DateTime? activeProfileProviderExpiresUtc = null;
+        if (activeProfileId is not null)
+        {
+            activeProfileProviderExpiresUtc = await db.ProfileProviders
+                .AsNoTracking()
+                .Where(pp => pp.ProfileId == activeProfileId && pp.Enabled)
+                .Join(
+                    db.Providers.AsNoTracking().Where(p => p.Enabled && p.PlaylistExpiresUtc != null),
+                    pp => pp.ProviderId,
+                    p => p.ProviderId,
+                    (pp, p) => p.PlaylistExpiresUtc)
+                .OrderBy(expiresUtc => expiresUtc)
+                .FirstOrDefaultAsync(ct);
+        }
+
         int publishedLive = 0, publishedMovie = 0, publishedSeries = 0;
         DateTime? lastPublishedUtc = null;
         string? lastChangeClass = null;
@@ -99,6 +114,15 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
         var refreshFailed = latestFetchRun is not null && latestFetchRun.Status == "fail";
 
+        var now = DateTime.UtcNow;
+        var expiryThreshold = now.AddDays(30);
+        var expiringProviders = await db.Providers
+            .AsNoTracking()
+            .Where(p => p.PlaylistExpiresUtc != null && p.PlaylistExpiresUtc <= expiryThreshold)
+            .OrderBy(p => p.PlaylistExpiresUtc)
+            .Select(p => new ExpiringProviderWarning(p.ProviderId, p.Name, p.PlaylistExpiresUtc!.Value))
+            .ToListAsync(ct);
+
         return new DashboardStatsDto
         {
             PublishedLiveCount = publishedLive,
@@ -110,6 +134,8 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             LastPublishedUtc = lastPublishedUtc,
             RefreshFailed = refreshFailed,
             LastChangeClass = lastChangeClass,
+            ActiveProfileProviderExpiresUtc = activeProfileProviderExpiresUtc,
+            ExpiringProviders = expiringProviders,
         };
     }
 }

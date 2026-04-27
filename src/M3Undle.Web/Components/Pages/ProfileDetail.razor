@@ -104,6 +104,33 @@ else
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Created</MudText>
                         <MudText Typo="Typo.body2">@profile.CreatedUtc.ToString("u")</MudText>
                     </MudStack>
+                    @{
+                        var earliestExpiry = profile.Providers
+                            .Where(p => p.PlaylistExpiresUtc.HasValue)
+                            .Select(p => p.PlaylistExpiresUtc!.Value)
+                            .OrderBy(d => d)
+                            .Cast<DateTime?>()
+                            .FirstOrDefault();
+                    }
+                    @if (earliestExpiry.HasValue)
+                    {
+                        var eDays = (earliestExpiry.Value - DateTime.UtcNow).TotalDays;
+                        var eColor = eDays < 0 ? Color.Error : eDays <= 7 ? Color.Error : eDays <= 30 ? Color.Warning : Color.Default;
+                        var eLabel = eDays < 0 ? $"Expired {earliestExpiry.Value:yyyy-MM-dd}"
+                                   : eDays < 1 ? $"Expires today ({earliestExpiry.Value:yyyy-MM-dd})"
+                                   : $"{earliestExpiry.Value:yyyy-MM-dd} (in {(int)eDays + 1}d)";
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Earliest Expiry</MudText>
+                            @if (eColor == Color.Default)
+                            {
+                                <MudText Typo="Typo.body2">@eLabel</MudText>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="@eColor" Variant="Variant.Outlined">@eLabel</MudChip>
+                            }
+                        </MudStack>
+                    }
                 </MudStack>
             </MudPaper>
         </MudItem>
@@ -187,6 +214,7 @@ else
                             <tr>
                                 <th>Provider</th>
                                 <th>Priority</th>
+                                <th>Expires</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
@@ -196,6 +224,29 @@ else
                                 <tr>
                                     <td>@p.Name</td>
                                     <td>@p.Priority</td>
+                                    <td>
+                                        @if (!p.PlaylistExpiresUtc.HasValue)
+                                        {
+                                            <span>—</span>
+                                        }
+                                        else
+                                        {
+                                            var pd = (p.PlaylistExpiresUtc.Value - DateTime.UtcNow).TotalDays;
+                                            var pc = pd <= 7 ? Color.Error : pd <= 30 ? Color.Warning : Color.Default;
+                                            var pl = pd < 0 ? $"Expired {p.PlaylistExpiresUtc.Value:yyyy-MM-dd}"
+                                                   : pd < 1 ? "Expires today"
+                                                   : pd <= 30 ? $"{p.PlaylistExpiresUtc.Value:yyyy-MM-dd} (in {(int)pd + 1}d)"
+                                                   : p.PlaylistExpiresUtc.Value.ToString("yyyy-MM-dd");
+                                            @if (pc == Color.Default)
+                                            {
+                                                <span>@pl</span>
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="@pc" Variant="Variant.Outlined">@pl</MudChip>
+                                            }
+                                        }
+                                    </td>
                                     <td>
                                         @if (!p.Enabled)
                                         {

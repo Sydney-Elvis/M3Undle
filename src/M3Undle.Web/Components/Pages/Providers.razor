@@ -69,6 +69,7 @@
                 <MudTh>Enabled</MudTh>
                 <MudTh>Max Streams</MudTh>
                 <MudTh>Last Refresh</MudTh>
+                <MudTh>Expires</MudTh>
                 <MudTh>Published</MudTh>
                 <MudTh>Status</MudTh>
                 <MudTh>Actions</MudTh>
@@ -92,6 +93,7 @@
                 <MudTd>@(context.Enabled ? "Yes" : "No")</MudTd>
                 <MudTd>@(context.MaxConcurrentStreams?.ToString() ?? "—")</MudTd>
                 <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
+                <MudTd>@ExpiryCell(context.PlaylistExpiresUtc)</MudTd>
                 <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
                 <MudTd>
                     @if (context.LastRefresh?.Status == "fail")
@@ -417,6 +419,41 @@
 
     private bool IsProviderActionDisabled(ProviderDto provider)
         => _isRefreshing || _isDeletingProvider || _isLoading || (_isPreviewLoading && _previewLoadingProviderId == provider.ProviderId);
+
+    private static RenderFragment ExpiryCell(DateTime? expiry) => builder =>
+    {
+        if (expiry is null)
+        {
+            builder.AddContent(0, "—");
+            return;
+        }
+        var daysLeft = (expiry.Value - DateTime.UtcNow).TotalDays;
+        var color = daysLeft <= 7 ? Color.Error : daysLeft <= 30 ? Color.Warning : Color.Default;
+        var label = daysLeft < 0 ? $"Expired {expiry.Value:yyyy-MM-dd}"
+                  : daysLeft < 1 ? $"Expires today"
+                  : daysLeft <= 30 ? $"{expiry.Value:yyyy-MM-dd} (in {(int)daysLeft + 1}d)"
+                  : expiry.Value.ToString("yyyy-MM-dd");
+
+        builder.OpenComponent<MudTooltip>(0);
+        builder.AddAttribute(1, "Text", expiry.Value.ToString("u"));
+        builder.AddAttribute(2, "ChildContent", (RenderFragment)(inner =>
+        {
+            if (color == Color.Default)
+            {
+                inner.AddContent(0, label);
+            }
+            else
+            {
+                inner.OpenComponent<MudChip<string>>(0);
+                inner.AddAttribute(1, "Size", Size.Small);
+                inner.AddAttribute(2, "Color", color);
+                inner.AddAttribute(3, "Variant", Variant.Outlined);
+                inner.AddAttribute(4, "ChildContent", (RenderFragment)(c => c.AddContent(0, label)));
+                inner.CloseComponent();
+            }
+        }));
+        builder.CloseComponent();
+    };
 
 }
 

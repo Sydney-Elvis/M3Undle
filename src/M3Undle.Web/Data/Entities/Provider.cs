@@ -31,6 +31,9 @@ public sealed class Provider
     // Set true when player_api.php probe succeeds for an M3U URL with embedded credentials
     public bool XtreamDetectedCapable { get; set; }
 
+    // UTC expiry from the Xtream player_api.php user_info.exp_date; null if unknown or not Xtream-capable
+    public DateTime? PlaylistExpiresUtc { get; set; }
+
     public ICollection<ProfileProvider> ProfileProviders { get; set; } = new List<ProfileProvider>();
     public ICollection<FetchRun> FetchRuns { get; set; } = new List<FetchRun>();
     public ICollection<ProviderGroup> ProviderGroups { get; set; } = new List<ProviderGroup>();

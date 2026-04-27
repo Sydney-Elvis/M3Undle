@@ -5,25 +5,25 @@ namespace M3Undle.Web.Application;
 
 public interface IM3USerializer
 {
-    Task WriteAsync(HttpContext context, RenderedLineup lineup, CancellationToken cancellationToken);
+    Task WriteAsync(HttpContext context, RenderedLineup lineup, DateTime? playlistExpiresUtc, CancellationToken cancellationToken);
 }
 
 public sealed class M3uSerializer : IM3USerializer
 {
-    public async Task WriteAsync(HttpContext context, RenderedLineup lineup, CancellationToken cancellationToken)
+    public async Task WriteAsync(HttpContext context, RenderedLineup lineup, DateTime? playlistExpiresUtc, CancellationToken cancellationToken)
     {
         var baseUrl = GetBaseUrl(context);
         var xmltvUrl = $"{baseUrl}/xmltv/m3undle.xml";
         xmltvUrl = xmltvUrl.ApplyClientAccessQuery(context);
 
-        var payload = BuildPlaylist(lineup, baseUrl, xmltvUrl, context);
+        var payload = BuildPlaylist(lineup, baseUrl, xmltvUrl, playlistExpiresUtc, context);
 
         context.Response.ContentType = "application/x-mpegurl; charset=utf-8";
         context.Response.ContentLength = Encoding.UTF8.GetByteCount(payload);
         await context.Response.WriteAsync(payload, cancellationToken);
     }
 
-    private static string BuildPlaylist(RenderedLineup lineup, string baseUrl, string xmltvUrl, HttpContext context)
+    private static string BuildPlaylist(RenderedLineup lineup, string baseUrl, string xmltvUrl, DateTime? playlistExpiresUtc, HttpContext context)
     {
         // ASP.NET Core does not buffer response writes by default. Build the payload once so
         // M3U clients receive a normal-length response instead of thousands of tiny flushed chunks.
@@ -32,7 +32,14 @@ public sealed class M3uSerializer : IM3USerializer
           .Append(xmltvUrl)
           .Append("\" x-tvg-url=\"")
           .Append(xmltvUrl)
-          .Append("\"\n");
+          .Append('"');
+        if (playlistExpiresUtc.HasValue)
+        {
+            sb.Append(" x-playlist-expires=\"")
+              .Append(playlistExpiresUtc.Value.ToString("yyyy-MM-ddTHH:mm:ssZ"))
+              .Append('"');
+        }
+        sb.Append('\n');
 
         foreach (var channel in lineup.Channels.OrderBy(c => c.TvgChno ?? int.MaxValue))
         {

@@ -122,6 +122,62 @@ public sealed class StreamTimeoutTests
         Assert.AreEqual(xml, result.Xml);
     }
 
+    [TestMethod]
+    public async Task TryProbeXtreamAsync_M3uGetUrl_ReturnsAccountInfo()
+    {
+        var expires = new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var handler = new RecordingJsonHttpMessageHandler(
+            $"{{\"user_info\":{{\"auth\":1,\"exp_date\":\"{expires.ToUnixTimeSeconds()}\",\"status\":\"Active\",\"max_connections\":\"4\"}}}}");
+        var fetcher = CreateFetcher(handler);
+        var provider = SimpleProvider();
+        provider.PlaylistUrl = "http://panel.example.test:8080/get.php?username=user%20name&password=pass%20word&type=m3u_plus";
+
+        var result = await fetcher.TryProbeXtreamAsync(provider, CancellationToken.None);
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(expires.UtcDateTime, result.ExpiresUtc);
+        Assert.AreEqual("Active", result.Status);
+        Assert.AreEqual(4, result.MaxConnections);
+        Assert.AreEqual(
+            "http://panel.example.test:8080/player_api.php?username=user%20name&password=pass%20word",
+            handler.RequestUri?.OriginalString);
+    }
+
+    [TestMethod]
+    public async Task TryProbeXtreamAsync_ExplicitXtreamProvider_ReturnsAccountInfo()
+    {
+        var previousKey = Environment.GetEnvironmentVariable("M3UNDLE_ENCRYPTION_KEY");
+        Environment.SetEnvironmentVariable("M3UNDLE_ENCRYPTION_KEY", Convert.ToBase64String(new byte[32]));
+        try
+        {
+            var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
+            var encryption = new SecretEncryptionService(envSvc);
+            var expires = new DateTimeOffset(2031, 5, 6, 7, 8, 9, TimeSpan.Zero);
+            var handler = new RecordingJsonHttpMessageHandler(
+                $"{{\"user_info\":{{\"auth\":1,\"exp_date\":{expires.ToUnixTimeSeconds()},\"status\":\"Active\",\"max_connections\":2}}}}");
+            var fetcher = CreateFetcher(handler);
+            var provider = SimpleProvider();
+            provider.PlaylistUrl = string.Empty;
+            provider.XtreamBaseUrl = "http://panel.example.test:8080/";
+            provider.XtreamUsername = "user name";
+            provider.XtreamEncryptedPassword = encryption.Encrypt("pass word");
+
+            var result = await fetcher.TryProbeXtreamAsync(provider, CancellationToken.None);
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual(expires.UtcDateTime, result.ExpiresUtc);
+            Assert.AreEqual("Active", result.Status);
+            Assert.AreEqual(2, result.MaxConnections);
+            Assert.AreEqual(
+                "http://panel.example.test:8080/player_api.php?username=user%20name&password=pass%20word",
+                handler.RequestUri?.OriginalString);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("M3UNDLE_ENCRYPTION_KEY", previousKey);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Test helpers
     // -------------------------------------------------------------------------
@@ -185,6 +241,21 @@ public sealed class StreamTimeoutTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(content),
+            });
+        }
+    }
+
+    private sealed class RecordingJsonHttpMessageHandler(string content) : HttpMessageHandler
+    {
+        public Uri? RequestUri { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestUri = request.RequestUri;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(content),
