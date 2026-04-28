@@ -309,6 +309,34 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         reconnectAttempt);
                     PublishSnapshots();
 
+                    if (ShouldCooldownImmediately(kind))
+                    {
+                        var retryAfter = ResolveCooldownDuration(ex);
+                        _strikeStore.RecordStrike(Key, retryAfter);
+                        _logger.LogWarning(
+                            "Session {SessionId} entering upstream cooldown for {ProviderId}/{ProviderChannelId}. kind={FailureKind} retryAfterSeconds={RetryAfterSeconds:F0}.",
+                            _sessionId,
+                            _source.ProviderId,
+                            _source.ProviderChannelId,
+                            kind,
+                            retryAfter.TotalSeconds);
+
+                        if (!_headersReadyTcs.Task.IsCompleted)
+                        {
+                            _headersReadyTcs.TrySetException(new StreamAdmissionException(
+                                $"Upstream source is cooling down for {retryAfter.TotalSeconds:F0}s.",
+                                StreamAdmissionFailureKind.Cooldown,
+                                StatusCodes.Status503ServiceUnavailable,
+                                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, retryAfter.TotalSeconds)))));
+                        }
+
+                        MarkPendingStopTrigger("upstream_cooldown");
+                        LogStopTrigger("upstream_cooldown", subscriberDisconnectReason: kind.ToString());
+                        SetState(SessionState.Faulted);
+                        await ForceCloseSubscribersAsync();
+                        break;
+                    }
+
                     if (IsFatal(kind))
                     {
                         _logger.LogError(
@@ -429,6 +457,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         => kind is UpstreamFailureKind.UpstreamAuth
             or UpstreamFailureKind.UpstreamNotFound
             or UpstreamFailureKind.StartupFatal;
+
+    private static bool ShouldCooldownImmediately(UpstreamFailureKind kind)
+        => kind is UpstreamFailureKind.UpstreamProxyAuthRequired
+            or UpstreamFailureKind.UpstreamRateLimited;
+
+    private TimeSpan ResolveCooldownDuration(Exception ex)
+    {
+        if (ex is UpstreamConnectException { RetryAfter: { } retryAfter })
+        {
+            if (retryAfter <= TimeSpan.Zero)
+                return TimeSpan.FromSeconds(1);
+
+            return _reconnectOptions.StrikeCooldown > retryAfter
+                ? _reconnectOptions.StrikeCooldown
+                : retryAfter;
+        }
+
+        return _reconnectOptions.StrikeCooldown > TimeSpan.Zero
+            ? _reconnectOptions.StrikeCooldown
+            : TimeSpan.FromSeconds(1);
+    }
 
     private TimeSpan GetReconnectDelay(int attempt)
     {

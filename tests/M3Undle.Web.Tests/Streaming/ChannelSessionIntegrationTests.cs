@@ -167,6 +167,123 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ProviderProxyAuthRequired_RecordsCooldownAndRejectsInitialAttach()
+    {
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.ProxyAuthenticationRequired);
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(30),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                StrikeCooldown = TimeSpan.FromSeconds(20),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => session.AttachSubscriberAsync(new DefaultHttpContext(), CancellationToken.None));
+
+        Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, ex.StatusCode);
+        Assert.AreEqual(20, ex.RetryAfterSeconds);
+        Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out var remaining));
+        Assert.IsGreaterThan(TimeSpan.Zero, remaining);
+        Assert.AreEqual(1, handler.ConnectionCount);
+    }
+
+    [TestMethod]
+    public async Task Session_RateLimited_UsesProviderRetryAfterForCooldown()
+    {
+        // Provider Retry-After (12s) > StrikeCooldown (5s): provider value should win.
+        var handler = FakeStreamingHandler.ReturnStatus((HttpStatusCode)429, response =>
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(12)));
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(30),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                StrikeCooldown = TimeSpan.FromSeconds(5),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => session.AttachSubscriberAsync(new DefaultHttpContext(), CancellationToken.None));
+
+        Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
+        Assert.AreEqual(12, ex.RetryAfterSeconds);
+        Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out var remaining));
+        Assert.IsGreaterThan(TimeSpan.FromSeconds(5), remaining);
+        Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(12), remaining);
+        Assert.AreEqual(1, handler.ConnectionCount);
+    }
+
+    [TestMethod]
+    public async Task Session_RateLimited_ProviderRetryAfterExceedsStrikeCooldown_UsesProviderRetryAfter()
+    {
+        // Provider says wait 30s; StrikeCooldown is only 10s.
+        // ResolveCooldownDuration should use max(10, 30) = 30s so we don't retry too early.
+        var handler = FakeStreamingHandler.ReturnStatus((HttpStatusCode)429, response =>
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)));
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(30),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                StrikeCooldown = TimeSpan.FromSeconds(10),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => session.AttachSubscriberAsync(new DefaultHttpContext(), CancellationToken.None));
+
+        Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
+        Assert.AreEqual(30, ex.RetryAfterSeconds);
+        Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out var remaining));
+        Assert.IsGreaterThan(TimeSpan.FromSeconds(10), remaining);
+        Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(30), remaining);
+        Assert.AreEqual(1, handler.ConnectionCount);
+    }
+
+    [TestMethod]
+    public async Task Manager_ChannelInCooldown_RejectsWithoutOpeningUpstream()
+    {
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.ProxyAuthenticationRequired);
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(30),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                StrikeCooldown = TimeSpan.FromSeconds(20),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        await AssertThrowsAsync<StreamAdmissionException>(
+            () => session.AttachSubscriberAsync(new DefaultHttpContext(), CancellationToken.None));
+
+        await WaitUntilAsync(() => !fixture.Manager.TryGet(fixture.Source.SessionKey, out _), TimeSpan.FromSeconds(5));
+        var connectionsAfterCooldown = handler.ConnectionCount;
+
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None).AsTask());
+
+        Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, ex.StatusCode);
+        Assert.IsNotNull(ex.RetryAfterSeconds);
+        Assert.AreEqual(connectionsAfterCooldown, handler.ConnectionCount);
+    }
+
+    [TestMethod]
     public async Task Session_MultipleSubscribers_ShareSingleUpstreamConnection()
     {
         var handler = FakeStreamingHandler.StreamForever();
@@ -975,8 +1092,15 @@ public sealed class ChannelSessionIntegrationTests
             return new FakeStreamingHandler(ct => StreamForeverResponse(data, ct));
         }
 
-        public static FakeStreamingHandler ReturnStatus(HttpStatusCode statusCode)
-            => new FakeStreamingHandler(_ => Task.FromResult(new HttpResponseMessage(statusCode)));
+        public static FakeStreamingHandler ReturnStatus(
+            HttpStatusCode statusCode,
+            Action<HttpResponseMessage>? configure = null)
+            => new FakeStreamingHandler(_ =>
+            {
+                var response = new HttpResponseMessage(statusCode);
+                configure?.Invoke(response);
+                return Task.FromResult(response);
+            });
 
         public static Task<HttpResponseMessage> StreamForeverResponse(byte[] chunk, CancellationToken ct)
         {

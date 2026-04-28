@@ -18,6 +18,82 @@ namespace M3Undle.Web.Tests.Streaming;
 public sealed class UpstreamStreamConnectorTests
 {
     [TestMethod]
+    public async Task ConnectAsync_WhenUpstreamReturns407_ClassifiesAsProxyAuthRequired()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.ts",
+            ffmpegPath: "",
+            handler: new RecordingHttpMessageHandler(_ => CreateStatusResponse(HttpStatusCode.ProxyAuthenticationRequired)));
+
+        var ex = await AssertThrowsAsync<UpstreamConnectException>(
+            () => fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None));
+
+        Assert.AreEqual(UpstreamFailureKind.UpstreamProxyAuthRequired, ex.FailureKind);
+        Assert.AreEqual(407, ex.StatusCode);
+        Assert.IsNull(ex.RetryAfter);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenUpstreamReturns429_ParsesRetryAfterSeconds()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.ts",
+            ffmpegPath: "",
+            handler: new RecordingHttpMessageHandler(_ =>
+            {
+                var response = CreateStatusResponse((HttpStatusCode)429);
+                response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(17));
+                return response;
+            }));
+
+        var ex = await AssertThrowsAsync<UpstreamConnectException>(
+            () => fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None));
+
+        Assert.AreEqual(UpstreamFailureKind.UpstreamRateLimited, ex.FailureKind);
+        Assert.AreEqual(429, ex.StatusCode);
+        Assert.IsNotNull(ex.RetryAfter);
+        Assert.AreEqual(17, (int)Math.Round(ex.RetryAfter.Value.TotalSeconds));
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenUpstreamReturns429WithHttpDate_ParsesRetryAfterDate()
+    {
+        var retryAt = DateTimeOffset.UtcNow.AddSeconds(12);
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.ts",
+            ffmpegPath: "",
+            handler: new RecordingHttpMessageHandler(_ =>
+            {
+                var response = CreateStatusResponse((HttpStatusCode)429);
+                response.Headers.RetryAfter = new RetryConditionHeaderValue(retryAt);
+                return response;
+            }));
+
+        var ex = await AssertThrowsAsync<UpstreamConnectException>(
+            () => fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None));
+
+        Assert.AreEqual(UpstreamFailureKind.UpstreamRateLimited, ex.FailureKind);
+        Assert.IsNotNull(ex.RetryAfter);
+        Assert.IsGreaterThan(0, ex.RetryAfter.Value.TotalSeconds);
+        Assert.IsLessThanOrEqualTo(12, ex.RetryAfter.Value.TotalSeconds);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenUpstreamReturns401_RemainsFatalAuth()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.ts",
+            ffmpegPath: "",
+            handler: new RecordingHttpMessageHandler(_ => CreateStatusResponse(HttpStatusCode.Unauthorized)));
+
+        var ex = await AssertThrowsAsync<UpstreamConnectException>(
+            () => fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None));
+
+        Assert.AreEqual(UpstreamFailureKind.UpstreamAuth, ex.FailureKind);
+        Assert.AreEqual(401, ex.StatusCode);
+    }
+
+    [TestMethod]
     public async Task ConnectAsync_WhenFfmpegProducesStartupBytes_ReturnsPrefixedRelayStream()
     {
         using var fixture = await ConnectorFixture.CreateAsync(
@@ -81,6 +157,23 @@ public sealed class UpstreamStreamConnectorTests
         };
         response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("video/MP2T");
         return response;
+    }
+
+    private static HttpResponseMessage CreateStatusResponse(HttpStatusCode statusCode)
+        => new(statusCode);
+
+    private static async Task<TException> AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
+    {
+        try
+        {
+            await action();
+            Assert.Fail($"Expected {typeof(TException).Name} to be thrown.");
+            throw new InvalidOperationException("Assert.Fail should have thrown.");
+        }
+        catch (TException ex)
+        {
+            return ex;
+        }
     }
 
     private static async Task<string> ReadExactAsciiAsync(System.IO.Stream stream, int length, TimeSpan timeout)

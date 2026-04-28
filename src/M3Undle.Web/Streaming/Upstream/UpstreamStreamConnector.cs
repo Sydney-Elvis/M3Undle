@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using M3Undle.Web.Application;
@@ -109,6 +110,34 @@ public sealed class UpstreamStreamConnector(
                     source.DisplayName);
                 throw new UpstreamConnectException("Provider stream endpoint not found.", UpstreamFailureKind.UpstreamNotFound, statusCode);
             }
+            if (statusCode == 407)
+            {
+                var retryAfter = ParseRetryAfter(response.Headers.RetryAfter);
+                response.Dispose();
+                logger.LogWarning(
+                    "Provider returned 407 for '{DisplayName}' — stream requests will cool down. RetryAfter={RetryAfterSeconds}s.",
+                    source.DisplayName,
+                    retryAfter?.TotalSeconds);
+                throw new UpstreamConnectException(
+                    "Provider proxy authentication rejected stream request.",
+                    UpstreamFailureKind.UpstreamProxyAuthRequired,
+                    statusCode,
+                    retryAfter: retryAfter);
+            }
+            if (statusCode == 429)
+            {
+                var retryAfter = ParseRetryAfter(response.Headers.RetryAfter);
+                response.Dispose();
+                logger.LogWarning(
+                    "Provider rate-limited stream request for '{DisplayName}' with 429. RetryAfter={RetryAfterSeconds}s.",
+                    source.DisplayName,
+                    retryAfter?.TotalSeconds);
+                throw new UpstreamConnectException(
+                    "Provider rate-limited stream request.",
+                    UpstreamFailureKind.UpstreamRateLimited,
+                    statusCode,
+                    retryAfter: retryAfter);
+            }
             if (statusCode >= 500)
             {
                 response.Dispose();
@@ -209,12 +238,33 @@ public sealed class UpstreamStreamConnector(
                 return UpstreamFailureKind.UpstreamAuth;
             if (code == 404)
                 return UpstreamFailureKind.UpstreamNotFound;
+            if (code == 407)
+                return UpstreamFailureKind.UpstreamProxyAuthRequired;
+            if (code == 429)
+                return UpstreamFailureKind.UpstreamRateLimited;
             if (code >= 500)
                 return UpstreamFailureKind.UpstreamServerError;
             return UpstreamFailureKind.Transport;
         }
 
         return UpstreamFailureKind.Unknown;
+    }
+
+    private static TimeSpan? ParseRetryAfter(RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter is null)
+            return null;
+
+        if (retryAfter.Delta is { } delta)
+            return delta > TimeSpan.Zero ? delta : TimeSpan.Zero;
+
+        if (retryAfter.Date is { } date)
+        {
+            var remaining = date - DateTimeOffset.UtcNow;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+
+        return null;
     }
 
     private async Task<UpstreamConnection?> TryFfmpegHlsRelayAsync(

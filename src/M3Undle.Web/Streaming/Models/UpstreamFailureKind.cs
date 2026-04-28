@@ -10,5 +10,6 @@ public enum UpstreamFailureKind
     Transport = 5,
     TimeoutOrStall = 6,
     EndOfStream = 7,
+    UpstreamProxyAuthRequired = 8,
+    UpstreamRateLimited = 9,
 }
-
