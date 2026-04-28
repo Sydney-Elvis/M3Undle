@@ -80,7 +80,7 @@ public sealed class ChannelSessionIntegrationTests
     [TestMethod]
     public async Task Session_UpstreamStall_TriggersReconnect()
     {
-        var chunk = new byte[188];
+        var chunk = FakeStreamingHandler.ValidTsPacket();
         var handler = FakeStreamingHandler.StreamForever(chunk);
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
 
@@ -118,7 +118,7 @@ public sealed class ChannelSessionIntegrationTests
     [TestMethod]
     public async Task Session_UpstreamStall_EmitsFailureAndReconnectDiagnostics()
     {
-        var chunk = new byte[188];
+        var chunk = FakeStreamingHandler.ValidTsPacket();
         var handler = FakeStreamingHandler.StreamForever(chunk);
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
 
@@ -153,7 +153,7 @@ public sealed class ChannelSessionIntegrationTests
     [TestMethod]
     public async Task Session_Reconnect_ResetsBytesSinceReconnect()
     {
-        var chunk = new byte[188];
+        var chunk = FakeStreamingHandler.ValidTsPacket();
         var handler = FakeStreamingHandler.StreamForever(chunk);
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 5, ct));
 
@@ -206,7 +206,7 @@ public sealed class ChannelSessionIntegrationTests
     [TestMethod]
     public async Task Session_FirstByteLatency_IsRecordedAfterUpstreamConnect()
     {
-        var chunk = new byte[188];
+        var chunk = FakeStreamingHandler.ValidTsPacket();
         var handler = FakeStreamingHandler.StreamForever(chunk);
         handler.QueueNext(ct => FakeStreamingHandler.WriteOneChunkAfterDelay(chunk, TimeSpan.FromMilliseconds(120), ct));
 
@@ -258,7 +258,7 @@ public sealed class ChannelSessionIntegrationTests
     {
         // First connect streams 3 chunks then stalls (headers ready → subscriber can attach).
         // Subsequent reconnects return 503 so outageStartedUtc is never reset.
-        var chunk = new byte[188];
+        var chunk = FakeStreamingHandler.ValidTsPacket();
         var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.ServiceUnavailable);
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
 
@@ -457,6 +457,209 @@ public sealed class ChannelSessionIntegrationTests
         Assert.IsTrue(fixture.Manager.TryGet(session.Key, out _));
 
         timeout.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsLateJoiner_StartsFromSafeSnapshot()
+    {
+        var handler = FakeStreamingHandler.StreamForeverSequence(MpegTsSafeStartupSequence());
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var firstContext = CreateResponseCaptureContext();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var firstSubscriber = await session.AttachSubscriberAsync(firstContext.Context, timeout.Token);
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var lateContext = CreateResponseCaptureContext();
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, timeout.Token);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188 * 4, TimeSpan.FromSeconds(5));
+
+        timeout.Cancel();
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await firstSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await firstSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = lateContext.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188 * 4, data.Length);
+        Assert.AreEqual(0, data.Length % 188);
+        for (var offset = 0; offset < data.Length; offset += 188)
+            Assert.AreEqual(0x47, data[offset]);
+
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, [0x00, 0x00, 0x01, 0x67]), "Late snapshot should include H.264 SPS.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, [0x00, 0x00, 0x01, 0x68]), "Late snapshot should include H.264 PPS.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, [0x00, 0x00, 0x01, 0x65]), "Late snapshot should include H.264 IDR.");
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsSyncLoss_DropsUnsafeBytesAndEmitsDiagnostic()
+    {
+        var handler = FakeStreamingHandler.StreamForeverSequence(
+        [
+            [0x00, 0x01, 0x02, 0x03],
+            FakeStreamingHandler.ValidTsPacket(),
+        ]);
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, timeout.Token);
+        await WaitUntilAsync(() => subscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsSyncLost).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        timeout.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188, data.Length);
+        Assert.AreEqual(0x47, data[0]);
+        Assert.AreEqual(0, data.Length % 188);
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_LateJoinerGetsSafeStartFromNewGeneration()
+    {
+        // First connection stalls after a few plain TS packets (no safe start established).
+        // After reconnect, the handler streams a full safe-startup sequence.
+        var safeSequence = MpegTsSafeStartupSequence();
+        var handler = FakeStreamingHandler.StreamForeverSequence(safeSequence);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(), 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        // Wait for reconnect to happen and a safe start to be detected on the new connection.
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0
+               && fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
+            TimeSpan.FromSeconds(12));
+
+        var lateContext = CreateResponseCaptureContext();
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = lateContext.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188, data.Length);
+        Assert.AreEqual(0, data.Length % 188, "Late subscriber must receive whole TS packets only.");
+        Assert.AreEqual(0x47, data[0], "First byte must be a TS sync byte.");
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTs_PatPmtOnlyStream_SelectsPatPmtSafeStart()
+    {
+        // Stream has PAT + PMT but no H.264 video (audio-only). Safe start should be
+        // selected at the PatPmt boundary without waiting for an IDR.
+        var patPmtSequence = new[]
+        {
+            PatPacket(100),
+            AudioOnlyPmtPacket(100),
+            FakeStreamingHandler.ValidTsPacket(0xBB),
+            FakeStreamingHandler.ValidTsPacket(0xCC),
+        };
+        var handler = FakeStreamingHandler.StreamForeverSequence(patPmtSequence);
+
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var safeStartEvent = fixture.DiagnosticsStore
+            .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected)
+            .First();
+        Assert.IsTrue(
+            safeStartEvent.Message?.Contains("PatPmt") == true,
+            $"Expected PatPmt safe-start, got: {safeStartEvent.Message}");
+
+        var lateContext = CreateResponseCaptureContext();
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = lateContext.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188, data.Length);
+        Assert.AreEqual(0, data.Length % 188, "Late subscriber must receive whole TS packets only.");
+        Assert.AreEqual(0x47, data[0], "First byte must be a TS sync byte.");
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsPacketizerDisabled_FallsBackToPassThrough()
+    {
+        // Content type claims video/MP2T but the data contains no 0x47 sync bytes.
+        // After the probe window the packetizer should disable itself and relay the raw bytes.
+        var nonTsChunk = new byte[100];
+        Array.Fill(nonTsChunk, (byte)0x11);
+        var handler = FakeStreamingHandler.StreamForever(nonTsChunk);
+
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var capture = CreateResponseCaptureContext();
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsPacketizerDisabled).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.IsGreaterThan(0, data.Length, "Pass-through data should reach subscriber after packetizer is disabled.");
+        Assert.IsTrue(data.All(b => b == 0x11), "Pass-through bytes must be exactly the raw upstream content.");
+
         await session.DisposeAsync();
     }
 
@@ -1199,6 +1402,109 @@ public sealed class ChannelSessionIntegrationTests
         return context;
     }
 
+    private static (DefaultHttpContext Context, MemoryStream Body) CreateResponseCaptureContext()
+    {
+        var body = new MemoryStream();
+        var context = new DefaultHttpContext();
+        context.Response.Body = body;
+        return (context, body);
+    }
+
+    private static IReadOnlyList<byte[]> MpegTsSafeStartupSequence()
+        =>
+        [
+            PatPacket(100),
+            PmtPacket(100, 256),
+            VideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x01, 0x02]),
+            VideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x03, 0x04]),
+            VideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x05, 0x06]),
+            FakeStreamingHandler.ValidTsPacket(0xCC),
+        ];
+
+    private static int IndexOf(byte[] data, byte[] pattern)
+    {
+        for (var i = 0; i <= data.Length - pattern.Length; i++)
+        {
+            var matched = true;
+            for (var j = 0; j < pattern.Length; j++)
+            {
+                if (data[i + j] == pattern[j])
+                    continue;
+
+                matched = false;
+                break;
+            }
+
+            if (matched)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static byte[] PatPacket(int pmtPid)
+        => Packet(0, payloadUnitStart: true,
+        [
+            0x00,
+            0x00, 0xB0, 0x0D,
+            0x00, 0x01,
+            0xC1,
+            0x00,
+            0x00,
+            0x00, 0x01,
+            (byte)(0xE0 | ((pmtPid >> 8) & 0x1F)), (byte)pmtPid,
+            0x00, 0x00, 0x00, 0x00,
+        ]);
+
+    private static byte[] PmtPacket(int pmtPid, int videoPid)
+        => Packet(pmtPid, payloadUnitStart: true,
+        [
+            0x00,
+            0x02, 0xB0, 0x12,
+            0x00, 0x01,
+            0xC1,
+            0x00,
+            0x00,
+            (byte)(0xE0 | ((videoPid >> 8) & 0x1F)), (byte)videoPid,
+            0xF0, 0x00,
+            0x1B,
+            (byte)(0xE0 | ((videoPid >> 8) & 0x1F)), (byte)videoPid,
+            0xF0, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ]);
+
+    private static byte[] VideoPacket(int videoPid, byte[] annexB)
+        => Packet(videoPid, payloadUnitStart: true,
+            [0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x80, 0x00, .. annexB]);
+
+    private static byte[] AudioOnlyPmtPacket(int pmtPid)
+        => Packet(pmtPid, payloadUnitStart: true,
+        [
+            0x00,
+            0x02, 0xB0, 0x12,
+            0x00, 0x01,
+            0xC1,
+            0x00,
+            0x00,
+            0xE1, 0x00,  // PCR PID
+            0xF0, 0x00,  // no program info
+            0x0F,        // stream type: AAC audio (not H.264)
+            0xE1, 0x00,  // elementary PID
+            0xF0, 0x00,  // no ES info
+            0x00, 0x00, 0x00, 0x00,
+        ]);
+
+    private static byte[] Packet(int pid, bool payloadUnitStart = false, byte[]? payload = null)
+    {
+        var packet = Enumerable.Repeat((byte)0xFF, 188).ToArray();
+        packet[0] = 0x47;
+        packet[1] = (byte)((payloadUnitStart ? 0x40 : 0x00) | ((pid >> 8) & 0x1F));
+        packet[2] = (byte)pid;
+        packet[3] = 0x10;
+        payload?.CopyTo(packet.AsSpan(4));
+        return packet;
+    }
+
     private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         private DateTimeOffset _utcNow = utcNow;
@@ -1234,9 +1540,22 @@ public sealed class ChannelSessionIntegrationTests
 
         public static FakeStreamingHandler StreamForever(byte[]? chunk = null)
         {
-            var data = chunk ?? new byte[188];
-            if (chunk is null) Array.Fill(data, (byte)0xAA);
+            var data = chunk ?? ValidTsPacket();
             return new FakeStreamingHandler(ct => StreamForeverResponse(data, ct));
+        }
+
+        public static FakeStreamingHandler StreamForeverSequence(IReadOnlyList<byte[]> chunks)
+            => new(ct => StreamForeverSequenceResponse(chunks, ct));
+
+        public static byte[] ValidTsPacket(byte fill = 0xAA)
+        {
+            var packet = new byte[188];
+            Array.Fill(packet, fill);
+            packet[0] = 0x47;
+            packet[1] = 0x01;
+            packet[2] = 0x00;
+            packet[3] = 0x10;
+            return packet;
         }
 
         public static FakeStreamingHandler ReturnStatus(
@@ -1258,6 +1577,29 @@ public sealed class ChannelSessionIntegrationTests
                 {
                     while (!ct.IsCancellationRequested)
                     {
+                        var result = await pipe.Writer.WriteAsync(chunk, ct);
+                        if (result.IsCompleted) break;
+                        await Task.Delay(5, ct);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { }
+                finally { pipe.Writer.Complete(); }
+            });
+            return Task.FromResult(CreateStreamingResponse(pipe.Reader.AsStream()));
+        }
+
+        public static Task<HttpResponseMessage> StreamForeverSequenceResponse(IReadOnlyList<byte[]> chunks, CancellationToken ct)
+        {
+            var pipe = new Pipe();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var index = 0;
+                    while (!ct.IsCancellationRequested)
+                    {
+                        var chunk = chunks[index++ % chunks.Count];
                         var result = await pipe.Writer.WriteAsync(chunk, ct);
                         if (result.IsCompleted) break;
                         await Task.Delay(5, ct);

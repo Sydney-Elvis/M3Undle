@@ -144,6 +144,8 @@ public sealed class SubscriberConnection
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _context.RequestAborted);
         var token = linkedCts.Token;
+        var snapshotGeneration = initialSnapshot.Generation;
+        var snapshotLastSequence = initialSnapshot.LastSequence;
 
         try
         {
@@ -162,6 +164,9 @@ public sealed class SubscriberConnection
                     Interlocked.Decrement(ref _queueDepth);
                     using (lease)
                     {
+                        if (lease.Generation == snapshotGeneration && lease.Sequence <= snapshotLastSequence)
+                            continue;
+
                         await WriteLeaseAsync(lease, token);
                     }
                 }

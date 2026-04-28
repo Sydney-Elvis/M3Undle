@@ -15,4 +15,7 @@ public enum StreamDiagnosticEventKind
     AdmissionRejected = 10,
     StopTriggered = 11,
     SessionClosed = 12,
+    MpegTsSyncLost = 13,
+    MpegTsSafeStartSelected = 14,
+    MpegTsPacketizerDisabled = 15,
 }

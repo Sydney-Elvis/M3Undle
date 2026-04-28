@@ -8,6 +8,7 @@ public sealed class RingBuffer
 
     private int _usedBytes;
     private long _sequence;
+    private long? _safeStartSequence;
     private int _generation;
     private bool _completed;
 
@@ -97,6 +98,47 @@ public sealed class RingBuffer
         }
     }
 
+    public void MarkSafeStart(BufferLease lease)
+    {
+        if (!lease.HasValue)
+            return;
+
+        MarkSafeStart(lease.Generation, lease.Sequence);
+    }
+
+    public void MarkSafeStart(int generation, long sequence)
+    {
+        lock (_gate)
+        {
+            if (generation == _generation)
+                _safeStartSequence = sequence;
+        }
+    }
+
+    public BufferSnapshot CreateSafeStartSnapshot()
+    {
+        var leases = new List<BufferLease>();
+
+        lock (_gate)
+        {
+            if (_safeStartSequence is null)
+                return new BufferSnapshot(_generation, [], 0, _maxBytes);
+
+            var usedBytes = 0;
+            foreach (var chunk in _chunks)
+            {
+                if (chunk.Generation != _generation || chunk.Sequence < _safeStartSequence.Value)
+                    continue;
+
+                chunk.Retain();
+                leases.Add(new BufferLease(chunk));
+                usedBytes += chunk.Length;
+            }
+
+            return new BufferSnapshot(_generation, leases, usedBytes, _maxBytes);
+        }
+    }
+
     public void ResetGeneration()
     {
         lock (_gate)
@@ -104,6 +146,7 @@ public sealed class RingBuffer
             _generation++;
             ClearNoLock();
             _sequence = 0;
+            _safeStartSequence = null;
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using M3Undle.Core.MpegTs;
 using M3Undle.Web.Streaming.Buffering;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
@@ -51,6 +52,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private string? _lastDisconnectReason;
     private DateTimeOffset? _connectAttemptStartedUtc;
     private bool _awaitingFirstByte;
+    private readonly MpegTsBoundaryScanner _mpegTsScanner = new();
+    private bool _mpegTsSafeStartSelected;
+    private int? _mpegTsCandidateSafeStartGeneration;
+    private long? _mpegTsCandidateSafeStartSequence;
+    private long _mpegTsBytesSinceReset;
+    private int _mpegTsProbeBytes;
+    private bool _mpegTsPacketModeKnown;
+    private bool _mpegTsPacketizeEnabled;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -132,7 +141,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _subscribers[subscriber.ClientId] = subscriber;
 
             subscriber.InitializeResponse(_contentType, _cacheControl);
-            _ = subscriber.StartAsync(_buffer.CreateLiveEdgeSnapshot(), _sessionCts.Token);
+            _ = subscriber.StartAsync(CreateSubscriberStartupSnapshot(), _sessionCts.Token);
             RecordDiagnostic(
                 StreamDiagnosticEventKind.SubscriberAttached,
                 subscriber: subscriber,
@@ -304,11 +313,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             _source.DisplayName,
                             reconnectAttempt);
                         _buffer.ResetGeneration();
+                        ResetMpegTsBoundaryState();
                         RecordDiagnostic(
                             StreamDiagnosticEventKind.ReconnectRecovered,
                             httpStatusCode: upstream.StatusCode,
                             reconnectAttempt: reconnectAttempt,
                             message: "Upstream stream recovered after reconnect.");
+                    }
+                    else
+                    {
+                        ResetMpegTsBoundaryState();
                     }
 
                     reconnectAttempt = 0;
@@ -491,28 +505,31 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             }
             Interlocked.Add(ref _totalBytesRelayed, bytesRead);
             Interlocked.Add(ref _bytesSinceReconnect, bytesRead);
-            using var published = _buffer.Write(readBuffer.AsMemory(0, bytesRead));
-            List<SubscriberConnection>? slowSubscribers = null;
-
-            foreach (var subscriber in _subscribers.Values)
+            if (IsMpegTsRelay() && ShouldPacketizeMpegTs(readBuffer.AsSpan(0, bytesRead)))
             {
-                var perSubscriber = published.Duplicate();
-                if (!subscriber.TryEnqueue(perSubscriber))
-                {
-                    perSubscriber.Dispose();
-                    slowSubscribers ??= [];
-                    slowSubscribers.Add(subscriber);
+                var batch = _mpegTsScanner.Process(readBuffer.AsSpan(0, bytesRead));
+                if (batch is null)
                     continue;
+
+                if (batch.DroppedByteCount > 0 || batch.SyncLost)
+                {
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.MpegTsSyncLost,
+                        message: $"MPEG-TS sync rescan dropped {batch.DroppedByteCount} byte(s).");
                 }
 
-                if (!subscriber.IsInternal)
-                    _registry.UpsertClient(subscriber.Snapshot());
-            }
+                if (batch.Data.Length == 0)
+                    continue;
 
-            if (slowSubscribers is not null)
+                Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
+                using var published = _buffer.Write(batch.Data);
+                MarkMpegTsSafeStartIfReady(published, batch.StartupKind);
+                await PublishToSubscribersAsync(published);
+            }
+            else
             {
-                foreach (var slow in slowSubscribers)
-                    await slow.CompleteAsync(SubscriberDisconnectReason.SlowClient);
+                using var published = _buffer.Write(readBuffer.AsMemory(0, bytesRead));
+                await PublishToSubscribersAsync(published);
             }
 
             var tick = Environment.TickCount64;
@@ -521,6 +538,127 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 _lastPublishTick = tick;
                 PublishSnapshots();
             }
+        }
+    }
+
+    private async Task PublishToSubscribersAsync(BufferLease published)
+    {
+        List<SubscriberConnection>? slowSubscribers = null;
+
+        foreach (var subscriber in _subscribers.Values)
+        {
+            var perSubscriber = published.Duplicate();
+            if (!subscriber.TryEnqueue(perSubscriber))
+            {
+                perSubscriber.Dispose();
+                slowSubscribers ??= [];
+                slowSubscribers.Add(subscriber);
+                continue;
+            }
+
+            if (!subscriber.IsInternal)
+                _registry.UpsertClient(subscriber.Snapshot());
+        }
+
+        if (slowSubscribers is not null)
+        {
+            foreach (var slow in slowSubscribers)
+                await slow.CompleteAsync(SubscriberDisconnectReason.SlowClient);
+        }
+    }
+
+    private BufferSnapshot CreateSubscriberStartupSnapshot()
+        => IsMpegTsRelay() ? _buffer.CreateSafeStartSnapshot() : _buffer.CreateLiveEdgeSnapshot();
+
+    private bool IsMpegTsRelay()
+        => _contentType?.Contains("MP2T", StringComparison.OrdinalIgnoreCase) == true
+           || _contentType?.Contains("mpegts", StringComparison.OrdinalIgnoreCase) == true;
+
+    private void ResetMpegTsBoundaryState()
+    {
+        _mpegTsScanner.Reset();
+        _mpegTsSafeStartSelected = false;
+        _mpegTsCandidateSafeStartGeneration = null;
+        _mpegTsCandidateSafeStartSequence = null;
+        _mpegTsProbeBytes = 0;
+        _mpegTsPacketModeKnown = false;
+        _mpegTsPacketizeEnabled = false;
+        Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
+    }
+
+    private bool ShouldPacketizeMpegTs(ReadOnlySpan<byte> data)
+    {
+        if (_mpegTsPacketModeKnown)
+            return _mpegTsPacketizeEnabled;
+
+        if (HasLikelyMpegTsSync(data))
+        {
+            _mpegTsPacketModeKnown = true;
+            _mpegTsPacketizeEnabled = true;
+            return true;
+        }
+
+        _mpegTsProbeBytes += data.Length;
+        if (_mpegTsProbeBytes < MpegTsBoundaryScanner.PacketSize * 4)
+            return true;
+
+        _mpegTsPacketModeKnown = true;
+        _mpegTsPacketizeEnabled = false;
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.MpegTsPacketizerDisabled,
+            message: "MPEG-TS packetizer disabled after probe found no sync byte; using pass-through relay.");
+        return false;
+    }
+
+    private static bool HasLikelyMpegTsSync(ReadOnlySpan<byte> data)
+    {
+        for (var i = 0; i < data.Length; i++)
+        {
+            if (data[i] != 0x47)
+                continue;
+
+            if (i + MpegTsBoundaryScanner.PacketSize >= data.Length
+                || data[i + MpegTsBoundaryScanner.PacketSize] == 0x47)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void MarkMpegTsSafeStartIfReady(BufferLease lease, MpegTsStartupKind kind)
+    {
+        var fallbackBytes = Math.Min(Math.Max(MpegTsBoundaryScanner.PacketSize, _bufferOptions.MaxBytesPerSession / 2), 512 * 1024);
+
+        if (kind == MpegTsStartupKind.PatPmt && _mpegTsCandidateSafeStartSequence is null)
+        {
+            _mpegTsCandidateSafeStartGeneration = lease.Generation;
+            _mpegTsCandidateSafeStartSequence = lease.Sequence;
+        }
+
+        var selected = kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt;
+        var fallback = false;
+        if (!selected && !_mpegTsSafeStartSelected && Interlocked.Read(ref _mpegTsBytesSinceReset) >= fallbackBytes)
+        {
+            selected = true;
+            fallback = true;
+        }
+
+        if (!selected)
+            return;
+
+        if (kind == MpegTsStartupKind.H264Idr
+            && _mpegTsCandidateSafeStartGeneration is { } generation
+            && _mpegTsCandidateSafeStartSequence is { } sequence)
+            _buffer.MarkSafeStart(generation, sequence);
+        else
+            _buffer.MarkSafeStart(lease);
+
+        if (!_mpegTsSafeStartSelected)
+        {
+            _mpegTsSafeStartSelected = true;
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.MpegTsSafeStartSelected,
+                message: $"MPEG-TS safe start selected: {(fallback ? "FallbackPacketBoundary" : kind)}.");
         }
     }
 
