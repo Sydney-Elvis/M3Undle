@@ -6,6 +6,7 @@ using M3Undle.Web.Contracts;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Streaming.Configuration;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -455,8 +456,11 @@ public static class ProviderApiEndpoints
             HeadersJson = isXtream ? null : (string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson),
             UserAgent = isXtream ? null : (string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim()),
             TimeoutSeconds = request.TimeoutSeconds,
+            MaxConcurrentStreams = request.MaxConcurrentStreams,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
+            ForceMpegTs = request.ForceMpegTs,
+            CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode),
             XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
             XtreamUsername = isXtream ? request.XtreamUsername?.Trim() : null,
             XtreamEncryptedPassword = isXtream ? encryption.Encrypt(request.XtreamPassword!) : null,
@@ -558,6 +562,8 @@ public static class ProviderApiEndpoints
             existing.IncludeSeries = request.IncludeSeries;
             existing.Enabled = request.Enabled;
             existing.MaxConcurrentStreams = request.MaxConcurrentStreams;
+            existing.ForceMpegTs = request.ForceMpegTs;
+            existing.CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode);
             existing.UpdatedUtc = DateTime.UtcNow;
 
             await db.SaveChangesAsync(cancellationToken);
@@ -589,6 +595,8 @@ public static class ProviderApiEndpoints
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             MaxConcurrentStreams = request.MaxConcurrentStreams,
+            ForceMpegTs = request.ForceMpegTs,
+            CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode),
             CreatedUtc = now,
             UpdatedUtc = now,
         };
@@ -697,6 +705,9 @@ public static class ProviderApiEndpoints
         provider.TimeoutSeconds = request.TimeoutSeconds;
         provider.IncludeVod = request.IncludeVod;
         provider.IncludeSeries = request.IncludeSeries;
+        provider.MaxConcurrentStreams = request.MaxConcurrentStreams;
+        provider.ForceMpegTs = request.ForceMpegTs;
+        provider.CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode);
         provider.UpdatedUtc = DateTime.UtcNow;
 
         if (isXtream)
@@ -1399,6 +1410,9 @@ public static class ProviderApiEndpoints
                     TimeoutSeconds = provider.TimeoutSeconds,
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,
+                    MaxConcurrentStreams = provider.MaxConcurrentStreams,
+                    ForceMpegTs = provider.ForceMpegTs,
+                    CleanRelayMode = CleanRelayModes.Normalize(provider.CleanRelayMode),
                     AssociatedProfileIds = associatedProfileIds,
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,

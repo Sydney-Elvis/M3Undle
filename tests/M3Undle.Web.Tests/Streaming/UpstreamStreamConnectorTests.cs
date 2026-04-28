@@ -149,6 +149,140 @@ public sealed class UpstreamStreamConnectorTests
         Assert.AreEqual("DIRECT", body);
     }
 
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayOff_UsesDirectHttp()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.mpeg?ffmpegMode=relay-success",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            handler: new RecordingHttpMessageHandler(_ => CreateHttpResponse("DIRECT")),
+            cleanRelayMode: "off",
+            forceMpegTs: false);
+
+        await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+        Assert.AreEqual(UpstreamRelayModes.Direct, connection.RelayMode);
+        Assert.AreEqual(1, fixture.Handler.RequestCount);
+
+        var body = await ReadExactAsciiAsync(connection.Stream, 6, TimeSpan.FromSeconds(2));
+        Assert.AreEqual("DIRECT", body);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayOn_ForDirectMpegTs_ReturnsFfmpegRemuxStream()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.mpeg?ffmpegMode=relay-success&prefix=HEAD&suffix=TAIL&delayMs=200",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            handler: new RecordingHttpMessageHandler(_ => throw new AssertFailedException("Direct HTTP fallback should not be used when clean relay starts.")),
+            cleanRelayMode: "remux",
+            forceMpegTs: false);
+
+        await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+        Assert.AreEqual("video/mp2t", connection.ContentType);
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, connection.RelayMode);
+        Assert.AreEqual(0, fixture.Handler.RequestCount);
+
+        var firstBytes = await ReadExactAsciiAsync(connection.Stream, 4, TimeSpan.FromSeconds(2));
+        var secondBytes = await ReadExactAsciiAsync(connection.Stream, 4, TimeSpan.FromSeconds(2));
+
+        Assert.AreEqual("HEAD", firstBytes);
+        Assert.AreEqual("TAIL", secondBytes);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayStalls_FallsBackToDirectHttp()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.mpeg?ffmpegMode=relay-stall",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            handler: new RecordingHttpMessageHandler(_ => CreateHttpResponse("DIRECT")),
+            cleanRelayMode: "remux",
+            cleanRelayOptions: new CleanRelayOptions { StartupTimeoutSeconds = 1, FallbackToDirect = true },
+            forceMpegTs: false);
+
+        await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+        Assert.AreEqual(UpstreamRelayModes.Direct, connection.RelayMode);
+        Assert.AreEqual("clean_relay_startup_failed", connection.RelayFallbackReason);
+        Assert.AreEqual(1, fixture.Handler.RequestCount);
+
+        var body = await ReadExactAsciiAsync(connection.Stream, 6, TimeSpan.FromSeconds(2));
+        Assert.AreEqual("DIRECT", body);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayStallsAndFallbackDisabled_Throws()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.mpeg?ffmpegMode=relay-stall",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            handler: new RecordingHttpMessageHandler(_ => CreateHttpResponse("DIRECT")),
+            cleanRelayMode: "remux",
+            cleanRelayOptions: new CleanRelayOptions { StartupTimeoutSeconds = 1, FallbackToDirect = false },
+            forceMpegTs: false);
+
+        var ex = await AssertThrowsAsync<UpstreamConnectException>(
+            () => fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None));
+
+        Assert.AreEqual(UpstreamFailureKind.Transport, ex.FailureKind);
+        Assert.AreEqual(0, fixture.Handler.RequestCount);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayExitsWithNoOutput_FallsBackToDirectHttp()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/channel.mpeg?ffmpegMode=relay-eof",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            handler: new RecordingHttpMessageHandler(_ => CreateHttpResponse("DIRECT")),
+            cleanRelayMode: "remux",
+            forceMpegTs: false);
+
+        await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+        Assert.AreEqual(UpstreamRelayModes.Direct, connection.RelayMode);
+        Assert.AreEqual("clean_relay_startup_failed", connection.RelayFallbackReason);
+        Assert.AreEqual(1, fixture.Handler.RequestCount);
+
+        var body = await ReadExactAsciiAsync(connection.Stream, 6, TimeSpan.FromSeconds(2));
+        Assert.AreEqual("DIRECT", body);
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayOn_PassesUserAgentAndHeadersToFfmpeg()
+    {
+        var argsFile = Path.GetTempFileName();
+        try
+        {
+            // FakeFfmpeg writes all args to argsFile before producing stdout output,
+            // so the file is guaranteed to exist once ConnectAsync returns.
+            using var fixture = await ConnectorFixture.CreateAsync(
+                streamUrl: $"http://provider.test/channel.mpeg?ffmpegMode=relay-success&prefix=HEAD&suffix=TAIL&delayMs=200&argsOut={Uri.EscapeDataString(argsFile)}",
+                ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+                handler: new RecordingHttpMessageHandler(_ => throw new AssertFailedException("Direct HTTP must not be called when clean relay starts.")),
+                cleanRelayMode: "remux",
+                userAgent: "TestAgent/2.0",
+                headersJson: """{"X-Auth-Token": "abc123"}""",
+                forceMpegTs: false);
+
+            await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+            Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, connection.RelayMode);
+
+            var argsText = await File.ReadAllTextAsync(argsFile);
+            StringAssert.Contains(argsText, "-user_agent");
+            StringAssert.Contains(argsText, "TestAgent/2.0");
+            StringAssert.Contains(argsText, "-headers");
+            StringAssert.Contains(argsText, "X-Auth-Token: abc123");
+        }
+        finally
+        {
+            File.Delete(argsFile);
+        }
+    }
+
     private static HttpResponseMessage CreateHttpResponse(string body)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
@@ -214,7 +348,15 @@ public sealed class UpstreamStreamConnectorTests
 
         public StreamSourceDescriptor Source { get; }
 
-        public static async Task<ConnectorFixture> CreateAsync(string streamUrl, string ffmpegPath, RecordingHttpMessageHandler handler)
+        public static async Task<ConnectorFixture> CreateAsync(
+            string streamUrl,
+            string ffmpegPath,
+            RecordingHttpMessageHandler handler,
+            string cleanRelayMode = "off",
+            CleanRelayOptions? cleanRelayOptions = null,
+            string? userAgent = null,
+            string? headersJson = null,
+            bool forceMpegTs = true)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -233,6 +375,9 @@ public sealed class UpstreamStreamConnectorTests
                     Enabled = true,
                     PlaylistUrl = "http://provider.test/playlist.m3u",
                     TimeoutSeconds = 30,
+                    CleanRelayMode = cleanRelayMode,
+                    UserAgent = userAgent,
+                    HeadersJson = headersJson,
                     CreatedUtc = DateTime.UtcNow,
                     UpdatedUtc = DateTime.UtcNow,
                 });
@@ -273,6 +418,7 @@ public sealed class UpstreamStreamConnectorTests
                 {
                     FfmpegPath = ffmpegPath,
                 }),
+                Options.Create(cleanRelayOptions ?? new CleanRelayOptions()),
                 NullLogger<UpstreamStreamConnector>.Instance);
 
             var source = new StreamSourceDescriptor(
@@ -284,7 +430,7 @@ public sealed class UpstreamStreamConnectorTests
                 RequestedRoute: "/live/key-1",
                 UserAgent: null,
                 RemoteIp: null,
-                ForceMpegTs: true);
+                ForceMpegTs: forceMpegTs);
 
             return new ConnectorFixture(connection, serviceProvider, handler, connector, source);
         }

@@ -501,6 +501,156 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_CleanRelay_StillSelectsMpegTsSafeStart()
+    {
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.InternalServerError);
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            cleanRelayMode: "remux",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            streamUrl: "http://fake/stream?ffmpegMode=relay-ts-sequence&delayMs=1");
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var firstContext = CreateResponseCaptureContext();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var firstSubscriber = await session.AttachSubscriberAsync(firstContext.Context, timeout.Token);
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                    sessionId: session.SessionId,
+                    kind: StreamDiagnosticEventKind.FfmpegRelayStarted)
+                .Any(x => x.Message?.Contains(UpstreamRelayModes.FfmpegCleanRemux, StringComparison.Ordinal) == true),
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var snapshot = fixture.Registry.TryGetSession(session.SessionId);
+        Assert.IsNotNull(snapshot);
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, snapshot.RelayMode);
+        Assert.AreEqual(0, handler.ConnectionCount);
+
+        var lateContext = CreateResponseCaptureContext();
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, timeout.Token);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188 * 4, TimeSpan.FromSeconds(5));
+
+        timeout.Cancel();
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await firstSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await firstSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = lateContext.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188 * 4, data.Length);
+        Assert.AreEqual(0, data.Length % 188);
+        for (var offset = 0; offset < data.Length; offset += 188)
+            Assert.AreEqual(0x47, data[offset]);
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_CleanRelayReconnect_ResetsSafeStartAndRecovers()
+    {
+        // relay-ts-sequence with cycles=1 emits one PAT+PMT+SPS+PPS+IDR sequence then exits.
+        // Each reconnect spins up a new FFmpeg process that also exits after one cycle, so we
+        // get repeated relay-start + safe-start events without an infinite stream.
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.InternalServerError);
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            cleanRelayMode: "remux",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            streamUrl: "http://fake/stream?ffmpegMode=relay-ts-sequence&cycles=1&delayMs=1",
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(30),
+                OutageWindow = TimeSpan.FromSeconds(60),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore
+                .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.FfmpegRelayStarted)
+                .Count(x => x.Message?.Contains(UpstreamRelayModes.FfmpegCleanRemux, StringComparison.Ordinal) == true) >= 2,
+            TimeSpan.FromSeconds(15));
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore
+                .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected)
+                .Count >= 2,
+            TimeSpan.FromSeconds(5));
+
+        var relayCount = fixture.DiagnosticsStore
+            .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.FfmpegRelayStarted)
+            .Count(x => x.Message?.Contains(UpstreamRelayModes.FfmpegCleanRemux, StringComparison.Ordinal) == true);
+        var safeStartCount = fixture.DiagnosticsStore
+            .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count;
+        var reconnectCount = fixture.DiagnosticsStore
+            .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled).Count;
+
+        Assert.IsGreaterThanOrEqualTo(2, relayCount);
+        Assert.IsGreaterThanOrEqualTo(2, safeStartCount);
+        Assert.IsGreaterThanOrEqualTo(1, reconnectCount);
+        Assert.AreEqual(0, handler.ConnectionCount, "Direct HTTP must not be used when clean relay is active.");
+
+        var lateContext = CreateResponseCaptureContext();
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = lateContext.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188, data.Length);
+        Assert.AreEqual(0, data.Length % 188, "Late subscriber must receive whole TS packets only.");
+        Assert.AreEqual(0x47, data[0], "First byte must be a TS sync byte.");
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_CleanRelayFallback_DirectStreamStillWorks()
+    {
+        var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket());
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            cleanRelayMode: "remux",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            streamUrl: "http://fake/stream?ffmpegMode=relay-stall",
+            cleanRelayOptions: new CleanRelayOptions { StartupTimeoutSeconds = 1, FallbackToDirect = true });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore
+                .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.FfmpegRelayFallbackToDirect)
+                .Count > 0,
+            TimeSpan.FromSeconds(10));
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        var snapshot = fixture.Registry.TryGetSession(session.SessionId);
+        Assert.IsNotNull(snapshot);
+        Assert.AreEqual(UpstreamRelayModes.Direct, snapshot.RelayMode);
+        Assert.AreEqual("clean_relay_startup_failed", snapshot.LastRelayFallbackReason);
+        Assert.IsGreaterThan(0, handler.ConnectionCount);
+        Assert.IsGreaterThan(0L, subscriber.BytesSent);
+
+        cts.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsSyncLoss_DropsUnsafeBytesAndEmitsDiagnostic()
     {
         var handler = FakeStreamingHandler.StreamForeverSequence(
@@ -1703,7 +1853,12 @@ public sealed class ChannelSessionIntegrationTests
             BufferOptions? bufferOptions = null,
             StreamProxyOptions? proxyOptions = null,
             ReconnectOptions? reconnectOptions = null,
-            TimeProvider? timeProvider = null)
+            TimeProvider? timeProvider = null,
+            string cleanRelayMode = "off",
+            string? ffmpegPath = null,
+            string streamUrl = "http://fake/stream",
+            bool forceMpegTs = false,
+            CleanRelayOptions? cleanRelayOptions = null)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
             await connection.OpenAsync();
@@ -1722,6 +1877,7 @@ public sealed class ChannelSessionIntegrationTests
                 Enabled = true,
                 PlaylistUrl = "http://fake/playlist.m3u",
                 TimeoutSeconds = 30,
+                CleanRelayMode = cleanRelayMode,
                 CreatedUtc = DateTime.UtcNow,
                 UpdatedUtc = DateTime.UtcNow,
             };
@@ -1738,7 +1894,7 @@ public sealed class ChannelSessionIntegrationTests
                 ProviderChannelId = "channel-1",
                 ProviderId = "provider-1",
                 DisplayName = "Test Channel",
-                StreamUrl = "http://fake/stream",
+                StreamUrl = streamUrl,
                 FirstSeenUtc = DateTime.UtcNow,
                 LastSeenUtc = DateTime.UtcNow,
                 Active = true,
@@ -1776,7 +1932,8 @@ public sealed class ChannelSessionIntegrationTests
             var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
             var connector = new UpstreamStreamConnector(
                 httpClientFactory, scopeFactory, reconnectOpts,
-                Options.Create(new GeneratedHlsOptions()),
+                Options.Create(new GeneratedHlsOptions { FfmpegPath = ffmpegPath ?? string.Empty }),
+                Options.Create(cleanRelayOptions ?? new CleanRelayOptions()),
                 NullLogger<UpstreamStreamConnector>.Instance);
             var strikeStore = new UpstreamFailureStrikeStore();
             var admissionBackoffStore = timeProvider is null
@@ -1796,7 +1953,8 @@ public sealed class ChannelSessionIntegrationTests
                 DisplayName: "Test Channel",
                 RequestedRoute: "/live/key-1",
                 UserAgent: null,
-                RemoteIp: null);
+                RemoteIp: null,
+                ForceMpegTs: forceMpegTs);
 
             return new SessionFixture(connection, serviceProvider, handler, strikeStore, registry, diagnosticsStore, manager, source);
         }
@@ -1812,5 +1970,33 @@ public sealed class ChannelSessionIntegrationTests
     private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    private static class FakeFfmpegBinary
+    {
+        public static string LocateExecutable()
+        {
+            var exeName = OperatingSystem.IsWindows()
+                ? "M3Undle.FakeFfmpeg.exe"
+                : "M3Undle.FakeFfmpeg";
+
+            var tfmDir = new DirectoryInfo(
+                AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            var configDir = tfmDir.Parent!;
+            var testsDir = configDir.Parent!.Parent!.Parent!;
+
+            var path = Path.Combine(
+                testsDir.FullName,
+                "M3Undle.FakeFfmpeg",
+                "bin",
+                configDir.Name,
+                tfmDir.Name,
+                exeName);
+
+            if (!File.Exists(path))
+                throw new FileNotFoundException($"FakeFfmpeg executable not found at '{path}'.");
+
+            return path;
+        }
     }
 }

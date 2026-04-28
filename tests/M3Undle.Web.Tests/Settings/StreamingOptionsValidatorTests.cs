@@ -213,4 +213,29 @@ public sealed class StreamingOptionsValidatorTests
         var result = new GeneratedHlsOptionsValidator().Validate(null, options);
         Assert.IsFalse(result.Succeeded);
     }
+
+    // ── CleanRelayOptionsValidator ───────────────────────────────────────────
+
+    [TestMethod]
+    public void CleanRelayOptions_ValidDefaults_Passes()
+    {
+        var result = new CleanRelayOptionsValidator().Validate(null, new CleanRelayOptions());
+        Assert.IsTrue(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void CleanRelayOptions_NonPositiveStartupTimeout_Fails()
+    {
+        var options = new CleanRelayOptions { StartupTimeoutSeconds = 0 };
+        var result = new CleanRelayOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void CleanRelayOptions_MaxStartupBytesBelowPacketSize_Fails()
+    {
+        var options = new CleanRelayOptions { MaxStartupBytes = 187 };
+        var result = new CleanRelayOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
 }

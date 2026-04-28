@@ -18,4 +18,6 @@ public enum StreamDiagnosticEventKind
     MpegTsSyncLost = 13,
     MpegTsSafeStartSelected = 14,
     MpegTsPacketizerDisabled = 15,
+    FfmpegRelayStarted = 16,
+    FfmpegRelayFallbackToDirect = 17,
 }

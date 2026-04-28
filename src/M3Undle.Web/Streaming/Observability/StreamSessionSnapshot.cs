@@ -23,4 +23,6 @@ public sealed record StreamSessionSnapshot(
     string? LastDisconnectReason = null,
     string? LastStopTrigger = null,
     int? LastUpstreamStatusCode = null,
-    double? LastCooldownSeconds = null);
+    double? LastCooldownSeconds = null,
+    string RelayMode = "Direct",
+    string? LastRelayFallbackReason = null);

@@ -1308,6 +1308,13 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("force_mpegts");
 
+                    b.Property<string>("CleanRelayMode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("off")
+                        .HasColumnName("clean_relay_mode");
+
                     b.Property<string>("HeadersJson")
                         .HasColumnType("TEXT")
                         .HasColumnName("headers_json");

@@ -28,6 +28,7 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.XtreamUsername).HasColumnName("xtream_username");
         builder.Property(x => x.XtreamEncryptedPassword).HasColumnName("xtream_encrypted_password");
         builder.Property(x => x.ForceMpegTs).HasColumnName("force_mpegts").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.CleanRelayMode).HasColumnName("clean_relay_mode").IsRequired().HasDefaultValue("off");
         builder.Property(x => x.XtreamIncludeXmltv).HasColumnName("xtream_include_xmltv").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.XtreamDetectedCapable).HasColumnName("xtream_detected_capable").IsRequired().HasDefaultValue(false);
 
@@ -35,4 +36,3 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.HasIndex(x => x.Enabled).HasDatabaseName("idx_providers_enabled");
     }
 }
-

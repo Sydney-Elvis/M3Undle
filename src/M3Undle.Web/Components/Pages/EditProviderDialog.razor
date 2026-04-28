@@ -119,6 +119,15 @@
                         Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
                     </MudAlert>
                 }
+                <MudSwitch @bind-Value="_model.CleanRelayRemux" Color="Color.Warning"
+                           Label="Clean relay remux"
+                           For="@(() => _model.CleanRelayRemux)" />
+                @if (_model.CleanRelayRemux)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
+                        Uses FFmpeg to remux live streams and repair timestamps. Adds CPU usage and some startup latency.
+                    </MudAlert>
+                }
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
             </MudStack>
         </MudForm>
@@ -215,6 +224,7 @@
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
+                CleanRelayRemux = string.Equals(Provider.CleanRelayMode, "remux", StringComparison.OrdinalIgnoreCase),
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             }
             : new EditModel
@@ -230,6 +240,7 @@
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
+                CleanRelayRemux = string.Equals(Provider.CleanRelayMode, "remux", StringComparison.OrdinalIgnoreCase),
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             };
 
@@ -324,6 +335,7 @@
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
+                    CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -342,6 +354,7 @@
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
+                    CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -393,6 +406,7 @@
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
         public bool ForceMpegTs { get; set; }
+        public bool CleanRelayRemux { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }
 }

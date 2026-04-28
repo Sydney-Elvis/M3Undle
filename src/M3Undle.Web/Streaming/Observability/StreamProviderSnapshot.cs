@@ -14,4 +14,6 @@ public sealed record StreamProviderSnapshot(
     double? FirstByteLatencyMs = null,
     long BytesSinceReconnect = 0,
     int? LastUpstreamStatusCode = null,
-    double? LastCooldownSeconds = null);
+    double? LastCooldownSeconds = null,
+    string RelayMode = "Direct",
+    string? LastRelayFallbackReason = null);

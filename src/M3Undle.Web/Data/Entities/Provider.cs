@@ -19,6 +19,8 @@ public sealed class Provider
 
     public bool ForceMpegTs { get; set; }
 
+    public string CleanRelayMode { get; set; } = "off";
+
     // Xtream Codes API provider fields
     public string? XtreamBaseUrl { get; set; }
     public string? XtreamUsername { get; set; }
@@ -37,4 +39,3 @@ public sealed class Provider
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();
     public ICollection<ChannelSource> ChannelSources { get; set; } = new List<ChannelSource>();
 }
-

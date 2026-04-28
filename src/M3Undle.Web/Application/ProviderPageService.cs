@@ -2,6 +2,7 @@ using M3Undle.Core.M3u;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Streaming.Configuration;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 
@@ -171,6 +172,7 @@ public sealed class ProviderPageService(
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             ForceMpegTs = request.ForceMpegTs,
+            CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode),
             XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
             XtreamUsername = isXtream ? request.XtreamUsername?.Trim() : null,
             XtreamEncryptedPassword = isXtream ? encryption.Encrypt(request.XtreamPassword!) : null,
@@ -329,6 +331,7 @@ public sealed class ProviderPageService(
         provider.IncludeVod = request.IncludeVod;
         provider.IncludeSeries = request.IncludeSeries;
         provider.ForceMpegTs = request.ForceMpegTs;
+        provider.CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode);
         provider.UpdatedUtc = DateTime.UtcNow;
 
         if (isXtream)
@@ -1006,6 +1009,7 @@ public sealed class ProviderPageService(
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,
                     ForceMpegTs = provider.ForceMpegTs,
+                    CleanRelayMode = CleanRelayModes.Normalize(provider.CleanRelayMode),
                     AssociatedProfileIds = associatedProfileIds,
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,

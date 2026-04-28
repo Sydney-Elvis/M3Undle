@@ -166,6 +166,7 @@ builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
 builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
 builder.Services.Configure<GeneratedHlsOptions>(builder.Configuration.GetSection("M3Undle:Streaming:GeneratedHls"));
+builder.Services.Configure<CleanRelayOptions>(builder.Configuration.GetSection("M3Undle:Streaming:CleanRelay"));
 builder.Services.AddSingleton<IConfigureOptions<StreamProxyOptions>, StreamProxyDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<BufferOptions>, BufferDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<ReconnectOptions>, ReconnectDbOptionsConfigurator>();
@@ -174,10 +175,12 @@ builder.Services.AddSingleton<IValidateOptions<StreamProxyOptions>, StreamProxyO
 builder.Services.AddSingleton<IValidateOptions<BufferOptions>, BufferOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<ReconnectOptions>, ReconnectOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<GeneratedHlsOptions>, GeneratedHlsOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<CleanRelayOptions>, CleanRelayOptionsValidator>();
 builder.Services.AddOptions<StreamProxyOptions>().ValidateOnStart();
 builder.Services.AddOptions<BufferOptions>().ValidateOnStart();
 builder.Services.AddOptions<ReconnectOptions>().ValidateOnStart();
 builder.Services.AddOptions<GeneratedHlsOptions>().ValidateOnStart();
+builder.Services.AddOptions<CleanRelayOptions>().ValidateOnStart();
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(

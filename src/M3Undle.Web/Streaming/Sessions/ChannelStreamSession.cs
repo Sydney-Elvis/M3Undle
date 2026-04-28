@@ -35,6 +35,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long _lastPublishTick;
     private string? _contentType;
     private string? _cacheControl;
+    private string _relayMode = UpstreamRelayModes.Direct;
+    private string? _lastRelayFallbackReason;
     private DateTimeOffset? _lastUpstreamByteUtc;
     private int _reconnectAttempts;
     private string? _lastFailureKind;
@@ -298,6 +300,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
+                    _relayMode = upstream.RelayMode;
+                    _lastRelayFallbackReason = upstream.RelayFallbackReason;
                     _headersReadyTcs.TrySetResult(true);
                     Interlocked.Exchange(ref _bytesSinceReconnect, 0);
                     RecordDiagnostic(
@@ -305,6 +309,22 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         httpStatusCode: upstream.StatusCode,
                         reconnectAttempt: reconnectAttempt,
                         message: "Connected to upstream stream.");
+                    if (!string.Equals(_relayMode, UpstreamRelayModes.Direct, StringComparison.Ordinal))
+                    {
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.FfmpegRelayStarted,
+                            httpStatusCode: upstream.StatusCode,
+                            reconnectAttempt: reconnectAttempt,
+                            message: $"FFmpeg relay started: {_relayMode}.");
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_lastRelayFallbackReason))
+                    {
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.FfmpegRelayFallbackToDirect,
+                            httpStatusCode: upstream.StatusCode,
+                            reconnectAttempt: reconnectAttempt,
+                            message: $"FFmpeg relay fallback to direct: {_lastRelayFallbackReason}.");
+                    }
 
                     if (reconnectAttempt > 0)
                     {
@@ -1028,7 +1048,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastDisconnectReason: _lastDisconnectReason,
             LastStopTrigger: _lastStopTrigger,
             LastUpstreamStatusCode: _lastUpstreamStatusCode,
-            LastCooldownSeconds: _lastCooldownSeconds);
+            LastCooldownSeconds: _lastCooldownSeconds,
+            RelayMode: _relayMode,
+            LastRelayFallbackReason: _lastRelayFallbackReason);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(
@@ -1043,7 +1065,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             FirstByteLatencyMs: _lastFirstByteLatencyMs,
             BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
             LastUpstreamStatusCode: _lastUpstreamStatusCode,
-            LastCooldownSeconds: _lastCooldownSeconds));
+            LastCooldownSeconds: _lastCooldownSeconds,
+            RelayMode: _relayMode,
+            LastRelayFallbackReason: _lastRelayFallbackReason));
     }
 
     private async Task NotifyClosedAsync()
