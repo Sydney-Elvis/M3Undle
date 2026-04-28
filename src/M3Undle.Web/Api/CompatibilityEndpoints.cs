@@ -78,6 +78,8 @@ public static class CompatibilityEndpoints
         streamStatus.MapGet(string.Empty, ServeStreamsStatusSummaryAsync);
         streamStatus.MapGet("clients", ServeStreamsClientsStatusAsync);
         streamStatus.MapGet("providers", ServeStreamsProvidersStatusAsync);
+        streamStatus.MapGet("events", ServeStreamsEventsStatusAsync);
+        streamStatus.MapGet("{sessionId}/events", ServeStreamsSingleSessionEventsStatusAsync);
         streamStatus.MapGet("{sessionId}", ServeStreamsSingleSessionStatusAsync);
 
         // Test-mode debug endpoints — only registered when M3UNDLE_TEST_MODE=true
@@ -92,6 +94,7 @@ public static class CompatibilityEndpoints
             debug.MapPost("/streams/reset", ServeDebugStreamResetAsync);
             debug.MapPost("/strikes/reset", ServeDebugStrikeResetAsync);
             debug.MapGet("/streams/strikes", ServeDebugStrikesAsync);
+            debug.MapGet("/streams/rca", ServeDebugStreamRcaAsync);
             debug.MapGet("/snapshots/idle", ServeDebugSnapshotIdleAsync);
         }
 
@@ -1173,9 +1176,12 @@ public static class CompatibilityEndpoints
         return Results.Json(dtos, JsonOptions);
     }
 
-    private static async Task<IResult> ServeDebugStreamResetAsync(ChannelSessionManager sessionManager)
+    private static async Task<IResult> ServeDebugStreamResetAsync(
+        ChannelSessionManager sessionManager,
+        StreamingDiagnosticsStore diagnosticsStore)
     {
         await sessionManager.ResetAllAsync();
+        diagnosticsStore.Clear();
         return Results.Ok(new { cleared = true });
     }
 
@@ -1294,6 +1300,17 @@ public static class CompatibilityEndpoints
     private static IResult ServeStreamsProvidersStatusAsync(StreamingRegistry registry)
         => Results.Json(registry.GetActiveProviderStreams(), JsonOptions);
 
+    private static IResult ServeStreamsEventsStatusAsync(
+        HttpContext context,
+        StreamingDiagnosticsStore diagnosticsStore)
+        => Results.Json(QueryDiagnosticEvents(context, diagnosticsStore), JsonOptions);
+
+    private static IResult ServeStreamsSingleSessionEventsStatusAsync(
+        string sessionId,
+        HttpContext context,
+        StreamingDiagnosticsStore diagnosticsStore)
+        => Results.Json(QueryDiagnosticEvents(context, diagnosticsStore, sessionId), JsonOptions);
+
     // `/tune/*` exists as the legacy HDHomeRun alias for `/hdhr/tune/*`.
     // `/tuner{n}/*` is the native HDHomeRun route shape used by LibHDHomeRun clients.
     // `/auto/*` and `/hdhr/auto/*` are auto-tune routes that pick the first free tuner.
@@ -1372,6 +1389,62 @@ public static class CompatibilityEndpoints
             : Results.Json(snapshot, JsonOptions);
     }
 
+    private static IResult ServeDebugStreamRcaAsync(
+        StreamingRegistry registry,
+        StreamingDiagnosticsStore diagnosticsStore,
+        UpstreamFailureStrikeStore strikeStore)
+    {
+        var cooldowns = strikeStore.GetActiveCooldowns()
+            .Select(c => new StreamCooldownDiagnostic(
+                c.Key.ToString(),
+                c.Key.ProviderId,
+                c.Key.ProviderChannelId,
+                Math.Round(c.Remaining.TotalSeconds, 1)))
+            .ToArray();
+
+        return Results.Json(new StreamRcaBundle(
+            GeneratedUtc: DateTimeOffset.UtcNow,
+            ActiveSessions: registry.GetActiveSessions(),
+            RecentEndedSessions: registry.GetRecentEndedSessions(),
+            ActiveClients: registry.GetActiveClients(),
+            ActiveProviderStreams: registry.GetActiveProviderStreams(),
+            ActiveCooldowns: cooldowns,
+            RecentEvents: diagnosticsStore.Query()), JsonOptions);
+    }
+
+    private static IReadOnlyList<StreamDiagnosticEvent> QueryDiagnosticEvents(
+        HttpContext context,
+        StreamingDiagnosticsStore diagnosticsStore,
+        string? sessionId = null)
+    {
+        var query = context.Request.Query;
+        var providerId = query.TryGetValue("providerId", out var providerValues)
+            ? providerValues.ToString()
+            : null;
+        var providerChannelId = query.TryGetValue("providerChannelId", out var channelValues)
+            ? channelValues.ToString()
+            : null;
+        StreamDiagnosticEventKind? kind = null;
+        if (query.TryGetValue("kind", out var kindValues)
+            && Enum.TryParse<StreamDiagnosticEventKind>(kindValues.ToString(), ignoreCase: true, out var parsedKind))
+        {
+            kind = parsedKind;
+        }
+
+        DateTimeOffset? sinceUtc = null;
+        if (query.TryGetValue("sinceUtc", out var sinceValues)
+            && DateTimeOffset.TryParse(
+                sinceValues.ToString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsedSince))
+        {
+            sinceUtc = parsedSince;
+        }
+
+        return diagnosticsStore.Query(sessionId, providerId, providerChannelId, kind, sinceUtc);
+    }
+
     private sealed record StreamStatusSummary(
         int ActiveSessionCount,
         int ActiveSubscriberCount,
@@ -1379,4 +1452,19 @@ public static class CompatibilityEndpoints
         int TotalReconnectAttempts,
         IReadOnlyList<StreamSessionSnapshot> ActiveSessions,
         IReadOnlyList<StreamSessionSnapshot> RecentEndedSessions);
+
+    private sealed record StreamCooldownDiagnostic(
+        string SessionKey,
+        string ProviderId,
+        string ProviderChannelId,
+        double RemainingSeconds);
+
+    private sealed record StreamRcaBundle(
+        DateTimeOffset GeneratedUtc,
+        IReadOnlyList<StreamSessionSnapshot> ActiveSessions,
+        IReadOnlyList<StreamSessionSnapshot> RecentEndedSessions,
+        IReadOnlyList<StreamClientSnapshot> ActiveClients,
+        IReadOnlyList<StreamProviderSnapshot> ActiveProviderStreams,
+        IReadOnlyList<StreamCooldownDiagnostic> ActiveCooldowns,
+        IReadOnlyList<StreamDiagnosticEvent> RecentEvents);
 }

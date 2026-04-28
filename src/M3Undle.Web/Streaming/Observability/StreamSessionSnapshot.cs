@@ -17,5 +17,10 @@ public sealed record StreamSessionSnapshot(
     int ReconnectAttempts,
     string? LastFailureKind,
     bool IsInternal = false,
-    string? ParentStreamSessionId = null);
-
+    string? ParentStreamSessionId = null,
+    double? FirstByteLatencyMs = null,
+    long BytesSinceReconnect = 0,
+    string? LastDisconnectReason = null,
+    string? LastStopTrigger = null,
+    int? LastUpstreamStatusCode = null,
+    double? LastCooldownSeconds = null);

@@ -116,6 +116,122 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_UpstreamStall_EmitsFailureAndReconnectDiagnostics()
+    {
+        var chunk = new byte[188];
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var failures = fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.UpstreamFailure);
+        var reconnects = fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled);
+
+        Assert.IsTrue(failures.Any(x => x.UpstreamFailureKind == UpstreamFailureKind.TimeoutOrStall));
+        Assert.IsTrue(reconnects.Any(x => x.ReconnectAttempt >= 1));
+
+        cts.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_Reconnect_ResetsBytesSinceReconnect()
+    {
+        var chunk = new byte[188];
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 5, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        // Wait until reconnect completes and bytes are flowing on the second connection.
+        await WaitUntilAsync(
+            () =>
+            {
+                var snap = fixture.Registry.TryGetSession(session.SessionId);
+                return snap is { ReconnectAttempts: > 0 } && snap.BytesSinceReconnect > 0;
+            },
+            TimeSpan.FromSeconds(5));
+
+        // Before the stall: bytes accumulated on connection 1.
+        var failureEvent = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.UpstreamFailure).FirstOrDefault();
+        Assert.IsNotNull(failureEvent);
+        Assert.IsGreaterThan(0L, failureEvent.BytesSinceReconnect.GetValueOrDefault());
+
+        // At the moment of recovery: BytesSinceReconnect is reset to 0 before any new reads.
+        var recoveredEvent = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.ReconnectRecovered).FirstOrDefault();
+        Assert.IsNotNull(recoveredEvent);
+        Assert.AreEqual(0L, recoveredEvent.BytesSinceReconnect.GetValueOrDefault());
+
+        // After recovery: bytes accumulate only from the new connection.
+        var snapshot = fixture.Registry.TryGetSession(session.SessionId);
+        Assert.IsNotNull(snapshot);
+        Assert.IsGreaterThan(0L, snapshot.BytesSinceReconnect);
+
+        cts.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_FirstByteLatency_IsRecordedAfterUpstreamConnect()
+    {
+        var chunk = new byte[188];
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteOneChunkAfterDelay(chunk, TimeSpan.FromMilliseconds(120), ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.Registry.TryGetSession(session.SessionId)?.FirstByteLatencyMs > 0,
+            TimeSpan.FromSeconds(5));
+
+        var snapshot = fixture.Registry.TryGetSession(session.SessionId);
+        Assert.IsNotNull(snapshot);
+        Assert.IsGreaterThan(0, snapshot.FirstByteLatencyMs.GetValueOrDefault());
+        Assert.IsGreaterThan(0L, snapshot.BytesSinceReconnect);
+
+        var events = fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.FirstUpstreamByte);
+        Assert.IsTrue(events.Any(x => x.FirstByteLatencyMs > 0));
+
+        cts.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_AuthFailure_FaultsSession()
     {
         var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.Unauthorized);
@@ -220,6 +336,13 @@ public sealed class ChannelSessionIntegrationTests
         Assert.IsGreaterThan(TimeSpan.FromSeconds(5), remaining);
         Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(12), remaining);
         Assert.AreEqual(1, handler.ConnectionCount);
+
+        var cooldownEvents = fixture.DiagnosticsStore.Query(kind: StreamDiagnosticEventKind.CooldownRecorded);
+        Assert.IsTrue(cooldownEvents.Any(x =>
+            x.ProviderId == fixture.Source.ProviderId
+            && x.ProviderChannelId == fixture.Source.ProviderChannelId
+            && x.UpstreamFailureKind == UpstreamFailureKind.UpstreamRateLimited
+            && x.RetryAfterSeconds == 12));
     }
 
     [TestMethod]
@@ -362,6 +485,30 @@ public sealed class ChannelSessionIntegrationTests
 
         await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
         Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+    }
+
+    [TestMethod]
+    public async Task Session_SubscriberDisconnect_EmitsDisconnectReason()
+    {
+        var handler = FakeStreamingHandler.StreamForever();
+        await using var fixture = await SessionFixture.CreateAsync(handler);
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), requestCts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.SubscriberRemoved).Count > 0,
+            TimeSpan.FromSeconds(2));
+
+        var removed = fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.SubscriberRemoved);
+        Assert.IsTrue(removed.Any(x => x.DisconnectReason == SubscriberDisconnectReason.ClientAborted));
+
+        await session.DisposeAsync();
     }
 
     [TestMethod]
@@ -1144,6 +1291,26 @@ public sealed class ChannelSessionIntegrationTests
             return Task.FromResult(CreateStreamingResponse(pipe.Reader.AsStream()));
         }
 
+        public static Task<HttpResponseMessage> WriteOneChunkAfterDelay(byte[] chunk, TimeSpan delay, CancellationToken ct)
+        {
+            var pipe = new Pipe();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (delay > TimeSpan.Zero)
+                        await Task.Delay(delay, ct);
+
+                    await pipe.Writer.WriteAsync(chunk, ct);
+                    await Task.Delay(Timeout.Infinite, ct);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { }
+                finally { pipe.Writer.Complete(); }
+            });
+            return Task.FromResult(CreateStreamingResponse(pipe.Reader.AsStream()));
+        }
+
         private static HttpResponseMessage CreateStreamingResponse(IOStream body)
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK);
@@ -1165,6 +1332,7 @@ public sealed class ChannelSessionIntegrationTests
         public FakeStreamingHandler Handler { get; }
         public UpstreamFailureStrikeStore StrikeStore { get; }
         public StreamingRegistry Registry { get; }
+        public StreamingDiagnosticsStore DiagnosticsStore { get; }
         public ChannelSessionManager Manager { get; }
         public StreamSourceDescriptor Source { get; }
 
@@ -1174,6 +1342,7 @@ public sealed class ChannelSessionIntegrationTests
             FakeStreamingHandler handler,
             UpstreamFailureStrikeStore strikeStore,
             StreamingRegistry registry,
+            StreamingDiagnosticsStore diagnosticsStore,
             ChannelSessionManager manager,
             StreamSourceDescriptor source)
         {
@@ -1182,6 +1351,7 @@ public sealed class ChannelSessionIntegrationTests
             Handler = handler;
             StrikeStore = strikeStore;
             Registry = registry;
+            DiagnosticsStore = diagnosticsStore;
             Manager = manager;
             Source = source;
         }
@@ -1271,9 +1441,10 @@ public sealed class ChannelSessionIntegrationTests
                 ? new StreamAdmissionBackoffStore()
                 : new StreamAdmissionBackoffStore(timeProvider);
             var registry = new StreamingRegistry(proxyOpts);
+            var diagnosticsStore = new StreamingDiagnosticsStore(proxyOpts);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
-                NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
+                diagnosticsStore, NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
 
             var source = new StreamSourceDescriptor(
                 ProfileId: "profile-1",
@@ -1285,7 +1456,7 @@ public sealed class ChannelSessionIntegrationTests
                 UserAgent: null,
                 RemoteIp: null);
 
-            return new SessionFixture(connection, serviceProvider, handler, strikeStore, registry, manager, source);
+            return new SessionFixture(connection, serviceProvider, handler, strikeStore, registry, diagnosticsStore, manager, source);
         }
 
         public async ValueTask DisposeAsync()

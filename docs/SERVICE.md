@@ -99,6 +99,14 @@ Operational status endpoints are also available for authenticated UI users:
 - `GET /status/streams`
 - `GET /status/streams/clients`
 - `GET /status/streams/providers`
+- `GET /status/streams/events`
+- `GET /status/streams/<sessionId>/events`
+
+When `M3UNDLE_TEST_MODE=true`, `/debug/streams/rca` returns a compact RCA
+bundle with active/recent sessions, clients, provider streams, cooldowns, and
+recent stream diagnostic events. Use it with app logs under
+`/etc/docker-apps/m3undle/data/logs/` when investigating playback stalls or
+provider failures.
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
 

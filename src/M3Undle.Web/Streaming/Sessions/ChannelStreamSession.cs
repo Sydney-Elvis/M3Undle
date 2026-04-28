@@ -16,6 +16,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly UpstreamStreamConnector _upstreamConnector;
     private readonly UpstreamFailureStrikeStore _strikeStore;
     private readonly StreamingRegistry _registry;
+    private readonly StreamingDiagnosticsStore _diagnosticsStore;
     private readonly ILogger<ChannelStreamSession> _logger;
     private readonly Func<ChannelSessionKey, ChannelStreamSession, Task> _onClosed;
     private readonly RingBuffer _buffer;
@@ -36,12 +37,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private DateTimeOffset? _lastUpstreamByteUtc;
     private int _reconnectAttempts;
     private string? _lastFailureKind;
+    private int? _lastUpstreamStatusCode;
+    private double? _lastCooldownSeconds;
+    private double? _lastFirstByteLatencyMs;
     private int _closeNotified;
     private int _pendingSubscriberAttaches;
     private int _stopRequested;
     private int _retainedExternalActivityCount;
     private long _totalBytesRelayed;
+    private long _bytesSinceReconnect;
     private string? _pendingStopTrigger;
+    private string? _lastStopTrigger;
+    private string? _lastDisconnectReason;
+    private DateTimeOffset? _connectAttemptStartedUtc;
+    private bool _awaitingFirstByte;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -53,6 +62,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         UpstreamStreamConnector upstreamConnector,
         UpstreamFailureStrikeStore strikeStore,
         StreamingRegistry registry,
+        StreamingDiagnosticsStore diagnosticsStore,
         ILogger<ChannelStreamSession> logger,
         Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed)
     {
@@ -63,12 +73,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _upstreamConnector = upstreamConnector;
         _strikeStore = strikeStore;
         _registry = registry;
+        _diagnosticsStore = diagnosticsStore;
         _logger = logger;
         _onClosed = onClosed;
         _idleGrace = ResolveIdleGrace(_proxyOptions);
 
         var maxBytes = Math.Clamp(_bufferOptions.MaxBytesPerSession, 1, _bufferOptions.MaxBytesHardCap);
         _buffer = new RingBuffer(maxBytes);
+        RecordDiagnostic(StreamDiagnosticEventKind.SessionCreated, message: "Shared stream session created.");
     }
 
     public ChannelSessionKey Key => _source.SessionKey;
@@ -121,6 +133,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
             subscriber.InitializeResponse(_contentType, _cacheControl);
             _ = subscriber.StartAsync(_buffer.CreateLiveEdgeSnapshot(), _sessionCts.Token);
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.SubscriberAttached,
+                subscriber: subscriber,
+                message: "Subscriber attached.");
             if (!isInternal)
                 _registry.UpsertClient(subscriber.Snapshot());
             PublishSnapshots();
@@ -158,6 +174,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         LogSubscriberRemoved(subscriber, reason);
+        _lastDisconnectReason = reason.ToString();
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.SubscriberRemoved,
+            subscriber: subscriber,
+            disconnectReason: reason,
+            message: "Subscriber removed.");
 
         lock (_gate)
         {
@@ -257,10 +279,23 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 {
                     SetState(reconnectAttempt == 0 ? SessionState.Connecting : SessionState.Reconnecting);
 
+                    _connectAttemptStartedUtc = DateTimeOffset.UtcNow;
+                    _awaitingFirstByte = true;
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.UpstreamConnectStarted,
+                        reconnectAttempt: reconnectAttempt,
+                        message: "Opening upstream stream connection.");
                     await using var upstream = await _upstreamConnector.ConnectAsync(_source, _sessionCts.Token);
+                    _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
                     _headersReadyTcs.TrySetResult(true);
+                    Interlocked.Exchange(ref _bytesSinceReconnect, 0);
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.UpstreamConnected,
+                        httpStatusCode: upstream.StatusCode,
+                        reconnectAttempt: reconnectAttempt,
+                        message: "Connected to upstream stream.");
 
                     if (reconnectAttempt > 0)
                     {
@@ -269,6 +304,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             _source.DisplayName,
                             reconnectAttempt);
                         _buffer.ResetGeneration();
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.ReconnectRecovered,
+                            httpStatusCode: upstream.StatusCode,
+                            reconnectAttempt: reconnectAttempt,
+                            message: "Upstream stream recovered after reconnect.");
                     }
 
                     reconnectAttempt = 0;
@@ -299,9 +339,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         : _upstreamConnector.Classify(ex);
 
                     _lastFailureKind = kind.ToString();
+                    _lastUpstreamStatusCode = ex is UpstreamConnectException connectExForStatus
+                        ? connectExForStatus.StatusCode
+                        : null;
                     _reconnectAttempts++;
                     reconnectAttempt++;
                     LogUpstreamFailure(kind);
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.UpstreamFailure,
+                        upstreamFailureKind: kind,
+                        httpStatusCode: _lastUpstreamStatusCode,
+                        reconnectAttempt: reconnectAttempt,
+                        message: ex.Message);
                     _logger.LogWarning(
                         "Session {SessionId} upstream failure kind={FailureKind} attempt={Attempt}.",
                         _sessionId,
@@ -312,6 +361,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     if (ShouldCooldownImmediately(kind))
                     {
                         var retryAfter = ResolveCooldownDuration(ex);
+                        _lastCooldownSeconds = retryAfter.TotalSeconds;
                         _strikeStore.RecordStrike(Key, retryAfter);
                         _logger.LogWarning(
                             "Session {SessionId} entering upstream cooldown for {ProviderId}/{ProviderChannelId}. kind={FailureKind} retryAfterSeconds={RetryAfterSeconds:F0}.",
@@ -331,6 +381,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         }
 
                         MarkPendingStopTrigger("upstream_cooldown");
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.CooldownRecorded,
+                            upstreamFailureKind: kind,
+                            httpStatusCode: _lastUpstreamStatusCode,
+                            cooldownSeconds: retryAfter.TotalSeconds,
+                            retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, retryAfter.TotalSeconds))),
+                            message: "Upstream cooldown recorded.");
                         LogStopTrigger("upstream_cooldown", subscriberDisconnectReason: kind.ToString());
                         SetState(SessionState.Faulted);
                         await ForceCloseSubscribersAsync();
@@ -373,6 +430,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     }
 
                     var delay = GetReconnectDelay(reconnectAttempt);
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.ReconnectScheduled,
+                        upstreamFailureKind: kind,
+                        httpStatusCode: _lastUpstreamStatusCode,
+                        reconnectAttempt: reconnectAttempt,
+                        reconnectDelay: delay,
+                        message: "Upstream reconnect scheduled.");
                     if (delay > TimeSpan.Zero)
                         await Task.Delay(delay, _sessionCts.Token);
                 }
@@ -414,7 +478,19 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             }
 
             _lastUpstreamByteUtc = DateTimeOffset.UtcNow;
+            if (_awaitingFirstByte)
+            {
+                _awaitingFirstByte = false;
+                _lastFirstByteLatencyMs = _connectAttemptStartedUtc is { } started
+                    ? (_lastUpstreamByteUtc.Value - started).TotalMilliseconds
+                    : null;
+                RecordDiagnostic(
+                    StreamDiagnosticEventKind.FirstUpstreamByte,
+                    firstByteLatencyMs: _lastFirstByteLatencyMs,
+                    message: "Received first upstream byte after connect.");
+            }
             Interlocked.Add(ref _totalBytesRelayed, bytesRead);
+            Interlocked.Add(ref _bytesSinceReconnect, bytesRead);
             using var published = _buffer.Write(readBuffer.AsMemory(0, bytesRead));
             List<SubscriberConnection>? slowSubscribers = null;
 
@@ -736,6 +812,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private void LogStopTrigger(string stopTrigger, string? subscriberDisconnectReason = null, TimeSpan? delay = null)
     {
+        _lastStopTrigger = stopTrigger;
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.StopTriggered,
+            stopTrigger: stopTrigger,
+            reconnectDelay: delay,
+            message: "Stream stop trigger recorded.");
         _logger.LogInformation(
             "Stream stop trigger: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RouteClassification={RouteClassification} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} PendingAttachCount={PendingAttachCount} StopTrigger={StopTrigger} SubscriberDisconnectReason={SubscriberDisconnectReason} DelayMs={DelayMs}",
             _sessionId,
@@ -802,7 +884,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             StartedUtc: _startedUtc,
             LastUpstreamByteUtc: _lastUpstreamByteUtc,
             ReconnectAttempts: _reconnectAttempts,
-            LastFailureKind: _lastFailureKind);
+            LastFailureKind: _lastFailureKind,
+            FirstByteLatencyMs: _lastFirstByteLatencyMs,
+            BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            LastDisconnectReason: _lastDisconnectReason,
+            LastStopTrigger: _lastStopTrigger,
+            LastUpstreamStatusCode: _lastUpstreamStatusCode,
+            LastCooldownSeconds: _lastCooldownSeconds);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(
@@ -813,7 +901,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastUpstreamByteUtc: _lastUpstreamByteUtc,
             ReconnectAttempts: _reconnectAttempts,
             LastFailureKind: _lastFailureKind,
-            ContentType: _contentType));
+            ContentType: _contentType,
+            FirstByteLatencyMs: _lastFirstByteLatencyMs,
+            BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            LastUpstreamStatusCode: _lastUpstreamStatusCode,
+            LastCooldownSeconds: _lastCooldownSeconds));
     }
 
     private async Task NotifyClosedAsync()
@@ -825,7 +917,52 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             "Shared stream session {SessionId} closed with state {State}.",
             _sessionId,
             _state);
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.SessionClosed,
+            stopTrigger: _lastStopTrigger,
+            message: "Shared stream session closed.");
         await _onClosed(Key, this);
+    }
+
+    private void RecordDiagnostic(
+        StreamDiagnosticEventKind kind,
+        SubscriberConnection? subscriber = null,
+        UpstreamFailureKind? upstreamFailureKind = null,
+        int? httpStatusCode = null,
+        int? reconnectAttempt = null,
+        TimeSpan? reconnectDelay = null,
+        double? firstByteLatencyMs = null,
+        SubscriberDisconnectReason? disconnectReason = null,
+        string? stopTrigger = null,
+        double? cooldownSeconds = null,
+        int? retryAfterSeconds = null,
+        string? message = null)
+    {
+        _diagnosticsStore.Record(new StreamDiagnosticEvent(
+            EventId: Guid.NewGuid().ToString("N"),
+            TimestampUtc: DateTimeOffset.UtcNow,
+            Kind: kind,
+            SessionId: _sessionId,
+            ProviderId: _source.ProviderId,
+            ProviderChannelId: _source.ProviderChannelId,
+            DisplayName: _source.DisplayName,
+            RequestedRoute: _source.RequestedRoute,
+            RouteClassification: RouteClassification,
+            ClientId: subscriber?.ClientId,
+            RemoteIp: subscriber?.RemoteIp,
+            UserAgent: subscriber?.UserAgent,
+            HttpStatusCode: httpStatusCode,
+            UpstreamFailureKind: upstreamFailureKind,
+            ReconnectAttempt: reconnectAttempt,
+            ReconnectDelayMs: reconnectDelay?.TotalMilliseconds,
+            FirstByteLatencyMs: firstByteLatencyMs,
+            BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            TotalBytesRelayed: Interlocked.Read(ref _totalBytesRelayed),
+            DisconnectReason: disconnectReason,
+            StopTrigger: stopTrigger,
+            CooldownSeconds: cooldownSeconds,
+            RetryAfterSeconds: retryAfterSeconds,
+            Message: message));
     }
 
     private string RouteClassification => StreamLogClassification.ClassifyRoute(_source.RequestedRoute);

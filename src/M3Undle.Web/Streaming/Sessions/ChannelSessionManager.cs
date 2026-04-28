@@ -18,6 +18,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly UpstreamFailureStrikeStore _strikeStore;
     private readonly StreamAdmissionBackoffStore _admissionBackoffStore;
     private readonly StreamingRegistry _registry;
+    private readonly StreamingDiagnosticsStore _diagnosticsStore;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChannelSessionManager> _logger;
     private readonly TimeProvider _timeProvider;
@@ -39,6 +40,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         UpstreamFailureStrikeStore strikeStore,
         StreamAdmissionBackoffStore admissionBackoffStore,
         StreamingRegistry registry,
+        StreamingDiagnosticsStore diagnosticsStore,
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider)
     {
@@ -49,6 +51,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         _strikeStore = strikeStore;
         _admissionBackoffStore = admissionBackoffStore;
         _registry = registry;
+        _diagnosticsStore = diagnosticsStore;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
         _timeProvider = timeProvider;
@@ -187,6 +190,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         _upstreamConnector,
                         _strikeStore,
                         _registry,
+                        _diagnosticsStore,
                         _loggerFactory.CreateLogger<ChannelStreamSession>(),
                         RemoveIfClosedAsync);
 
@@ -419,6 +423,17 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                 displayName,
                 cooldownRemaining.TotalSeconds);
         }
+
+        _diagnosticsStore.Record(new StreamDiagnosticEvent(
+            EventId: Guid.NewGuid().ToString("N"),
+            TimestampUtc: DateTimeOffset.UtcNow,
+            Kind: StreamDiagnosticEventKind.AdmissionRejected,
+            ProviderId: key.ProviderId,
+            ProviderChannelId: key.ProviderChannelId,
+            DisplayName: displayName,
+            CooldownSeconds: cooldownRemaining.TotalSeconds,
+            RetryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldownRemaining.TotalSeconds))),
+            Message: "Stream request rejected because upstream source is cooling down."));
 
         throw new StreamAdmissionException(
             $"Upstream source is cooling down for {cooldownRemaining.TotalSeconds:F0}s.",
