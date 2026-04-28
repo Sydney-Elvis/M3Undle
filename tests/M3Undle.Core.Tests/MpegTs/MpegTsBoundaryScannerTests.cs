@@ -18,7 +18,7 @@ public sealed class MpegTsBoundaryScannerTests
         Assert.IsNotNull(batch);
         Assert.AreEqual(3, batch.DroppedByteCount);
         Assert.IsTrue(batch.SyncLost);
-        Assert.AreEqual(MpegTsBoundaryScanner.PacketSize, batch.Data.Length);
+        Assert.HasCount(MpegTsBoundaryScanner.PacketSize, batch.Data);
         Assert.AreEqual(0x47, batch.Data[0]);
     }
 
@@ -33,7 +33,7 @@ public sealed class MpegTsBoundaryScannerTests
 
         Assert.IsNull(first);
         Assert.IsNotNull(second);
-        Assert.AreEqual(MpegTsBoundaryScanner.PacketSize, second.Data.Length);
+        Assert.HasCount(MpegTsBoundaryScanner.PacketSize, second.Data);
         CollectionAssert.AreEqual(packet, second.Data);
     }
 
@@ -50,7 +50,7 @@ public sealed class MpegTsBoundaryScannerTests
         Assert.IsNotNull(batch);
         Assert.AreEqual(3, batch.DroppedByteCount);
         Assert.IsTrue(batch.SyncLost);
-        Assert.AreEqual(MpegTsBoundaryScanner.PacketSize * 2, batch.Data.Length);
+        Assert.HasCount(MpegTsBoundaryScanner.PacketSize * 2, batch.Data);
         Assert.AreEqual(0x47, batch.Data[0]);
         Assert.AreEqual(0x47, batch.Data[MpegTsBoundaryScanner.PacketSize]);
     }
@@ -65,7 +65,7 @@ public sealed class MpegTsBoundaryScannerTests
 
         Assert.IsNotNull(batch);
         Assert.AreEqual(MpegTsStartupKind.PatPmt, batch.StartupKind);
-        Assert.AreEqual(MpegTsBoundaryScanner.PacketSize * 2, batch.Data.Length);
+        Assert.HasCount(MpegTsBoundaryScanner.PacketSize * 2, batch.Data);
     }
 
     [TestMethod]
@@ -102,7 +102,7 @@ public sealed class MpegTsBoundaryScannerTests
         Assert.IsNotNull(batch);
         Assert.AreEqual(3, batch.DroppedByteCount);
         Assert.IsTrue(batch.SyncLost);
-        Assert.AreEqual(MpegTsBoundaryScanner.PacketSize, batch.Data.Length);
+        Assert.HasCount(MpegTsBoundaryScanner.PacketSize, batch.Data);
         Assert.AreEqual(0x47, batch.Data[0]);
     }
 

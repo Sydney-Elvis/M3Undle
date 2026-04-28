@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using M3Undle.Web.Application;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
@@ -19,6 +20,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly StreamAdmissionBackoffStore _admissionBackoffStore;
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
+    private readonly IEventService _eventService;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChannelSessionManager> _logger;
     private readonly TimeProvider _timeProvider;
@@ -41,6 +43,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         StreamAdmissionBackoffStore admissionBackoffStore,
         StreamingRegistry registry,
         StreamingDiagnosticsStore diagnosticsStore,
+        IEventService eventService,
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider)
     {
@@ -52,6 +55,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         _admissionBackoffStore = admissionBackoffStore;
         _registry = registry;
         _diagnosticsStore = diagnosticsStore;
+        _eventService = eventService;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
         _timeProvider = timeProvider;
@@ -191,6 +195,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         _strikeStore,
                         _registry,
                         _diagnosticsStore,
+                        _eventService,
                         _loggerFactory.CreateLogger<ChannelStreamSession>(),
                         RemoveIfClosedAsync);
 

@@ -77,6 +77,39 @@ public sealed class EventServiceTests
     }
 
     [TestMethod]
+    public async Task PublishAsync_StreamRecoveryAndUnstableEventsReplaceEachOtherPerProvider()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = fixture.Services.GetRequiredService<IEventService>();
+
+        await service.PublishAsync(
+            SystemEventSeverity.Warning,
+            SystemEventTypes.ProviderStreamUnstable,
+            "Provider stream unstable",
+            providerId: "provider-1");
+
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.ProviderStreamUnstable, providerId: "provider-1"));
+
+        await service.PublishAsync(
+            SystemEventSeverity.Info,
+            SystemEventTypes.ProviderStreamRecovered,
+            "Provider stream recovered",
+            providerId: "provider-1");
+
+        Assert.IsFalse(await service.HasEventAsync(SystemEventTypes.ProviderStreamUnstable, providerId: "provider-1"));
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.ProviderStreamRecovered, providerId: "provider-1"));
+
+        await service.PublishAsync(
+            SystemEventSeverity.Warning,
+            SystemEventTypes.ProviderStreamUnstable,
+            "Provider stream unstable again",
+            providerId: "provider-1");
+
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.ProviderStreamUnstable, providerId: "provider-1"));
+        Assert.IsFalse(await service.HasEventAsync(SystemEventTypes.ProviderStreamRecovered, providerId: "provider-1"));
+    }
+
+    [TestMethod]
     public async Task CleanupOldEventsAsync_DeletesOnlyEventsOlderThanRetention()
     {
         await using var fixture = await CreateFixtureAsync();

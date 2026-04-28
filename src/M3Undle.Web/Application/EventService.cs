@@ -32,6 +32,20 @@ public sealed class EventService(
                     .ExecuteDeleteAsync(CancellationToken.None);
             }
 
+            if (eventType == SystemEventTypes.ProviderStreamUnstable && providerId is not null)
+            {
+                await db.SystemEvents
+                    .Where(e => e.EventType == SystemEventTypes.ProviderStreamRecovered && e.ProviderId == providerId)
+                    .ExecuteDeleteAsync(CancellationToken.None);
+            }
+
+            if (eventType == SystemEventTypes.ProviderStreamRecovered && providerId is not null)
+            {
+                await db.SystemEvents
+                    .Where(e => e.EventType == SystemEventTypes.ProviderStreamUnstable && e.ProviderId == providerId)
+                    .ExecuteDeleteAsync(CancellationToken.None);
+            }
+
             SystemEvent? existing = null;
             if (providerId is not null)
                 existing = await db.SystemEvents.FirstOrDefaultAsync(

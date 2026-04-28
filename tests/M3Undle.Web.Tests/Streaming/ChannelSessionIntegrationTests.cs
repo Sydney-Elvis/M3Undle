@@ -8,6 +8,7 @@ using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Sessions;
 using M3Undle.Web.Streaming.Subscribers;
 using M3Undle.Web.Streaming.Upstream;
+using M3Undle.Web.Tests.Stubs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -758,9 +759,8 @@ public sealed class ChannelSessionIntegrationTests
         var safeStartEvent = fixture.DiagnosticsStore
             .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected)
             .First();
-        Assert.IsTrue(
-            safeStartEvent.Message?.Contains("PatPmt") == true,
-            $"Expected PatPmt safe-start, got: {safeStartEvent.Message}");
+        Assert.IsNotNull(safeStartEvent.Message);
+        StringAssert.Contains(safeStartEvent.Message, "PatPmt");
 
         var lateContext = CreateResponseCaptureContext();
         var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token);
@@ -1943,7 +1943,7 @@ public sealed class ChannelSessionIntegrationTests
             var diagnosticsStore = new StreamingDiagnosticsStore(proxyOpts);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
-                diagnosticsStore, NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
+                diagnosticsStore, new NullEventService(), NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
 
             var source = new StreamSourceDescriptor(
                 ProfileId: "profile-1",

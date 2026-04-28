@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using M3Undle.Core.MpegTs;
+using M3Undle.Web.Application;
 using M3Undle.Web.Streaming.Buffering;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
@@ -18,6 +19,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly UpstreamFailureStrikeStore _strikeStore;
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
+    private readonly IEventService _eventService;
     private readonly ILogger<ChannelStreamSession> _logger;
     private readonly Func<ChannelSessionKey, ChannelStreamSession, Task> _onClosed;
     private readonly RingBuffer _buffer;
@@ -74,6 +76,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         UpstreamFailureStrikeStore strikeStore,
         StreamingRegistry registry,
         StreamingDiagnosticsStore diagnosticsStore,
+        IEventService eventService,
         ILogger<ChannelStreamSession> logger,
         Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed)
     {
@@ -85,6 +88,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _strikeStore = strikeStore;
         _registry = registry;
         _diagnosticsStore = diagnosticsStore;
+        _eventService = eventService;
         _logger = logger;
         _onClosed = onClosed;
         _idleGrace = ResolveIdleGrace(_proxyOptions);
@@ -324,6 +328,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             httpStatusCode: upstream.StatusCode,
                             reconnectAttempt: reconnectAttempt,
                             message: $"FFmpeg relay fallback to direct: {_lastRelayFallbackReason}.");
+                        await PublishUnstableProviderEventAsync(
+                            $"FFmpeg relay fell back to direct streaming ({_lastRelayFallbackReason}).");
                     }
 
                     if (reconnectAttempt > 0)
@@ -339,6 +345,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             httpStatusCode: upstream.StatusCode,
                             reconnectAttempt: reconnectAttempt,
                             message: "Upstream stream recovered after reconnect.");
+                        await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
                     }
                     else
                     {
@@ -422,6 +429,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             cooldownSeconds: retryAfter.TotalSeconds,
                             retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, retryAfter.TotalSeconds))),
                             message: "Upstream cooldown recorded.");
+                        await PublishUnstableProviderEventAsync(
+                            $"Stream entered cooldown after {kind} ({Math.Ceiling(retryAfter.TotalSeconds):F0}s).");
                         LogStopTrigger("upstream_cooldown", subscriberDisconnectReason: kind.ToString());
                         SetState(SessionState.Faulted);
                         await ForceCloseSubscribersAsync();
@@ -1125,6 +1134,54 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             CooldownSeconds: cooldownSeconds,
             RetryAfterSeconds: retryAfterSeconds,
             Message: message));
+    }
+
+    private async Task PublishUnstableProviderEventAsync(string detail)
+    {
+        try
+        {
+            await _eventService.PublishAsync(
+                SystemEventSeverity.Warning,
+                SystemEventTypes.ProviderStreamUnstable,
+                $"Provider stream unstable: {_source.DisplayName}",
+                detail,
+                providerId: _source.ProviderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish ProviderStreamUnstable event for provider {ProviderId}.",
+                _source.ProviderId);
+        }
+    }
+
+    private async Task PublishRecoveredProviderEventIfNeededAsync(CancellationToken ct)
+    {
+        try
+        {
+            var hasUnstable = await _eventService.HasEventAsync(
+                SystemEventTypes.ProviderStreamUnstable,
+                providerId: _source.ProviderId,
+                ct: ct);
+
+            if (!hasUnstable)
+                return;
+
+            await _eventService.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.ProviderStreamRecovered,
+                $"Provider stream recovered: {_source.DisplayName}",
+                "Upstream stream recovered after reconnect.",
+                providerId: _source.ProviderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish ProviderStreamRecovered event for provider {ProviderId}.",
+                _source.ProviderId);
+        }
     }
 
     private string RouteClassification => StreamLogClassification.ClassifyRoute(_source.RequestedRoute);
