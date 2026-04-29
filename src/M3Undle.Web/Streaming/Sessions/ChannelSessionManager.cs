@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using M3Undle.Web.Application;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Observability;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Upstream;
 using Microsoft.Extensions.Hosting;
@@ -21,6 +22,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
     private readonly IEventService _eventService;
+    private readonly M3UndleMetrics? _metrics;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<ChannelSessionManager> _logger;
     private readonly TimeProvider _timeProvider;
@@ -45,7 +47,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         StreamingDiagnosticsStore diagnosticsStore,
         IEventService eventService,
         ILoggerFactory loggerFactory,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        M3UndleMetrics? metrics = null)
     {
         _bufferOptions = bufferOptions.Value;
         _proxyOptions = proxyOptions.Value;
@@ -59,6 +62,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
         _timeProvider = timeProvider;
+        _metrics = metrics;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -168,6 +172,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         preemptionTask = TryBeginIdleRetunePreemptionLocked(source);
                         if (preemptionTask is null)
                         {
+                            _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
                             throw CreateAdmissionException(
                                 key,
                                 source.DisplayName,
@@ -197,7 +202,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         _diagnosticsStore,
                         _eventService,
                         _loggerFactory.CreateLogger<ChannelStreamSession>(),
-                        RemoveIfClosedAsync);
+                        RemoveIfClosedAsync,
+                        _metrics);
 
                     _sessions[key] = session;
                     return session;
@@ -237,6 +243,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             {
                 var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
                 if (providerUpstreams >= providerCap)
+                {
+                    _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
                     throw CreateAdmissionException(
                         key,
                         source.DisplayName,
@@ -244,6 +252,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         $"Provider upstream limit ({providerCap}) reached.",
                         "provider has reached its upstream limit of {Limit} stream(s).",
                         providerCap);
+                }
             }
         }
     }

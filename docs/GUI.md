@@ -116,6 +116,20 @@ Controls whether the M3U, XMLTV, stream, and HDHomeRun client endpoints require 
 - Set the `Virtual Tuner ID` used for HDHomeRun tuner ownership and retune/reuse behaviour
 - See whether a credential is currently configured
 
+**Observability**
+Controls Prometheus metrics exposure and metrics-token management. You can:
+
+- Enable or disable the metrics endpoint
+- Choose metrics mode: `Disabled`, `LocalOnly`, `Token`, or `Public`
+- Add explicit CIDR ranges for local-only scrapes
+- Generate metrics tokens for Prometheus, Grafana Alloy/Agent, or other scrapers
+- Delete expired or rotated metrics tokens
+- Keep channel-level labels disabled to avoid high-cardinality metrics
+
+Generated metrics tokens are shown once. After creation, the UI only shows metadata such as name, scope, created time, last used time, expiration, and expired state.
+
+See [OBSERVABILITY.md](OBSERVABILITY.md) for scrape examples, metric names, health probes, and diagnostics APIs.
+
 **Refresh Schedule**
 Controls how often M3Undle fetches updated lineup and guide data from providers. Options: Manual only, every 1h, 2h, 4h (default), 6h, 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
 

@@ -1,4 +1,5 @@
 using M3Undle.Web.Streaming.Subscribers;
+using M3Undle.Web.Observability;
 
 namespace M3Undle.Web.Application;
 
@@ -23,7 +24,8 @@ public sealed record HdHomeRunTunerLeaseSnapshot(
     DateTimeOffset? ActivatedUtc);
 
 public sealed class HdHomeRunTunerManager(
-    HdHomeRunTunerCountResolver tunerCountResolver)
+    HdHomeRunTunerCountResolver tunerCountResolver,
+    M3UndleMetrics? metrics = null)
 {
     private readonly Lock _lock = new();
     private readonly Dictionary<string, TunerLease> _leases = new(StringComparer.Ordinal);
@@ -45,6 +47,7 @@ public sealed class HdHomeRunTunerManager(
             var streamLimit = ResolveStreamLimit();
             if (streamLimit is not null && priorLease is null && _leases.Count >= streamLimit.Value)
             {
+                metrics?.RecordHdhrTuneRequest(success: false);
                 return new HdHomeRunTunerAcquireResult(
                     Succeeded: false,
                     Error: $"All {streamLimit.Value} HDHomeRun tuner slots are in use.",
@@ -67,6 +70,7 @@ public sealed class HdHomeRunTunerManager(
                 SessionRetention: null,
                 PendingReleaseCts: null);
 
+            metrics?.RecordHdhrTuneRequest(success: true);
             return new HdHomeRunTunerAcquireResult(
                 Succeeded: true,
                 Error: null,
@@ -83,6 +87,7 @@ public sealed class HdHomeRunTunerManager(
 
             if (streamLimit is not null && _leases.Count >= streamLimit.Value)
             {
+                metrics?.RecordHdhrTuneRequest(success: false);
                 return new HdHomeRunTunerAcquireResult(
                     Succeeded: false,
                     Error: $"All {streamLimit.Value} HDHomeRun tuner slots are in use.",
@@ -113,6 +118,7 @@ public sealed class HdHomeRunTunerManager(
                     SessionRetention: null,
                     PendingReleaseCts: null);
 
+                metrics?.RecordHdhrTuneRequest(success: true);
                 return new HdHomeRunTunerAcquireResult(
                     Succeeded: true,
                     Error: null,
@@ -120,6 +126,7 @@ public sealed class HdHomeRunTunerManager(
                     PriorSubscriber: null);
             }
 
+            metrics?.RecordHdhrTuneRequest(success: false);
             return new HdHomeRunTunerAcquireResult(
                 Succeeded: false,
                 Error: $"All {streamLimit ?? tunerCountResolver.ResolveTunerCount()} HDHomeRun tuner slots are in use.",

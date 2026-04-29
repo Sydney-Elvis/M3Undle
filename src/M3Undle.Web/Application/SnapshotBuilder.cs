@@ -8,6 +8,7 @@ using M3Undle.Core.M3u;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Observability;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -31,7 +32,8 @@ public sealed class SnapshotBuilder(
     IRefreshScheduleService refreshScheduleService,
     IEventService eventService,
     TimeProvider timeProvider,
-    ILogger<SnapshotBuilder> logger)
+    ILogger<SnapshotBuilder> logger,
+    M3UndleMetrics? metrics = null)
 {
     internal sealed record InterestRuleConfig(
         string MatchType,
@@ -115,6 +117,8 @@ public sealed class SnapshotBuilder(
         {
         }
     }
+
+    private sealed record LineupMetricDeltas(int Added, int Removed, int Renamed, int MappingChanges);
 
     /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
     public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunAsync(CancellationToken cancellationToken)
@@ -250,6 +254,7 @@ public sealed class SnapshotBuilder(
         catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or OperationCanceledException)
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
+            metrics?.RecordProviderRefresh(provider.ProviderId, success: false, sw.Elapsed);
             await FailFetchRunAsync(fetchRun, ex.Message);
             await PublishSystemEventBestEffortAsync(
                 SystemEventSeverity.Error,
@@ -262,6 +267,7 @@ public sealed class SnapshotBuilder(
 
         logger.LogInformation("Playlist fetched in {Elapsed}ms — {ChannelCount} channels for provider {ProviderId}.",
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
+        metrics?.RecordProviderRefresh(provider.ProviderId, success: true, sw.Elapsed);
         sw.Restart();
 
         // 4. Probe Xtream API for capability/expiry (non-fatal, updates fields in place)
@@ -712,8 +718,16 @@ public sealed class SnapshotBuilder(
         db.Snapshots.Add(snapshot);
         await db.SaveChangesAsync(cancellationToken);
 
+        var lineupDeltas = await ComputeLineupMetricDeltasAsync(prevSnapshot, channelIndex, cancellationToken);
+
         await PromoteSnapshotAsync(snapshot, profileId, cancellationToken);
         await PurgeOldSnapshotsAsync(profileId, cancellationToken);
+        metrics?.RecordLineupPublish(
+            profileId,
+            lineupDeltas.Added,
+            lineupDeltas.Removed,
+            lineupDeltas.Renamed,
+            lineupDeltas.MappingChanges);
 
         using var snapshotScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
         logger.LogInformation(
@@ -1211,6 +1225,11 @@ public sealed class SnapshotBuilder(
 
         // Compile
         var (compiledXml, report) = epgCompiler.Compile(outputChannels, sources, catalogues, mappingLookup);
+        metrics?.RecordEpgRefresh(
+            success: fetchResults.Any(x => x.Result.Status is "ok" or "not_modified"),
+            channels: report.TotalChannels,
+            programs: report.TotalProgrammes,
+            unmatchedChannels: Math.Max(0, report.TotalChannels - report.MappedChannels));
 
         // "Don't regress" guard: if compiled guide is empty and we have a previous active snapshot,
         // re-use the previous guide rather than publishing an empty one.
@@ -1789,6 +1808,53 @@ public sealed class SnapshotBuilder(
 
         newSnapshot.Status = "active";
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static async Task<LineupMetricDeltas> ComputeLineupMetricDeltasAsync(
+        Snapshot? previousSnapshot,
+        IReadOnlyCollection<ChannelIndexEntry> currentEntries,
+        CancellationToken cancellationToken)
+    {
+        if (previousSnapshot is null)
+            return new LineupMetricDeltas(currentEntries.Count, 0, 0, 0);
+
+        if (!File.Exists(previousSnapshot.ChannelIndexPath))
+            return new LineupMetricDeltas(0, 0, 0, 0);
+
+        var previousByKey = new Dictionary<string, ChannelIndexEntry>(StringComparer.Ordinal);
+        await foreach (var entry in ChannelIndexStore.StreamAllAsync(previousSnapshot.ChannelIndexPath, cancellationToken))
+            previousByKey.TryAdd(entry.StreamKey, entry);
+
+        var currentByKey = new Dictionary<string, ChannelIndexEntry>(StringComparer.Ordinal);
+        foreach (var entry in currentEntries)
+            currentByKey.TryAdd(entry.StreamKey, entry);
+
+        var added = 0;
+        var renamed = 0;
+        var mappingChanges = 0;
+        foreach (var (streamKey, current) in currentByKey)
+        {
+            if (!previousByKey.TryGetValue(streamKey, out var previous))
+            {
+                added++;
+                continue;
+            }
+
+            if (!string.Equals(previous.DisplayName, current.DisplayName, StringComparison.Ordinal)
+                || !string.Equals(previous.TvgName, current.TvgName, StringComparison.Ordinal))
+            {
+                renamed++;
+            }
+
+            if (!string.Equals(previous.TvgId, current.TvgId, StringComparison.Ordinal)
+                || previous.TvgChno != current.TvgChno)
+            {
+                mappingChanges++;
+            }
+        }
+
+        var removed = previousByKey.Keys.Count(key => !currentByKey.ContainsKey(key));
+        return new LineupMetricDeltas(added, removed, renamed, mappingChanges);
     }
 
     private async Task PurgeOldSnapshotsAsync(string profileId, CancellationToken cancellationToken)

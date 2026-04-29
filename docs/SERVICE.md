@@ -102,6 +102,21 @@ Operational status endpoints are also available for authenticated UI users:
 - `GET /status/streams/events`
 - `GET /status/streams/<sessionId>/events`
 
+Observability endpoints are available for monitoring systems:
+
+- `GET /metrics` — Prometheus-compatible scrape output, controlled by the metrics access mode
+- `GET /livez` — liveness probe
+- `GET /readyz` — readiness probe
+- `GET /healthz` — JSON health summary
+- `GET /health/ready` — readiness compatibility alias
+
+Authenticated admin diagnostics APIs expose current operational state as JSON:
+
+- `GET /api/admin/diagnostics/providers`
+- `GET /api/admin/diagnostics/streams`
+- `GET /api/admin/diagnostics/lineup`
+- `GET /api/admin/diagnostics/epg`
+
 When `M3UNDLE_TEST_MODE=true`, `/debug/streams/rca` returns a compact RCA
 bundle with active/recent sessions, clients, provider streams, cooldowns, and
 recent stream diagnostic events. Use it with app logs under
@@ -109,6 +124,7 @@ recent stream diagnostic events. Use it with app logs under
 provider failures.
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
+See also: `docs/OBSERVABILITY.md`
 
 ---
 
@@ -129,7 +145,7 @@ Views:
 - **Channel Review Queue**: review pending channels in `/channels/review`; include/exclude selected channels or bulk-action pending channels by provider group
 - **Channels**: browse the live channels currently in the published lineup; edit channel numbers, output groups, and EPG IDs
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
-- **Settings**: configure endpoint security credentials, HDHomeRun settings, stream proxy settings, refresh schedule, and downstream integrations; displays active vs. saved configuration with a restart-required indicator and in-app restart button
+- **Settings**: configure endpoint security credentials, HDHomeRun settings, observability, stream proxy settings, refresh schedule, and downstream integrations; displays active vs. saved configuration with a restart-required indicator and in-app restart button
 
 Design goals:
 - configuration should be explicit and understandable

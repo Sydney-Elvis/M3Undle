@@ -89,6 +89,17 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
         builder.Property(s => s.EventRetentionDays)
             .HasColumnName("event_retention_days")
             .HasDefaultValue(SystemEventSettings.DefaultRetentionDays);
+        builder.Property(s => s.ObservabilityMetricsEnabled)
+            .HasColumnName("observability_metrics_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.ObservabilityMetricsMode)
+            .HasColumnName("observability_metrics_mode")
+            .HasDefaultValue("LocalOnly");
+        builder.Property(s => s.ObservabilityMetricsEnableChannelLabels)
+            .HasColumnName("observability_metrics_enable_channel_labels")
+            .HasDefaultValue(false);
+        builder.Property(s => s.ObservabilityMetricsLocalAllowedCidrs)
+            .HasColumnName("observability_metrics_local_allowed_cidrs");
 
         builder.HasData(new SiteSettings
         {
@@ -120,6 +131,10 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             RefreshScheduleKind = "6h",
             RefreshStartupCatchup = true,
             EventRetentionDays = SystemEventSettings.DefaultRetentionDays,
+            ObservabilityMetricsEnabled = true,
+            ObservabilityMetricsMode = "LocalOnly",
+            ObservabilityMetricsEnableChannelLabels = false,
+            ObservabilityMetricsLocalAllowedCidrs = null,
         });
     }
 }

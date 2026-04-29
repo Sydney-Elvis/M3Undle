@@ -221,6 +221,28 @@ The same settings page also controls the HDHomeRun `Virtual Tuner ID` used for t
 |---|---|---|
 | `M3UNDLE_M3U_DIR` | `/m3u_data` | Directory the file browser exposes when adding a provider from a local `.m3u` file. The Docker image defaults to `/m3u_data`. Mount a host directory to that path, or set this variable to a different container path and mount there. |
 
+### Optional — Observability
+
+Most users should configure metrics from **Settings → Observability** after first startup. The variables below are useful for managed deployments or bootstrap defaults.
+
+| Variable | Default | Description |
+|---|---|---|
+| `M3Undle__Observability__Metrics__Enabled` | `true` | Master switch for the Prometheus-compatible scrape endpoint. |
+| `M3Undle__Observability__Metrics__Path` | `/metrics` | Scrape endpoint path. |
+| `M3Undle__Observability__Metrics__Mode` | `LocalOnly` | Metrics access mode: `Disabled`, `LocalOnly`, `Token`, or `Public`. |
+| `M3Undle__Observability__Metrics__EnableChannelLabels` | `false` | Reserved guard for channel-level labels. Leave disabled unless you understand the Prometheus cardinality impact. |
+| `M3Undle__Observability__Metrics__LocalAllowedCidrs__0` | *(empty)* | First CIDR allowed in `LocalOnly` mode, for example `192.168.1.0/24`. Add more with `__1`, `__2`, etc. |
+
+Example:
+
+```yaml
+environment:
+  M3Undle__Observability__Metrics__Mode: "LocalOnly"
+  M3Undle__Observability__Metrics__LocalAllowedCidrs__0: "192.168.1.0/24"
+```
+
+Metrics tokens are generated in the web UI and shown once. See [OBSERVABILITY.md](OBSERVABILITY.md) for Prometheus and Grafana examples.
+
 ### App Settings
 
 | Variable | Default | Description |
@@ -346,6 +368,10 @@ Once running, clients consume these endpoints directly:
 | `GET /hdhr/discover.json` | HDHomeRun discovery |
 | `GET /hdhr/lineup.json` | HDHomeRun channel lineup |
 | `GET /health` | Health check |
+| `GET /livez` | Liveness probe |
+| `GET /readyz` | Readiness probe |
+| `GET /healthz` | JSON health summary |
+| `GET /metrics` | Prometheus-compatible metrics scrape endpoint |
 | `GET /status` | Machine-readable status JSON |
 
 **M3U/XMLTV clients** — point at `http://<host>:8080/m3u/m3undle.m3u`.
@@ -355,6 +381,8 @@ Once running, clients consume these endpoints directly:
 **HDHomeRun clients** — see [HDHomeRun Setup](#hdhr-setup) below.
 
 Stream URLs in the playlist point to the relay proxy — provider credentials are never exposed to clients.
+
+Metrics access is controlled separately from UI login and endpoint security. The default is local-only access. See [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ---
 

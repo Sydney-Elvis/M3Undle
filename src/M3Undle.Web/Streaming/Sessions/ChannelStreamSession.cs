@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using M3Undle.Core.M3u;
 using M3Undle.Core.MpegTs;
 using M3Undle.Web.Application;
+using M3Undle.Web.Observability;
 using M3Undle.Web.Streaming.Buffering;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
@@ -20,6 +22,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
     private readonly IEventService _eventService;
+    private readonly M3UndleMetrics? _metrics;
     private readonly ILogger<ChannelStreamSession> _logger;
     private readonly Func<ChannelSessionKey, ChannelStreamSession, Task> _onClosed;
     private readonly RingBuffer _buffer;
@@ -78,7 +81,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         StreamingDiagnosticsStore diagnosticsStore,
         IEventService eventService,
         ILogger<ChannelStreamSession> logger,
-        Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed)
+        Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed,
+        M3UndleMetrics? metrics = null)
     {
         _source = source;
         _bufferOptions = bufferOptions;
@@ -91,11 +95,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _eventService = eventService;
         _logger = logger;
         _onClosed = onClosed;
+        _metrics = metrics;
         _idleGrace = ResolveIdleGrace(_proxyOptions);
 
         var maxBytes = Math.Clamp(_bufferOptions.MaxBytesPerSession, 1, _bufferOptions.MaxBytesHardCap);
         _buffer = new RingBuffer(maxBytes);
         RecordDiagnostic(StreamDiagnosticEventKind.SessionCreated, message: "Shared stream session created.");
+        _metrics?.RecordStreamStarted(_source.ProviderId, ResolveStreamType(_source.StreamUrl), ResolveProtocol(_source.StreamUrl));
     }
 
     public ChannelSessionKey Key => _source.SessionKey;
@@ -334,6 +340,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
                     if (reconnectAttempt > 0)
                     {
+                        _metrics?.RecordStreamReconnect(_source.ProviderId);
                         _logger.LogInformation(
                             "Stream '{DisplayName}' recovered successfully after {Attempts} reconnect attempt(s).",
                             _source.DisplayName,
@@ -385,6 +392,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         : null;
                     _reconnectAttempts++;
                     reconnectAttempt++;
+                    _metrics?.RecordStreamFailure(_source.ProviderId);
                     LogUpstreamFailure(kind);
                     RecordDiagnostic(
                         StreamDiagnosticEventKind.UpstreamFailure,
@@ -490,6 +498,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             if (_state != SessionState.Faulted)
                 SetState(SessionState.Closed);
 
+            _metrics?.RecordStreamEnded(_source.ProviderId, ResolveStreamType(_source.StreamUrl), ResolveProtocol(_source.StreamUrl));
             PublishSnapshots();
             _registry.RemoveSession(_sessionId);
             await NotifyClosedAsync();
@@ -880,6 +889,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         return idleGrace;
     }
+
+    private static string ResolveStreamType(string streamUrl)
+    {
+        var kind = LiveClassifier.ClassifyContent(streamUrl);
+        return kind is "vod" or "series" ? kind : "live";
+    }
+
+    private static string ResolveProtocol(string streamUrl)
+        => streamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ? "hls" : "mpegts";
 
     private void LogSubscriberAttached(SubscriberConnection subscriber)
     {

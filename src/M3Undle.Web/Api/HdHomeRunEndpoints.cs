@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using M3Undle.Web.Application;
+using M3Undle.Web.Observability;
 using M3Undle.Web.Security;
 
 namespace M3Undle.Web.Api;
@@ -51,12 +52,14 @@ public static class HdHomeRunEndpoints
     private static async Task<IResult> ServeDiscoverAsync(
         HttpContext context,
         HdHomeRunDeviceService deviceService,
+        M3UndleMetrics metrics,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!deviceService.IsEnabled)
             return TypedResults.NotFound();
 
+        metrics.RecordHdhrDiscoveryRequest();
         var logger = CreateLogger(loggerFactory);
         using var scope = BeginHdhrScope(logger);
 

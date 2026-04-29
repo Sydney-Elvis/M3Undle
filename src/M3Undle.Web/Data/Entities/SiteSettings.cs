@@ -33,4 +33,9 @@ public sealed class SiteSettings
     public bool RefreshStartupCatchup { get; set; } = true;
 
     public int EventRetentionDays { get; set; } = 7;
+
+    public bool ObservabilityMetricsEnabled { get; set; } = true;
+    public string ObservabilityMetricsMode { get; set; } = "LocalOnly";
+    public bool ObservabilityMetricsEnableChannelLabels { get; set; }
+    public string? ObservabilityMetricsLocalAllowedCidrs { get; set; }
 }

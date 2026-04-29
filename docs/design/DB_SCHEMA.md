@@ -333,6 +333,46 @@ Indexes:
 
 ---
 
+## Observability Additions
+
+The following tables and columns support metrics access, token management, and observability settings.
+
+---
+
+### metrics_tokens
+App-generated tokens for Prometheus-compatible metrics scraping.
+
+- metrics_token_id (PK, TEXT, uuid)
+- name (TEXT, unique)
+- token_hash (TEXT) -- hashed token; plaintext is shown once at creation only
+- scope (TEXT, default 'metrics:read')
+- created_utc (TEXT)
+- last_used_utc (TEXT, nullable)
+- expires_utc (TEXT, nullable)
+
+Indexes:
+- ux_metrics_tokens_name(name)
+- idx_metrics_tokens_expires(expires_utc)
+
+Notes:
+- Tokens authenticate only the metrics endpoint.
+- Diagnostics APIs continue to use UI/admin authorization.
+- Token regeneration is create-new plus delete-old.
+
+---
+
+### site_settings additions (observability)
+New columns added to the existing `site_settings` table:
+
+- observability_metrics_enabled (INTEGER, 0/1, default 1)
+- observability_metrics_mode (TEXT, default 'LocalOnly') -- 'Disabled'|'LocalOnly'|'Token'|'Public'
+- observability_metrics_enable_channel_labels (INTEGER, 0/1, default 0)
+- observability_metrics_local_allowed_cidrs (TEXT, nullable) -- newline-separated CIDR list
+
+The configured metrics path remains an app setting (`M3Undle:Observability:Metrics:Path`) because the OpenTelemetry scrape endpoint is mapped at startup.
+
+---
+
 ## Alpha 5 Additions
 
 The following tables and columns were added during the Alpha 5 release cycle.

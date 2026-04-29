@@ -128,6 +128,10 @@ Proxy live streams through M3Undle, hide provider credentials from clients, shar
 
 ![Stream Monitor showing two active sessions with buffer usage and three connected clients sharing streams](docs/images/readme-streams.png)
 
+### Observability
+
+Expose Prometheus-compatible metrics, liveness/readiness probes, and authenticated diagnostics APIs for monitoring provider refreshes, streams, lineup publishing, EPG status, and HDHomeRun activity.
+
 ### Profiles and publishing
 
 Use named profiles, switch the active published profile, keep published history, and fall back to last-known-good output when needed.
@@ -146,10 +150,14 @@ After publishing a lineup, point your clients at M3Undle instead of the raw prov
 | XMLTV guide | `http://<host>:8080/xmltv/m3undle.xml` |
 | HDHomeRun-style tuner | `http://<host>:5004` |
 | Xtream-style API | `http://<host>:8080` |
+| Prometheus metrics | `http://<host>:8080/metrics` |
+| Health probes | `http://<host>:8080/livez`, `http://<host>:8080/readyz` |
 
 For HDHomeRun-style clients, manual tuner setup is usually the most reliable option. Use `http://<host>:5004`.
 
 For Xtream-style clients, add M3Undle as the server URL and use the endpoint credentials configured in M3Undle.
+
+The metrics endpoint defaults to local-only access. For metrics modes, tokens, health probes, diagnostics APIs, and Prometheus examples, see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 
 ## Minimal configuration
 
@@ -206,6 +214,11 @@ Check the HDHomeRun discovery endpoint:
 
     curl http://<host>:5004/discover.json
 
+Check service health:
+
+    curl -i http://<host>:8080/livez
+    curl -i http://<host>:8080/readyz
+
 Common first checks:
 
 | Problem | Check |
@@ -217,6 +230,7 @@ Common first checks:
 | Xtream provider fails to save | Confirm `M3UNDLE_ENCRYPTION_KEY` is set and has not changed since the provider was added. |
 | Browser playback fails | Check stream status in the web UI and confirm the `/data` volume is writable. |
 | Streams stop or fail to start | Check provider limits, active stream sessions, and container logs. |
+| Monitoring scrape fails | Check the metrics access mode in Settings and see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md). |
 
 When reporting an issue, include the M3Undle version tag, Docker compose file with secrets removed, client name, endpoint type, and relevant logs.
 

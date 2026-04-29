@@ -1,4 +1,5 @@
 using M3Undle.Web.Application;
+using M3Undle.Web.Observability;
 using M3Undle.Web.Security;
 using Microsoft.AspNetCore.Http.HttpResults;
 
@@ -22,6 +23,11 @@ public static class SiteSettingsApiEndpoints
         group.MapPut("/hdhr", UpdateHdhrSettingsAsync).WithSummary("Update HDHomeRun settings");
         group.MapGet("/events", GetEventSettingsAsync).WithSummary("Get event settings");
         group.MapPut("/events", UpdateEventSettingsAsync).WithSummary("Update event settings");
+        group.MapGet("/observability", GetObservabilitySettingsAsync).WithSummary("Get observability settings");
+        group.MapPut("/observability", UpdateObservabilitySettingsAsync).WithSummary("Update observability settings");
+        group.MapGet("/observability/tokens", ListMetricsTokensAsync).WithSummary("List metrics tokens");
+        group.MapPost("/observability/tokens", CreateMetricsTokenAsync).WithSummary("Create a metrics token");
+        group.MapDelete("/observability/tokens/{tokenId}", DeleteMetricsTokenAsync).WithSummary("Delete a metrics token");
 
         return app;
     }
@@ -80,6 +86,90 @@ public static class SiteSettingsApiEndpoints
         bool HasCredential,
         string? ActiveProfileId,
         string? VirtualTunerId);
+
+    private static async Task<Ok<ObservabilitySettingsResponse>> GetObservabilitySettingsAsync(
+        IObservabilitySettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var settings = await settingsService.GetSettingsAsync(cancellationToken);
+        return TypedResults.Ok(MapObservabilitySettings(settings));
+    }
+
+    private static async Task<Results<Ok<ObservabilitySettingsResponse>, ValidationProblem>> UpdateObservabilitySettingsAsync(
+        ObservabilitySettingsUpdateRequest request,
+        IObservabilitySettingsService settingsService,
+        CancellationToken cancellationToken)
+    {
+        var result = await settingsService.UpdateAsync(new UpdateObservabilitySettingsCommand(
+            request.Enabled,
+            request.Mode,
+            request.EnableChannelLabels,
+            request.LocalAllowedCidrs ?? []), cancellationToken);
+
+        if (!result.Succeeded)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["observability"] = [result.Error ?? "Observability settings update failed."],
+            });
+        }
+
+        return TypedResults.Ok(MapObservabilitySettings(result.Settings));
+    }
+
+    private static async Task<Ok<IReadOnlyList<MetricsTokenSummary>>> ListMetricsTokensAsync(
+        IMetricsTokenService tokenService,
+        CancellationToken cancellationToken)
+        => TypedResults.Ok(await tokenService.ListAsync(cancellationToken));
+
+    private static async Task<Results<Ok<CreateMetricsTokenResponse>, ValidationProblem>> CreateMetricsTokenAsync(
+        CreateMetricsTokenRequest request,
+        IMetricsTokenService tokenService,
+        CancellationToken cancellationToken)
+    {
+        var result = await tokenService.CreateAsync(
+            new CreateMetricsTokenCommand(request.Name, request.ExpiresUtc), cancellationToken);
+
+        if (!result.Succeeded)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["metricsToken"] = [result.Error ?? "Metrics token creation failed."],
+            });
+        }
+
+        return TypedResults.Ok(new CreateMetricsTokenResponse(result.Token!, result.PlainToken!));
+    }
+
+    private static async Task<Results<NoContent, NotFound>> DeleteMetricsTokenAsync(
+        string tokenId,
+        IMetricsTokenService tokenService,
+        CancellationToken cancellationToken)
+    {
+        return await tokenService.DeleteAsync(tokenId, cancellationToken)
+            ? TypedResults.NoContent()
+            : TypedResults.NotFound();
+    }
+
+    private static ObservabilitySettingsResponse MapObservabilitySettings(ObservabilitySettingsSnapshot settings)
+        => new(settings.Enabled, settings.Path, settings.Mode, settings.EnableChannelLabels, settings.LocalAllowedCidrs);
+
+    private sealed record ObservabilitySettingsUpdateRequest(
+        bool Enabled,
+        string Mode,
+        bool EnableChannelLabels,
+        IReadOnlyList<string>? LocalAllowedCidrs);
+
+    private sealed record ObservabilitySettingsResponse(
+        bool Enabled,
+        string Path,
+        string Mode,
+        bool EnableChannelLabels,
+        IReadOnlyList<string> LocalAllowedCidrs);
+
+    private sealed record CreateMetricsTokenRequest(string? Name, DateTime? ExpiresUtc);
+
+    private sealed record CreateMetricsTokenResponse(MetricsTokenSummary Token, string PlainToken);
 
     private static async Task<Ok<GeneratedHlsSettingsResponse>> GetGeneratedHlsSettingsAsync(
         IGeneratedHlsSettingsService settingsService,

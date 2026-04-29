@@ -177,7 +177,10 @@ public sealed class ChannelSessionIntegrationTests
             () =>
             {
                 var snap = fixture.Registry.TryGetSession(session.SessionId);
-                return snap is { ReconnectAttempts: > 0 } && snap.BytesSinceReconnect > 0;
+                return snap is { ReconnectAttempts: > 0, BytesSinceReconnect: > 0 }
+                    && fixture.DiagnosticsStore.Query(
+                        sessionId: session.SessionId,
+                        kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0;
             },
             TimeSpan.FromSeconds(5));
 

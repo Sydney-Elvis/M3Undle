@@ -2,6 +2,7 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
 @using M3Undle.Web.Contracts.Providers
+@using M3Undle.Web.Observability
 @using M3Undle.Web.Streaming.Configuration
 @using M3Undle.Web.Streaming.Observability
 @inject ISiteSettingsService SiteSettings
@@ -15,7 +16,10 @@
 @inject IDownstreamIntegrationService DownstreamIntegrations
 @inject ProviderPageService ProviderPageService
 @inject IEventService EventService
+@inject IObservabilitySettingsService ObservabilitySettings
+@inject IMetricsTokenService MetricsTokenService
 @inject IDialogService DialogService
+@inject IJSRuntime JS
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -180,6 +184,154 @@
                         <MudChip T="string" Size="Size.Small" Color="Color.Warning">No credential configured</MudChip>
                     }
                 </MudStack>
+            }
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-1">Observability</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                Controls Prometheus metrics scraping and metrics token access.
+            </MudText>
+
+            @if (_loadingObservabilitySettings)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else
+            {
+                @if (_metricsMode == MetricsAccessModes.Public)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        Metrics are public. Anyone who can reach this server can scrape runtime details.
+                    </MudAlert>
+                }
+
+                <MudSwitch T="bool" Label="Expose metrics endpoint" @bind-Value="_metricsEnabled"
+                           Color="Color.Primary" Class="mb-3" />
+
+                <MudSelect T="string" Label="Metrics access mode" @bind-Value="_metricsMode"
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                           Disabled="!_metricsEnabled">
+                    <MudSelectItem Value="@MetricsAccessModes.LocalOnly">Local only (loopback + CIDRs)</MudSelectItem>
+                    <MudSelectItem Value="@MetricsAccessModes.Token">Token (Bearer auth required)</MudSelectItem>
+                    <MudSelectItem Value="@MetricsAccessModes.Public">Public — no authentication</MudSelectItem>
+                    <MudSelectItem Value="@MetricsAccessModes.Disabled">Disabled (no endpoint)</MudSelectItem>
+                </MudSelect>
+
+                <MudSwitch T="bool" Label="Enable channel labels" @bind-Value="_metricsEnableChannelLabels"
+                           Color="Color.Primary" Class="mb-0" Disabled="!_metricsEnabled" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                    Adds channel_name/channel_id labels to stream metrics. Avoid on large lineups — significantly increases Prometheus cardinality.
+                </MudText>
+
+                <MudTextField @bind-Value="_metricsLocalAllowedCidrs"
+                              Label="Allowed CIDRs for LocalOnly"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              FullWidth="true"
+                              Lines="3"
+                              Placeholder="172.18.0.0/16"
+                              Disabled="!_metricsEnabled"
+                              HelperText="Loopback is always allowed. Add one CIDR per line for Docker/internal scrape networks." />
+
+                @if (!string.IsNullOrWhiteSpace(_observabilityError))
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_observabilityError
+                    </MudAlert>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_observabilitySuccess))
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        @_observabilitySuccess
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_savingObservabilitySettings"
+                           OnClick="SaveObservabilitySettingsAsync">
+                    @(_savingObservabilitySettings ? "Saving..." : "Save Observability Settings")
+                </MudButton>
+
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-3 mb-0">
+                    Scrape endpoint: <code>@_metricsPath</code>
+                </MudText>
+
+                <MudDivider Class="my-4" />
+
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Metrics Tokens</MudText>
+
+                @if (!string.IsNullOrWhiteSpace(_newMetricsToken))
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                            <span>New token for @_newMetricsTokenCreatedName: <code>@_newMetricsToken</code></span>
+                            <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
+                                           Size="Size.Small"
+                                           title="Copy token"
+                                           OnClick="CopyNewTokenAsync" />
+                        </MudStack>
+                    </MudAlert>
+                }
+
+                <MudGrid Spacing="2" Class="mb-3">
+                    <MudItem xs="12" sm="5">
+                        <MudTextField @bind-Value="_newMetricsTokenName"
+                                      Label="Token Name"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      FullWidth="true"
+                                      Placeholder="Prometheus" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudDatePicker @bind-Date="_newMetricsTokenExpires"
+                                       Label="Expires"
+                                       Variant="Variant.Outlined"
+                                       Margin="Margin.Dense"
+                                       Clearable="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="3" Class="d-flex align-center">
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                   Disabled="_creatingMetricsToken"
+                                   OnClick="CreateMetricsTokenAsync">
+                            @(_creatingMetricsToken ? "Creating..." : "Generate")
+                        </MudButton>
+                    </MudItem>
+                </MudGrid>
+
+                @if (_metricsTokens.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">No metrics tokens configured.</MudText>
+                }
+                else
+                {
+                    <MudTable Items="_metricsTokens" Dense="true" Hover="true">
+                        <HeaderContent>
+                            <MudTh>Name</MudTh>
+                            <MudTh>Scope</MudTh>
+                            <MudTh>Created</MudTh>
+                            <MudTh>Last Used</MudTh>
+                            <MudTh>Expires</MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.Name</MudTd>
+                            <MudTd>@context.Scope</MudTd>
+                            <MudTd>@context.CreatedUtc.ToLocalTime().ToString("g")</MudTd>
+                            <MudTd>@(context.LastUsedUtc?.ToLocalTime().ToString("g") ?? "Never")</MudTd>
+                            <MudTd>@(context.ExpiresUtc?.ToLocalTime().ToString("g") ?? "Never")</MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete"
+                                               Color="Color.Error"
+                                               Size="Size.Small"
+                                               OnClick="() => DeleteMetricsTokenAsync(context)" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
             }
         </MudPaper>
     </MudItem>
@@ -892,6 +1044,22 @@
     private string? _endpointError;
     private string? _endpointSuccess;
 
+    private bool _loadingObservabilitySettings;
+    private bool _savingObservabilitySettings;
+    private bool _creatingMetricsToken;
+    private bool _metricsEnabled = true;
+    private string _metricsMode = MetricsAccessModes.LocalOnly;
+    private bool _metricsEnableChannelLabels;
+    private string _metricsLocalAllowedCidrs = string.Empty;
+    private string _newMetricsTokenName = string.Empty;
+    private DateTime? _newMetricsTokenExpires;
+    private string? _newMetricsToken;
+    private string? _newMetricsTokenCreatedName;
+    private string _metricsPath = "/metrics";
+    private string? _observabilityError;
+    private string? _observabilitySuccess;
+    private List<MetricsTokenSummary> _metricsTokens = [];
+
     private bool _loadingStreamingSettings;
     private bool _savingStreamingSettings;
     private bool _restartingApplication;
@@ -979,8 +1147,126 @@
     protected override async Task OnInitializedAsync()
     {
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync(), LoadEventSettingsAsync());
+        await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadObservabilitySettingsAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync(), LoadEventSettingsAsync());
     }
+
+    private async Task LoadObservabilitySettingsAsync()
+    {
+        _loadingObservabilitySettings = true;
+        _observabilityError = null;
+
+        try
+        {
+            var settings = await ObservabilitySettings.GetSettingsAsync(CancellationToken.None);
+            _metricsEnabled = settings.Enabled;
+            _metricsMode = settings.Mode;
+            _metricsPath = settings.Path;
+            _metricsEnableChannelLabels = settings.EnableChannelLabels;
+            _metricsLocalAllowedCidrs = string.Join(Environment.NewLine, settings.LocalAllowedCidrs);
+            _metricsTokens = [.. await MetricsTokenService.ListAsync(CancellationToken.None)];
+        }
+        catch (Exception ex)
+        {
+            _observabilityError = $"Failed to load observability settings: {ex.Message}";
+        }
+        finally
+        {
+            _loadingObservabilitySettings = false;
+        }
+    }
+
+    private async Task SaveObservabilitySettingsAsync()
+    {
+        _savingObservabilitySettings = true;
+        _observabilityError = null;
+        _observabilitySuccess = null;
+
+        try
+        {
+            var result = await ObservabilitySettings.UpdateAsync(new UpdateObservabilitySettingsCommand(
+                Enabled: _metricsEnabled,
+                Mode: _metricsMode,
+                EnableChannelLabels: _metricsEnableChannelLabels,
+                LocalAllowedCidrs: ParseCidrs(_metricsLocalAllowedCidrs)), CancellationToken.None);
+
+            if (!result.Succeeded)
+            {
+                _observabilityError = result.Error ?? "Observability settings update failed.";
+                return;
+            }
+
+            _metricsEnabled = result.Settings.Enabled;
+            _metricsMode = result.Settings.Mode;
+            _metricsEnableChannelLabels = result.Settings.EnableChannelLabels;
+            _metricsLocalAllowedCidrs = string.Join(Environment.NewLine, result.Settings.LocalAllowedCidrs);
+            _observabilitySuccess = "Observability settings saved.";
+        }
+        catch (Exception ex)
+        {
+            _observabilityError = $"Failed to save observability settings: {ex.Message}";
+        }
+        finally
+        {
+            _savingObservabilitySettings = false;
+        }
+    }
+
+    private async Task CreateMetricsTokenAsync()
+    {
+        _creatingMetricsToken = true;
+        _observabilityError = null;
+        _observabilitySuccess = null;
+        _newMetricsToken = null;
+
+        try
+        {
+            var result = await MetricsTokenService.CreateAsync(
+                new CreateMetricsTokenCommand(_newMetricsTokenName, _newMetricsTokenExpires), CancellationToken.None);
+
+            if (!result.Succeeded)
+            {
+                _observabilityError = result.Error ?? "Metrics token creation failed.";
+                return;
+            }
+
+            _newMetricsToken = result.PlainToken;
+            _newMetricsTokenCreatedName = result.Token?.Name ?? _newMetricsTokenName;
+            _newMetricsTokenName = string.Empty;
+            _newMetricsTokenExpires = null;
+            _metricsTokens = [.. await MetricsTokenService.ListAsync(CancellationToken.None)];
+        }
+        catch (Exception ex)
+        {
+            _observabilityError = $"Failed to create metrics token: {ex.Message}";
+        }
+        finally
+        {
+            _creatingMetricsToken = false;
+        }
+    }
+
+    private async Task DeleteMetricsTokenAsync(MetricsTokenSummary token)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Metrics Token",
+            $"Remove '{token.Name}'? Existing scrapers using this token will stop working.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+        if (confirmed != true)
+            return;
+
+        await MetricsTokenService.DeleteAsync(token.MetricsTokenId, CancellationToken.None);
+        _metricsTokens = [.. await MetricsTokenService.ListAsync(CancellationToken.None)];
+    }
+
+    private async Task CopyNewTokenAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_newMetricsToken))
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _newMetricsToken);
+    }
+
+    private static IReadOnlyList<string> ParseCidrs(string value)
+        => value.Split(['\r', '\n', ',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private async Task LoadEventSettingsAsync()
     {
