@@ -87,12 +87,22 @@ public sealed class HdHomeRunTunerManager(
 
             if (streamLimit is not null && _leases.Count >= streamLimit.Value)
             {
-                metrics?.RecordHdhrTuneRequest(success: false);
-                return new HdHomeRunTunerAcquireResult(
-                    Succeeded: false,
-                    Error: $"All {streamLimit.Value} HDHomeRun tuner slots are in use.",
-                    Reservation: null,
-                    PriorSubscriber: null);
+                // Before rejecting, reclaim any slot held only by a grace-period timer.
+                // Those leases have a disconnected subscriber; the timer exists only to absorb
+                // quick reconnects. A new unrelated request takes priority over the grace hold.
+                var graceEntry = _leases.FirstOrDefault(x => x.Value.PendingReleaseCts is not null);
+                if (string.IsNullOrWhiteSpace(graceEntry.Key))
+                {
+                    metrics?.RecordHdhrTuneRequest(success: false);
+                    return new HdHomeRunTunerAcquireResult(
+                        Succeeded: false,
+                        Error: $"All {streamLimit.Value} HDHomeRun tuner slots are in use.",
+                        Reservation: null,
+                        PriorSubscriber: null);
+                }
+
+                DisposeLeaseResources(graceEntry.Value);
+                _leases.Remove(graceEntry.Key);
             }
 
             var searchRange = streamLimit ?? _leases.Count + 1;
