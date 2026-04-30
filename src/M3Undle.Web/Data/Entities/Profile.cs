@@ -8,6 +8,8 @@ public sealed class Profile
     public bool IsActive { get; set; }
     public string OutputName { get; set; } = string.Empty;
     public string MergeMode { get; set; } = string.Empty;
+    public string? RefreshScheduleKindOverride { get; set; }
+    public bool? RefreshStartupCatchupOverride { get; set; }
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 
@@ -23,4 +25,3 @@ public sealed class Profile
     public ICollection<EndpointAccessBinding> ActiveEndpointAccessBindings { get; set; } = new List<EndpointAccessBinding>();
     public ICollection<EndpointAccessBinding> DefaultEndpointAccessBindings { get; set; } = new List<EndpointAccessBinding>();
 }
-

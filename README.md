@@ -138,7 +138,7 @@ Use named profiles, switch the active published profile, keep published history,
 
 ### Administration
 
-Configure refresh schedules, endpoint security, optional UI authentication, downstream notifications, provider stream limits, and service behavior from the web UI or Docker configuration.
+Configure global refresh defaults, per-profile refresh overrides, endpoint security, optional UI authentication, downstream notifications, provider stream limits, and service behavior from the web UI or Docker configuration.
 
 ## Client endpoints
 

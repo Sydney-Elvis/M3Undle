@@ -45,6 +45,8 @@ Indexes:
 - is_active (INTEGER, 0/1, default 0) -- exactly one profile may have is_active=1; partial unique index enforced
 - output_name (TEXT)  -- used for /m3u/<output_name>.m3u and /xmltv/<output_name>.xml
 - merge_mode (TEXT)   -- 'single', 'merged', 'redundancy-ready'
+- refresh_schedule_kind_override (TEXT, nullable) -- null inherits global; otherwise 'manual'|'1h'|'2h'|'4h'|'6h'|'12h'|'24h'
+- refresh_startup_catchup_override (INTEGER, 0/1, nullable) -- null inherits global startup catch-up behavior
 - created_utc (TEXT)
 - updated_utc (TEXT)
 
@@ -448,7 +450,7 @@ Configured downstream client integrations (Jellyfin, Emby, webhook).
 ### site_settings additions (refresh schedule)
 New columns added to the existing `site_settings` table:
 - refresh_schedule_kind (TEXT, default '6h') -- 'manual'|'1h'|'2h'|'4h'|'6h'|'12h'|'24h'
-- refresh_startup_catchup (INTEGER, 0/1, default 1) -- trigger catch-up refresh on startup if lineup is stale
+- refresh_startup_catchup (INTEGER, 0/1, default 1) -- global default for startup catch-up when the active profile has no override
 
 ### epg_sources additions
 - refresh_interval_hours (INTEGER, nullable) -- per-source cadence override; null = follow global schedule

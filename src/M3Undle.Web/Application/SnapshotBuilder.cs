@@ -142,12 +142,12 @@ public sealed class SnapshotBuilder(
         var channelsByProvider = new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
         var aggregateProfileIds = new HashSet<string>();
 
-        var scheduleSettings = await refreshScheduleService.GetSettingsAsync(cancellationToken);
-        var globalIntervalHours = scheduleSettings.IntervalHours;
+        var scheduleSettings = await refreshScheduleService.GetActiveProfileSettingsAsync(cancellationToken);
+        var defaultIntervalHours = scheduleSettings?.Settings.IntervalHours;
 
         foreach (var provider in providers)
         {
-            var (s, e, channels, cc, profileIds) = await RunForProviderAsync(provider, globalIntervalHours, cancellationToken);
+            var (s, e, channels, cc, profileIds) = await RunForProviderAsync(provider, defaultIntervalHours, cancellationToken);
             if (s)
             {
                 anySucceeded = true;

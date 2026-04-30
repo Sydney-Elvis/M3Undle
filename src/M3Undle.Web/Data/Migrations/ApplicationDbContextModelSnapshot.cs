@@ -901,6 +901,14 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("output_name");
 
+                    b.Property<string>("RefreshScheduleKindOverride")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("refresh_schedule_kind_override");
+
+                    b.Property<bool?>("RefreshStartupCatchupOverride")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("refresh_startup_catchup_override");
+
                     b.Property<DateTime>("UpdatedUtc")
                         .HasColumnType("TEXT")
                         .HasColumnName("updated_utc");

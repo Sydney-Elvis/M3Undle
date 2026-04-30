@@ -28,9 +28,9 @@
 <MudGrid Spacing="3">
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Refresh Schedule</MudText>
+            <MudText Typo="Typo.h6" Class="mb-1">Global Refresh Schedule</MudText>
             <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Controls how often M3Undle fetches new lineup and guide data from upstream providers.
+                Default cadence for profiles that do not set their own refresh schedule.
             </MudText>
 
             @if (_loadingRefreshSettings)
@@ -1376,7 +1376,10 @@
             var settings = await RefreshSchedule.GetSettingsAsync(CancellationToken.None);
             _refreshScheduleKind = settings.ScheduleKind;
             _refreshStartupCatchup = settings.StartupCatchup;
-            _nextRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(CancellationToken.None);
+            var activeSettings = await RefreshSchedule.GetActiveProfileSettingsAsync(CancellationToken.None);
+            _nextRefreshUtc = activeSettings is not null
+                ? await RefreshSchedule.GetNextScheduledRefreshUtcAsync(activeSettings.ProfileId!, CancellationToken.None)
+                : null;
         }
         catch (Exception ex)
         {
@@ -1404,7 +1407,10 @@
                 return;
             }
 
-            _nextRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(CancellationToken.None);
+            var savedActiveSettings = await RefreshSchedule.GetActiveProfileSettingsAsync(CancellationToken.None);
+            _nextRefreshUtc = savedActiveSettings is not null
+                ? await RefreshSchedule.GetNextScheduledRefreshUtcAsync(savedActiveSettings.ProfileId!, CancellationToken.None)
+                : null;
             _refreshSuccess = "Refresh settings saved.";
         }
         catch (Exception ex)

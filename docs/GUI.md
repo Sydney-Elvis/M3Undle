@@ -65,10 +65,13 @@ Each profile shows:
 - Display name and output name
 - Enabled/disabled state
 - Linked providers
+- Effective refresh schedule
 - Last published time and health status
 - Live, movie, and series counts
 
-Clicking a profile opens its detail page, which shows provider membership, published history, and pending review items.
+Clicking a profile opens its detail page, which shows provider membership, refresh schedule controls, published history, and pending review items.
+
+By default, profiles inherit the global refresh schedule from Settings. A profile can override that default with its own interval or manual-only schedule. For the active profile, that effective schedule drives automatic refresh timing and startup catch-up behavior.
 
 Profiles can be deleted via `DELETE /api/v1/profiles/{profileId}`. Deletion removes all associated data (group filters, channel selections, custom groups, canonical channels, stream keys, snapshots, and provider links) and is blocked while a snapshot refresh is in progress.
 
@@ -131,7 +134,9 @@ Generated metrics tokens are shown once. After creation, the UI only shows metad
 See [OBSERVABILITY.md](OBSERVABILITY.md) for scrape examples, metric names, health probes, and diagnostics APIs.
 
 **Refresh Schedule**
-Controls how often M3Undle fetches updated lineup and guide data from providers. Options: Manual only, every 1h, 2h, 4h (default), 6h, 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
+Controls the global default cadence for profiles that do not set their own refresh policy. Options: Manual only, every 1h, 2h, 4h, 6h (default), 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the active profile's last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
+
+Profiles can override the global default from their detail page. A profile override can use its own interval or manual-only mode, and profiles with no override continue to inherit future global schedule changes.
 
 **Stream Proxy**
 Configures how M3Undle handles live stream relay. Settings are grouped into three areas:
