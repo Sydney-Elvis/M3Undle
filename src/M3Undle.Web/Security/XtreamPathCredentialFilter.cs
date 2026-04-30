@@ -22,7 +22,9 @@ internal sealed class XtreamPathCredentialFilter(
     {
         var http = context.HttpContext;
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Auth" });
-        var routeTemplate = GetRouteTemplate(http, "/live/{xtreamUser}/{xtreamPass}/{streamId}");
+        var routeTemplate = GetRouteTemplate(http, "/live/{xtreamUser}/{xtreamPass}/{streamId}").ReplaceLineEndings(" ");
+        var methodForLog = http.Request.Method.ReplaceLineEndings(" ");
+        var clientForLog = (http.Connection.RemoteIpAddress?.ToString() ?? "unknown").ReplaceLineEndings(" ");
 
         var username = (string?)http.GetRouteValue("xtreamUser") ?? string.Empty;
         var password = (string?)http.GetRouteValue("xtreamPass") ?? string.Empty;
@@ -32,8 +34,8 @@ internal sealed class XtreamPathCredentialFilter(
             logger.LogWarning(
                 "Xtream path authentication denied due to missing credentials. path={Path} method={Method} client={Client}",
                 routeTemplate,
-                http.Request.Method,
-                http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+                methodForLog,
+                clientForLog);
             http.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return Results.Unauthorized();
         }
@@ -69,8 +71,8 @@ internal sealed class XtreamPathCredentialFilter(
                 logger.LogWarning(
                     "Xtream path authentication denied due to invalid credentials. path={Path} method={Method} client={Client}",
                     routeTemplate,
-                    http.Request.Method,
-                    http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+                    methodForLog,
+                    clientForLog);
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return Results.Unauthorized();
             }

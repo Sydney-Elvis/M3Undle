@@ -101,16 +101,17 @@ public sealed class HdHomeRunDiscoveryService(
                         : searchTarget.ReplaceLineEndings(" ");
 
                     var hdhrBaseUrl = $"{baseUrl.TrimEnd('/')}/hdhr";
+                    var location = $"{hdhrBaseUrl}/device.xml";
                     var response = BuildSsdpResponse(effectiveSearchTarget, device.DeviceId, hdhrBaseUrl);
                     var bytes = Encoding.ASCII.GetBytes(response);
                     await udp.SendAsync(bytes, result.RemoteEndPoint, cancellationToken);
 
                     logger.LogInformation(
                         "HDHomeRun SSDP discovery response sent to {RemoteEndPoint}. st={SearchTarget} deviceId={DeviceId} location={Location}",
-                        result.RemoteEndPoint,
+                        result.RemoteEndPoint.ToString().ReplaceLineEndings(" "),
                         effectiveSearchTarget,
                         device.DeviceId,
-                        $"{hdhrBaseUrl}/device.xml");
+                        location.ReplaceLineEndings(" "));
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -181,10 +182,10 @@ public sealed class HdHomeRunDiscoveryService(
 
                     logger.LogInformation(
                         "HDHomeRun SiliconDust discovery response sent to {RemoteEndPoint}. deviceId={DeviceId} tunerCount={TunerCount} lineupUrl={LineupUrl}",
-                        result.RemoteEndPoint,
+                        result.RemoteEndPoint.ToString().ReplaceLineEndings(" "),
                         device.DeviceId,
                         device.TunerCount,
-                        lineupUrl);
+                        lineupUrl.ReplaceLineEndings(" "));
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {

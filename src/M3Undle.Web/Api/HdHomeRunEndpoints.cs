@@ -81,11 +81,11 @@ public static class HdHomeRunEndpoints
 
         logger.LogInformation(
             "HDHomeRun discover.json served to {Client}. path={Path} deviceId={DeviceId} tunerCount={TunerCount} baseUrl={BaseUrl}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/discover.json"),
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/discover.json").ReplaceLineEndings(" "),
             device.DeviceId,
             device.TunerCount,
-            baseUrl);
+            baseUrl.ReplaceLineEndings(" "));
 
         return TypedResults.Json(payload, JsonOptions);
     }
@@ -106,8 +106,8 @@ public static class HdHomeRunEndpoints
         {
             logger.LogWarning(
                 "HDHomeRun lineup.json unavailable for {Client}. path={Path}",
-                DescribeClient(context),
-                GetRouteTemplate(context, "/hdhr/lineup.json"));
+                DescribeClient(context).ReplaceLineEndings(" "),
+                GetRouteTemplate(context, "/hdhr/lineup.json").ReplaceLineEndings(" "));
             return lineupResult.ErrorResult!;
         }
 
@@ -120,8 +120,8 @@ public static class HdHomeRunEndpoints
 
         logger.LogInformation(
             "HDHomeRun lineup.json served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/lineup.json"),
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/lineup.json").ReplaceLineEndings(" "),
             lineupResult.Lineup.SnapshotId,
             payload.Count);
 
@@ -147,8 +147,8 @@ public static class HdHomeRunEndpoints
         {
             logger.LogWarning(
                 "HDHomeRun lineup.xml unavailable for {Client}. path={Path}",
-                DescribeClient(context),
-                GetRouteTemplate(context, "/hdhr/lineup.xml"));
+                DescribeClient(context).ReplaceLineEndings(" "),
+                GetRouteTemplate(context, "/hdhr/lineup.xml").ReplaceLineEndings(" "));
             return lineupResult.ErrorResult!;
         }
 
@@ -181,8 +181,8 @@ public static class HdHomeRunEndpoints
 
         logger.LogInformation(
             "HDHomeRun lineup.xml served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/lineup.xml"),
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/lineup.xml").ReplaceLineEndings(" "),
             lineup.SnapshotId,
             lineup.Channels.Count);
 
@@ -208,8 +208,8 @@ public static class HdHomeRunEndpoints
         {
             logger.LogWarning(
                 "HDHomeRun lineup.m3u unavailable for {Client}. path={Path}",
-                DescribeClient(context),
-                GetRouteTemplate(context, "/hdhr/lineup.m3u"));
+                DescribeClient(context).ReplaceLineEndings(" "),
+                GetRouteTemplate(context, "/hdhr/lineup.m3u").ReplaceLineEndings(" "));
             return lineupResult.ErrorResult!;
         }
 
@@ -233,8 +233,8 @@ public static class HdHomeRunEndpoints
 
         logger.LogInformation(
             "HDHomeRun lineup.m3u served to {Client}. path={Path} snapshot={SnapshotId} channels={ChannelCount}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/lineup.m3u"),
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/lineup.m3u").ReplaceLineEndings(" "),
             lineup.SnapshotId,
             lineup.Channels.Count);
 
@@ -287,8 +287,8 @@ public static class HdHomeRunEndpoints
 
         logger.LogInformation(
             "HDHomeRun lineup_status.json served to {Client}. path={Path} status={Status} channels={ChannelCount}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/lineup_status.json"),
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/lineup_status.json").ReplaceLineEndings(" "),
             status,
             channelCount);
 
@@ -307,9 +307,9 @@ public static class HdHomeRunEndpoints
         using var scope = BeginHdhrScope(logger);
         logger.LogInformation(
             "HDHomeRun lineup.post acknowledged for {Client}. path={Path} method={Method}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/lineup.post"),
-            context.Request.Method);
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/lineup.post").ReplaceLineEndings(" "),
+            context.Request.Method.ReplaceLineEndings(" "));
 
         return TypedResults.Text("OK", "text/plain; charset=utf-8");
     }
@@ -365,8 +365,8 @@ public static class HdHomeRunEndpoints
 
         logger.LogInformation(
             "HDHomeRun device.xml served to {Client}. path={Path} deviceId={DeviceId}",
-            DescribeClient(context),
-            GetRouteTemplate(context, "/hdhr/device.xml"),
+            DescribeClient(context).ReplaceLineEndings(" "),
+            GetRouteTemplate(context, "/hdhr/device.xml").ReplaceLineEndings(" "),
             device.DeviceId);
 
         return TypedResults.Bytes(ms.ToArray(), "application/xml; charset=utf-8");

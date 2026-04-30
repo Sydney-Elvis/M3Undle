@@ -13,7 +13,9 @@ internal sealed class ClientEndpointAccessFilter(
     {
         var http = context.HttpContext;
         var resolved = await accessResolver.ResolveAsync(http, http.RequestAborted);
-        var routeTemplate = GetRouteTemplate(http, "/client-endpoint");
+        var routeTemplate = GetRouteTemplate(http, "/client-endpoint").ReplaceLineEndings(" ");
+        var methodForLog = http.Request.Method.ReplaceLineEndings(" ");
+        var clientForLog = (http.Connection.RemoteIpAddress?.ToString() ?? "unknown").ReplaceLineEndings(" ");
 
         if (!resolved.IsSuccess)
         {
@@ -21,9 +23,9 @@ internal sealed class ClientEndpointAccessFilter(
             logger.LogWarning(
                 "Client endpoint access denied. path={Path} method={Method} reason={Reason} client={Client}",
                 routeTemplate,
-                http.Request.Method,
+                methodForLog,
                 resolved.FailureReason,
-                http.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+                clientForLog);
             return BuildFailureResult(http, resolved.FailureReason, options.Value.Realm);
         }
 
