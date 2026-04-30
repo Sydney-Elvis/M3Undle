@@ -12,7 +12,7 @@ namespace M3Undle.Web.Data.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AddColumn<DateTime>(
-                name: "PlaylistExpiresUtc",
+                name: "playlist_expires_utc",
                 table: "providers",
                 type: "TEXT",
                 nullable: true);
@@ -22,7 +22,7 @@ namespace M3Undle.Web.Data.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropColumn(
-                name: "PlaylistExpiresUtc",
+                name: "playlist_expires_utc",
                 table: "providers");
         }
     }

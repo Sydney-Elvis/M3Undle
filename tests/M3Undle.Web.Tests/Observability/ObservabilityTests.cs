@@ -89,9 +89,14 @@ public sealed class ObservabilityTests
     }
 
     [TestMethod]
-    public async Task MetricsEndpoint_DefaultLocalOnly_AllowsTestServerScrape()
+    public async Task MetricsEndpoint_PublicMode_AllowsScrape()
     {
         await using var factory = new ObservabilityApiFactory();
+        await factory.UpdateSettingsAsync(settings =>
+        {
+            settings.ObservabilityMetricsEnabled = true;
+            settings.ObservabilityMetricsMode = MetricsAccessModes.Public;
+        });
         using var client = factory.CreateClient();
 
         using var response = await client.GetAsync("/metrics");
@@ -99,6 +104,18 @@ public sealed class ObservabilityTests
 
         var body = await response.Content.ReadAsStringAsync();
         StringAssert.Contains(body, "m3undle");
+    }
+
+    [TestMethod]
+    public async Task MetricsEndpoint_LocalOnly_RejectsNullRemoteIp()
+    {
+        // In-process test servers have a null RemoteIpAddress. LocalOnly mode must
+        // reject null to avoid an accidental bypass when forwarded headers are misconfigured.
+        await using var factory = new ObservabilityApiFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/metrics");
+        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [TestMethod]
@@ -151,6 +168,11 @@ public sealed class ObservabilityTests
     public async Task MetricsEndpoint_RateLimitsExcessiveScrapes()
     {
         await using var factory = new ObservabilityApiFactory();
+        await factory.UpdateSettingsAsync(settings =>
+        {
+            settings.ObservabilityMetricsEnabled = true;
+            settings.ObservabilityMetricsMode = MetricsAccessModes.Public;
+        });
         using var client = factory.CreateClient();
 
         var statuses = new List<HttpStatusCode>();

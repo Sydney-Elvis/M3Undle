@@ -86,8 +86,8 @@ public static class XtreamEndpoints
         if (string.IsNullOrEmpty(action) || action == "get_account_info")
         {
             var minExpiry = await db.ProfileProviders
-                .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId)
-                .Join(db.Providers, pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
+                .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId && pp.Enabled)
+                .Join(db.Providers.Where(p => p.Enabled), pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
                 .Where(e => e != null)
                 .MinAsync(e => e, cancellationToken);
             return BuildAccountInfoResult(context, access, minExpiry);
@@ -396,8 +396,8 @@ public static class XtreamEndpoints
         }
 
         var minExpiry = await db.ProfileProviders
-            .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId)
-            .Join(db.Providers, pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
+            .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId && pp.Enabled)
+            .Join(db.Providers.Where(p => p.Enabled), pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
             .Where(e => e != null)
             .MinAsync(e => e, cancellationToken);
 

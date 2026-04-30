@@ -78,7 +78,7 @@ public sealed class MetricsEndpointSecurityMiddleware(
     private static bool IsAllowedLocalAddress(IPAddress? address, IReadOnlyList<string> cidrs)
     {
         if (address is null)
-            return true;
+            return false;
 
         if (IPAddress.IsLoopback(address))
             return true;

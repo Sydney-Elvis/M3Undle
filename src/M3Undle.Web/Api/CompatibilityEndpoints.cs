@@ -122,8 +122,8 @@ public static class CompatibilityEndpoints
             }
 
             var minExpiry = await db.ProfileProviders
-                .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId)
-                .Join(db.Providers, pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
+                .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId && pp.Enabled)
+                .Join(db.Providers.Where(p => p.Enabled), pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
                 .Where(e => e != null)
                 .MinAsync(e => e, cancellationToken);
 

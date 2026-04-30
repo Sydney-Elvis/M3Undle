@@ -440,7 +440,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
         _diagnosticsStore.Record(new StreamDiagnosticEvent(
             EventId: Guid.NewGuid().ToString("N"),
-            TimestampUtc: DateTimeOffset.UtcNow,
+            TimestampUtc: _timeProvider.GetUtcNow(),
             Kind: StreamDiagnosticEventKind.AdmissionRejected,
             ProviderId: key.ProviderId,
             ProviderChannelId: key.ProviderChannelId,

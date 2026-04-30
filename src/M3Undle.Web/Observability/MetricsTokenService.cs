@@ -109,7 +109,7 @@ public sealed class MetricsTokenService(ApplicationDbContext db, TimeProvider ti
             if (result == PasswordVerificationResult.SuccessRehashNeeded)
                 candidate.TokenHash = _passwordHasher.HashPassword(candidate.Name, token.Trim());
 
-            await db.SaveChangesAsync(CancellationToken.None);
+            await db.SaveChangesAsync(ct);
             return true;
         }
 

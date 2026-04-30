@@ -31,6 +31,7 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.CleanRelayMode).HasColumnName("clean_relay_mode").IsRequired().HasDefaultValue("off");
         builder.Property(x => x.XtreamIncludeXmltv).HasColumnName("xtream_include_xmltv").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.XtreamDetectedCapable).HasColumnName("xtream_detected_capable").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.PlaylistExpiresUtc).HasColumnName("playlist_expires_utc");
 
         builder.HasIndex(x => x.Name).IsUnique();
         builder.HasIndex(x => x.Enabled).HasDatabaseName("idx_providers_enabled");

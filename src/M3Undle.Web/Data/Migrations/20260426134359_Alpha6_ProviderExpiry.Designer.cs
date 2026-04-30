@@ -1345,7 +1345,8 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnName("needs_env_var_substitution");
 
                     b.Property<DateTime?>("PlaylistExpiresUtc")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasColumnName("playlist_expires_utc");
 
                     b.Property<string>("PlaylistUrl")
                         .IsRequired()
