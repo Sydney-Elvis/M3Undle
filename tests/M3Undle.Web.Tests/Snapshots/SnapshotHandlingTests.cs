@@ -810,6 +810,171 @@ public sealed class SnapshotHandlingTests
         }
     }
 
+    [TestMethod]
+    public async Task SnapshotBuilder_BuildOnly_EmptyCarriedForwardGuide_RecompilesFromCache()
+    {
+        // Regression: build-only was carrying forward the previous snapshot's guide.xml verbatim.
+        // When that guide was an empty stub, the new snapshot also got an empty guide even though
+        // a valid cached EPG file and mappings existed.
+        await using var fixture = await CreateFixtureAsync();
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var epgCacheDir = Path.Combine(tempDir, "epg-cache");
+        var oldSnapDir = Path.Combine(tempDir, "old-snap");
+
+        const string epgSourceId = "epgsrc-1";
+        const string xmltvChannelId = "CBS.us";
+        const string providerChannelId = "ch-cbs";
+        const string fetchRunId = "run-1";
+
+        var emptyGuide = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+        var cachedXmltv =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv>" +
+            $"<channel id=\"{xmltvChannelId}\"><display-name>CBS</display-name></channel>" +
+            $"<programme start=\"20260501060000 +0000\" stop=\"20260501070000 +0000\" channel=\"{xmltvChannelId}\">" +
+            "<title>Morning News</title></programme></tv>";
+
+        try
+        {
+            Directory.CreateDirectory(epgCacheDir);
+            Directory.CreateDirectory(oldSnapDir);
+
+            // Write cached EPG (simulates a previously fetched + stored upstream guide)
+            await File.WriteAllTextAsync(Path.Combine(epgCacheDir, $"{epgSourceId}.xml"), cachedXmltv);
+
+            // Write the empty guide that the previous snapshot points at
+            var oldGuidePath = Path.Combine(oldSnapDir, "guide.xml");
+            await File.WriteAllTextAsync(oldGuidePath, emptyGuide);
+
+            await using (var setup = fixture.CreateDbContext())
+            {
+                setup.Profiles.Add(NewProfile("profile-1"));
+                setup.Providers.Add(NewProvider("provider-1"));
+                setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+                setup.FetchRuns.Add(NewFetchRun(fetchRunId, "provider-1"));
+
+                setup.ProviderGroups.Add(new ProviderGroup
+                {
+                    ProviderGroupId = "grp-1",
+                    ProviderId = "provider-1",
+                    RawName = "Live",
+                    Active = true,
+                    FirstSeenUtc = DateTime.UtcNow,
+                    LastSeenUtc = DateTime.UtcNow,
+                });
+
+                setup.ProviderChannels.Add(new ProviderChannel
+                {
+                    ProviderChannelId = providerChannelId,
+                    ProviderId = "provider-1",
+                    DisplayName = "CBS",
+                    TvgId = xmltvChannelId,
+                    StreamUrl = "http://example.com/live/user/pass/cbs.ts",
+                    GroupTitle = "Live",
+                    ProviderGroupId = "grp-1",
+                    Active = true,
+                    ContentType = "live",
+                    LastFetchRunId = fetchRunId,
+                    FirstSeenUtc = DateTime.UtcNow,
+                    LastSeenUtc = DateTime.UtcNow,
+                });
+
+                // ChannelMode = "all" (GroupModeAutoUpdate): all live channels auto-included without
+                // needing per-channel ProfileGroupChannelFilter rows.
+                setup.ProfileGroupFilters.Add(new ProfileGroupFilter
+                {
+                    ProfileGroupFilterId = "pgf-1",
+                    ProfileId = "profile-1",
+                    ProviderGroupId = "grp-1",
+                    Decision = "include",
+                    ChannelMode = "all",
+                    TrackingPolicy = "review",
+                    CreatedUtc = DateTime.UtcNow,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+
+                // LastSuccessUtc = now + RefreshIntervalHours = 24 → cadence check is fresh → no HTTP fetch
+                setup.EpgSources.Add(new EpgSource
+                {
+                    EpgSourceId = epgSourceId,
+                    ProviderId = "provider-1",
+                    Name = "Test EPG",
+                    Kind = "xmltv_url",
+                    UrlOrPath = "http://example.com/xmltv.xml",
+                    Priority = 10,
+                    Enabled = true,
+                    LastSuccessUtc = DateTime.UtcNow,
+                    RefreshIntervalHours = 24,
+                    CreatedUtc = DateTime.UtcNow,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+
+                setup.EpgChannelMappings.Add(new EpgChannelMapping
+                {
+                    EpgChannelMappingId = "map-1",
+                    ProfileId = "profile-1",
+                    ProviderChannelId = providerChannelId,
+                    EpgSourceId = epgSourceId,
+                    XmltvChannelId = xmltvChannelId,
+                    MappingMode = "manual",
+                    Confidence = 1.0f,
+                    CreatedUtc = DateTime.UtcNow,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+
+                // Previous active snapshot whose guide is an empty stub — reproduces the bug state
+                setup.Snapshots.Add(new Snapshot
+                {
+                    SnapshotId = "snap-old",
+                    ProfileId = "profile-1",
+                    Status = "active",
+                    CreatedUtc = DateTime.UtcNow.AddHours(-1),
+                    XmltvPath = oldGuidePath,
+                    // .idx file won't exist → SnapshotChangeClassifier returns null → always creates new snapshot
+                    ChannelIndexPath = Path.Combine(oldSnapDir, "channel_index.ndjson"),
+                    PlaylistPath = oldGuidePath,
+                    StatusJsonPath = oldGuidePath,
+                });
+
+                await setup.SaveChangesAsync();
+            }
+
+            await using var db = fixture.CreateDbContext();
+            var builder = CreateBuilder(db, HttpStatusCode.OK, emptyGuide, tempDir);
+
+            await builder.BuildOnlyAsync(
+                new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>
+                {
+                    ["provider-1"] =
+                    [
+                        new ParsedProviderChannel
+                        {
+                            DisplayName = "CBS",
+                            StreamUrl = "http://example.com/live/user/pass/cbs.ts",
+                            GroupTitle = "Live",
+                            TvgId = xmltvChannelId,
+                        }
+                    ]
+                },
+                CancellationToken.None);
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .Where(x => x.ProfileId == "profile-1" && x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+
+            var guide = await File.ReadAllTextAsync(active.XmltvPath);
+            Assert.IsTrue(
+                guide.Contains("<programme"),
+                "build-only must recompile EPG from cached sources when the previous active guide was an empty stub.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Test helpers
     // -------------------------------------------------------------------------

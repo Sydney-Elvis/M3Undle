@@ -376,9 +376,12 @@ public sealed class SnapshotBuilder(
         string? lastErrorSummary = null;
         string? aggregateChangeClass = ChangeClasses.None;
 
+        var scheduleSettings = await refreshScheduleService.GetActiveProfileSettingsAsync(cancellationToken);
+        var defaultIntervalHours = scheduleSettings?.Settings.IntervalHours;
+
         foreach (var link in activeLinks)
         {
-            var xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+            var xmltvContent = EmptyXmltvDocument;
             var latestSnapshot = await db.Snapshots
                 .AsNoTracking()
                 .Where(x => x.ProfileId == link.ProfileId && x.Status == "active")
@@ -387,6 +390,14 @@ public sealed class SnapshotBuilder(
 
             if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
                 xmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
+
+            // If the carried-forward guide has no programme data, recompile from cached EPG sources.
+            // Covers the case where a prior empty-guide snapshot is carried forward after a selection change.
+            if (!xmltvContent.Contains("<programme", StringComparison.Ordinal))
+            {
+                logger.LogInformation("Carried-forward guide is empty — recompiling EPG from cache for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
+                xmltvContent = await FetchAndCompileEpgAsync(provider, link.ProfileId, Stopwatch.StartNew(), defaultIntervalHours, cancellationToken);
+            }
 
             logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
 
