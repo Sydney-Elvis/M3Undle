@@ -51,6 +51,17 @@ public sealed class GeneratedHlsSessionManager(
 
     public string ConfiguredFfmpegPath => _options.FfmpegPath;
 
+    public static bool ShouldCountAsViewer(string? userAgent)
+    {
+        if (string.IsNullOrWhiteSpace(userAgent))
+            return true;
+
+        return !userAgent.Contains("curl/", StringComparison.OrdinalIgnoreCase)
+               && !userAgent.Contains("Wget/", StringComparison.OrdinalIgnoreCase)
+               && !userAgent.Contains("HTTPie/", StringComparison.OrdinalIgnoreCase)
+               && !userAgent.Contains("PostmanRuntime/", StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task<GeneratedHlsSessionHandle?> CreateSessionAsync(
         GeneratedHlsSessionRequest request,
         CancellationToken ct)
@@ -59,6 +70,9 @@ public sealed class GeneratedHlsSessionManager(
             return null;
 
         Directory.CreateDirectory(_options.Directory);
+
+        if (TryGetReusableSession(request, out var reusableSession))
+            return reusableSession;
 
         var sessionId = Guid.NewGuid().ToString("N");
         var sessionDir = Path.Combine(_options.Directory, sessionId);
@@ -89,6 +103,7 @@ public sealed class GeneratedHlsSessionManager(
 
         var session = new GeneratedHlsSession(
             sessionId,
+            request.StreamUrl,
             request.DisplayName,
             sessionDir,
             manifestPath,
@@ -134,6 +149,39 @@ public sealed class GeneratedHlsSessionManager(
         return new GeneratedHlsSessionHandle(sessionId, manifestPath);
     }
 
+    private bool TryGetReusableSession(
+        GeneratedHlsSessionRequest request,
+        out GeneratedHlsSessionHandle handle)
+    {
+        handle = default!;
+
+        if (request.AdmissionKey is null)
+            return false;
+
+        foreach (var session in _sessions.Values)
+        {
+            if (!session.CanReuseFor(request))
+                continue;
+
+            session.Touch();
+            registry.UpsertSession(session.ToSnapshot());
+            if (session.AdmissionKey is { } key)
+                channelSessionManager?.TouchHlsSlot(key);
+
+            logger.LogInformation(
+                "Generated HLS session reused: SessionId={SessionId} DisplayName={DisplayName} ParentStreamSessionId={ParentStreamSessionId} AdmissionKey={AdmissionKey} ManifestPath={ManifestPath}",
+                session.SessionId,
+                session.DisplayName,
+                session.ParentStreamSessionId,
+                session.AdmissionKey?.ToString(),
+                session.ManifestPath);
+            handle = new GeneratedHlsSessionHandle(session.SessionId, session.ManifestPath);
+            return true;
+        }
+
+        return false;
+    }
+
     public async Task<string?> ReadManifestAsync(string sessionId, CancellationToken ct)
     {
         if (!_sessions.TryGetValue(sessionId, out var session))
@@ -142,7 +190,7 @@ public sealed class GeneratedHlsSessionManager(
         session.Touch();
         registry.UpsertSession(session.ToSnapshot());
         if (session.AdmissionKey is { } key)
-            channelSessionManager.TouchHlsSlot(key);
+            channelSessionManager?.TouchHlsSlot(key);
 
         if (!File.Exists(session.ManifestPath))
             return null;
@@ -186,29 +234,38 @@ public sealed class GeneratedHlsSessionManager(
         session.Touch();
         registry.UpsertSession(session.ToSnapshot());
         if (session.AdmissionKey is { } admKey)
-            channelSessionManager.TouchHlsSlot(admKey);
+            channelSessionManager?.TouchHlsSlot(admKey);
 
         filePath = candidate;
         return true;
     }
 
-    public void TrackClient(string sessionId, string? remoteIp, string? userAgent, string requestedRoute)
+    public void TrackClient(
+        string sessionId,
+        string? remoteIp,
+        string? userAgent,
+        string requestedRoute,
+        bool countAsViewer = true)
     {
         if (!_sessions.TryGetValue(sessionId, out var session))
             return;
 
-        var trackedClient = session.TrackClient(remoteIp, userAgent, requestedRoute);
+        var trackedClient = session.TrackClient(remoteIp, userAgent, requestedRoute, countAsViewer);
         var record = trackedClient.Record;
-        registry.UpsertClient(new StreamClientSnapshot(
-            record.ClientId, record.SessionId, record.RequestedRoute,
-            record.RemoteIp, record.UserAgent, record.ConnectedUtc,
-            BytesSent: 0, QueueDepth: 0));
+        if (record.CountAsViewer)
+        {
+            registry.UpsertClient(new StreamClientSnapshot(
+                record.ClientId, record.SessionId, record.RequestedRoute,
+                record.RemoteIp, record.UserAgent, record.ConnectedUtc,
+                BytesSent: 0, QueueDepth: 0));
+        }
+
         registry.UpsertSession(session.ToSnapshot());
 
-        if (trackedClient.IsNewClient)
+        if (trackedClient.IsNewClient && record.CountAsViewer)
             EvictRetunedClients(sessionId, remoteIp, userAgent, record.LastAccessUtc);
 
-        if (trackedClient.IsNewClient)
+        if (trackedClient.IsNewClient && record.CountAsViewer)
         {
             logger.LogInformation(
                 "Generated HLS client attached: SessionId={SessionId} ParentStreamSessionId={ParentStreamSessionId} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} RequestedRoute={RequestedRoute} Classification={Classification} HlsClientCount={HlsClientCount}",
@@ -583,7 +640,7 @@ public sealed class GeneratedHlsSessionManager(
         registry.RemoveSession(sessionId);
 
         if (session.AdmissionKey is { } key)
-            channelSessionManager.ReleaseHlsSlot(key);
+            channelSessionManager?.ReleaseHlsSlot(key);
 
         try
         {
@@ -928,10 +985,12 @@ public sealed class GeneratedHlsSessionManager(
         string? RemoteIp,
         string? UserAgent,
         DateTimeOffset ConnectedUtc,
-        DateTimeOffset LastAccessUtc);
+        DateTimeOffset LastAccessUtc,
+        bool CountAsViewer);
 
     private sealed class GeneratedHlsSession(
         string sessionId,
+        string streamUrl,
         string displayName,
         string workDirectory,
         string manifestPath,
@@ -948,6 +1007,8 @@ public sealed class GeneratedHlsSessionManager(
         private readonly ConcurrentDictionary<string, HlsClientRecord> _hlsClients = new(StringComparer.Ordinal);
 
         public string SessionId { get; } = sessionId;
+
+        public string StreamUrl { get; } = streamUrl;
 
         public string DisplayName { get; } = displayName;
 
@@ -968,7 +1029,24 @@ public sealed class GeneratedHlsSessionManager(
         public DateTimeOffset LastAccessUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _lastAccessUnixMs));
 
-        public int HlsClientCount => _hlsClients.Count;
+        public int HlsClientCount => _hlsClients.Values.Count(x => x.CountAsViewer);
+
+        public bool CanReuseFor(GeneratedHlsSessionRequest request)
+        {
+            if (request.AdmissionKey is null || AdmissionKey is null)
+                return false;
+
+            if (Process.HasExited || !File.Exists(ManifestPath))
+                return false;
+
+            if (!AdmissionKey.Value.Equals(request.AdmissionKey.Value))
+                return false;
+
+            if (!string.Equals(StreamUrl, request.StreamUrl, StringComparison.Ordinal))
+                return false;
+
+            return string.Equals(ParentStreamSessionId, request.ParentStreamSessionId, StringComparison.Ordinal);
+        }
 
         public void SetPumpTasks(Task stderrPumpTask, Task stdoutPumpTask)
         {
@@ -1011,7 +1089,7 @@ public sealed class GeneratedHlsSessionManager(
         public static bool HasClientFingerprint(string? remoteIp, string? userAgent)
             => !string.IsNullOrWhiteSpace(remoteIp) || !string.IsNullOrWhiteSpace(userAgent);
 
-        public TrackedHlsClient TrackClient(string? remoteIp, string? userAgent, string requestedRoute)
+        public TrackedHlsClient TrackClient(string? remoteIp, string? userAgent, string requestedRoute, bool countAsViewer)
         {
             var clientKey = CreateClientKey(remoteIp, userAgent);
             var now = DateTimeOffset.UtcNow;
@@ -1020,7 +1098,12 @@ public sealed class GeneratedHlsSessionManager(
             {
                 if (_hlsClients.TryGetValue(clientKey, out var existing))
                 {
-                    var updated = existing with { LastAccessUtc = now, RequestedRoute = requestedRoute };
+                    var updated = existing with
+                    {
+                        LastAccessUtc = now,
+                        RequestedRoute = requestedRoute,
+                        CountAsViewer = existing.CountAsViewer || countAsViewer,
+                    };
                     _hlsClients[clientKey] = updated;
                     return new TrackedHlsClient(updated, IsNewClient: false);
                 }
@@ -1032,7 +1115,8 @@ public sealed class GeneratedHlsSessionManager(
                     remoteIp,
                     userAgent,
                     now,
-                    now);
+                    now,
+                    countAsViewer);
 
                 _hlsClients[clientKey] = created;
                 return new TrackedHlsClient(created, IsNewClient: true);
@@ -1069,7 +1153,10 @@ public sealed class GeneratedHlsSessionManager(
             {
                 foreach (var kvp in _hlsClients.ToArray())
                 {
-                    if (kvp.Value.LastAccessUtc < cutoff && _hlsClients.TryRemove(kvp.Key, out var record))
+                    if (kvp.Value.LastAccessUtc >= cutoff || !_hlsClients.TryRemove(kvp.Key, out var record))
+                        continue;
+
+                    if (record.CountAsViewer)
                         removed.Add(record);
                 }
             }
@@ -1084,7 +1171,7 @@ public sealed class GeneratedHlsSessionManager(
             {
                 foreach (var key in _hlsClients.Keys.ToArray())
                 {
-                    if (_hlsClients.TryRemove(key, out var record))
+                    if (_hlsClients.TryRemove(key, out var record) && record.CountAsViewer)
                         removed.Add(record);
                 }
             }
@@ -1098,8 +1185,8 @@ public sealed class GeneratedHlsSessionManager(
             ProviderChannelId: AdmissionKey?.ProviderChannelId ?? string.Empty,
             DisplayName: DisplayName,
             State: Process.HasExited ? SessionState.Faulted : SessionState.Live,
-            SubscriberCount: _hlsClients.Count,
-            IsShared: _hlsClients.Count > 1,
+            SubscriberCount: HlsClientCount,
+            IsShared: HlsClientCount > 1,
             BufferUsedBytes: 0,
             BufferMaxBytes: 0,
             StartedUtc: StartedUtc,

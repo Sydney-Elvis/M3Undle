@@ -1,5 +1,6 @@
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.GeneratedHls;
+using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -65,6 +66,41 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task CreateSessionAsync_WithSameAdmissionKeyAndStream_ReusesExistingSession()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        var key = new ChannelSessionKey("provider-1", "channel-1");
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var first = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/channel-1.ts",
+                DisplayName: "Reusable Channel",
+                AdmissionKey: key,
+                RequestedRoute: "/live/a"),
+            CancellationToken.None);
+
+        var second = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/channel-1.ts",
+                DisplayName: "Reusable Channel",
+                AdmissionKey: key,
+                RequestedRoute: "/live/b"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(first);
+        Assert.IsNotNull(second);
+        Assert.AreEqual(first.SessionId, second.SessionId);
+
+        var hlsRoot = Path.Combine(ffmpeg.Root, "generated-hls");
+        Assert.HasCount(1, Directory.GetDirectories(hlsRoot));
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task CreateSessionAsync_WhenManifestNeverAppears_ReturnsNull()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: false);
@@ -80,6 +116,41 @@ public sealed class GeneratedHlsSessionManagerTests
             CancellationToken.None);
 
         Assert.IsNull(handle);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TrackClient_WhenKnownProbeUserAgent_DoesNotCountSubscriber()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Probe Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+        Assert.IsFalse(GeneratedHlsSessionManager.ShouldCountAsViewer("curl/8.5.0"));
+        Assert.IsTrue(GeneratedHlsSessionManager.ShouldCountAsViewer("Mozilla/5.0 IPTVnator"));
+
+        manager.TrackClient(
+            handle.SessionId,
+            "172.21.0.1",
+            "curl/8.5.0",
+            "/hls/generated/test/segment_000068.ts",
+            countAsViewer: GeneratedHlsSessionManager.ShouldCountAsViewer("curl/8.5.0"));
+
+        Assert.IsEmpty(registry.GetActiveClients());
+
+        var session = registry.TryGetSession(handle.SessionId);
+        Assert.IsNotNull(session);
+        Assert.AreEqual(0, session.SubscriberCount);
 
         await manager.StopAsync(CancellationToken.None);
     }

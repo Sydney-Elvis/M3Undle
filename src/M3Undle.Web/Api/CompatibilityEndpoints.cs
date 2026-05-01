@@ -980,7 +980,8 @@ public static class CompatibilityEndpoints
             sessionId,
             context.Connection.RemoteIpAddress?.ToString(),
             context.Request.Headers.UserAgent.ToString(),
-            context.Request.Path.Value ?? string.Empty);
+            context.Request.Path.Value ?? string.Empty,
+            GeneratedHlsSessionManager.ShouldCountAsViewer(context.Request.Headers.UserAgent.ToString()));
 
         if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
         {
