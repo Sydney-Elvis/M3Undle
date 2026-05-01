@@ -510,7 +510,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
     private int CountProviderUpstreamsLocked(string providerId)
     {
-        var tsCount = _sessions.Keys.Count(x => x.ProviderId == providerId);
+        var tsCount = _sessions.Values.Count(s =>
+            s.Key.ProviderId == providerId && !s.IsIdleGraceWithNoConsumers);
         var hlsCount = _hlsSlots.Keys.Count(x => x.ProviderId == providerId && !_sessions.ContainsKey(x));
         return tsCount + hlsCount;
     }

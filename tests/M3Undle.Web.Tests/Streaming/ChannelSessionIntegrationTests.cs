@@ -1078,8 +1078,10 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_ProviderTunerLimit_PreemptsIdleGraceForSameRemoteIpRetune()
+    public async Task Session_ProviderTunerLimit_AdmitsSameIpRetuneWhileIdleGraceSessionHasNoConsumers()
     {
+        // A zero-subscriber idle-grace session must not count against the provider cap.
+        // Same-IP retuning to a different channel must be admitted directly — no preemption needed.
         await using var fixture = await SessionFixture.CreateAsync(
             FakeStreamingHandler.StreamForever(),
             proxyOptions: new StreamProxyOptions
@@ -1113,18 +1115,22 @@ public sealed class ChannelSessionIntegrationTests
         await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
         await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
 
+        // session1 is idle-grace with zero consumers — must not block the same IP from retuning.
         var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
 
         Assert.AreEqual(source2.SessionKey, session2.Key);
-        await WaitUntilAsync(() => !fixture.Manager.TryGet(source1.SessionKey, out _), TimeSpan.FromSeconds(5));
-        Assert.IsFalse(fixture.Manager.TryGet(source1.SessionKey, out _));
+        // session1 was not preempted — still present in idle grace.
+        Assert.IsTrue(fixture.Manager.TryGet(source1.SessionKey, out _));
 
+        await session1.DisposeAsync();
         await session2.DisposeAsync();
     }
 
     [TestMethod]
-    public async Task Session_ProviderTunerLimit_DoesNotPreemptIdleGraceForDifferentRemoteIp()
+    public async Task Session_ProviderTunerLimit_AdmitsDifferentIpWhileIdleGraceSessionHasNoConsumers()
     {
+        // A zero-subscriber idle-grace session must not count against the provider cap.
+        // A different remote IP requesting a different channel should be admitted without preemption.
         await using var fixture = await SessionFixture.CreateAsync(
             FakeStreamingHandler.StreamForever(),
             proxyOptions: new StreamProxyOptions
@@ -1159,12 +1165,131 @@ public sealed class ChannelSessionIntegrationTests
         await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
         await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
 
+        // session1 is now idle-grace with zero consumers — must not block source2 admission.
+        var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
+
+        Assert.AreEqual(source2.SessionKey, session2.Key);
+        // session1 was not preempted — it still exists and will close naturally after idle grace.
+        Assert.IsTrue(fixture.Manager.TryGet(source1.SessionKey, out _));
+
+        await session1.DisposeAsync();
+        await session2.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ProviderTunerLimit_IdleGraceWithSubscribersStillBlocksAdmission()
+    {
+        // A session with an active internal subscriber in idle-grace should still count
+        // against the provider cap — only zero-consumer sessions are exempt.
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(10),
+                ProviderMaxConcurrentUpstreams = 1,
+            });
+
+        var source1 = fixture.Source with
+        {
+            TunerLimit = 1,
+            RemoteIp = "10.0.0.10",
+            UserAgent = "test-client",
+        };
+        var source2 = source1 with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/stream-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+            RemoteIp = "10.0.0.11",
+        };
+
+        var session1 = await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session1.AttachSubscriberAsync(CreateHttpContext(source1.RemoteIp), requestCts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        // source2 is blocked because source1 still has an active external subscriber.
         var ex = await AssertThrowsAsync<StreamAdmissionException>(
             () => fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None).AsTask());
 
         Assert.AreEqual(StreamAdmissionFailureKind.ProviderLimit, ex.FailureKind);
 
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
         await session1.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ProviderTunerLimit_AllowsThirdChannelWhileSecondIsIdleGraceWithNoConsumers()
+    {
+        // Regression: provider max=2, channel-1 active (1 real upstream), channel-2 enters
+        // zero-subscriber idle grace (was incorrectly counted as the 2nd upstream), channel-3
+        // must be admitted — not rejected — during channel-2's idle grace window.
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(15),
+                ProviderMaxConcurrentUpstreams = 2,
+            });
+
+        var sourceAbc = fixture.Source with
+        {
+            TunerLimit = 2,
+            RemoteIp = "10.0.0.10",
+            ProviderChannelId = "abc",
+            StreamUrl = "http://fake/abc",
+            DisplayName = "ABC",
+            RequestedRoute = "/live/abc",
+        };
+        var sourceCbs = sourceAbc with
+        {
+            ProviderChannelId = "cbs",
+            StreamUrl = "http://fake/cbs",
+            DisplayName = "CBS",
+            RequestedRoute = "/live/cbs",
+            RemoteIp = "10.0.0.20",
+        };
+        var sourceFox = sourceAbc with
+        {
+            ProviderChannelId = "fox",
+            StreamUrl = "http://fake/fox",
+            DisplayName = "FOX",
+            RequestedRoute = "/live/fox",
+            RemoteIp = "10.0.0.30",
+        };
+
+        // ABC: active with a real subscriber (counts as upstream 1).
+        var abcSession = await fixture.Manager.GetOrCreateAsync(sourceAbc, CancellationToken.None);
+        using var abcCts = new CancellationTokenSource();
+        var abcSubscriber = await abcSession.AttachSubscriberAsync(CreateHttpContext(sourceAbc.RemoteIp), abcCts.Token);
+        await WaitUntilAsync(() => abcSubscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        // CBS: open then immediately abandon — enters idle grace with zero subscribers.
+        var cbsSession = await fixture.Manager.GetOrCreateAsync(sourceCbs, CancellationToken.None);
+        using var cbsCts = new CancellationTokenSource();
+        var cbsSubscriber = await cbsSession.AttachSubscriberAsync(CreateHttpContext(sourceCbs.RemoteIp), cbsCts.Token);
+        await WaitUntilAsync(() => cbsSubscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+        cbsCts.Cancel();
+        await cbsSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await cbsSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // CBS is now idle-grace with zero consumers — must not count as the 2nd upstream.
+        // FOX must be admitted as the real 2nd upstream while CBS grace period is still running.
+        var foxSession = await fixture.Manager.GetOrCreateAsync(sourceFox, CancellationToken.None);
+        Assert.AreEqual(sourceFox.SessionKey, foxSession.Key);
+
+        abcCts.Cancel();
+        await abcSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await abcSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await abcSession.DisposeAsync();
+        await cbsSession.DisposeAsync();
+        await foxSession.DisposeAsync();
     }
 
     [TestMethod]

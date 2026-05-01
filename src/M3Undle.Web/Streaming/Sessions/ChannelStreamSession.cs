@@ -130,6 +130,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
     }
 
+    public bool IsIdleGraceWithNoConsumers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return string.Equals(_pendingStopTrigger, "idle_grace", StringComparison.Ordinal)
+                    && ShouldScheduleIdleShutdownNoLock();
+            }
+        }
+    }
+
     public async Task<SubscriberConnection> AttachSubscriberAsync(
         HttpContext context,
         CancellationToken requestCt,
