@@ -245,6 +245,13 @@ public sealed class GeneratedHlsSessionManager(
             registry.RemoveClient(evictedClient.ClientId);
             registry.UpsertSession(otherSession.ToSnapshot());
             LogObservedHlsClientRemoved(otherSession, evictedClient, "retune_detected");
+
+            // If the eviction emptied a relay-backed session, tear it down immediately
+            // instead of waiting up to InactivityTimeoutSeconds for the sweep loop.
+            // This stops the stale internal relay subscriber from continuing to drain the
+            // parent ring buffer alongside the new session's subscriber.
+            if (otherSession.HlsClientCount == 0 && otherSession.ParentStreamSessionId is not null)
+                _ = RemoveSessionAsync(otherSession.SessionId, "retune_orphaned");
         }
     }
 
@@ -340,6 +347,10 @@ public sealed class GeneratedHlsSessionManager(
             // Internal relay: authenticate with secret header, no provider credentials needed.
             info.ArgumentList.Add("-headers");
             info.ArgumentList.Add($"X-M3Undle-Internal-Relay: {request.InternalRelaySecret}\r\n");
+            // The relay attaches at the live edge (mid-stream). Regenerate PTS from DTS so FFmpeg
+            // does not inherit stale timestamps from an arbitrary position in the source GOP.
+            info.ArgumentList.Add("-fflags");
+            info.ArgumentList.Add("+genpts");
         }
         else
         {
