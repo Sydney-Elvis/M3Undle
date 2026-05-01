@@ -3,6 +3,7 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Streaming.Buffering;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Sessions;
@@ -897,6 +898,67 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task GeneratedHlsRelaySession_KeepsParentAliveAfterExternalSubscriberDisconnects()
+    {
+        var root = CreateTempDir();
+        File.WriteAllText(Path.Combine(root, "write.flag"), string.Empty);
+
+        try
+        {
+            var handler = FakeStreamingHandler.StreamForever();
+            await using var fixture = await SessionFixture.CreateAsync(
+                handler,
+                proxyOptions: new StreamProxyOptions { StreamingEnabled = true, IdleGrace = TimeSpan.FromMilliseconds(200) });
+            await using var generatedHlsManager = CreateGeneratedHlsManager(root, fixture.Manager, fixture.Registry);
+
+            await generatedHlsManager.StartAsync(CancellationToken.None);
+            Assert.IsTrue(generatedHlsManager.IsEffectivelyEnabled);
+
+            var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+            using var externalCts = new CancellationTokenSource();
+            using var internalCts = new CancellationTokenSource();
+            var externalSub = await session.AttachSubscriberAsync(new DefaultHttpContext(), externalCts.Token);
+            var internalSub = await session.AttachSubscriberAsync(new DefaultHttpContext(), internalCts.Token, isInternal: true);
+
+            await WaitUntilAsync(
+                () => externalSub.BytesSent > 0 && internalSub.BytesSent > 0,
+                TimeSpan.FromSeconds(5));
+
+            var handle = await generatedHlsManager.CreateSessionAsync(
+                new GeneratedHlsSessionRequest(
+                    StreamUrl: "http://127.0.0.1/internal/relay/provider-1/channel-1",
+                    DisplayName: fixture.Source.DisplayName,
+                    AdmissionKey: fixture.Source.SessionKey,
+                    InternalRelaySecret: "test-secret",
+                    ParentStreamSessionId: session.SessionId,
+                    RequestedRoute: fixture.Source.RequestedRoute),
+                CancellationToken.None);
+
+            Assert.IsNotNull(handle);
+
+            externalCts.Cancel();
+            await externalSub.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+            await externalSub.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await Task.Delay(350);
+            Assert.IsTrue(
+                fixture.Manager.TryGet(session.Key, out _),
+                "Relay-backed generated HLS must retain the parent shared stream while its HLS session is active.");
+
+            await generatedHlsManager.StopAsync(CancellationToken.None);
+
+            await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
+            Assert.IsFalse(fixture.Manager.TryGet(session.Key, out _));
+
+            internalCts.Cancel();
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [TestMethod]
     public async Task Session_ProviderTunerLimit_RejectsAdditionalProviderSession()
     {
         // Checklist: Provider stream limits still reject new sessions correctly (per-provider TunerLimit path).
@@ -1544,6 +1606,54 @@ public sealed class ChannelSessionIntegrationTests
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
             await Task.Delay(20);
+    }
+
+    private static GeneratedHlsSessionManager CreateGeneratedHlsManager(
+        string root,
+        ChannelSessionManager channelSessionManager,
+        StreamingRegistry registry)
+    {
+        var options = Options.Create(new GeneratedHlsOptions
+        {
+            Enabled = true,
+            Directory = Path.Combine(root, "generated-hls"),
+            FfmpegPath = FakeFfmpegBinary.LocateExecutable(),
+            SegmentDurationSeconds = 1,
+            PlaylistSize = 2,
+            DeleteThreshold = 1,
+            StartupTimeoutSeconds = 3,
+            InactivityTimeoutSeconds = 120,
+            CleanupIntervalSeconds = 120,
+            RetuneEvictionGraceSeconds = 5,
+            StartupStaleAgeHours = 1,
+        });
+
+        return new GeneratedHlsSessionManager(
+            options,
+            scopeFactory: null!,
+            channelSessionManager,
+            registry,
+            NullLogger<GeneratedHlsSessionManager>.Instance);
+    }
+
+    private static string CreateTempDir()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"m3undle-channel-session-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
+            // best-effort cleanup in tests
+        }
     }
 
     private static DefaultHttpContext CreateHttpContext(string? remoteIp)

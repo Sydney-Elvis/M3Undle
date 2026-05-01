@@ -105,6 +105,8 @@ public sealed class GeneratedHlsSessionManager(
             return null;
         }
 
+        RetainParentStreamActivity(session);
+
         var stderrPumpTask = PumpProcessStreamAsync(session, process.StandardError, isError: true, _lifetimeCts.Token);
         var stdoutPumpTask = PumpProcessStreamAsync(session, process.StandardOutput, isError: false, _lifetimeCts.Token);
         session.SetPumpTasks(stderrPumpTask, stdoutPumpTask);
@@ -570,6 +572,8 @@ public sealed class GeneratedHlsSessionManager(
         if (!_sessions.TryRemove(sessionId, out var session))
             return;
 
+        session.ReleaseParentActivityRetention();
+
         foreach (var client in session.RemoveAllClients())
         {
             registry.RemoveClient(client.ClientId);
@@ -613,6 +617,23 @@ public sealed class GeneratedHlsSessionManager(
                 artifactState.LastManifestWriteUtc,
                 artifactState.LastSegmentWriteUtc);
         }
+    }
+
+    private void RetainParentStreamActivity(GeneratedHlsSession session)
+    {
+        if (session.AdmissionKey is not { } key || string.IsNullOrWhiteSpace(session.ParentStreamSessionId))
+            return;
+
+        var retention = channelSessionManager.RetainGeneratedHlsActivity(key, session.ParentStreamSessionId);
+        if (retention is null)
+            return;
+
+        session.SetParentActivityRetention(retention);
+        logger.LogInformation(
+            "Generated HLS session retained parent stream activity: SessionId={SessionId} ParentStreamSessionId={ParentStreamSessionId} AdmissionKey={AdmissionKey}",
+            session.SessionId,
+            session.ParentStreamSessionId,
+            session.AdmissionKey?.ToString());
     }
 
     private async Task ObservePumpTasksAsync(GeneratedHlsSession session)
@@ -922,6 +943,7 @@ public sealed class GeneratedHlsSessionManager(
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private Task? _stderrPumpTask;
         private Task? _stdoutPumpTask;
+        private IDisposable? _parentActivityRetention;
         private readonly object _clientSync = new();
         private readonly ConcurrentDictionary<string, HlsClientRecord> _hlsClients = new(StringComparer.Ordinal);
 
@@ -952,6 +974,18 @@ public sealed class GeneratedHlsSessionManager(
         {
             _stderrPumpTask = stderrPumpTask;
             _stdoutPumpTask = stdoutPumpTask;
+        }
+
+        public void SetParentActivityRetention(IDisposable retention)
+        {
+            var previous = Interlocked.Exchange(ref _parentActivityRetention, retention);
+            previous?.Dispose();
+        }
+
+        public void ReleaseParentActivityRetention()
+        {
+            var retention = Interlocked.Exchange(ref _parentActivityRetention, null);
+            retention?.Dispose();
         }
 
         public Task[] GetPumpTasks()

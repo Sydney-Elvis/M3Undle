@@ -345,6 +345,20 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     public bool TryGet(ChannelSessionKey key, out ChannelStreamSession? session)
         => _sessions.TryGetValue(key, out session);
 
+    public IDisposable? RetainGeneratedHlsActivity(ChannelSessionKey key, string? parentStreamSessionId)
+    {
+        if (string.IsNullOrWhiteSpace(parentStreamSessionId))
+            return null;
+
+        if (!_sessions.TryGetValue(key, out var session)
+            || !string.Equals(session.SessionId, parentStreamSessionId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return session.RetainExternalActivity();
+    }
+
     public Task RemoveIfClosedAsync(ChannelSessionKey key, ChannelStreamSession session)
     {
         lock (_admissionGate)
