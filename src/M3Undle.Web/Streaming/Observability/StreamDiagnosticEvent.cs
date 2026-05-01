@@ -23,6 +23,8 @@ public sealed record StreamDiagnosticEvent(
     double? FirstByteLatencyMs = null,
     long? BytesSinceReconnect = null,
     long? TotalBytesRelayed = null,
+    long? BytesSent = null,
+    int? QueueDepth = null,
     SubscriberDisconnectReason? DisconnectReason = null,
     string? StopTrigger = null,
     double? CooldownSeconds = null,

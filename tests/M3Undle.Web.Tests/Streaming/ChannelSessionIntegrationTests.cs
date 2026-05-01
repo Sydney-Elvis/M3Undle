@@ -80,6 +80,50 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_SubscriberQueueFull_RecordsSlowClientDiagnostic()
+    {
+        var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket());
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            bufferOptions: new BufferOptions
+            {
+                ReadChunkSizeBytes = 188,
+                SubscriberQueueCapacity = 1,
+                MaxBytesPerSession = 64 * 1024,
+                MaxBytesHardCap = 4 * 1024 * 1024,
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var context = new DefaultHttpContext();
+        await using var blockingBody = new BlockingWriteStream();
+        context.Response.Body = blockingBody;
+
+        var subscriber = await session.AttachSubscriberAsync(context, CancellationToken.None);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.SubscriberQueueFull).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var queueFull = fixture.DiagnosticsStore
+            .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.SubscriberQueueFull)
+            .First();
+        Assert.AreEqual(subscriber.ClientId, queueFull.ClientId);
+        Assert.AreEqual(SubscriberDisconnectReason.SlowClient, queueFull.DisconnectReason);
+        Assert.AreEqual(1, queueFull.QueueDepth);
+        Assert.IsGreaterThan(0L, queueFull.TotalBytesRelayed.GetValueOrDefault());
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore
+                .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.SubscriberRemoved)
+                .Any(x => x.ClientId == subscriber.ClientId && x.DisconnectReason == SubscriberDisconnectReason.SlowClient),
+            TimeSpan.FromSeconds(2));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_UpstreamStall_TriggersReconnect()
     {
         var chunk = FakeStreamingHandler.ValidTsPacket();
@@ -1775,6 +1819,48 @@ public sealed class ChannelSessionIntegrationTests
         public override DateTimeOffset GetUtcNow() => _utcNow;
 
         public void Advance(TimeSpan duration) => _utcNow = _utcNow.Add(duration);
+    }
+
+    private sealed class BlockingWriteStream : IOStream
+    {
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => 0;
+
+        public override long Position
+        {
+            get => 0;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+            => Task.CompletedTask;
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => new(Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
     }
 
     // ---------------------------------------------------------------------------

@@ -20,4 +20,5 @@ public enum StreamDiagnosticEventKind
     MpegTsPacketizerDisabled = 15,
     FfmpegRelayStarted = 16,
     FfmpegRelayFallbackToDirect = 17,
+    SubscriberQueueFull = 24,
 }

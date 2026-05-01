@@ -86,4 +86,38 @@ public sealed class SubscriberConnectionTests
         var received = body.ToArray();
         CollectionAssert.AreEqual(new byte[] { 0xD0, 0xD1, 0xD2 }, received);
     }
+
+    [TestMethod]
+    public async Task TryEnqueue_WhenQueueIsFull_ReturnsFalse()
+    {
+        var buffer = new RingBuffer(maxBytes: 1024);
+        using var first = buffer.Write(new byte[] { 0xE0 });
+        using var second = buffer.Write(new byte[] { 0xE1 });
+
+        var body = new MemoryStream();
+        var context = new DefaultHttpContext();
+        context.Response.Body = body;
+        var subscriber = new SubscriberConnection(
+            "session-3", "/test", context, queueCapacity: 1,
+            onCompleted: (_, _) => Task.CompletedTask);
+
+        var firstQueued = first.Duplicate();
+        var secondQueued = second.Duplicate();
+
+        Assert.IsTrue(subscriber.TryEnqueue(firstQueued));
+        if (subscriber.TryEnqueue(secondQueued))
+        {
+            Assert.Fail("A full subscriber queue must report enqueue failure so the session can evict the slow client.");
+        }
+
+        secondQueued.Dispose();
+        Assert.AreEqual(1, subscriber.QueueDepth);
+
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Completed);
+
+        await subscriber.StartAsync(buffer.CreateLiveEdgeSnapshot(), CancellationToken.None);
+        await subscriber.Completion;
+
+        CollectionAssert.AreEqual(new byte[] { 0xE0 }, body.ToArray());
+    }
 }

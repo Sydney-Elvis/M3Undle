@@ -45,7 +45,7 @@ public sealed class SubscriberConnection
         {
             SingleReader = true,
             SingleWriter = false,
-            FullMode = BoundedChannelFullMode.DropWrite,
+            FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         };
 

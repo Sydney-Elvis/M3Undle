@@ -589,6 +589,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             if (!subscriber.TryEnqueue(perSubscriber))
             {
                 perSubscriber.Dispose();
+                RecordDiagnostic(
+                    StreamDiagnosticEventKind.SubscriberQueueFull,
+                    subscriber: subscriber,
+                    disconnectReason: SubscriberDisconnectReason.SlowClient,
+                    message: "Subscriber queue rejected live stream chunk; removing subscriber as slow client.");
                 slowSubscribers ??= [];
                 slowSubscribers.Add(subscriber);
                 continue;
@@ -1147,6 +1152,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             FirstByteLatencyMs: firstByteLatencyMs,
             BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
             TotalBytesRelayed: Interlocked.Read(ref _totalBytesRelayed),
+            BytesSent: subscriber?.BytesSent,
+            QueueDepth: subscriber?.QueueDepth,
             DisconnectReason: disconnectReason,
             StopTrigger: stopTrigger,
             CooldownSeconds: cooldownSeconds,
