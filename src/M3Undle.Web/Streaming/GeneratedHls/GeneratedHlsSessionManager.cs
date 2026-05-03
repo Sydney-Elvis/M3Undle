@@ -885,7 +885,7 @@ public sealed class GeneratedHlsSessionManager(
 
             if (isError)
             {
-                logger.LogDebug(
+                logger.LogWarning(
                     "FFmpeg[{SessionId}] parent={ParentStreamSessionId} {DisplayName}: {Line}",
                     session.SessionId,
                     session.ParentStreamSessionId,

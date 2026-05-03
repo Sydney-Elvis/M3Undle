@@ -114,6 +114,57 @@ public sealed class UpstreamStreamConnectorTests
     }
 
     [TestMethod]
+    public async Task ConnectAsync_WhenNonForcedSourceIsExplicitHls_UsesFfmpegHlsRelay()
+    {
+        var argsFile = Path.GetTempFileName();
+        try
+        {
+            using var fixture = await ConnectorFixture.CreateAsync(
+                streamUrl: $"http://provider.test/channel.m3u8?ffmpegMode=relay-success&prefix=HEAD&suffix=TAIL&delayMs=200&argsOut={Uri.EscapeDataString(argsFile)}",
+                ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+                handler: new RecordingHttpMessageHandler(_ => throw new AssertFailedException("Direct HTTP fallback should not be used for explicit HLS relay.")),
+                forceMpegTs: false);
+
+            await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+            Assert.AreEqual(UpstreamRelayModes.FfmpegHlsToMpegTs, connection.RelayMode);
+            Assert.AreEqual(0, fixture.Handler.RequestCount);
+
+            var args = (await File.ReadAllLinesAsync(argsFile)).ToList();
+            Assert.IsTrue(args.Contains("-re"));
+            Assert.IsTrue(args.Contains("-allowed_extensions"));
+            Assert.IsTrue(args.Contains("ALL"));
+            Assert.IsFalse(args.Contains("-reconnect_streamed"));
+
+            var firstBytes = await ReadExactAsciiAsync(connection.Stream, 4, TimeSpan.FromSeconds(2));
+            Assert.AreEqual("HEAD", firstBytes);
+        }
+        finally
+        {
+            File.Delete(argsFile);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenNonForcedSourceIsXtreamNumericUrl_UsesDirectHttp()
+    {
+        using var fixture = await ConnectorFixture.CreateAsync(
+            streamUrl: "http://provider.test/user/pass/123?ffmpegMode=relay-success&prefix=HEAD",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            handler: new RecordingHttpMessageHandler(_ => CreateHttpResponse("DIRECT")),
+            forceMpegTs: false);
+
+        await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+        Assert.AreEqual(UpstreamRelayModes.Direct, connection.RelayMode);
+        Assert.AreEqual(1, fixture.Handler.RequestCount);
+        Assert.AreEqual("http://provider.test/user/pass/123?ffmpegMode=relay-success&prefix=HEAD", fixture.Handler.LastRequestUri?.ToString());
+
+        var body = await ReadExactAsciiAsync(connection.Stream, 6, TimeSpan.FromSeconds(2));
+        Assert.AreEqual("DIRECT", body);
+    }
+
+    [TestMethod]
     public async Task ConnectAsync_WhenFfmpegStallsWithoutOutput_FallsBackToDirectHttp()
     {
         using var fixture = await ConnectorFixture.CreateAsync(
@@ -276,6 +327,7 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "TestAgent/2.0");
             StringAssert.Contains(argsText, "-headers");
             StringAssert.Contains(argsText, "X-Auth-Token: abc123");
+            StringAssert.Contains(argsText, "-reconnect_streamed");
         }
         finally
         {

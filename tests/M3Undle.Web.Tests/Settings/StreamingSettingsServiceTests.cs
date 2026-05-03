@@ -3,6 +3,7 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Streaming.Configuration;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -167,6 +168,40 @@ public sealed class StreamingSettingsServiceTests
         }
     }
 
+    [TestMethod]
+    public async Task BufferDbOptionsConfigurator_DerivesSubscriberQueueCapacityFromSavedBufferShape()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var db = fixture.CreateDbContext())
+        {
+            var service = CreateService(db);
+            var result = await service.UpdateAsync(new UpdateStreamingSettingsCommand(
+                StreamingEnabled: true,
+                MaxConcurrentSessions: 50,
+                IdleGraceSeconds: 15,
+                IdleGraceHardCapSeconds: 120,
+                BufferMaxBytesPerSession: 256 * 1024,
+                BufferMaxBytesHardCap: 4 * 1024 * 1024,
+                BufferReadChunkSizeBytes: 64 * 1024,
+                ReconnectReadStallTimeoutSeconds: 30,
+                ReconnectOutageWindowSeconds: 75,
+                ReconnectConnectTimeoutSeconds: 15));
+
+            Assert.IsTrue(result.Succeeded);
+        }
+
+        var services = new ServiceCollection();
+        services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite(fixture.Connection));
+        using var provider = services.BuildServiceProvider();
+
+        var options = new BufferOptions();
+        new BufferDbOptionsConfigurator(provider.GetRequiredService<IServiceScopeFactory>()).Configure(options);
+
+        Assert.AreEqual(256 * 1024, options.MaxBytesPerSession);
+        Assert.AreEqual(64 * 1024, options.ReadChunkSizeBytes);
+        Assert.AreEqual(4, options.SubscriberQueueCapacity);
+    }
+
     private static StreamingSettingsService CreateService(ApplicationDbContext db)
         => new(
             db,
@@ -193,6 +228,8 @@ public sealed class StreamingSettingsServiceTests
 
     private sealed class TestFixture(SqliteConnection connection, DbContextOptions<ApplicationDbContext> options) : IAsyncDisposable
     {
+        public SqliteConnection Connection => connection;
+
         public ApplicationDbContext CreateDbContext() => new(options);
 
         public async ValueTask DisposeAsync()

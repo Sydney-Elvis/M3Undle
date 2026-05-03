@@ -79,6 +79,8 @@ public sealed class SubscriberConnection
 
     public int QueueDepth => Math.Max(0, Volatile.Read(ref _queueDepth));
 
+    public bool IsCompleted => Volatile.Read(ref _completed) == 1;
+
     public Task Completion => _pumpTask ?? Task.CompletedTask;
 
     public void InitializeResponse(string? contentType, string? cacheControl)

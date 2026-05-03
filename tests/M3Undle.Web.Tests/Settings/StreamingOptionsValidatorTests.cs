@@ -114,6 +114,14 @@ public sealed class StreamingOptionsValidatorTests
     }
 
     [TestMethod]
+    public void ReconnectOptions_ContentStallTimeoutZero_Fails()
+    {
+        var options = new ReconnectOptions { ContentStallTimeout = TimeSpan.Zero };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
     public void ReconnectOptions_OutageWindowBelowReadStallTimeout_Fails()
     {
         var options = new ReconnectOptions

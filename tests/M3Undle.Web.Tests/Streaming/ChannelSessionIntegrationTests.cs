@@ -510,7 +510,7 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsLateJoiner_StartsFromSafeSnapshot()
+    public async Task Session_MpegTsInternalLateJoiner_StartsFromSafeSnapshot()
     {
         var handler = FakeStreamingHandler.StreamForeverSequence(MpegTsSafeStartupSequence());
         await using var fixture = await SessionFixture.CreateAsync(handler);
@@ -527,7 +527,7 @@ public sealed class ChannelSessionIntegrationTests
             TimeSpan.FromSeconds(5));
 
         var lateContext = CreateResponseCaptureContext();
-        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, timeout.Token);
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, timeout.Token, isInternal: true);
         await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188 * 4, TimeSpan.FromSeconds(5));
 
         timeout.Cancel();
@@ -734,7 +734,7 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_LateJoinerGetsSafeStartFromNewGeneration()
+    public async Task Session_MpegTsReconnect_InternalLateJoinerGetsSafeStartFromNewGeneration()
     {
         // First connection stalls after a few plain TS packets (no safe start established).
         // After reconnect, the handler streams a full safe-startup sequence.
@@ -763,7 +763,7 @@ public sealed class ChannelSessionIntegrationTests
             TimeSpan.FromSeconds(12));
 
         var lateContext = CreateResponseCaptureContext();
-        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token);
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token, isInternal: true);
         await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
 
         cts.Cancel();
@@ -811,7 +811,7 @@ public sealed class ChannelSessionIntegrationTests
         StringAssert.Contains(safeStartEvent.Message, "PatPmt");
 
         var lateContext = CreateResponseCaptureContext();
-        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token);
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, cts.Token, isInternal: true);
         await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
 
         cts.Cancel();
@@ -858,6 +858,163 @@ public sealed class ChannelSessionIntegrationTests
         Assert.IsGreaterThan(0, data.Length, "Pass-through data should reach subscriber after packetizer is disabled.");
         Assert.IsTrue(data.All(b => b == 0x11), "Pass-through bytes must be exactly the raw upstream content.");
 
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsKeepalive_ExternalNonHdhrSubscriberReceivesNullPacketDuringStall()
+    {
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.ServiceUnavailable);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 1, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(10),
+                ContentStallTimeout = TimeSpan.FromSeconds(3),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        capture.Context.Request.Path = "/live/key-1";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(() => subscriber.BytesSent >= 188 * 2, TimeSpan.FromSeconds(2));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188 * 2, data.Length);
+        Assert.AreEqual(1, handler.ConnectionCount, "Keepalive must not reconnect the upstream socket.");
+        Assert.AreEqual(0x47, data[188]);
+        Assert.AreEqual(0x1f, data[189]);
+        Assert.AreEqual(0xff, data[190]);
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsKeepalive_HdhrOnlySubscriberDoesNotReceiveNullPackets()
+    {
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.ServiceUnavailable);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 1, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(10),
+                ContentStallTimeout = TimeSpan.FromSeconds(3),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var source = fixture.Source with { RequestedRoute = "/hdhr/tune/key-1" };
+        var session = await fixture.Manager.GetOrCreateAsync(source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        capture.Context.Request.Path = "/hdhr/tune/key-1";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+        await WaitUntilAsync(() => subscriber.BytesSent >= 188, TimeSpan.FromSeconds(2));
+        await Task.Delay(1100, cts.Token);
+
+        Assert.AreEqual(188, subscriber.BytesSent);
+        Assert.AreEqual(1, handler.ConnectionCount);
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsKeepalive_NonHdhrJoinerOnHdhrOpenedSessionReceivesNullPacket()
+    {
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.ServiceUnavailable);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 1, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(10),
+                ContentStallTimeout = TimeSpan.FromSeconds(3),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var source = fixture.Source with { RequestedRoute = "/hdhr/tune/key-1" };
+        var session = await fixture.Manager.GetOrCreateAsync(source, CancellationToken.None);
+        var hdhrCapture = CreateResponseCaptureContext();
+        hdhrCapture.Context.Request.Path = "/hdhr/tune/key-1";
+        var smartersCapture = CreateResponseCaptureContext();
+        smartersCapture.Context.Request.Path = "/live/key-1";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var hdhrSubscriber = await session.AttachSubscriberAsync(hdhrCapture.Context, cts.Token);
+        await WaitUntilAsync(() => hdhrSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(2));
+
+        var smartersSubscriber = await session.AttachSubscriberAsync(smartersCapture.Context, cts.Token);
+        await WaitUntilAsync(() => smartersSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(2));
+
+        cts.Cancel();
+        await smartersSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await hdhrSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await smartersSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await hdhrSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = smartersCapture.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188, data.Length);
+        Assert.AreEqual(0x47, data[0]);
+        Assert.AreEqual(0x1f, data[1]);
+        Assert.AreEqual(0xff, data[2]);
+        Assert.AreEqual(1, handler.ConnectionCount);
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsNullOnlyUpstreamData_DoesNotResetContentStallTimer()
+    {
+        var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket());
+        handler.QueueNext(ct => FakeStreamingHandler.StreamForeverResponse(NullTsPacket(), ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(10),
+                ContentStallTimeout = TimeSpan.FromMilliseconds(500),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        Assert.IsGreaterThanOrEqualTo(2, handler.ConnectionCount);
+
+        cts.Cancel();
         await session.DisposeAsync();
     }
 
@@ -1003,6 +1160,38 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Manager_GeneratedHlsParentResolution_CreatesSharedParentWhenMissing()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var session = await fixture.Manager.TryGetOrCreateForGeneratedHlsAsync(
+            fixture.Source,
+            useSharedSession: true,
+            CancellationToken.None);
+
+        Assert.IsNotNull(session);
+        Assert.AreEqual(fixture.Source.SessionKey, session.Key);
+        Assert.IsTrue(fixture.Manager.TryGet(fixture.Source.SessionKey, out var activeSession));
+        Assert.AreSame(session, activeSession);
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Manager_GeneratedHlsParentResolution_NonSharedRequestDoesNotCreateParent()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var session = await fixture.Manager.TryGetOrCreateForGeneratedHlsAsync(
+            fixture.Source,
+            useSharedSession: false,
+            CancellationToken.None);
+
+        Assert.IsNull(session);
+        Assert.IsFalse(fixture.Manager.TryGet(fixture.Source.SessionKey, out _));
+    }
+
+    [TestMethod]
     public async Task Session_ProviderTunerLimit_RejectsAdditionalProviderSession()
     {
         // Checklist: Provider stream limits still reject new sessions correctly (per-provider TunerLimit path).
@@ -1078,10 +1267,10 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_ProviderTunerLimit_AdmitsSameIpRetuneWhileIdleGraceSessionHasNoConsumers()
+    public async Task Session_ProviderTunerLimit_PreemptsSameIpIdleGraceSessionBeforeRetune()
     {
         // A zero-subscriber idle-grace session must not count against the provider cap.
-        // Same-IP retuning to a different channel must be admitted directly — no preemption needed.
+        // Same-IP retuning to a different channel is admitted after the tracked idle session is preempted.
         await using var fixture = await SessionFixture.CreateAsync(
             FakeStreamingHandler.StreamForever(),
             proxyOptions: new StreamProxyOptions
@@ -1119,18 +1308,17 @@ public sealed class ChannelSessionIntegrationTests
         var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
 
         Assert.AreEqual(source2.SessionKey, session2.Key);
-        // session1 was not preempted — still present in idle grace.
-        Assert.IsTrue(fixture.Manager.TryGet(source1.SessionKey, out _));
+        Assert.IsFalse(fixture.Manager.TryGet(source1.SessionKey, out _));
 
         await session1.DisposeAsync();
         await session2.DisposeAsync();
     }
 
     [TestMethod]
-    public async Task Session_ProviderTunerLimit_AdmitsDifferentIpWhileIdleGraceSessionHasNoConsumers()
+    public async Task Session_ProviderTunerLimit_PreemptsDifferentIpIdleGraceSessionBeforeAdmittingNewTune()
     {
         // A zero-subscriber idle-grace session must not count against the provider cap.
-        // A different remote IP requesting a different channel should be admitted without preemption.
+        // A different remote IP requesting a different channel is admitted after provider-scoped idle preemption.
         await using var fixture = await SessionFixture.CreateAsync(
             FakeStreamingHandler.StreamForever(),
             proxyOptions: new StreamProxyOptions
@@ -1169,8 +1357,7 @@ public sealed class ChannelSessionIntegrationTests
         var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
 
         Assert.AreEqual(source2.SessionKey, session2.Key);
-        // session1 was not preempted — it still exists and will close naturally after idle grace.
-        Assert.IsTrue(fixture.Manager.TryGet(source1.SessionKey, out _));
+        Assert.IsFalse(fixture.Manager.TryGet(source1.SessionKey, out _));
 
         await session1.DisposeAsync();
         await session2.DisposeAsync();
@@ -1280,9 +1467,10 @@ public sealed class ChannelSessionIntegrationTests
         await cbsSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
 
         // CBS is now idle-grace with zero consumers — must not count as the 2nd upstream.
-        // FOX must be admitted as the real 2nd upstream while CBS grace period is still running.
+        // FOX must be admitted as the real 2nd upstream after CBS is preempted from tracked capacity.
         var foxSession = await fixture.Manager.GetOrCreateAsync(sourceFox, CancellationToken.None);
         Assert.AreEqual(sourceFox.SessionKey, foxSession.Key);
+        Assert.IsFalse(fixture.Manager.TryGet(sourceCbs.SessionKey, out _));
 
         abcCts.Cancel();
         await abcSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
@@ -1290,6 +1478,51 @@ public sealed class ChannelSessionIntegrationTests
         await abcSession.DisposeAsync();
         await cbsSession.DisposeAsync();
         await foxSession.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MaxConcurrentSessions_PreemptsIdleGraceSessionBeforeAdmittingReplacement()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(
+            FakeStreamingHandler.StreamForever(),
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                MaxConcurrentSessions = 1,
+                IdleGrace = TimeSpan.FromSeconds(10),
+            });
+
+        var source1 = fixture.Source with
+        {
+            RemoteIp = "10.0.0.10",
+            ProviderChannelId = "channel-1",
+            StreamUrl = "http://fake/channel-1",
+            RequestedRoute = "/live/key-1",
+        };
+        var source2 = source1 with
+        {
+            ProviderChannelId = "channel-2",
+            StreamUrl = "http://fake/channel-2",
+            DisplayName = "Test Channel 2",
+            RequestedRoute = "/live/key-2",
+        };
+
+        var session1 = await fixture.Manager.GetOrCreateAsync(source1, CancellationToken.None);
+        using var requestCts = new CancellationTokenSource();
+        var subscriber = await session1.AttachSubscriberAsync(CreateHttpContext(source1.RemoteIp), requestCts.Token);
+        await WaitUntilAsync(() => subscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        requestCts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var session2 = await fixture.Manager.GetOrCreateAsync(source2, CancellationToken.None);
+
+        Assert.AreEqual(source2.SessionKey, session2.Key);
+        Assert.IsFalse(fixture.Manager.TryGet(source1.SessionKey, out _));
+
+        await session1.DisposeAsync();
+        await session2.DisposeAsync();
     }
 
     [TestMethod]
@@ -1925,6 +2158,9 @@ public sealed class ChannelSessionIntegrationTests
             0xF0, 0x00,  // no ES info
             0x00, 0x00, 0x00, 0x00,
         ]);
+
+    private static byte[] NullTsPacket()
+        => Packet(0x1fff);
 
     private static byte[] Packet(int pid, bool payloadUnitStart = false, byte[]? payload = null)
     {

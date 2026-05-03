@@ -13,6 +13,22 @@ public static class HlsDetection
     }
 
     /// <summary>
+    /// Returns the URL as a single-element list if it is an explicit .m3u8 URL, otherwise empty.
+    /// Use this for source-driven relay decisions where heuristic candidate generation would
+    /// incorrectly relay Xtream numeric URLs that already serve MPEG-TS directly.
+    /// </summary>
+    public static IReadOnlyList<string> GetExplicitHlsCandidates(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            && uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            return [url];
+        }
+
+        return [];
+    }
+
+    /// <summary>
     /// Returns an ordered list of HLS manifest URL candidates to try for the given stream URL.
     /// Returns an empty list if no HLS variant can be inferred.
     /// Callers should try candidates in order and use the first that returns a valid M3U8.

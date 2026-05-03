@@ -53,6 +53,9 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
         if (options.ReadStallTimeout <= TimeSpan.Zero)
             errors.Add("Streaming:Reconnect:ReadStallTimeout must be greater than zero.");
 
+        if (options.ContentStallTimeout <= TimeSpan.Zero)
+            errors.Add("Streaming:Reconnect:ContentStallTimeout must be greater than zero.");
+
         if (options.OutageWindow < options.ReadStallTimeout)
             errors.Add("Streaming:Reconnect:OutageWindow must be greater than or equal to ReadStallTimeout.");
 

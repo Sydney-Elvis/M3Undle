@@ -149,7 +149,14 @@ Each setting includes a plain-English description, and a help icon explains the 
 
 Stream proxy changes are saved to the database immediately but only take effect after a restart. The page shows the currently active (running) configuration alongside the saved values, and displays a warning banner when they differ. An in-app **Restart M3Undle** button is available once settings have been saved, and shows how many streams are currently active so you know the impact before restarting.
 
+When the simultaneous-stream cap is full, zero-viewer streams waiting in their disconnect grace period do not block a new tune. M3Undle can preempt a qualifying idle-grace session so a real viewer can start immediately.
+
+MPEG-TS CDN-gap handling is automatic. M3Undle can send null-packet keepalives for external non-HDHomeRun players during short upstream gaps, while HDHomeRun-only sessions are left as plain upstream MPEG-TS for DVR compatibility. The advanced content-stall timeout for that behavior is configured through appsettings/environment variables rather than the UI.
+
 For HDHomeRun-style access, tuner ownership is tracked by the configured `Virtual Tuner ID`, not by remote IP. Re-tuning from the same virtual tuner replaces the prior playback session instead of consuming another tuner slot.
+
+**Browser Playback**
+Controls generated HLS for browser and Electron clients. When a browser requests HLS for a TS-only live stream, M3Undle uses FFmpeg to generate a rolling HLS session. Shared live streams are fed from M3Undle's internal relay session, which is created on first HLS playback if needed, so browser playback still shares the provider connection with other viewers.
 
 **Downstream Integrations**
 Configure automated notification to downstream clients (Jellyfin, Emby, or a generic webhook) after M3Undle publishes a lineup or guide update. Each integration can be:

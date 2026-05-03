@@ -652,8 +652,11 @@ public static class CompatibilityEndpoints
             var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
             string? generatedRelaySecret = null;
             string? parentStreamSessionId = null;
-            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out var parentSession)
-                && parentSession is not null)
+            var parentSession = await channelSessionManager.TryGetOrCreateForGeneratedHlsAsync(
+                resolved.SourceDescriptor,
+                resolved.UseSharedSession,
+                cancellationToken);
+            if (parentSession is not null)
             {
                 var sk = resolved.SourceDescriptor.SessionKey;
                 parentStreamSessionId = parentSession.SessionId;
@@ -765,11 +768,7 @@ public static class CompatibilityEndpoints
                         await tunerAcquire.PriorSubscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
                 }
 
-                var sessionSource = IsHdHomeRunTuneRoute(context.Request.Path)
-                    ? resolved.SourceDescriptor with { ForceMpegTs = true }
-                    : resolved.SourceDescriptor;
-
-                var session = await channelSessionManager.GetOrCreateAsync(sessionSource, cancellationToken);
+                var session = await channelSessionManager.GetOrCreateAsync(resolved.SourceDescriptor, cancellationToken);
                 subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
 
                 if (tunerReservation is not null)
@@ -778,12 +777,12 @@ public static class CompatibilityEndpoints
                         tunerReservation.VirtualTunerId,
                         tunerReservation.ReservationId,
                         tunerReservation.StreamKey,
-                        context.Request.Path.Value ?? sessionSource.RequestedRoute));
+                        context.Request.Path.Value ?? resolved.SourceDescriptor.RequestedRoute));
                     tunerSessionRetention = session.RetainExternalActivity();
                     hdHomeRunTunerManager.Activate(
                         tunerReservation,
                         subscriber,
-                        sessionSource.DisplayName,
+                        resolved.SourceDescriptor.DisplayName,
                         tunerSessionRetention);
                     tunerSessionRetention = null;
                     logger.LogInformation(
@@ -791,7 +790,7 @@ public static class CompatibilityEndpoints
                         tunerReservation.VirtualTunerId,
                         tunerReservation.ReservationId,
                         tunerReservation.StreamKey,
-                        sessionSource.DisplayName,
+                        resolved.SourceDescriptor.DisplayName,
                         subscriber.ClientId);
                 }
 

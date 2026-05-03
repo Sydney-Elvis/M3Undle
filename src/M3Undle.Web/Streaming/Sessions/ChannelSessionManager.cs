@@ -149,10 +149,9 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                 }
 
                 EvictExpiredHlsSlotsLocked();
-                var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
-
                 var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
-                if (totalUpstreams >= maxSessions)
+                var activeUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked();
+                if (activeUpstreams >= maxSessions)
                 {
                     throw CreateAdmissionException(
                         key,
@@ -163,26 +162,34 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         maxSessions);
                 }
 
+                var trackedUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+                var shouldPreemptTrackedCapacity = trackedUpstreams >= maxSessions;
+
                 var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
                 if (effectiveProviderCap is { } providerCap and > 0)
                 {
-                    var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                    var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
+                        + CountProviderHlsUpstreamsLocked(key.ProviderId);
                     if (providerUpstreams >= providerCap)
                     {
-                        preemptionTask = TryBeginIdleRetunePreemptionLocked(source);
-                        if (preemptionTask is null)
-                        {
-                            _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
-                            throw CreateAdmissionException(
-                                key,
-                                source.DisplayName,
-                                StreamAdmissionFailureKind.ProviderLimit,
-                                $"Provider upstream limit ({providerCap}) reached.",
-                                "provider has reached its upstream limit of {Limit} stream(s).",
-                                providerCap);
-                        }
+                        _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
+                        throw CreateAdmissionException(
+                            key,
+                            source.DisplayName,
+                            StreamAdmissionFailureKind.ProviderLimit,
+                            $"Provider upstream limit ({providerCap}) reached.",
+                            "provider has reached its upstream limit of {Limit} stream(s).",
+                            providerCap);
                     }
+
+                    var trackedProviderUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: true)
+                        + CountProviderHlsUpstreamsLocked(key.ProviderId);
+                    if (trackedProviderUpstreams >= providerCap)
+                        preemptionTask = TryBeginProviderIdleCapacityPreemptionLocked(source);
                 }
+
+                if (preemptionTask is null && shouldPreemptTrackedCapacity)
+                    preemptionTask = TryBeginIdleCapacityPreemptionLocked(source);
 
                 if (preemptionTask is null)
                 {
@@ -226,7 +233,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                 return;
 
             EvictExpiredHlsSlotsLocked();
-            var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked();
 
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
             if (totalUpstreams >= maxSessions)
@@ -241,7 +248,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
             if (effectiveProviderCap is { } providerCap and > 0)
             {
-                var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
+                    + CountProviderHlsUpstreamsLocked(key.ProviderId);
                 if (providerUpstreams >= providerCap)
                 {
                     _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
@@ -254,6 +262,27 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         providerCap);
                 }
             }
+        }
+    }
+
+    internal async ValueTask<ChannelStreamSession?> TryGetOrCreateForGeneratedHlsAsync(
+        StreamSourceDescriptor source,
+        bool useSharedSession,
+        CancellationToken ct)
+    {
+        if (_sessions.TryGetValue(source.SessionKey, out var existing))
+            return existing;
+
+        if (!useSharedSession)
+            return null;
+
+        try
+        {
+            return await GetOrCreateAsync(source, ct);
+        }
+        catch (StreamAdmissionException)
+        {
+            return null;
         }
     }
 
@@ -275,7 +304,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             }
 
             EvictExpiredHlsSlotsLocked();
-            var totalUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
+            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked();
 
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
             if (totalUpstreams >= maxSessions)
@@ -290,7 +319,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
             if (effectiveProviderCap is { } providerCap and > 0)
             {
-                var providerUpstreams = CountProviderUpstreamsLocked(key.ProviderId);
+                var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
+                    + CountProviderHlsUpstreamsLocked(key.ProviderId);
                 if (providerUpstreams >= providerCap)
                     throw CreateAdmissionException(
                         key,
@@ -508,25 +538,50 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             ContentType: "application/vnd.apple.mpegurl"));
     }
 
-    private int CountProviderUpstreamsLocked(string providerId)
+    private int CountActiveSessionUpstreamsLocked()
+        => _sessions.Values.Count(s => !s.IsIdleGraceWithNoConsumers);
+
+    private int CountProviderSessionsLocked(string providerId, bool includeIdleGrace)
+        => _sessions.Values.Count(s =>
+            s.Key.ProviderId == providerId
+            && (includeIdleGrace || !s.IsIdleGraceWithNoConsumers));
+
+    private int CountProviderHlsUpstreamsLocked(string providerId)
+        => _hlsSlots.Keys.Count(x => x.ProviderId == providerId && !_sessions.ContainsKey(x));
+
+    private Task? TryBeginIdleCapacityPreemptionLocked(StreamSourceDescriptor source)
     {
-        var tsCount = _sessions.Values.Count(s =>
-            s.Key.ProviderId == providerId && !s.IsIdleGraceWithNoConsumers);
-        var hlsCount = _hlsSlots.Keys.Count(x => x.ProviderId == providerId && !_sessions.ContainsKey(x));
-        return tsCount + hlsCount;
+        var candidate = _sessions.Values.FirstOrDefault(session =>
+            !session.Key.Equals(source.SessionKey)
+            && session.IsIdleGraceWithNoConsumers);
+
+        return TryBeginIdlePreemptionLocked(
+            candidate,
+            source,
+            "idle_capacity_preempted",
+            IdlePreemptionReason.SessionCapacity);
     }
 
-    private Task? TryBeginIdleRetunePreemptionLocked(StreamSourceDescriptor source)
+    private Task? TryBeginProviderIdleCapacityPreemptionLocked(StreamSourceDescriptor source)
     {
-        var remoteIp = source.RemoteIp;
-        if (string.IsNullOrWhiteSpace(remoteIp))
-            return null;
-
         var candidate = _sessions.Values.FirstOrDefault(session =>
             !session.Key.Equals(source.SessionKey)
             && string.Equals(session.Key.ProviderId, source.SessionKey.ProviderId, StringComparison.Ordinal)
-            && session.CanPreemptIdleGraceForRemoteIp(remoteIp));
+            && session.IsIdleGraceWithNoConsumers);
 
+        return TryBeginIdlePreemptionLocked(
+            candidate,
+            source,
+            "provider_idle_capacity_preempted",
+            IdlePreemptionReason.ProviderCapacity);
+    }
+
+    private Task? TryBeginIdlePreemptionLocked(
+        ChannelStreamSession? candidate,
+        StreamSourceDescriptor source,
+        string stopTrigger,
+        IdlePreemptionReason reason)
+    {
         if (candidate is null)
             return null;
 
@@ -542,14 +597,26 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         {
             try
             {
-                _logger.LogInformation(
-                    "Preempting idle-grace session {SessionId} for {ProviderId}/{ProviderChannelId} so remote IP {RemoteIp} can retune to '{DisplayName}'.",
-                    candidate.SessionId,
-                    candidate.Key.ProviderId,
-                    candidate.Key.ProviderChannelId,
-                    remoteIp,
-                    source.DisplayName);
-                await candidate.StopAsync("retune_preempted");
+                if (reason == IdlePreemptionReason.ProviderCapacity)
+                {
+                    _logger.LogInformation(
+                        "Preempting provider idle-grace session {SessionId} for {ProviderId}/{ProviderChannelId} so '{DisplayName}' can open without exceeding the tracked provider cap.",
+                        candidate.SessionId,
+                        candidate.Key.ProviderId,
+                        candidate.Key.ProviderChannelId,
+                        source.DisplayName);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Preempting idle-grace session {SessionId} for {ProviderId}/{ProviderChannelId} so '{DisplayName}' can open without exceeding the tracked session cap.",
+                        candidate.SessionId,
+                        candidate.Key.ProviderId,
+                        candidate.Key.ProviderChannelId,
+                        source.DisplayName);
+                }
+
+                await candidate.StopAsync(stopTrigger);
             }
             finally
             {
@@ -563,6 +630,12 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                 }
             }
         }
+    }
+
+    private enum IdlePreemptionReason
+    {
+        SessionCapacity,
+        ProviderCapacity,
     }
 
     private int CountUniqueHlsUpstreamsLocked()

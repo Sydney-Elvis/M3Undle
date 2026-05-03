@@ -243,6 +243,18 @@ environment:
 
 Metrics tokens are generated in the web UI and shown once. See [OBSERVABILITY.md](OBSERVABILITY.md) for Prometheus and Grafana examples.
 
+### Optional — Stream Relay Tuning
+
+Most stream proxy settings are managed from **Settings → Stream Proxy** and restart-required changes are tracked in the UI. The variables below are advanced startup/config controls for behavior that is not exposed as a normal UI field.
+
+| Variable | Default | Description |
+|---|---|---|
+| `M3Undle__Streaming__ProviderMaxConcurrentUpstreams` | *(unset)* | Optional global provider-upstream cap used when a provider does not have its own max concurrent stream limit. |
+| `M3Undle__Streaming__Reconnect__ContentStallTimeout` | `00:00:08` | MPEG-TS content-stall timeout. Real TS content resets this timer; null-only packets do not, so prolonged CDN gaps can reconnect before the generic read-stall timeout. |
+| `M3Undle__Streaming__Reconnect__StrikeCooldown` | `00:05:00` | Cooldown after retry exhaustion for a failing source, used to avoid provider retune storms. |
+
+The UI-managed stream settings, such as max simultaneous streams, idle grace, buffer size, read-stall timeout, reconnect window, and connect timeout, are persisted in the database and can override appsettings/environment values after first configuration.
+
 ### App Settings
 
 | Variable | Default | Description |

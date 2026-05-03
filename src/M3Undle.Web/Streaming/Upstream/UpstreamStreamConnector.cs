@@ -58,11 +58,16 @@ public sealed class UpstreamStreamConnector(
                 effectiveStreamUrl = refreshedStreamUrl;
         }
 
-        var hlsCandidates = source.ForceMpegTs
-            ? HlsDetection.GetHlsCandidates(effectiveStreamUrl)
+        if (source.ForceMpegTs)
+            effectiveStreamUrl = RewriteUrlForMpegTs(effectiveStreamUrl);
+
+        var hlsCandidates = !string.IsNullOrWhiteSpace(_hlsOptions.FfmpegPath)
+            ? (source.ForceMpegTs
+                ? HlsDetection.GetHlsCandidates(effectiveStreamUrl)
+                : HlsDetection.GetExplicitHlsCandidates(effectiveStreamUrl))
             : [];
 
-        if (source.ForceMpegTs && hlsCandidates.Count > 0 && !string.IsNullOrWhiteSpace(_hlsOptions.FfmpegPath))
+        if (hlsCandidates.Count > 0)
         {
             var ffmpegConn = await TryFfmpegHlsRelayAsync(hlsCandidates[0], provider, source.DisplayName, ct);
             if (ffmpegConn is not null)
@@ -73,9 +78,6 @@ public sealed class UpstreamStreamConnector(
                 source.DisplayName,
                 hlsCandidates[0]);
         }
-
-        if (source.ForceMpegTs)
-            effectiveStreamUrl = RewriteUrlForMpegTs(effectiveStreamUrl);
 
         string? relayFallbackReason = null;
         if (CleanRelayModes.IsRemux(provider.CleanRelayMode))
@@ -310,6 +312,7 @@ public sealed class UpstreamStreamConnector(
             relayMode: UpstreamRelayModes.FfmpegHlsToMpegTs,
             relayDescription: "HLS relay",
             includeCleanRepairFlags: false,
+            isHlsInput: true,
             ct: ct);
     }
 
@@ -338,6 +341,7 @@ public sealed class UpstreamStreamConnector(
             relayMode: UpstreamRelayModes.FfmpegCleanRemux,
             relayDescription: "clean remux relay",
             includeCleanRepairFlags: true,
+            isHlsInput: false,
             ct: ct);
     }
 
@@ -356,6 +360,7 @@ public sealed class UpstreamStreamConnector(
         string relayMode,
         string relayDescription,
         bool includeCleanRepairFlags,
+        bool isHlsInput,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(ffmpegPath))
@@ -378,8 +383,11 @@ public sealed class UpstreamStreamConnector(
         info.ArgumentList.Add("1");
         info.ArgumentList.Add("-reconnect_at_eof");
         info.ArgumentList.Add("1");
-        info.ArgumentList.Add("-reconnect_streamed");
-        info.ArgumentList.Add("1");
+        if (!isHlsInput)
+        {
+            info.ArgumentList.Add("-reconnect_streamed");
+            info.ArgumentList.Add("1");
+        }
         info.ArgumentList.Add("-fflags");
         info.ArgumentList.Add("+genpts+discardcorrupt");
         if (includeCleanRepairFlags)
@@ -405,6 +413,13 @@ public sealed class UpstreamStreamConnector(
         {
             info.ArgumentList.Add("-headers");
             info.ArgumentList.Add(headersArg);
+        }
+
+        if (isHlsInput)
+        {
+            info.ArgumentList.Add("-re");
+            info.ArgumentList.Add("-allowed_extensions");
+            info.ArgumentList.Add("ALL");
         }
 
         info.ArgumentList.Add("-i");

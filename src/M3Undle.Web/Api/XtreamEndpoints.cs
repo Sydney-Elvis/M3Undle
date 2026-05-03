@@ -560,8 +560,11 @@ public static class XtreamEndpoints
             var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
             string? generatedRelaySecret = null;
             string? parentStreamSessionId = null;
-            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out var parentSession)
-                && parentSession is not null)
+            var parentSession = await channelSessionManager.TryGetOrCreateForGeneratedHlsAsync(
+                resolved.SourceDescriptor,
+                resolved.UseSharedSession,
+                cancellationToken);
+            if (parentSession is not null)
             {
                 var sk = resolved.SourceDescriptor.SessionKey;
                 parentStreamSessionId = parentSession.SessionId;

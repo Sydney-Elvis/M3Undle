@@ -29,6 +29,8 @@ At a high level, the service:
 - Shares one upstream live connection across subscribers for the same channel session
 - Keeps a small byte-bounded in-memory buffer for late joiners
 - Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
+- Handles MPEG-TS CDN gaps with subscriber-aware keepalives for non-HDHomeRun players and content-stall reconnects for null-only gaps
+- Creates the shared internal relay parent for generated HLS when the first browser-style viewer joins a TS-only live stream
 - Enforces HDHomeRun tuner-slot limits by `VirtualTunerId`, so the same virtual tuner can retune without consuming another slot
 
 ---
@@ -91,6 +93,8 @@ The service publishes endpoints intended to be consumed by clients and DVR syste
 - `GET /hdhr/tune/<streamKey>`
 
 Live routes are served by the shared stream proxy. VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay paths.
+
+For live MPEG-TS, M3Undle may publish null-packet keepalives during short upstream gaps when an external non-HDHomeRun subscriber is attached. HDHomeRun-only sessions avoid those injected packets so DVR transcode pipelines receive only upstream content. If upstream data is null-only for too long, the stream is treated as content-stalled and reconnects.
 
 **Xtream Codes API** (`/player_api.php`, `/get.php`, path-credential stream URLs) is also available for clients such as TiviMate, GSE Player, and IPTV Smarters. See `docs/design/HTTP_COMPATIBILITY.md` for the full endpoint reference.
 
