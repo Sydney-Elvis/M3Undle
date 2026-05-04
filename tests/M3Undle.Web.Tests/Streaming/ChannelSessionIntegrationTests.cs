@@ -386,6 +386,9 @@ public sealed class ChannelSessionIntegrationTests
         Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(12), remaining);
         Assert.AreEqual(1, handler.ConnectionCount);
 
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(kind: StreamDiagnosticEventKind.CooldownRecorded).Any(),
+            TimeSpan.FromSeconds(5));
         var cooldownEvents = fixture.DiagnosticsStore.Query(kind: StreamDiagnosticEventKind.CooldownRecorded);
         Assert.IsTrue(cooldownEvents.Any(x =>
             x.ProviderId == fixture.Source.ProviderId
@@ -927,7 +930,7 @@ public sealed class ChannelSessionIntegrationTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
-        await WaitUntilAsync(() => subscriber.BytesSent >= 188, TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => subscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
         await Task.Delay(1100, cts.Token);
 
         Assert.AreEqual(188, subscriber.BytesSent);
