@@ -197,4 +197,144 @@ public sealed class RingBufferTests
         Assert.AreEqual(0, secondLease.Sequence);
         Assert.AreEqual(generationBefore + 1, secondLease.Generation);
     }
+
+    // ---------------------------------------------------------------------------
+    // Safe-start snapshot tests
+    // ---------------------------------------------------------------------------
+
+    [TestMethod]
+    public void CreateSafeStartSnapshot_WhenNoMarkSet_ReturnsEmptySnapshot()
+    {
+        var buffer = new RingBuffer(maxBytes: 64);
+        using var _ = buffer.Write(new byte[] { 1, 2, 3 });
+
+        var snapshot = buffer.CreateSafeStartSnapshot();
+        try
+        {
+            Assert.IsEmpty(snapshot.Chunks);
+            Assert.AreEqual(0, snapshot.UsedBytes);
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public void MarkSafeStart_ByLease_SnapshotStartsFromMarkedChunk()
+    {
+        var buffer = new RingBuffer(maxBytes: 64);
+        using var l0 = buffer.Write(new byte[] { 0xA0 });
+        using var l1 = buffer.Write(new byte[] { 0xA1 });
+        using var l2 = buffer.Write(new byte[] { 0xA2 });
+
+        buffer.MarkSafeStart(l1);
+
+        var snapshot = buffer.CreateSafeStartSnapshot();
+        try
+        {
+            Assert.HasCount(2, snapshot.Chunks);
+            CollectionAssert.AreEqual(new byte[] { 0xA1 }, snapshot.Chunks[0].Memory.ToArray());
+            CollectionAssert.AreEqual(new byte[] { 0xA2 }, snapshot.Chunks[1].Memory.ToArray());
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public void MarkSafeStart_ByGenerationAndSequence_SnapshotRespectsMarkedBoundary()
+    {
+        var buffer = new RingBuffer(maxBytes: 64);
+        using var l0 = buffer.Write(new byte[] { 0xB0 });
+        using var l1 = buffer.Write(new byte[] { 0xB1 });
+        using var l2 = buffer.Write(new byte[] { 0xB2 });
+
+        buffer.MarkSafeStart(l2.Generation, l2.Sequence);
+
+        var snapshot = buffer.CreateSafeStartSnapshot();
+        try
+        {
+            Assert.HasCount(1, snapshot.Chunks);
+            CollectionAssert.AreEqual(new byte[] { 0xB2 }, snapshot.Chunks[0].Memory.ToArray());
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public void MarkSafeStart_CanBeUpdatedToLaterSequence()
+    {
+        var buffer = new RingBuffer(maxBytes: 64);
+        using var l0 = buffer.Write(new byte[] { 0xC0 });
+        using var l1 = buffer.Write(new byte[] { 0xC1 });
+        using var l2 = buffer.Write(new byte[] { 0xC2 });
+
+        buffer.MarkSafeStart(l0);
+        buffer.MarkSafeStart(l2);
+
+        var snapshot = buffer.CreateSafeStartSnapshot();
+        try
+        {
+            Assert.HasCount(1, snapshot.Chunks);
+            CollectionAssert.AreEqual(new byte[] { 0xC2 }, snapshot.Chunks[0].Memory.ToArray());
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public void MarkSafeStart_AfterResetGeneration_OldMarkCleared()
+    {
+        var buffer = new RingBuffer(maxBytes: 64);
+        using var l0 = buffer.Write(new byte[] { 1 });
+        buffer.MarkSafeStart(l0);
+
+        buffer.ResetGeneration();
+
+        var snapshot = buffer.CreateSafeStartSnapshot();
+        try
+        {
+            Assert.IsEmpty(snapshot.Chunks);
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+    }
+
+    [TestMethod]
+    public void MarkSafeStart_WrongGeneration_IsIgnored()
+    {
+        var buffer = new RingBuffer(maxBytes: 64);
+        using var l0 = buffer.Write(new byte[] { 1 });
+        var gen0 = l0.Generation;
+        var seq0 = l0.Sequence;
+
+        buffer.ResetGeneration();
+        using var l1 = buffer.Write(new byte[] { 2 });
+
+        buffer.MarkSafeStart(gen0, seq0);
+
+        var snapshot = buffer.CreateSafeStartSnapshot();
+        try
+        {
+            Assert.IsEmpty(snapshot.Chunks);
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+    }
 }

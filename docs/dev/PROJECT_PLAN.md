@@ -146,7 +146,7 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
 - [x] Source strike cooldown after retry exhaustion to prevent retry storms (default 5m, in-memory only)
 - [x] Explicit route split: `/live`, `/stream`, `/tune`, `/hdhr/tune` → shared session; `/movie`, `/vod`, `/series` → direct relay
 - [x] Streaming observability endpoints: `/status/streams`, `/status/streams/clients`, `/status/streams/providers`
-- [x] Settings page stream UI: full read/write configuration for all stream proxy tuning values (enable/disable, session limits, buffer sizing, reconnect behaviour); values persisted to DB and loaded at startup via `IConfigureOptions`; in-app restart trigger with "restart required" banner when saved settings differ from the active runtime; startup `IValidateOptions` validation rejects out-of-range config from both appsettings and DB; byte-field upper bounds enforced in UI (1 GiB per session, 16 MiB read chunk) and service validation
+- [x] Settings page stream UI: read/write configuration for approved stream proxy tuning values (enable/disable, session limits, buffer sizing, reconnect behaviour); values persisted to DB and loaded at startup via `IConfigureOptions`; in-app restart trigger with "restart required" banner when saved settings differ from the active runtime; startup `IValidateOptions` validation rejects out-of-range config from both appsettings and DB; byte-field upper bounds enforced in UI (1 GiB per session, 16 MiB read chunk) and service validation
 
 #### DVR Integration (HDHomeRun Emulation)
 - [x] Initial HDHomeRun compatibility groundwork:

@@ -29,6 +29,8 @@ At a high level, the service:
 - Shares one upstream live connection across subscribers for the same channel session
 - Keeps a small byte-bounded in-memory buffer for late joiners
 - Reconnects on upstream stalls and evicts slow subscribers without blocking the whole session
+- Handles MPEG-TS CDN gaps with subscriber-aware keepalives for non-HDHomeRun players and content-stall reconnects for null-only gaps
+- Creates the shared internal relay parent for generated HLS when the first browser-style viewer joins a TS-only live stream
 - Enforces HDHomeRun tuner-slot limits by `VirtualTunerId`, so the same virtual tuner can retune without consuming another slot
 
 ---
@@ -92,6 +94,8 @@ The service publishes endpoints intended to be consumed by clients and DVR syste
 
 Live routes are served by the shared stream proxy. VOD-style routes (`/movie`, `/vod`, `/series`) stay on direct relay paths.
 
+For live MPEG-TS, M3Undle may publish null-packet keepalives during short upstream gaps when an external non-HDHomeRun subscriber is attached. HDHomeRun-only sessions avoid those injected packets so DVR transcode pipelines receive only upstream content. If upstream data is null-only for too long, the stream is treated as content-stalled and reconnects.
+
 **Xtream Codes API** (`/player_api.php`, `/get.php`, path-credential stream URLs) is also available for clients such as TiviMate, GSE Player, and IPTV Smarters. See `docs/design/HTTP_COMPATIBILITY.md` for the full endpoint reference.
 
 Operational status endpoints are also available for authenticated UI users:
@@ -99,8 +103,32 @@ Operational status endpoints are also available for authenticated UI users:
 - `GET /status/streams`
 - `GET /status/streams/clients`
 - `GET /status/streams/providers`
+- `GET /status/streams/events`
+- `GET /status/streams/<sessionId>/events`
+
+Observability endpoints are available for monitoring systems:
+
+- `GET /metrics` — Prometheus-compatible scrape output, controlled by the metrics access mode
+- `GET /livez` — liveness probe
+- `GET /readyz` — readiness probe
+- `GET /healthz` — JSON health summary
+- `GET /health/ready` — readiness compatibility alias
+
+Authenticated admin diagnostics APIs expose current operational state as JSON:
+
+- `GET /api/admin/diagnostics/providers`
+- `GET /api/admin/diagnostics/streams`
+- `GET /api/admin/diagnostics/lineup`
+- `GET /api/admin/diagnostics/epg`
+
+When `M3UNDLE_TEST_MODE=true`, `/debug/streams/rca` returns a compact RCA
+bundle with active/recent sessions, clients, provider streams, cooldowns, and
+recent stream diagnostic events. Use it with app logs under
+`/etc/docker-apps/m3undle/data/logs/` when investigating playback stalls or
+provider failures.
 
 See: `docs/design/HTTP_COMPATIBILITY.md`
+See also: `docs/OBSERVABILITY.md`
 
 ---
 
@@ -121,7 +149,7 @@ Views:
 - **Channel Review Queue**: review pending channels in `/channels/review`; include/exclude selected channels or bulk-action pending channels by provider group
 - **Channels**: browse the live channels currently in the published lineup; edit channel numbers, output groups, and EPG IDs
 - **Streams**: see active stream sessions, connected clients, buffer usage, reconnect activity, and recently ended sessions
-- **Settings**: configure endpoint security credentials, HDHomeRun settings, stream proxy settings, refresh schedule, and downstream integrations; displays active vs. saved configuration with a restart-required indicator and in-app restart button
+- **Settings**: configure endpoint security credentials, HDHomeRun settings, observability, stream proxy settings, refresh schedule, and downstream integrations; displays active vs. saved configuration with a restart-required indicator and in-app restart button
 
 Design goals:
 - configuration should be explicit and understandable

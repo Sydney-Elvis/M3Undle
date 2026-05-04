@@ -31,4 +31,11 @@ public sealed class SiteSettings
     // Refresh schedule — "manual" | "6h" | "12h" | "24h"
     public string RefreshScheduleKind { get; set; } = "6h";
     public bool RefreshStartupCatchup { get; set; } = true;
+
+    public int EventRetentionDays { get; set; } = 7;
+
+    public bool ObservabilityMetricsEnabled { get; set; } = true;
+    public string ObservabilityMetricsMode { get; set; } = "LocalOnly";
+    public bool ObservabilityMetricsEnableChannelLabels { get; set; }
+    public string? ObservabilityMetricsLocalAllowedCidrs { get; set; }
 }

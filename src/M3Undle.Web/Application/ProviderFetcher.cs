@@ -1,3 +1,4 @@
+using System.Text.Json;
 using M3Undle.Core.M3u;
 using M3Undle.Core.Providers;
 using M3Undle.Web.Data.Entities;
@@ -142,6 +143,65 @@ public sealed class ProviderFetcher(
         }
     }
 
+    // Probes player_api.php for Xtream account metadata.
+    // Returns null when the endpoint is unreachable, auth fails, or credentials cannot be resolved.
+    // Never throws — all failures are swallowed and logged at Debug level.
+    public async Task<XtreamAccountInfo?> TryProbeXtreamAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        if (!TryResolveXtreamProbeCredentials(provider, out var baseUrl, out var username, out var password))
+            return null;
+
+        var probeUrl = XtreamProviderUrls.BuildPlayerApiUrl(baseUrl, username, password);
+        var timeoutSeconds = Math.Clamp(provider.TimeoutSeconds, 1, 10);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+        try
+        {
+            using var client = httpClientFactory.CreateClient();
+            if (provider.XtreamBaseUrl is null)
+            {
+                ApplyHeadersFromJson(client, provider.HeadersJson);
+                if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+                    client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
+            }
+
+            var json = await client.GetStringAsync(probeUrl, timeoutCts.Token);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("user_info", out var userInfo))
+                return null;
+            if (!userInfo.TryGetProperty("auth", out var auth) || auth.GetInt32() != 1)
+                return null;
+
+            DateTime? expiresUtc = null;
+            if (TryGetUnixSeconds(userInfo, "exp_date", out var expUnix))
+            {
+                expiresUtc = DateTimeOffset.FromUnixTimeSeconds(expUnix).UtcDateTime;
+            }
+
+            string? status = null;
+            if (userInfo.TryGetProperty("status", out var statusEl) && statusEl.ValueKind == JsonValueKind.String)
+                status = statusEl.GetString();
+
+            int? maxConnections = null;
+            if (userInfo.TryGetProperty("max_connections", out var maxEl))
+            {
+                if (maxEl.ValueKind == JsonValueKind.Number && maxEl.TryGetInt32(out var mc))
+                    maxConnections = mc;
+                else if (maxEl.ValueKind == JsonValueKind.String && int.TryParse(maxEl.GetString(), out var mcs))
+                    maxConnections = mcs;
+            }
+
+            return new XtreamAccountInfo(expiresUtc, status, maxConnections);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or FormatException)
+        {
+            logger.LogDebug("Xtream capability probe failed for {BaseUrl}: {Message}", baseUrl, ex.Message);
+            return null;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers (also used by ProviderApiEndpoints via internal access)
     // -------------------------------------------------------------------------
@@ -167,6 +227,67 @@ public sealed class ProviderFetcher(
 
     internal static void ApplyHeadersFromJson(HttpClient client, string? headersJson)
         => ProviderRequestHeaders.ApplyTo(client, headersJson);
+
+    private bool TryResolveXtreamProbeCredentials(
+        Provider provider,
+        out string baseUrl,
+        out string username,
+        out string password)
+    {
+        baseUrl = username = password = string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(provider.XtreamBaseUrl))
+        {
+            if (string.IsNullOrWhiteSpace(provider.XtreamEncryptedPassword))
+                return false;
+
+            try
+            {
+                password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword);
+            }
+            catch (InvalidOperationException ex)
+            {
+                logger.LogDebug(
+                    "Xtream capability probe skipped for provider {ProviderId}: password decrypt failed: {Message}",
+                    provider.ProviderId,
+                    ex.Message);
+                return false;
+            }
+
+            baseUrl = provider.XtreamBaseUrl.TrimEnd('/');
+            username = provider.XtreamUsername?.Trim() ?? string.Empty;
+            return true;
+        }
+
+        string playlistUrl;
+        try
+        {
+            playlistUrl = SubstituteProviderUrl(provider.PlaylistUrl);
+        }
+        catch (ProviderFetchException ex)
+        {
+            logger.LogDebug(
+                "Xtream capability probe skipped for provider {ProviderId}: {Message}",
+                provider.ProviderId,
+                ex.Message);
+            return false;
+        }
+
+        return XtreamProviderUrls.TryExtractCredentials(playlistUrl, out baseUrl, out username, out password);
+    }
+
+    private static bool TryGetUnixSeconds(JsonElement element, string propertyName, out long value)
+    {
+        value = 0;
+        if (!element.TryGetProperty(propertyName, out var property))
+            return false;
+
+        if (property.ValueKind == JsonValueKind.Number)
+            return property.TryGetInt64(out value);
+
+        return property.ValueKind == JsonValueKind.String
+            && long.TryParse(property.GetString(), out value);
+    }
 
     private string ResolvePlaylistUrl(Provider provider)
     {
@@ -241,6 +362,11 @@ public sealed record PlaylistFetchResult(
 public sealed record XmltvFetchResult(
     string Xml,
     long Bytes);
+
+public sealed record XtreamAccountInfo(
+    DateTime? ExpiresUtc,
+    string? Status,
+    int? MaxConnections);
 
 // -------------------------------------------------------------------------
 // Channel record (replaces private ParsedChannel in ProviderApiEndpoints)

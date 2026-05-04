@@ -97,6 +97,25 @@ Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, 
     An HTTP 302 redirect would deliver raw credentials to every client that follows the stream URL.
     Relay is a security contract, not an implementation detail. This MUST NOT be changed to a redirect.
 
+#### MPEG-TS relay stability
+
+Direct live MPEG-TS relay may emit 188-byte null-PID keepalive packets during brief upstream silence for stall-sensitive external players.
+Keepalive eligibility is based on each attached subscriber's request path, not on the route that originally opened the shared session:
+
+- HDHomeRun-only sessions receive plain upstream bytes with no injected keepalive packets.
+- If any external non-HDHomeRun subscriber is attached, the shared session may publish keepalive packets during upstream gaps.
+- Keepalive timing must not cancel the in-flight upstream HTTP read.
+
+MPEG-TS content-stall detection treats null-only data as no real content, so a prolonged CDN gap can reconnect before the generic read-stall timeout.
+
+#### Generated HLS
+
+Browser-style HLS requests (`?format=hls` or browser user-agent fallback) use native upstream HLS when available. For TS-only live streams, M3Undle creates generated HLS with FFmpeg.
+
+When generated HLS wraps a shared live session, M3Undle resolves or creates the parent shared relay first and feeds FFmpeg from the internal relay URL. A first HLS viewer must not be handed the raw provider MPEG-TS URL as the generated-HLS input.
+
+Explicit upstream HLS sources may be remuxed to MPEG-TS for the shared relay. Numeric Xtream-style stream URLs are treated as direct MPEG-TS unless the provider explicitly requests MPEG-TS conversion, so ordinary live streams do not incur unnecessary FFmpeg relay work.
+
 ### HDHomeRun HTTP API
 - GET `/hdhr/discover.json`
   - Returns stable device identity metadata (`DeviceID`, `DeviceAuth`, `FriendlyName`, `ModelNumber`, `BaseURL`, `LineupURL`, `TunerCount`).
@@ -119,6 +138,7 @@ Legacy aliases (`/discover.json`, `/lineup.json`, `/lineup.xml`, `/lineup.m3u`, 
 - A new `/hdhr/tune/<streamKey>` request on the same `VirtualTunerId` replaces the prior playback from that tuner instead of consuming another slot.
 - Requests from distinct `VirtualTunerId` values can consume separate tuner slots up to the configured `TunerCount`.
 - Requests beyond the configured tuner count return a busy/unavailable response.
+- HDHomeRun-only shared sessions do not receive injected MPEG-TS keepalive packets; this avoids null-packet-only windows in downstream DVR transcode pipelines.
 
 ### Xtream Codes API
 

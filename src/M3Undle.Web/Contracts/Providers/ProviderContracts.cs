@@ -49,6 +49,7 @@ public sealed class ProviderDto
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public bool ForceMpegTs { get; set; }
+    public string CleanRelayMode { get; set; } = "off";
     public List<string> AssociatedProfileIds { get; set; } = [];
     public ProviderLastRefreshDto? LastRefresh { get; set; }
     public List<ProviderLatestSnapshotDto> LatestSnapshots { get; set; } = [];
@@ -56,6 +57,8 @@ public sealed class ProviderDto
     public string? XtreamBaseUrl { get; set; }
     public string? XtreamUsername { get; set; }
     public bool XtreamIncludeXmltv { get; set; }
+    public bool XtreamDetectedCapable { get; set; }
+    public DateTime? PlaylistExpiresUtc { get; set; }
     public bool IsXtreamProvider => XtreamBaseUrl is not null;
 }
 
@@ -81,6 +84,7 @@ public sealed class CreateProviderRequest
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public bool ForceMpegTs { get; set; }
+    public string CleanRelayMode { get; set; } = "off";
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
@@ -112,6 +116,7 @@ public sealed class UpdateProviderRequest
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public bool ForceMpegTs { get; set; }
+    public string CleanRelayMode { get; set; } = "off";
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
@@ -212,20 +217,6 @@ public sealed class ConfigYamlProviderDto
     public List<string> MissingEnvVars { get; set; } = [];
 }
 
-public sealed class ImportConfigProviderRequest
-{
-    [Required]
-    public string Name { get; set; } = string.Empty;
-    public bool IncludeVod { get; set; }
-    public bool IncludeSeries { get; set; }
-
-    [Range(1, 100)]
-    public int? MaxConcurrentStreams { get; set; }
-
-    public List<string>? AssociateToProfileIds { get; set; }
-    public bool ImportAsXtream { get; set; }
-}
-
 public sealed class CreateProfileRequest
 {
     [Required]
@@ -243,23 +234,16 @@ public sealed class ProviderHealthDto
     public DateTime? LastSuccessFetch { get; set; }
 }
 
-public sealed class ProbeConfigProviderRequest
-{
-    [Required]
-    public string Name { get; set; } = string.Empty;
-}
-
-public sealed class ProbeConfigProviderResultDto
-{
-    public bool Ok { get; set; }
-    public int? ChannelCount { get; set; }
-    public string? Error { get; set; }
-}
 
 public sealed class UpsertProviderResult
 {
     public string Action { get; set; } = string.Empty; // "created" or "updated"
     public ProviderDto Provider { get; set; } = new();
+}
+
+public sealed class UpgradeToXtreamRequest
+{
+    public bool XtreamIncludeXmltv { get; set; }
 }
 
 public sealed class SnapshotStatusDto
@@ -277,4 +261,3 @@ public sealed class SelectAllChannelsResult
     public int GroupsUpdated { get; set; }
     public int ChannelsSelected { get; set; }
 }
-

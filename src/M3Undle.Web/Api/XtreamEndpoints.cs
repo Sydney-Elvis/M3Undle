@@ -76,6 +76,7 @@ public static class XtreamEndpoints
         HttpContext context,
         ILineupRenderer lineupRenderer,
         XtreamStreamIdCache streamIdCache,
+        ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
         var access = context.GetResolvedClientAccess();
@@ -83,7 +84,14 @@ public static class XtreamEndpoints
 
         // No action or explicit get_account_info → return account + server info
         if (string.IsNullOrEmpty(action) || action == "get_account_info")
-            return BuildAccountInfoResult(context, access);
+        {
+            var minExpiry = await db.ProfileProviders
+                .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId && pp.Enabled)
+                .Join(db.Providers.Where(p => p.Enabled), pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
+                .Where(e => e != null)
+                .MinAsync(e => e, cancellationToken);
+            return BuildAccountInfoResult(context, access, minExpiry);
+        }
 
         var lineup = await lineupRenderer.TryRenderActiveLineupAsync(
             access.Binding.ActiveProfileId, cancellationToken);
@@ -104,9 +112,13 @@ public static class XtreamEndpoints
         };
     }
 
-    private static IResult BuildAccountInfoResult(HttpContext context, ResolvedClientAccess access)
+    private static IResult BuildAccountInfoResult(HttpContext context, ResolvedClientAccess access, DateTime? minProviderExpiry)
     {
         var now = DateTimeOffset.UtcNow;
+
+        var expDate = minProviderExpiry.HasValue
+            ? new DateTimeOffset(minProviderExpiry.Value, TimeSpan.Zero).ToUnixTimeSeconds().ToString()
+            : (string?)null;
 
         var response = new
         {
@@ -119,7 +131,7 @@ public static class XtreamEndpoints
                 message = string.Empty,
                 auth = 1,
                 status = "Active",
-                exp_date = (string?)null,
+                exp_date = expDate,
                 is_trial = "0",
                 active_cons = "0",
                 created_at = now.ToUnixTimeSeconds().ToString(),
@@ -368,6 +380,7 @@ public static class XtreamEndpoints
         HttpContext context,
         ILineupRenderer lineupRenderer,
         IM3USerializer m3uSerializer,
+        ApplicationDbContext db,
         CancellationToken cancellationToken)
     {
         var access = context.GetResolvedClientAccess();
@@ -382,7 +395,13 @@ public static class XtreamEndpoints
             return;
         }
 
-        await m3uSerializer.WriteAsync(context, lineup, cancellationToken);
+        var minExpiry = await db.ProfileProviders
+            .Where(pp => pp.ProfileId == access.Binding.ActiveProfileId && pp.Enabled)
+            .Join(db.Providers.Where(p => p.Enabled), pp => pp.ProviderId, p => p.ProviderId, (pp, p) => p.PlaylistExpiresUtc)
+            .Where(e => e != null)
+            .MinAsync(e => e, cancellationToken);
+
+        await m3uSerializer.WriteAsync(context, lineup, minExpiry, cancellationToken);
     }
 
     // -------------------------------------------------------------------------
@@ -541,8 +560,11 @@ public static class XtreamEndpoints
             var generatedStreamUrl = resolved.SourceDescriptor.StreamUrl;
             string? generatedRelaySecret = null;
             string? parentStreamSessionId = null;
-            if (channelSessionManager.TryGet(resolved.SourceDescriptor.SessionKey, out var parentSession)
-                && parentSession is not null)
+            var parentSession = await channelSessionManager.TryGetOrCreateForGeneratedHlsAsync(
+                resolved.SourceDescriptor,
+                resolved.UseSharedSession,
+                cancellationToken);
+            if (parentSession is not null)
             {
                 var sk = resolved.SourceDescriptor.SessionKey;
                 parentStreamSessionId = parentSession.SessionId;
@@ -740,7 +762,8 @@ public static class XtreamEndpoints
             sessionId,
             context.Connection.RemoteIpAddress?.ToString(),
             context.Request.Headers.UserAgent.ToString(),
-            context.Request.Path.Value ?? string.Empty);
+            context.Request.Path.Value ?? string.Empty,
+            GeneratedHlsSessionManager.ShouldCountAsViewer(context.Request.Headers.UserAgent.ToString()));
 
         if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
         {

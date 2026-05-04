@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using M3Undle.Web.Application;
@@ -17,10 +18,12 @@ public sealed class UpstreamStreamConnector(
     IServiceScopeFactory scopeFactory,
     IOptions<ReconnectOptions> reconnectOptions,
     IOptions<GeneratedHlsOptions> hlsOptions,
+    IOptions<CleanRelayOptions> cleanRelayOptions,
     ILogger<UpstreamStreamConnector> logger)
 {
     private readonly ReconnectOptions _reconnectOptions = reconnectOptions.Value;
     private readonly GeneratedHlsOptions _hlsOptions = hlsOptions.Value;
+    private readonly CleanRelayOptions _cleanRelayOptions = cleanRelayOptions.Value;
 
     public async Task<UpstreamConnection> ConnectAsync(StreamSourceDescriptor source, CancellationToken ct)
     {
@@ -55,11 +58,16 @@ public sealed class UpstreamStreamConnector(
                 effectiveStreamUrl = refreshedStreamUrl;
         }
 
-        var hlsCandidates = source.ForceMpegTs
-            ? HlsDetection.GetHlsCandidates(effectiveStreamUrl)
+        if (source.ForceMpegTs)
+            effectiveStreamUrl = RewriteUrlForMpegTs(effectiveStreamUrl);
+
+        var hlsCandidates = !string.IsNullOrWhiteSpace(_hlsOptions.FfmpegPath)
+            ? (source.ForceMpegTs
+                ? HlsDetection.GetHlsCandidates(effectiveStreamUrl)
+                : HlsDetection.GetExplicitHlsCandidates(effectiveStreamUrl))
             : [];
 
-        if (source.ForceMpegTs && hlsCandidates.Count > 0 && !string.IsNullOrWhiteSpace(_hlsOptions.FfmpegPath))
+        if (hlsCandidates.Count > 0)
         {
             var ffmpegConn = await TryFfmpegHlsRelayAsync(hlsCandidates[0], provider, source.DisplayName, ct);
             if (ffmpegConn is not null)
@@ -71,8 +79,25 @@ public sealed class UpstreamStreamConnector(
                 hlsCandidates[0]);
         }
 
-        if (source.ForceMpegTs)
-            effectiveStreamUrl = RewriteUrlForMpegTs(effectiveStreamUrl);
+        string? relayFallbackReason = null;
+        if (CleanRelayModes.IsRemux(provider.CleanRelayMode))
+        {
+            var cleanRelayConnection = await TryFfmpegCleanRemuxRelayAsync(effectiveStreamUrl, provider, source.DisplayName, ct);
+            if (cleanRelayConnection is not null)
+                return cleanRelayConnection;
+
+            relayFallbackReason = "clean_relay_startup_failed";
+            if (!_cleanRelayOptions.FallbackToDirect)
+            {
+                throw new UpstreamConnectException(
+                    "FFmpeg clean relay startup failed.",
+                    UpstreamFailureKind.Transport);
+            }
+
+            logger.LogWarning(
+                "FFmpeg clean relay startup failed for '{DisplayName}'. Falling back to direct HTTP relay.",
+                source.DisplayName);
+        }
 
         var client = httpClientFactory.CreateClient("stream-relay");
         ProviderFetcher.ApplyHeadersFromJson(client, provider.HeadersJson);
@@ -109,6 +134,34 @@ public sealed class UpstreamStreamConnector(
                     source.DisplayName);
                 throw new UpstreamConnectException("Provider stream endpoint not found.", UpstreamFailureKind.UpstreamNotFound, statusCode);
             }
+            if (statusCode == 407)
+            {
+                var retryAfter = ParseRetryAfter(response.Headers.RetryAfter);
+                response.Dispose();
+                logger.LogWarning(
+                    "Provider returned 407 for '{DisplayName}' — stream requests will cool down. RetryAfter={RetryAfterSeconds}s.",
+                    source.DisplayName,
+                    retryAfter?.TotalSeconds);
+                throw new UpstreamConnectException(
+                    "Provider proxy authentication rejected stream request.",
+                    UpstreamFailureKind.UpstreamProxyAuthRequired,
+                    statusCode,
+                    retryAfter: retryAfter);
+            }
+            if (statusCode == 429)
+            {
+                var retryAfter = ParseRetryAfter(response.Headers.RetryAfter);
+                response.Dispose();
+                logger.LogWarning(
+                    "Provider rate-limited stream request for '{DisplayName}' with 429. RetryAfter={RetryAfterSeconds}s.",
+                    source.DisplayName,
+                    retryAfter?.TotalSeconds);
+                throw new UpstreamConnectException(
+                    "Provider rate-limited stream request.",
+                    UpstreamFailureKind.UpstreamRateLimited,
+                    statusCode,
+                    retryAfter: retryAfter);
+            }
             if (statusCode >= 500)
             {
                 response.Dispose();
@@ -131,7 +184,12 @@ public sealed class UpstreamStreamConnector(
                 statusCode,
                 response.Content.Headers.ContentType?.ToString() ?? "unknown");
 
-            var connection = new UpstreamConnection(client, response, stream);
+            var connection = new UpstreamConnection(
+                client,
+                response,
+                stream,
+                relayMode: UpstreamRelayModes.Direct,
+                relayFallbackReason: relayFallbackReason);
             response = null; // ownership transferred to UpstreamConnection
             return connection;
         }
@@ -209,6 +267,10 @@ public sealed class UpstreamStreamConnector(
                 return UpstreamFailureKind.UpstreamAuth;
             if (code == 404)
                 return UpstreamFailureKind.UpstreamNotFound;
+            if (code == 407)
+                return UpstreamFailureKind.UpstreamProxyAuthRequired;
+            if (code == 429)
+                return UpstreamFailureKind.UpstreamRateLimited;
             if (code >= 500)
                 return UpstreamFailureKind.UpstreamServerError;
             return UpstreamFailureKind.Transport;
@@ -217,13 +279,92 @@ public sealed class UpstreamStreamConnector(
         return UpstreamFailureKind.Unknown;
     }
 
+    private static TimeSpan? ParseRetryAfter(RetryConditionHeaderValue? retryAfter)
+    {
+        if (retryAfter is null)
+            return null;
+
+        if (retryAfter.Delta is { } delta)
+            return delta > TimeSpan.Zero ? delta : TimeSpan.Zero;
+
+        if (retryAfter.Date is { } date)
+        {
+            var remaining = date - DateTimeOffset.UtcNow;
+            return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+        }
+
+        return null;
+    }
+
     private async Task<UpstreamConnection?> TryFfmpegHlsRelayAsync(
         string hlsUrl,
         Provider provider,
         string displayName,
         CancellationToken ct)
     {
-        var ffmpegPath = _hlsOptions.FfmpegPath;
+        return await TryFfmpegRelayAsync(
+            inputUrl: hlsUrl,
+            provider: provider,
+            displayName: displayName,
+            ffmpegPath: _hlsOptions.FfmpegPath,
+            startupTimeout: TimeSpan.FromSeconds(10),
+            startupBufferBytes: 8 * 1024,
+            relayMode: UpstreamRelayModes.FfmpegHlsToMpegTs,
+            relayDescription: "HLS relay",
+            includeCleanRepairFlags: false,
+            isHlsInput: true,
+            ct: ct);
+    }
+
+    private async Task<UpstreamConnection?> TryFfmpegCleanRemuxRelayAsync(
+        string inputUrl,
+        Provider provider,
+        string displayName,
+        CancellationToken ct)
+    {
+        var ffmpegPath = ResolveCleanRelayFfmpegPath();
+        if (string.IsNullOrWhiteSpace(ffmpegPath))
+        {
+            logger.LogWarning(
+                "FFmpeg clean relay requested for '{DisplayName}' but no FFmpeg path is configured.",
+                displayName);
+            return null;
+        }
+
+        return await TryFfmpegRelayAsync(
+            inputUrl: inputUrl,
+            provider: provider,
+            displayName: displayName,
+            ffmpegPath: ffmpegPath,
+            startupTimeout: TimeSpan.FromSeconds(_cleanRelayOptions.StartupTimeoutSeconds),
+            startupBufferBytes: _cleanRelayOptions.MaxStartupBytes,
+            relayMode: UpstreamRelayModes.FfmpegCleanRemux,
+            relayDescription: "clean remux relay",
+            includeCleanRepairFlags: true,
+            isHlsInput: false,
+            ct: ct);
+    }
+
+    private string? ResolveCleanRelayFfmpegPath()
+        => string.IsNullOrWhiteSpace(_cleanRelayOptions.FfmpegPath)
+            ? _hlsOptions.FfmpegPath
+            : _cleanRelayOptions.FfmpegPath;
+
+    private async Task<UpstreamConnection?> TryFfmpegRelayAsync(
+        string inputUrl,
+        Provider provider,
+        string displayName,
+        string? ffmpegPath,
+        TimeSpan startupTimeout,
+        int startupBufferBytes,
+        string relayMode,
+        string relayDescription,
+        bool includeCleanRepairFlags,
+        bool isHlsInput,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(ffmpegPath))
+            return null;
 
         var info = new ProcessStartInfo
         {
@@ -242,10 +383,22 @@ public sealed class UpstreamStreamConnector(
         info.ArgumentList.Add("1");
         info.ArgumentList.Add("-reconnect_at_eof");
         info.ArgumentList.Add("1");
-        info.ArgumentList.Add("-reconnect_streamed");
-        info.ArgumentList.Add("1");
+        if (!isHlsInput)
+        {
+            info.ArgumentList.Add("-reconnect_streamed");
+            info.ArgumentList.Add("1");
+        }
         info.ArgumentList.Add("-fflags");
         info.ArgumentList.Add("+genpts+discardcorrupt");
+        if (includeCleanRepairFlags)
+        {
+            info.ArgumentList.Add("-err_detect");
+            info.ArgumentList.Add("ignore_err");
+            info.ArgumentList.Add("-use_wallclock_as_timestamps");
+            info.ArgumentList.Add("1");
+            info.ArgumentList.Add("-avoid_negative_ts");
+            info.ArgumentList.Add("make_zero");
+        }
 
         if (!string.IsNullOrWhiteSpace(provider.UserAgent))
         {
@@ -262,8 +415,15 @@ public sealed class UpstreamStreamConnector(
             info.ArgumentList.Add(headersArg);
         }
 
+        if (isHlsInput)
+        {
+            info.ArgumentList.Add("-re");
+            info.ArgumentList.Add("-allowed_extensions");
+            info.ArgumentList.Add("ALL");
+        }
+
         info.ArgumentList.Add("-i");
-        info.ArgumentList.Add(hlsUrl);
+        info.ArgumentList.Add(inputUrl);
         info.ArgumentList.Add("-map");
         info.ArgumentList.Add("0:v?");
         info.ArgumentList.Add("-map");
@@ -292,7 +452,7 @@ public sealed class UpstreamStreamConnector(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "FFmpeg HLS relay process start failed for '{DisplayName}'.", displayName);
+            logger.LogWarning(ex, "FFmpeg {RelayDescription} process start failed for '{DisplayName}'.", relayDescription, displayName);
             return null;
         }
 
@@ -305,27 +465,29 @@ public sealed class UpstreamStreamConnector(
                 {
                     var line = await process.StandardError.ReadLineAsync();
                     if (line is null) break;
-                    logger.LogDebug("FFmpeg/HLS-relay[{DisplayName}]: {Line}", displayName, line);
+                    logger.LogDebug("FFmpeg/{RelayMode}[{DisplayName}]: {Line}", relayMode, displayName, line);
                 }
             }
             catch { }
         }, CancellationToken.None);
 
-        var startupBuffer = new byte[8 * 1024];
+        var startupBuffer = new byte[Math.Max(188, startupBufferBytes)];
         var stdout = process.StandardOutput.BaseStream;
         int startupBytes;
 
         try
         {
             using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            startupCts.CancelAfter(TimeSpan.FromSeconds(10));
+            startupCts.CancelAfter(startupTimeout);
             startupBytes = await stdout.ReadAsync(startupBuffer.AsMemory(), startupCts.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             logger.LogWarning(
-                "FFmpeg HLS relay for '{DisplayName}' produced no output within 10 s. Falling back to direct HTTP.",
-                displayName);
+                "FFmpeg {RelayDescription} for '{DisplayName}' produced no output within {StartupTimeoutSeconds:F0} s.",
+                relayDescription,
+                displayName,
+                startupTimeout.TotalSeconds);
             TryKillProcess(process);
             process.Dispose();
             return null;
@@ -340,7 +502,8 @@ public sealed class UpstreamStreamConnector(
         if (startupBytes == 0)
         {
             logger.LogWarning(
-                "FFmpeg HLS relay for '{DisplayName}' exited with no output. Falling back to direct HTTP.",
+                "FFmpeg {RelayDescription} for '{DisplayName}' exited with no output.",
+                relayDescription,
                 displayName);
             TryKillProcess(process);
             process.Dispose();
@@ -348,14 +511,16 @@ public sealed class UpstreamStreamConnector(
         }
 
         logger.LogInformation(
-            "FFmpeg HLS relay started for '{DisplayName}' (HLS→MPEGTS, {StartupBytes} startup bytes).",
+            "FFmpeg {RelayMode} started for '{DisplayName}' ({StartupBytes} startup bytes).",
+            relayMode,
             displayName,
             startupBytes);
 
         return new UpstreamConnection(
             process,
             new PrefixedStream(startupBuffer.AsMemory(0, startupBytes), stdout),
-            "video/mp2t");
+            "video/mp2t",
+            relayMode: relayMode);
     }
 
     private static void TryKillProcess(Process process)

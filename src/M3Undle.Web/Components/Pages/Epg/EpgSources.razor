@@ -392,9 +392,11 @@ else
     {
         try
         {
-            var settings = await RefreshScheduleService.GetSettingsAsync(_cts.Token);
-            _refreshScheduleKind = settings.ScheduleKind;
-            _nextRefreshUtc = await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(_cts.Token);
+            var settings = await RefreshScheduleService.GetActiveProfileSettingsAsync(_cts.Token);
+            _refreshScheduleKind = settings?.Settings.ScheduleKind ?? "manual";
+            _nextRefreshUtc = settings?.ProfileId is null
+                ? null
+                : await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(settings.ProfileId, _cts.Token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

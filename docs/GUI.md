@@ -65,10 +65,13 @@ Each profile shows:
 - Display name and output name
 - Enabled/disabled state
 - Linked providers
+- Effective refresh schedule
 - Last published time and health status
 - Live, movie, and series counts
 
-Clicking a profile opens its detail page, which shows provider membership, published history, and pending review items.
+Clicking a profile opens its detail page, which shows provider membership, refresh schedule controls, published history, and pending review items.
+
+By default, profiles inherit the global refresh schedule from Settings. A profile can override that default with its own interval or manual-only schedule. For the active profile, that effective schedule drives automatic refresh timing and startup catch-up behavior.
 
 Profiles can be deleted via `DELETE /api/v1/profiles/{profileId}`. Deletion removes all associated data (group filters, channel selections, custom groups, canonical channels, stream keys, snapshots, and provider links) and is blocked while a snapshot refresh is in progress.
 
@@ -116,8 +119,24 @@ Controls whether the M3U, XMLTV, stream, and HDHomeRun client endpoints require 
 - Set the `Virtual Tuner ID` used for HDHomeRun tuner ownership and retune/reuse behaviour
 - See whether a credential is currently configured
 
+**Observability**
+Controls Prometheus metrics exposure and metrics-token management. You can:
+
+- Enable or disable the metrics endpoint
+- Choose metrics mode: `Disabled`, `LocalOnly`, `Token`, or `Public`
+- Add explicit CIDR ranges for local-only scrapes
+- Generate metrics tokens for Prometheus, Grafana Alloy/Agent, or other scrapers
+- Delete expired or rotated metrics tokens
+- Keep channel-level labels disabled to avoid high-cardinality metrics
+
+Generated metrics tokens are shown once. After creation, the UI only shows metadata such as name, scope, created time, last used time, expiration, and expired state.
+
+See [OBSERVABILITY.md](OBSERVABILITY.md) for scrape examples, metric names, health probes, and diagnostics APIs.
+
 **Refresh Schedule**
-Controls how often M3Undle fetches updated lineup and guide data from providers. Options: Manual only, every 1h, 2h, 4h (default), 6h, 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
+Controls the global default cadence for profiles that do not set their own refresh policy. Options: Manual only, every 1h, 2h, 4h, 6h (default), 12h, or 24h. The startup catch-up toggle controls whether a refresh runs automatically at startup when the active profile's last known snapshot is older than the selected interval. Schedule changes take effect immediately without a restart.
+
+Profiles can override the global default from their detail page. A profile override can use its own interval or manual-only mode, and profiles with no override continue to inherit future global schedule changes.
 
 **Stream Proxy**
 Configures how M3Undle handles live stream relay. Settings are grouped into three areas:
@@ -130,7 +149,14 @@ Each setting includes a plain-English description, and a help icon explains the 
 
 Stream proxy changes are saved to the database immediately but only take effect after a restart. The page shows the currently active (running) configuration alongside the saved values, and displays a warning banner when they differ. An in-app **Restart M3Undle** button is available once settings have been saved, and shows how many streams are currently active so you know the impact before restarting.
 
+When the simultaneous-stream cap is full, zero-viewer streams waiting in their disconnect grace period do not block a new tune. M3Undle can preempt a qualifying idle-grace session so a real viewer can start immediately.
+
+MPEG-TS CDN-gap handling is automatic. M3Undle can send null-packet keepalives for external non-HDHomeRun players during short upstream gaps, while HDHomeRun-only sessions are left as plain upstream MPEG-TS for DVR compatibility. The advanced content-stall timeout for that behavior is configured through appsettings/environment variables rather than the UI.
+
 For HDHomeRun-style access, tuner ownership is tracked by the configured `Virtual Tuner ID`, not by remote IP. Re-tuning from the same virtual tuner replaces the prior playback session instead of consuming another tuner slot.
+
+**Browser Playback**
+Controls generated HLS for browser and Electron clients. When a browser requests HLS for a TS-only live stream, M3Undle uses FFmpeg to generate a rolling HLS session. Shared live streams are fed from M3Undle's internal relay session, which is created on first HLS playback if needed, so browser playback still shares the provider connection with other viewers.
 
 **Downstream Integrations**
 Configure automated notification to downstream clients (Jellyfin, Emby, or a generic webhook) after M3Undle publishes a lineup or guide update. Each integration can be:

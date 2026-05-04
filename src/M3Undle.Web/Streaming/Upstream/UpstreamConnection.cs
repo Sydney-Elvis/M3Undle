@@ -11,21 +11,34 @@ public sealed class UpstreamConnection : IAsyncDisposable
     private readonly string? _contentType;
     private readonly int _statusCode;
 
-    public UpstreamConnection(HttpClient client, HttpResponseMessage response, Stream stream)
+    public UpstreamConnection(
+        HttpClient client,
+        HttpResponseMessage response,
+        Stream stream,
+        string relayMode = UpstreamRelayModes.Direct,
+        string? relayFallbackReason = null)
     {
         _client = client;
         _response = response;
         Stream = stream;
         _statusCode = (int)response.StatusCode;
         _contentType = response.Content.Headers.ContentType?.ToString();
+        RelayMode = relayMode;
+        RelayFallbackReason = relayFallbackReason;
     }
 
-    public UpstreamConnection(Process process, Stream stream, string contentType, int statusCode = 200)
+    public UpstreamConnection(
+        Process process,
+        Stream stream,
+        string contentType,
+        int statusCode = 200,
+        string relayMode = UpstreamRelayModes.FfmpegHlsToMpegTs)
     {
         _process = process;
         Stream = stream;
         _contentType = contentType;
         _statusCode = statusCode;
+        RelayMode = relayMode;
     }
 
     public HttpResponseMessage? Response => _response;
@@ -35,6 +48,10 @@ public sealed class UpstreamConnection : IAsyncDisposable
     public string? ContentType => _contentType;
 
     public int StatusCode => _statusCode;
+
+    public string RelayMode { get; }
+
+    public string? RelayFallbackReason { get; }
 
     public async ValueTask DisposeAsync()
     {

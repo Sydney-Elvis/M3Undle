@@ -22,18 +22,18 @@ public sealed class ProviderConfiguration : IEntityTypeConfiguration<Provider>
         builder.Property(x => x.MaxConcurrentStreams).HasColumnName("max_concurrent_streams");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
-        builder.Property(x => x.ConfigSourcePath).HasColumnName("config_source_path");
-        builder.Property(x => x.NeedsEnvVarSubstitution).HasColumnName("needs_env_var_substitution").IsRequired();
         builder.Property(x => x.IncludeVod).HasColumnName("include_vod").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.IncludeSeries).HasColumnName("include_series").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.XtreamBaseUrl).HasColumnName("xtream_base_url");
         builder.Property(x => x.XtreamUsername).HasColumnName("xtream_username");
         builder.Property(x => x.XtreamEncryptedPassword).HasColumnName("xtream_encrypted_password");
         builder.Property(x => x.ForceMpegTs).HasColumnName("force_mpegts").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.CleanRelayMode).HasColumnName("clean_relay_mode").IsRequired().HasDefaultValue("off");
         builder.Property(x => x.XtreamIncludeXmltv).HasColumnName("xtream_include_xmltv").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.XtreamDetectedCapable).HasColumnName("xtream_detected_capable").IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.PlaylistExpiresUtc).HasColumnName("playlist_expires_utc");
 
         builder.HasIndex(x => x.Name).IsUnique();
         builder.HasIndex(x => x.Enabled).HasDatabaseName("idx_providers_enabled");
     }
 }
-

@@ -21,5 +21,8 @@ public sealed class StreamProxyOptions
     public bool EnableClientStreamDetails { get; set; } = true;
 
     public bool StatusIncludeUserAgent { get; set; } = true;
-}
 
+    public int DiagnosticsMaxEvents { get; set; } = 1000;
+
+    public int DiagnosticsRetentionSeconds { get; set; } = 900;
+}

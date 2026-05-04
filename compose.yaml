@@ -15,11 +15,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       TZ: UTC
       M3UNDLE_M3U_DIR: /m3u_data
-      M3Undle__Streaming__GeneratedHls__Directory: /hls-work
     volumes:
       - ./data:/data
       - ./m3u_data:/m3u_data
-      - ./hls-work:/hls-work
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]

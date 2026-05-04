@@ -1,3 +1,4 @@
+using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,7 @@ public sealed class DownstreamNotificationService(
     IServiceScopeFactory scopeFactory,
     IEnumerable<IDownstreamAdapter> adapters,
     SecretEncryptionService encryption,
+    IEventService eventService,
     ILogger<DownstreamNotificationService> logger) : BackgroundService
 {
     private readonly Dictionary<string, IDownstreamAdapter> _adapters =
@@ -109,7 +111,22 @@ public sealed class DownstreamNotificationService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to decrypt API key for integration {Id}.", integration.DownstreamIntegrationId);
-                await WriteResultAsync(integration.DownstreamIntegrationId, null, "Failed to decrypt API key: " + ex.Message, ct);
+                var decryptError = "Failed to decrypt API key: " + ex.Message;
+                try
+                {
+                    await eventService.PublishAsync(
+                        SystemEventSeverity.Warning,
+                        SystemEventTypes.DownstreamNotificationFailed,
+                        $"Downstream notification failed: {integration.Name}",
+                        decryptError,
+                        integrationId: integration.DownstreamIntegrationId);
+                }
+                catch (Exception publishEx) when (publishEx is not OperationCanceledException)
+                {
+                    logger.LogWarning(publishEx, "Failed to publish DownstreamNotificationFailed event.");
+                }
+
+                await WriteResultAsync(integration.DownstreamIntegrationId, null, decryptError, ct);
                 return;
             }
         }
@@ -118,11 +135,22 @@ public sealed class DownstreamNotificationService(
             integration.BaseUrl, apiKey, integration.WebhookHeadersJson, trigger, ct);
 
         if (error is not null)
+        {
             logger.LogWarning("Downstream notification failed for {Name} ({Id}): {Error}",
                 integration.Name, integration.DownstreamIntegrationId, error);
+            try
+            {
+                await eventService.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.DownstreamNotificationFailed,
+                    $"Downstream notification failed: {integration.Name}", error,
+                    integrationId: integration.DownstreamIntegrationId);
+            }
+            catch (Exception ex) { logger.LogWarning(ex, "Failed to publish DownstreamNotificationFailed event."); }
+        }
         else
+        {
             logger.LogInformation("Downstream notification sent to {Name} ({Id}).",
                 integration.Name, integration.DownstreamIntegrationId);
+        }
 
         await WriteResultAsync(integration.DownstreamIntegrationId, error is null ? DateTime.UtcNow : null, error, ct);
     }

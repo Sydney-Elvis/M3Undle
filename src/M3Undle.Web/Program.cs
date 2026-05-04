@@ -8,6 +8,7 @@ using M3Undle.Web.Components;
 using M3Undle.Web.Components.Account;
 using M3Undle.Web.Data;
 using M3Undle.Web.Logging;
+using M3Undle.Web.Observability;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.GeneratedHls;
@@ -24,13 +25,17 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using MudBlazor.Services;
+using OpenTelemetry.Metrics;
 using Serilog;
 using Serilog.Formatting.Compact;
 using System.Data.Common;
+using System.Threading.RateLimiting;
 
 // Static web assets initialization runs during CreateBuilder and can fail before the app
 // has a chance to configure a custom web root. Create the likely content-root candidates
@@ -111,9 +116,11 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 if (builder.Environment.IsDevelopment())
     builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddCheck<M3UndleReadinessHealthCheck>("m3undle_ready", tags: ["ready"]);
 builder.Services.AddM3UndleOpenApi();
 builder.Services.AddValidation();
+builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient();
 builder.Services.AddCors(options =>
 {
@@ -166,6 +173,67 @@ builder.Services.Configure<StreamProxyOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<BufferOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Buffer"));
 builder.Services.Configure<ReconnectOptions>(builder.Configuration.GetSection("M3Undle:Streaming:Reconnect"));
 builder.Services.Configure<GeneratedHlsOptions>(builder.Configuration.GetSection("M3Undle:Streaming:GeneratedHls"));
+builder.Services.Configure<CleanRelayOptions>(builder.Configuration.GetSection("M3Undle:Streaming:CleanRelay"));
+builder.Services.Configure<ObservabilityOptions>(builder.Configuration.GetSection("M3Undle:Observability"));
+var metricsScrapePath = NormalizeObservabilityPath(builder.Configuration["M3Undle:Observability:Metrics:Path"], "/metrics");
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = static async (context, cancellationToken) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            context.HttpContext.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        context.HttpContext.Response.ContentType = "text/plain; charset=utf-8";
+        await context.HttpContext.Response.WriteAsync("Rate limit exceeded.", cancellationToken);
+    };
+
+    options.GlobalLimiter = PartitionedRateLimiter.CreateChained<HttpContext>(
+        PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        {
+            var group = GetObservabilityRateLimitGroup(context.Request.Path, metricsScrapePath);
+            if (group is null)
+                return RateLimitPartition.GetNoLimiter("observability-unlimited-concurrency");
+
+            var key = $"{group}:{GetRateLimitClientKey(context)}";
+            return RateLimitPartition.GetConcurrencyLimiter(key, _ => new ConcurrencyLimiterOptions
+            {
+                PermitLimit = group switch
+                {
+                    "metrics" => 1,
+                    "diagnostics" => 2,
+                    _ => 4,
+                },
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            });
+        }),
+        PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        {
+            var group = GetObservabilityRateLimitGroup(context.Request.Path, metricsScrapePath);
+            if (group is null)
+                return RateLimitPartition.GetNoLimiter("observability-unlimited-window");
+
+            var key = $"{group}:{GetRateLimitClientKey(context)}";
+            return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = group switch
+                {
+                    "metrics" => 12,
+                    "diagnostics" => 30,
+                    _ => 60,
+                },
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                AutoReplenishment = true,
+            });
+        }));
+});
+builder.Services.AddOpenTelemetry()
+    .WithMetrics(metrics => metrics
+        .AddMeter(M3UndleMetrics.MeterName)
+        .AddPrometheusExporter());
 builder.Services.AddSingleton<IConfigureOptions<StreamProxyOptions>, StreamProxyDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<BufferOptions>, BufferDbOptionsConfigurator>();
 builder.Services.AddSingleton<IConfigureOptions<ReconnectOptions>, ReconnectDbOptionsConfigurator>();
@@ -174,10 +242,14 @@ builder.Services.AddSingleton<IValidateOptions<StreamProxyOptions>, StreamProxyO
 builder.Services.AddSingleton<IValidateOptions<BufferOptions>, BufferOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<ReconnectOptions>, ReconnectOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<GeneratedHlsOptions>, GeneratedHlsOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<CleanRelayOptions>, CleanRelayOptionsValidator>();
+builder.Services.AddSingleton<IValidateOptions<ObservabilityOptions>, ObservabilityOptionsValidator>();
 builder.Services.AddOptions<StreamProxyOptions>().ValidateOnStart();
 builder.Services.AddOptions<BufferOptions>().ValidateOnStart();
 builder.Services.AddOptions<ReconnectOptions>().ValidateOnStart();
 builder.Services.AddOptions<GeneratedHlsOptions>().ValidateOnStart();
+builder.Services.AddOptions<CleanRelayOptions>().ValidateOnStart();
+builder.Services.AddOptions<ObservabilityOptions>().ValidateOnStart();
 builder.Services.PostConfigure<SnapshotOptions>(options =>
 {
     options.Directory = RuntimePaths.ResolveDirectory(
@@ -224,7 +296,9 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 builder.Services.AddSingleton(runtimePaths);
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(AppBuildInfo.ForEntryAssembly());
 builder.Services.AddSingleton<AppEventBus>();
+builder.Services.AddSingleton<IEventService, EventService>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddSingleton<M3Undle.Core.Epg.XmltvParser>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
@@ -271,6 +345,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshSer
 builder.Services.AddHostedService<DownstreamNotificationService>();
 builder.Services.AddSingleton<HdHomeRunTunerManager>();
 builder.Services.AddSingleton<StreamingRegistry>();
+builder.Services.AddSingleton<StreamingDiagnosticsStore>();
 builder.Services.AddSingleton<InternalRelaySecretService>();
 builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
 builder.Services.AddSingleton<StreamAdmissionBackoffStore>();
@@ -282,6 +357,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<ChannelSessionMana
 builder.Services.AddScoped<StreamRequestResolver>();
 builder.Services.AddSingleton<HlsManifestRewriter>();
 builder.Services.AddSingleton<HlsProxyService>();
+builder.Services.AddScoped<IObservabilitySettingsService, ObservabilitySettingsService>();
+builder.Services.AddScoped<IMetricsTokenService, MetricsTokenService>();
+builder.Services.AddSingleton<M3UndleMetrics>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
@@ -307,7 +385,7 @@ builder.Services.AddSingleton<IEmailSender<ApplicationUser>, IdentityNoOpEmailSe
 builder.Services.AddMudServices();
 
 var app = builder.Build();
-var buildInfo = AppBuildInfo.ForEntryAssembly();
+var buildInfo = app.Services.GetRequiredService<AppBuildInfo>();
 
 app.Logger.LogInformation(
     "Starting M3Undle {Version} (BuildDateUtc={BuildDateUtc}, BuildNumber={BuildNumber})",
@@ -315,18 +393,24 @@ app.Logger.LogInformation(
     buildInfo.BuildDateUtc ?? "unknown",
     buildInfo.BuildNumber ?? "n/a");
 
+List<string> appliedMigrations;
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     await RepairAlpha4MigrationHistoryAsync(db);
     await StartupMigrationRepair.RepairAlpha5PartialSchemaAsync(db);
     await RepairAlpha6SchemaAsync(db);
+    appliedMigrations = db.Database.GetPendingMigrations().ToList();
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 
     var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
     await streamingSettings.ClearRestartRequiredAsync();
 }
+
+_ = app.Services.GetRequiredService<M3UndleMetrics>();
+
+await PublishStartupEventsAsync(app, buildInfo, appliedMigrations);
 
 await SeedAdminAccountIfNeededAsync(app.Services);
 
@@ -360,6 +444,14 @@ app.Use(static async (ctx, next) =>
 });
 
 app.UseRouting();
+app.UseRateLimiter();
+app.UseMiddleware<MetricsEndpointSecurityMiddleware>();
+app.UseOpenTelemetryPrometheusScrapingEndpoint(context =>
+{
+    var metricsOptions = context.RequestServices.GetRequiredService<IOptions<ObservabilityOptions>>();
+    return context.Request.Path.Equals(metricsOptions.Value.Metrics.NormalizedPath, StringComparison.OrdinalIgnoreCase);
+});
+app.UseMiddleware<HttpMetricsMiddleware>();
 app.UseWhen(
     context => IsMediaSurfacePath(context.Request.Path),
     branch => branch.UseCors(MediaSurfaceCorsPolicy));
@@ -389,6 +481,25 @@ app.MapXtreamEndpoints();
 app.MapEpgApiEndpoints();
 app.MapDashboardApiEndpoints();
 app.MapDownstreamApiEndpoints();
+app.MapDiagnosticsApiEndpoints();
+app.MapHealthChecks("/livez", new HealthCheckOptions
+{
+    Predicate = _ => false,
+}).AllowAnonymous().ExcludeFromDescription();
+app.MapHealthChecks("/readyz", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = M3UndleHealthResponseWriters.WriteReadinessAsync,
+}).AllowAnonymous().ExcludeFromDescription();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+    ResponseWriter = M3UndleHealthResponseWriters.WriteReadinessAsync,
+}).AllowAnonymous().ExcludeFromDescription();
+app.MapHealthChecks("/healthz", new HealthCheckOptions
+{
+    ResponseWriter = M3UndleHealthResponseWriters.WriteHealthSummaryAsync,
+}).AllowAnonymous().ExcludeFromDescription();
 app.MapHealthChecks("/health").ExcludeFromDescription();
 app.MapM3UndleOpenApiEndpoints(app.Environment);
 
@@ -477,6 +588,35 @@ static bool IsClientDeliveryPath(PathString path)
 
 static bool IsFlagEnabled(string? value)
     => string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+
+static string NormalizeObservabilityPath(string? path, string fallback)
+{
+    var candidate = string.IsNullOrWhiteSpace(path) ? fallback : path.Trim();
+    return candidate.StartsWith('/') ? candidate : "/" + candidate;
+}
+
+static string? GetObservabilityRateLimitGroup(PathString path, string metricsPath)
+{
+    if (path.Equals(metricsPath, StringComparison.OrdinalIgnoreCase))
+        return "metrics";
+
+    if (path.StartsWithSegments("/api/admin/diagnostics", StringComparison.OrdinalIgnoreCase))
+        return "diagnostics";
+
+    if (path.Equals("/livez", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/readyz", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/healthz", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/health", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/health/ready", StringComparison.OrdinalIgnoreCase))
+    {
+        return "health";
+    }
+
+    return null;
+}
+
+static string GetRateLimitClientKey(HttpContext context)
+    => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
 static bool IsMediaSurfacePath(PathString path)
 {
@@ -732,6 +872,31 @@ static async Task RepairAlpha6SchemaAsync(ApplicationDbContext db)
     await ins.ExecuteNonQueryAsync();
 
     await tx.CommitAsync();
+}
+
+static async Task PublishStartupEventsAsync(WebApplication app, AppBuildInfo buildInfo, IReadOnlyCollection<string> appliedMigrations)
+{
+    try
+    {
+        var startupEvents = app.Services.GetRequiredService<IEventService>();
+        await startupEvents.PublishAsync(
+            SystemEventSeverity.Info,
+            SystemEventTypes.AppRestarted,
+            $"Application started (v{buildInfo.Version})");
+
+        if (appliedMigrations.Count > 0)
+        {
+            await startupEvents.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.DatabaseMigrationApplied,
+                $"{appliedMigrations.Count} database migration(s) applied on startup",
+                string.Join(", ", appliedMigrations.Select(m => m[(m.IndexOf('_') + 1)..])));
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Failed to publish startup system events.");
+    }
 }
 
 sealed class SqliteConnectionInterceptor : DbConnectionInterceptor

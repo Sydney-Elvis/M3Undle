@@ -45,6 +45,8 @@ Indexes:
 - is_active (INTEGER, 0/1, default 0) -- exactly one profile may have is_active=1; partial unique index enforced
 - output_name (TEXT)  -- used for /m3u/<output_name>.m3u and /xmltv/<output_name>.xml
 - merge_mode (TEXT)   -- 'single', 'merged', 'redundancy-ready'
+- refresh_schedule_kind_override (TEXT, nullable) -- null inherits global; otherwise 'manual'|'1h'|'2h'|'4h'|'6h'|'12h'|'24h'
+- refresh_startup_catchup_override (INTEGER, 0/1, nullable) -- null inherits global startup catch-up behavior
 - created_utc (TEXT)
 - updated_utc (TEXT)
 
@@ -333,6 +335,46 @@ Indexes:
 
 ---
 
+## Observability Additions
+
+The following tables and columns support metrics access, token management, and observability settings.
+
+---
+
+### metrics_tokens
+App-generated tokens for Prometheus-compatible metrics scraping.
+
+- metrics_token_id (PK, TEXT, uuid)
+- name (TEXT, unique)
+- token_hash (TEXT) -- hashed token; plaintext is shown once at creation only
+- scope (TEXT, default 'metrics:read')
+- created_utc (TEXT)
+- last_used_utc (TEXT, nullable)
+- expires_utc (TEXT, nullable)
+
+Indexes:
+- ux_metrics_tokens_name(name)
+- idx_metrics_tokens_expires(expires_utc)
+
+Notes:
+- Tokens authenticate only the metrics endpoint.
+- Diagnostics APIs continue to use UI/admin authorization.
+- Token regeneration is create-new plus delete-old.
+
+---
+
+### site_settings additions (observability)
+New columns added to the existing `site_settings` table:
+
+- observability_metrics_enabled (INTEGER, 0/1, default 1)
+- observability_metrics_mode (TEXT, default 'LocalOnly') -- 'Disabled'|'LocalOnly'|'Token'|'Public'
+- observability_metrics_enable_channel_labels (INTEGER, 0/1, default 0)
+- observability_metrics_local_allowed_cidrs (TEXT, nullable) -- newline-separated CIDR list
+
+The configured metrics path remains an app setting (`M3Undle:Observability:Metrics:Path`) because the OpenTelemetry scrape endpoint is mapped at startup.
+
+---
+
 ## Alpha 5 Additions
 
 The following tables and columns were added during the Alpha 5 release cycle.
@@ -408,7 +450,7 @@ Configured downstream client integrations (Jellyfin, Emby, webhook).
 ### site_settings additions (refresh schedule)
 New columns added to the existing `site_settings` table:
 - refresh_schedule_kind (TEXT, default '6h') -- 'manual'|'1h'|'2h'|'4h'|'6h'|'12h'|'24h'
-- refresh_startup_catchup (INTEGER, 0/1, default 1) -- trigger catch-up refresh on startup if lineup is stale
+- refresh_startup_catchup (INTEGER, 0/1, default 1) -- global default for startup catch-up when the active profile has no override
 
 ### epg_sources additions
 - refresh_interval_hours (INTEGER, nullable) -- per-source cadence override; null = follow global schedule

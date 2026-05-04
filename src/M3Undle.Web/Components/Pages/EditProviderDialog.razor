@@ -10,6 +10,34 @@
             </MudChip>
         </MudStack>
 
+        @if (!Provider.IsXtreamProvider && Provider.XtreamDetectedCapable)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-3">
+                <MudStack Spacing="1">
+                    <MudText Typo="Typo.body2">
+                        <strong>Xtream API detected.</strong> Upgrade to use Xtream mode for richer channel data, stable stream IDs, and subscription expiry tracking.
+                    </MudText>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+                        <MudSwitch @bind-Value="_upgradeIncludeXmltv" Color="Color.Primary" Label="Include XMLTV guide" Disabled="@(_isUpgrading || !_encryptionAvailable)" />
+                        <MudSpacer />
+                        <MudButton Variant="Variant.Filled" Color="Color.Info" Size="Size.Small"
+                                   Disabled="@(_isUpgrading || !_encryptionAvailable)"
+                                   OnClick="UpgradeToXtreamAsync">
+                            @(_isUpgrading ? "Upgrading..." : "Upgrade to Xtream")
+                        </MudButton>
+                    </MudStack>
+                    @if (!_encryptionAvailable)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Warning">M3UNDLE_ENCRYPTION_KEY must be configured to upgrade to Xtream mode.</MudText>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_upgradeError))
+                    {
+                        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Text" Class="mt-1">@_upgradeError</MudAlert>
+                    }
+                </MudStack>
+            </MudAlert>
+        }
+
         @if (!string.IsNullOrWhiteSpace(_error))
         {
             <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
@@ -91,6 +119,15 @@
                         Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
                     </MudAlert>
                 }
+                <MudSwitch @bind-Value="_model.CleanRelayRemux" Color="Color.Warning"
+                           Label="Clean relay remux"
+                           For="@(() => _model.CleanRelayRemux)" />
+                @if (_model.CleanRelayRemux)
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
+                        Uses FFmpeg to remux live streams and repair timestamps. Adds CPU usage and some startup latency.
+                    </MudAlert>
+                }
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
             </MudStack>
         </MudForm>
@@ -149,9 +186,12 @@
     private MudForm? _form;
     private bool _isSaving;
     private bool _isChangingPassword;
+    private bool _isUpgrading;
     private string? _error;
     private string? _passwordError;
     private string? _passwordSuccess;
+    private string? _upgradeError;
+    private bool _upgradeIncludeXmltv;
     private bool _encryptionAvailable;
 
     private List<ProfileListItemDto> _localProfiles = [];
@@ -184,6 +224,7 @@
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
+                CleanRelayRemux = string.Equals(Provider.CleanRelayMode, "remux", StringComparison.OrdinalIgnoreCase),
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             }
             : new EditModel
@@ -199,10 +240,11 @@
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
+                CleanRelayRemux = string.Equals(Provider.CleanRelayMode, "remux", StringComparison.OrdinalIgnoreCase),
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             };
 
-        if (Provider.IsXtreamProvider)
+        if (Provider.IsXtreamProvider || Provider.XtreamDetectedCapable)
         {
             try
             {
@@ -217,6 +259,24 @@
         !Providers.Any(prov =>
             prov.ProviderId != Provider.ProviderId &&
             prov.AssociatedProfileIds.Contains(p.ProfileId)));
+
+    private async Task UpgradeToXtreamAsync()
+    {
+        _upgradeError = null;
+        _isUpgrading = true;
+        try
+        {
+            var (_, error) = await ProviderPageService.UpgradeProviderToXtreamAsync(
+                Provider.ProviderId,
+                new UpgradeToXtreamRequest { XtreamIncludeXmltv = _upgradeIncludeXmltv },
+                CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(error)) { _upgradeError = error; return; }
+            await OnSaved.InvokeAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex) { _upgradeError = $"Upgrade failed: {ex.Message}"; }
+        finally { _isUpgrading = false; }
+    }
 
     private void Cancel() => MudDialog.Cancel();
 
@@ -275,6 +335,7 @@
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
+                    CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -293,6 +354,7 @@
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
+                    CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -344,6 +406,7 @@
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
         public bool ForceMpegTs { get; set; }
+        public bool CleanRelayRemux { get; set; }
         public string ProfileId { get; set; } = string.Empty;
     }
 }

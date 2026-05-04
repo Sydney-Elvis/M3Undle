@@ -105,6 +105,37 @@ public sealed class StreamingRegistryTests
         Assert.AreEqual("parent-session", child.ParentStreamSessionId);
     }
 
+    [TestMethod]
+    public void GetActiveSessions_ShowsParentlessGeneratedHlsSession()
+    {
+        var registry = CreateRegistry();
+        var startedUtc = new DateTimeOffset(2026, 04, 20, 12, 00, 00, TimeSpan.Zero);
+
+        registry.UpsertSession(new StreamSessionSnapshot(
+            SessionId: "xtream-hls",
+            ProviderId: "provider",
+            ProviderChannelId: "channel",
+            DisplayName: "FOX",
+            State: SessionState.Live,
+            SubscriberCount: 1,
+            IsShared: false,
+            BufferUsedBytes: 0,
+            BufferMaxBytes: 0,
+            StartedUtc: startedUtc,
+            LastUpstreamByteUtc: startedUtc,
+            ReconnectAttempts: 0,
+            LastFailureKind: null,
+            IsInternal: false,
+            ParentStreamSessionId: null));
+
+        var sessions = registry.GetActiveSessions();
+
+        Assert.HasCount(1, sessions);
+        Assert.AreEqual("xtream-hls", sessions[0].SessionId);
+        Assert.AreEqual("FOX", sessions[0].DisplayName);
+        Assert.IsFalse(sessions[0].IsInternal);
+    }
+
     private static StreamingRegistry CreateRegistry()
         => new(Options.Create(new M3Undle.Web.Streaming.Configuration.StreamProxyOptions()));
 }

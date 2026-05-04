@@ -213,6 +213,7 @@ public sealed class BufferDbOptionsConfigurator(IServiceScopeFactory scopeFactor
         options.MaxBytesPerSession = settings.StreamBufferMaxBytesPerSession;
         options.MaxBytesHardCap = settings.StreamBufferMaxBytesHardCap;
         options.ReadChunkSizeBytes = settings.StreamBufferReadChunkSizeBytes;
+        options.SubscriberQueueCapacity = Math.Max(1, settings.StreamBufferMaxBytesPerSession / Math.Max(1, settings.StreamBufferReadChunkSizeBytes));
     }
 }
 

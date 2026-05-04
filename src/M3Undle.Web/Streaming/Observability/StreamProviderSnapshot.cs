@@ -10,5 +10,10 @@ public sealed record StreamProviderSnapshot(
     DateTimeOffset? LastUpstreamByteUtc,
     int ReconnectAttempts,
     string? LastFailureKind,
-    string? ContentType);
-
+    string? ContentType,
+    double? FirstByteLatencyMs = null,
+    long BytesSinceReconnect = 0,
+    int? LastUpstreamStatusCode = null,
+    double? LastCooldownSeconds = null,
+    string RelayMode = "Direct",
+    string? LastRelayFallbackReason = null);

@@ -17,6 +17,8 @@ public sealed class ProfileConfiguration : IEntityTypeConfiguration<Profile>
         builder.Property(x => x.IsActive).HasColumnName("is_active").IsRequired().HasDefaultValue(false);
         builder.Property(x => x.OutputName).HasColumnName("output_name").IsRequired();
         builder.Property(x => x.MergeMode).HasColumnName("merge_mode").IsRequired();
+        builder.Property(x => x.RefreshScheduleKindOverride).HasColumnName("refresh_schedule_kind_override");
+        builder.Property(x => x.RefreshStartupCatchupOverride).HasColumnName("refresh_startup_catchup_override");
         builder.Property(x => x.CreatedUtc).HasColumnName("created_utc").IsRequired();
         builder.Property(x => x.UpdatedUtc).HasColumnName("updated_utc").IsRequired();
 
@@ -27,4 +29,3 @@ public sealed class ProfileConfiguration : IEntityTypeConfiguration<Profile>
             .IsUnique();
     }
 }
-

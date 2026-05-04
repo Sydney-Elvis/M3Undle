@@ -823,6 +823,49 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("fetch_runs", (string)null);
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.MetricsToken", b =>
+                {
+                    b.Property<string>("MetricsTokenId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("metrics_token_id");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<DateTime?>("ExpiresUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expires_utc");
+
+                    b.Property<DateTime?>("LastUsedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_used_utc");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("metrics:read")
+                        .HasColumnName("scope");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("token_hash");
+
+                    b.HasKey("MetricsTokenId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("metrics_tokens", (string)null);
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Profile", b =>
                 {
                     b.Property<string>("ProfileId")
@@ -857,6 +900,14 @@ namespace M3Undle.Web.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("output_name");
+
+                    b.Property<string>("RefreshScheduleKindOverride")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("refresh_schedule_kind_override");
+
+                    b.Property<bool?>("RefreshStartupCatchupOverride")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("refresh_startup_catchup_override");
 
                     b.Property<DateTime>("UpdatedUtc")
                         .HasColumnType("TEXT")
@@ -1294,9 +1345,12 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("provider_id");
 
-                    b.Property<string>("ConfigSourcePath")
+                    b.Property<string>("CleanRelayMode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT")
-                        .HasColumnName("config_source_path");
+                        .HasDefaultValue("off")
+                        .HasColumnName("clean_relay_mode");
 
                     b.Property<DateTime>("CreatedUtc")
                         .HasColumnType("TEXT")
@@ -1337,9 +1391,9 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("name");
 
-                    b.Property<bool>("NeedsEnvVarSubstitution")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("needs_env_var_substitution");
+                    b.Property<DateTime?>("PlaylistExpiresUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("playlist_expires_utc");
 
                     b.Property<string>("PlaylistUrl")
                         .IsRequired()
@@ -1367,6 +1421,12 @@ namespace M3Undle.Web.Data.Migrations
                     b.Property<string>("XtreamBaseUrl")
                         .HasColumnType("TEXT")
                         .HasColumnName("xtream_base_url");
+
+                    b.Property<bool>("XtreamDetectedCapable")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("xtream_detected_capable");
 
                     b.Property<string>("XtreamEncryptedPassword")
                         .HasColumnType("TEXT")
@@ -1606,6 +1666,12 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("endpoint_security_enabled");
 
+                    b.Property<int>("EventRetentionDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(7)
+                        .HasColumnName("event_retention_days");
+
                     b.Property<bool>("GeneratedHlsEnabled")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
@@ -1663,6 +1729,29 @@ namespace M3Undle.Web.Data.Migrations
                     b.Property<int?>("HdhrTunerCountOverride")
                         .HasColumnType("INTEGER")
                         .HasColumnName("hdhr_tuner_count_override");
+
+                    b.Property<bool>("ObservabilityMetricsEnableChannelLabels")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("observability_metrics_enable_channel_labels");
+
+                    b.Property<bool>("ObservabilityMetricsEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true)
+                        .HasColumnName("observability_metrics_enabled");
+
+                    b.Property<string>("ObservabilityMetricsLocalAllowedCidrs")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("observability_metrics_local_allowed_cidrs");
+
+                    b.Property<string>("ObservabilityMetricsMode")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("LocalOnly")
+                        .HasColumnName("observability_metrics_mode");
 
                     b.Property<string>("RefreshScheduleKind")
                         .IsRequired()
@@ -1753,6 +1842,7 @@ namespace M3Undle.Web.Data.Migrations
                             Id = 1,
                             AuthenticationEnabled = false,
                             EndpointSecurityEnabled = false,
+                            EventRetentionDays = 7,
                             GeneratedHlsEnabled = true,
                             GeneratedHlsSettingsRestartRequired = false,
                             HdhrDiscoveryEnabled = true,
@@ -1760,6 +1850,9 @@ namespace M3Undle.Web.Data.Migrations
                             HdhrSettingsRestartRequired = false,
                             HdhrSiliconDustDiscoveryEnabled = true,
                             HdhrSsdpEnabled = true,
+                            ObservabilityMetricsEnableChannelLabels = false,
+                            ObservabilityMetricsEnabled = true,
+                            ObservabilityMetricsMode = "LocalOnly",
                             RefreshScheduleKind = "6h",
                             RefreshStartupCatchup = true,
                             StreamBufferMaxBytesHardCap = 33554432,
@@ -1889,6 +1982,65 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDatabaseName("idx_stream_keys_profile");
 
                     b.ToTable("stream_keys", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.SystemEvent", b =>
+                {
+                    b.Property<string>("SystemEventId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Detail")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("event_type");
+
+                    b.Property<string>("IntegrationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("integration_id");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<int>("OccurrenceCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1)
+                        .HasColumnName("occurrence_count");
+
+                    b.Property<string>("ProviderId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_id");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("severity");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("title");
+
+                    b.HasKey("SystemEventId");
+
+                    b.HasIndex("OccurredAt")
+                        .HasDatabaseName("ix_system_events_occurred_at");
+
+                    b.HasIndex("EventType", "IntegrationId")
+                        .HasDatabaseName("ix_system_events_event_type_integration_id")
+                        .HasFilter("\"integration_id\" IS NOT NULL");
+
+                    b.HasIndex("EventType", "ProviderId")
+                        .HasDatabaseName("ix_system_events_event_type_provider_id")
+                        .HasFilter("\"provider_id\" IS NOT NULL");
+
+                    b.ToTable("system_events", (string)null);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>

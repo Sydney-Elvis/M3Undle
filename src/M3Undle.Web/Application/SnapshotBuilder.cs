@@ -8,6 +8,7 @@ using M3Undle.Core.M3u;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Observability;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -29,8 +30,10 @@ public sealed class SnapshotBuilder(
     IOptions<SnapshotOptions> snapshotOptions,
     CustomGroupPageService customGroupService,
     IRefreshScheduleService refreshScheduleService,
+    IEventService eventService,
     TimeProvider timeProvider,
-    ILogger<SnapshotBuilder> logger)
+    ILogger<SnapshotBuilder> logger,
+    M3UndleMetrics? metrics = null)
 {
     internal sealed record InterestRuleConfig(
         string MatchType,
@@ -115,6 +118,8 @@ public sealed class SnapshotBuilder(
         }
     }
 
+    private sealed record LineupMetricDeltas(int Added, int Removed, int Renamed, int MappingChanges);
+
     /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
     public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunAsync(CancellationToken cancellationToken)
     {
@@ -137,13 +142,17 @@ public sealed class SnapshotBuilder(
         var channelsByProvider = new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
         var aggregateProfileIds = new HashSet<string>();
 
-        var scheduleSettings = await refreshScheduleService.GetSettingsAsync(cancellationToken);
-        var globalIntervalHours = scheduleSettings.IntervalHours;
+        var scheduleSettings = await refreshScheduleService.GetActiveProfileSettingsAsync(cancellationToken);
+        var defaultIntervalHours = scheduleSettings?.Settings.IntervalHours;
 
         foreach (var provider in providers)
         {
-            var (s, e, channels, cc, profileIds) = await RunForProviderAsync(provider, globalIntervalHours, cancellationToken);
-            if (s) anySucceeded = true;
+            var (s, e, channels, cc, profileIds) = await RunForProviderAsync(provider, defaultIntervalHours, cancellationToken);
+            if (s)
+            {
+                anySucceeded = true;
+                await PublishProviderBackOnlineIfNeededAsync(provider, cancellationToken);
+            }
             if (e is not null) lastErrorSummary = e;
             if (channels.Count > 0) channelsByProvider[provider.ProviderId] = channels;
             aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
@@ -245,15 +254,29 @@ public sealed class SnapshotBuilder(
         catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or OperationCanceledException)
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
+            metrics?.RecordProviderRefresh(provider.ProviderId, success: false, sw.Elapsed);
             await FailFetchRunAsync(fetchRun, ex.Message);
+            await PublishSystemEventBestEffortAsync(
+                SystemEventSeverity.Error,
+                SystemEventTypes.ProviderFetchFailed,
+                $"Provider '{provider.Name}' fetch failed",
+                ex.Message,
+                providerId: provider.ProviderId);
             return (false, ex.Message, [], null, new HashSet<string>());
         }
 
         logger.LogInformation("Playlist fetched in {Elapsed}ms — {ChannelCount} channels for provider {ProviderId}.",
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
+        metrics?.RecordProviderRefresh(provider.ProviderId, success: true, sw.Elapsed);
         sw.Restart();
 
-        // 4. EPG fetch + DB sync
+        // 4. Probe Xtream API for capability/expiry (non-fatal, updates fields in place)
+        if (provider.XtreamBaseUrl is null)
+            await UpdateXtreamCapabilityAsync(provider, cancellationToken);
+        else
+            await UpdateXtreamExpiryAsync(provider, cancellationToken);
+
+        // 5. EPG fetch + DB sync
         string xmltvContent;
         long xmltvBytes = 0;
         var stage = "xmltv";
@@ -305,7 +328,7 @@ public sealed class SnapshotBuilder(
         fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
         await db.SaveChangesAsync(cancellationToken);
 
-        // 5. Build snapshot for each linked profile
+        // 6. Build snapshot for each linked profile
         bool anySucceeded = false;
         string? lastErrorSummary = null;
         string? aggregateChangeClass = ChangeClasses.None;
@@ -353,9 +376,12 @@ public sealed class SnapshotBuilder(
         string? lastErrorSummary = null;
         string? aggregateChangeClass = ChangeClasses.None;
 
+        var scheduleSettings = await refreshScheduleService.GetActiveProfileSettingsAsync(cancellationToken);
+        var defaultIntervalHours = scheduleSettings?.Settings.IntervalHours;
+
         foreach (var link in activeLinks)
         {
-            var xmltvContent = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+            var xmltvContent = EmptyXmltvDocument;
             var latestSnapshot = await db.Snapshots
                 .AsNoTracking()
                 .Where(x => x.ProfileId == link.ProfileId && x.Status == "active")
@@ -364,6 +390,14 @@ public sealed class SnapshotBuilder(
 
             if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
                 xmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
+
+            // If the carried-forward guide has no programme data, recompile from cached EPG sources.
+            // Covers the case where a prior empty-guide snapshot is carried forward after a selection change.
+            if (!xmltvContent.Contains("<programme", StringComparison.Ordinal))
+            {
+                logger.LogInformation("Carried-forward guide is empty — recompiling EPG from cache for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
+                xmltvContent = await FetchAndCompileEpgAsync(provider, link.ProfileId, Stopwatch.StartNew(), defaultIntervalHours, cancellationToken);
+            }
 
             logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
 
@@ -380,6 +414,51 @@ public sealed class SnapshotBuilder(
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    private async Task UpdateXtreamCapabilityAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        var info = await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
+        var capable = info is not null;
+        var newExpiry = info is not null ? info.ExpiresUtc : provider.PlaylistExpiresUtc;
+
+        var capableChanged = capable != provider.XtreamDetectedCapable;
+        var expiryChanged = newExpiry != provider.PlaylistExpiresUtc;
+        if (!capableChanged && !expiryChanged)
+            return;
+
+        await db.Providers
+            .Where(p => p.ProviderId == provider.ProviderId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.XtreamDetectedCapable, capable)
+                .SetProperty(p => p.PlaylistExpiresUtc, newExpiry),
+                CancellationToken.None);
+
+        if (capableChanged)
+        {
+            if (capable)
+                logger.LogInformation(
+                    "Xtream API capability detected for provider {ProviderId} (expires: {Expires}, status: {Status}, maxConn: {MaxConn}).",
+                    provider.ProviderId,
+                    info!.ExpiresUtc?.ToString("yyyy-MM-dd") ?? "unknown",
+                    info.Status ?? "unknown",
+                    info.MaxConnections?.ToString() ?? "unknown");
+            else
+                logger.LogInformation("Xtream API capability no longer detected for provider {ProviderId}.", provider.ProviderId);
+        }
+    }
+
+    private async Task UpdateXtreamExpiryAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        var info = await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
+        if (info is null || info.ExpiresUtc == provider.PlaylistExpiresUtc)
+            return;
+
+        await db.Providers
+            .Where(p => p.ProviderId == provider.ProviderId)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(p => p.PlaylistExpiresUtc, info.ExpiresUtc),
+                CancellationToken.None);
+    }
 
     private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass)> BuildSnapshotFromDbAsync(
         Provider provider,
@@ -650,8 +729,16 @@ public sealed class SnapshotBuilder(
         db.Snapshots.Add(snapshot);
         await db.SaveChangesAsync(cancellationToken);
 
+        var lineupDeltas = await ComputeLineupMetricDeltasAsync(prevSnapshot, channelIndex, cancellationToken);
+
         await PromoteSnapshotAsync(snapshot, profileId, cancellationToken);
         await PurgeOldSnapshotsAsync(profileId, cancellationToken);
+        metrics?.RecordLineupPublish(
+            profileId,
+            lineupDeltas.Added,
+            lineupDeltas.Removed,
+            lineupDeltas.Renamed,
+            lineupDeltas.MappingChanges);
 
         using var snapshotScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Snapshot" });
         logger.LogInformation(
@@ -1149,6 +1236,11 @@ public sealed class SnapshotBuilder(
 
         // Compile
         var (compiledXml, report) = epgCompiler.Compile(outputChannels, sources, catalogues, mappingLookup);
+        metrics?.RecordEpgRefresh(
+            success: fetchResults.Any(x => x.Result.Status is "ok" or "not_modified"),
+            channels: report.TotalChannels,
+            programs: report.TotalProgrammes,
+            unmatchedChannels: Math.Max(0, report.TotalChannels - report.MappedChannels));
 
         // "Don't regress" guard: if compiled guide is empty and we have a previous active snapshot,
         // re-use the previous guide rather than publishing an empty one.
@@ -1729,6 +1821,53 @@ public sealed class SnapshotBuilder(
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    private static async Task<LineupMetricDeltas> ComputeLineupMetricDeltasAsync(
+        Snapshot? previousSnapshot,
+        IReadOnlyCollection<ChannelIndexEntry> currentEntries,
+        CancellationToken cancellationToken)
+    {
+        if (previousSnapshot is null)
+            return new LineupMetricDeltas(currentEntries.Count, 0, 0, 0);
+
+        if (!File.Exists(previousSnapshot.ChannelIndexPath))
+            return new LineupMetricDeltas(0, 0, 0, 0);
+
+        var previousByKey = new Dictionary<string, ChannelIndexEntry>(StringComparer.Ordinal);
+        await foreach (var entry in ChannelIndexStore.StreamAllAsync(previousSnapshot.ChannelIndexPath, cancellationToken))
+            previousByKey.TryAdd(entry.StreamKey, entry);
+
+        var currentByKey = new Dictionary<string, ChannelIndexEntry>(StringComparer.Ordinal);
+        foreach (var entry in currentEntries)
+            currentByKey.TryAdd(entry.StreamKey, entry);
+
+        var added = 0;
+        var renamed = 0;
+        var mappingChanges = 0;
+        foreach (var (streamKey, current) in currentByKey)
+        {
+            if (!previousByKey.TryGetValue(streamKey, out var previous))
+            {
+                added++;
+                continue;
+            }
+
+            if (!string.Equals(previous.DisplayName, current.DisplayName, StringComparison.Ordinal)
+                || !string.Equals(previous.TvgName, current.TvgName, StringComparison.Ordinal))
+            {
+                renamed++;
+            }
+
+            if (!string.Equals(previous.TvgId, current.TvgId, StringComparison.Ordinal)
+                || previous.TvgChno != current.TvgChno)
+            {
+                mappingChanges++;
+            }
+        }
+
+        var removed = previousByKey.Keys.Count(key => !currentByKey.ContainsKey(key));
+        return new LineupMetricDeltas(added, removed, renamed, mappingChanges);
+    }
+
     private async Task PurgeOldSnapshotsAsync(string profileId, CancellationToken cancellationToken)
     {
         var retention = snapshotOptions.Value.RetentionCount;
@@ -1775,5 +1914,53 @@ public sealed class SnapshotBuilder(
         fetchRun.ErrorSummary = errorSummary;
         // Use CancellationToken.None — must persist even if run was cancelled
         await db.SaveChangesAsync(CancellationToken.None);
+    }
+
+    private async Task PublishProviderBackOnlineIfNeededAsync(Provider provider, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var hasFailure = await eventService.HasEventAsync(
+                SystemEventTypes.ProviderFetchFailed,
+                providerId: provider.ProviderId,
+                ct: cancellationToken);
+            if (!hasFailure)
+                return;
+
+            var hasRecovery = await eventService.HasEventAsync(
+                SystemEventTypes.ProviderBackOnline,
+                providerId: provider.ProviderId,
+                ct: cancellationToken);
+            if (hasRecovery)
+                return;
+
+            await eventService.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.ProviderBackOnline,
+                $"Provider '{provider.Name}' is back online",
+                providerId: provider.ProviderId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to publish ProviderBackOnline event for provider {ProviderId}.", provider.ProviderId);
+        }
+    }
+
+    private async Task PublishSystemEventBestEffortAsync(
+        SystemEventSeverity severity,
+        string eventType,
+        string title,
+        string? detail = null,
+        string? providerId = null,
+        string? integrationId = null)
+    {
+        try
+        {
+            await eventService.PublishAsync(severity, eventType, title, detail, providerId, integrationId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to publish system event {EventType}.", eventType);
+        }
     }
 }

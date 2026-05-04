@@ -19,6 +19,8 @@ public sealed class DashboardProfileSummary
     public ProfileHealthStatus HealthStatus { get; set; }
 }
 
+public sealed record ExpiringProviderWarning(string ProviderId, string ProviderName, DateTime ExpiresUtc);
+
 public sealed class DashboardStatsDto
 {
     public int PublishedLiveCount { get; set; }
@@ -30,4 +32,6 @@ public sealed class DashboardStatsDto
     public DateTime? LastPublishedUtc { get; set; }
     public bool RefreshFailed { get; set; }
     public string? LastChangeClass { get; set; }
+    public DateTime? ActiveProfileProviderExpiresUtc { get; set; }
+    public List<ExpiringProviderWarning> ExpiringProviders { get; set; } = [];
 }

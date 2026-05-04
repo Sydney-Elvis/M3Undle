@@ -1,4 +1,8 @@
 using System.Collections.Concurrent;
+using M3Undle.Core.M3u;
+using M3Undle.Core.MpegTs;
+using M3Undle.Web.Application;
+using M3Undle.Web.Observability;
 using M3Undle.Web.Streaming.Buffering;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
@@ -16,6 +20,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly UpstreamStreamConnector _upstreamConnector;
     private readonly UpstreamFailureStrikeStore _strikeStore;
     private readonly StreamingRegistry _registry;
+    private readonly StreamingDiagnosticsStore _diagnosticsStore;
+    private readonly IEventService _eventService;
+    private readonly M3UndleMetrics? _metrics;
     private readonly ILogger<ChannelStreamSession> _logger;
     private readonly Func<ChannelSessionKey, ChannelStreamSession, Task> _onClosed;
     private readonly RingBuffer _buffer;
@@ -26,6 +33,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly string _sessionId = Guid.NewGuid().ToString("N");
     private readonly DateTimeOffset _startedUtc = DateTimeOffset.UtcNow;
     private readonly TimeSpan _idleGrace;
+    private static readonly TimeSpan MpegTsKeepaliveInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly byte[] MpegTsNullPacket = CreateMpegTsNullPacket();
 
     private StreamSourceDescriptor _source;
     private SessionState _state = SessionState.Initializing;
@@ -33,15 +42,33 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long _lastPublishTick;
     private string? _contentType;
     private string? _cacheControl;
+    private string _relayMode = UpstreamRelayModes.Direct;
+    private string? _lastRelayFallbackReason;
     private DateTimeOffset? _lastUpstreamByteUtc;
     private int _reconnectAttempts;
     private string? _lastFailureKind;
+    private int? _lastUpstreamStatusCode;
+    private double? _lastCooldownSeconds;
+    private double? _lastFirstByteLatencyMs;
     private int _closeNotified;
     private int _pendingSubscriberAttaches;
     private int _stopRequested;
     private int _retainedExternalActivityCount;
     private long _totalBytesRelayed;
+    private long _bytesSinceReconnect;
     private string? _pendingStopTrigger;
+    private string? _lastStopTrigger;
+    private string? _lastDisconnectReason;
+    private DateTimeOffset? _connectAttemptStartedUtc;
+    private bool _awaitingFirstByte;
+    private readonly MpegTsBoundaryScanner _mpegTsScanner = new();
+    private bool _mpegTsSafeStartSelected;
+    private int? _mpegTsCandidateSafeStartGeneration;
+    private long? _mpegTsCandidateSafeStartSequence;
+    private long _mpegTsBytesSinceReset;
+    private int _mpegTsProbeBytes;
+    private bool _mpegTsPacketModeKnown;
+    private bool _mpegTsPacketizeEnabled;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -53,8 +80,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         UpstreamStreamConnector upstreamConnector,
         UpstreamFailureStrikeStore strikeStore,
         StreamingRegistry registry,
+        StreamingDiagnosticsStore diagnosticsStore,
+        IEventService eventService,
         ILogger<ChannelStreamSession> logger,
-        Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed)
+        Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed,
+        M3UndleMetrics? metrics = null)
     {
         _source = source;
         _bufferOptions = bufferOptions;
@@ -63,12 +93,17 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _upstreamConnector = upstreamConnector;
         _strikeStore = strikeStore;
         _registry = registry;
+        _diagnosticsStore = diagnosticsStore;
+        _eventService = eventService;
         _logger = logger;
         _onClosed = onClosed;
+        _metrics = metrics;
         _idleGrace = ResolveIdleGrace(_proxyOptions);
 
         var maxBytes = Math.Clamp(_bufferOptions.MaxBytesPerSession, 1, _bufferOptions.MaxBytesHardCap);
         _buffer = new RingBuffer(maxBytes);
+        RecordDiagnostic(StreamDiagnosticEventKind.SessionCreated, message: "Shared stream session created.");
+        _metrics?.RecordStreamStarted(_source.ProviderId, ResolveStreamType(_source.StreamUrl), ResolveProtocol(_source.StreamUrl));
     }
 
     public ChannelSessionKey Key => _source.SessionKey;
@@ -97,6 +132,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
     }
 
+    public bool IsIdleGraceWithNoConsumers
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return string.Equals(_pendingStopTrigger, "idle_grace", StringComparison.Ordinal)
+                    && ShouldScheduleIdleShutdownNoLock();
+            }
+        }
+    }
+
     public async Task<SubscriberConnection> AttachSubscriberAsync(
         HttpContext context,
         CancellationToken requestCt,
@@ -120,7 +167,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _subscribers[subscriber.ClientId] = subscriber;
 
             subscriber.InitializeResponse(_contentType, _cacheControl);
-            _ = subscriber.StartAsync(_buffer.CreateLiveEdgeSnapshot(), _sessionCts.Token);
+            _ = subscriber.StartAsync(CreateSubscriberStartupSnapshot(subscriber.IsInternal), _sessionCts.Token);
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.SubscriberAttached,
+                subscriber: subscriber,
+                message: "Subscriber attached.");
             if (!isInternal)
                 _registry.UpsertClient(subscriber.Snapshot());
             PublishSnapshots();
@@ -158,6 +209,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         LogSubscriberRemoved(subscriber, reason);
+        _lastDisconnectReason = reason.ToString();
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.SubscriberRemoved,
+            subscriber: subscriber,
+            disconnectReason: reason,
+            message: "Subscriber removed.");
 
         lock (_gate)
         {
@@ -257,18 +314,63 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 {
                     SetState(reconnectAttempt == 0 ? SessionState.Connecting : SessionState.Reconnecting);
 
+                    _connectAttemptStartedUtc = DateTimeOffset.UtcNow;
+                    _awaitingFirstByte = true;
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.UpstreamConnectStarted,
+                        reconnectAttempt: reconnectAttempt,
+                        message: "Opening upstream stream connection.");
                     await using var upstream = await _upstreamConnector.ConnectAsync(_source, _sessionCts.Token);
+                    _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
+                    _relayMode = upstream.RelayMode;
+                    _lastRelayFallbackReason = upstream.RelayFallbackReason;
                     _headersReadyTcs.TrySetResult(true);
+                    Interlocked.Exchange(ref _bytesSinceReconnect, 0);
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.UpstreamConnected,
+                        httpStatusCode: upstream.StatusCode,
+                        reconnectAttempt: reconnectAttempt,
+                        message: "Connected to upstream stream.");
+                    if (!string.Equals(_relayMode, UpstreamRelayModes.Direct, StringComparison.Ordinal))
+                    {
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.FfmpegRelayStarted,
+                            httpStatusCode: upstream.StatusCode,
+                            reconnectAttempt: reconnectAttempt,
+                            message: $"FFmpeg relay started: {_relayMode}.");
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_lastRelayFallbackReason))
+                    {
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.FfmpegRelayFallbackToDirect,
+                            httpStatusCode: upstream.StatusCode,
+                            reconnectAttempt: reconnectAttempt,
+                            message: $"FFmpeg relay fallback to direct: {_lastRelayFallbackReason}.");
+                        await PublishUnstableProviderEventAsync(
+                            $"FFmpeg relay fell back to direct streaming ({_lastRelayFallbackReason}).");
+                    }
 
                     if (reconnectAttempt > 0)
                     {
+                        _metrics?.RecordStreamReconnect(_source.ProviderId);
                         _logger.LogInformation(
                             "Stream '{DisplayName}' recovered successfully after {Attempts} reconnect attempt(s).",
                             _source.DisplayName,
                             reconnectAttempt);
                         _buffer.ResetGeneration();
+                        ResetMpegTsBoundaryState();
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.ReconnectRecovered,
+                            httpStatusCode: upstream.StatusCode,
+                            reconnectAttempt: reconnectAttempt,
+                            message: "Upstream stream recovered after reconnect.");
+                        await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
+                    }
+                    else
+                    {
+                        ResetMpegTsBoundaryState();
                     }
 
                     reconnectAttempt = 0;
@@ -299,15 +401,63 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         : _upstreamConnector.Classify(ex);
 
                     _lastFailureKind = kind.ToString();
+                    _lastUpstreamStatusCode = ex is UpstreamConnectException connectExForStatus
+                        ? connectExForStatus.StatusCode
+                        : null;
                     _reconnectAttempts++;
                     reconnectAttempt++;
+                    _metrics?.RecordStreamFailure(_source.ProviderId);
                     LogUpstreamFailure(kind);
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.UpstreamFailure,
+                        upstreamFailureKind: kind,
+                        httpStatusCode: _lastUpstreamStatusCode,
+                        reconnectAttempt: reconnectAttempt,
+                        message: ex.Message);
                     _logger.LogWarning(
                         "Session {SessionId} upstream failure kind={FailureKind} attempt={Attempt}.",
                         _sessionId,
                         kind,
                         reconnectAttempt);
                     PublishSnapshots();
+
+                    if (ShouldCooldownImmediately(kind))
+                    {
+                        var retryAfter = ResolveCooldownDuration(ex);
+                        _lastCooldownSeconds = retryAfter.TotalSeconds;
+                        _strikeStore.RecordStrike(Key, retryAfter);
+                        _logger.LogWarning(
+                            "Session {SessionId} entering upstream cooldown for {ProviderId}/{ProviderChannelId}. kind={FailureKind} retryAfterSeconds={RetryAfterSeconds:F0}.",
+                            _sessionId,
+                            _source.ProviderId,
+                            _source.ProviderChannelId,
+                            kind,
+                            retryAfter.TotalSeconds);
+
+                        if (!_headersReadyTcs.Task.IsCompleted)
+                        {
+                            _headersReadyTcs.TrySetException(new StreamAdmissionException(
+                                $"Upstream source is cooling down for {retryAfter.TotalSeconds:F0}s.",
+                                StreamAdmissionFailureKind.Cooldown,
+                                StatusCodes.Status503ServiceUnavailable,
+                                retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, retryAfter.TotalSeconds)))));
+                        }
+
+                        MarkPendingStopTrigger("upstream_cooldown");
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.CooldownRecorded,
+                            upstreamFailureKind: kind,
+                            httpStatusCode: _lastUpstreamStatusCode,
+                            cooldownSeconds: retryAfter.TotalSeconds,
+                            retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, retryAfter.TotalSeconds))),
+                            message: "Upstream cooldown recorded.");
+                        await PublishUnstableProviderEventAsync(
+                            $"Stream entered cooldown after {kind} ({Math.Ceiling(retryAfter.TotalSeconds):F0}s).");
+                        LogStopTrigger("upstream_cooldown", subscriberDisconnectReason: kind.ToString());
+                        SetState(SessionState.Faulted);
+                        await ForceCloseSubscribersAsync();
+                        break;
+                    }
 
                     if (IsFatal(kind))
                     {
@@ -345,6 +495,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     }
 
                     var delay = GetReconnectDelay(reconnectAttempt);
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.ReconnectScheduled,
+                        upstreamFailureKind: kind,
+                        httpStatusCode: _lastUpstreamStatusCode,
+                        reconnectAttempt: reconnectAttempt,
+                        reconnectDelay: delay,
+                        message: "Upstream reconnect scheduled.");
                     if (delay > TimeSpan.Zero)
                         await Task.Delay(delay, _sessionCts.Token);
                 }
@@ -355,6 +512,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             if (_state != SessionState.Faulted)
                 SetState(SessionState.Closed);
 
+            _metrics?.RecordStreamEnded(_source.ProviderId, ResolveStreamType(_source.StreamUrl), ResolveProtocol(_source.StreamUrl));
             PublishSnapshots();
             _registry.RemoveSession(_sessionId);
             await NotifyClosedAsync();
@@ -364,59 +522,311 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private async Task ReadFromUpstreamAsync(UpstreamConnection upstream, CancellationToken ct)
     {
         var readBuffer = new byte[Math.Max(188, _bufferOptions.ReadChunkSizeBytes)];
+        Task<int>? pendingReadTask = null;
+        var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        stallCts.CancelAfter(ResolveCurrentStallTimeout());
 
-        while (!ct.IsCancellationRequested)
+        try
         {
-            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            readCts.CancelAfter(_reconnectOptions.ReadStallTimeout);
-
-            int bytesRead;
-            try
+            while (!ct.IsCancellationRequested)
             {
-                bytesRead = await upstream.Stream.ReadAsync(readBuffer.AsMemory(0, readBuffer.Length), readCts.Token);
-            }
-            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
-            {
-                throw new UpstreamConnectException("Upstream read stalled.", UpstreamFailureKind.TimeoutOrStall, null, ex);
-            }
+                pendingReadTask ??= upstream.Stream
+                    .ReadAsync(readBuffer.AsMemory(0, readBuffer.Length), stallCts.Token)
+                    .AsTask();
 
-            if (bytesRead == 0)
-            {
-                throw new UpstreamConnectException("Upstream EOF.", UpstreamFailureKind.EndOfStream);
-            }
-
-            _lastUpstreamByteUtc = DateTimeOffset.UtcNow;
-            Interlocked.Add(ref _totalBytesRelayed, bytesRead);
-            using var published = _buffer.Write(readBuffer.AsMemory(0, bytesRead));
-            List<SubscriberConnection>? slowSubscribers = null;
-
-            foreach (var subscriber in _subscribers.Values)
-            {
-                var perSubscriber = published.Duplicate();
-                if (!subscriber.TryEnqueue(perSubscriber))
+                var completed = await Task.WhenAny(pendingReadTask, Task.Delay(MpegTsKeepaliveInterval, ct));
+                if (!ReferenceEquals(completed, pendingReadTask))
                 {
-                    perSubscriber.Dispose();
-                    slowSubscribers ??= [];
-                    slowSubscribers.Add(subscriber);
+                    ct.ThrowIfCancellationRequested();
+
+                    if (ShouldInjectMpegTsKeepalive())
+                        await PublishMpegTsKeepaliveAsync();
+
                     continue;
                 }
 
-                if (!subscriber.IsInternal)
-                    _registry.UpsertClient(subscriber.Snapshot());
+                int bytesRead;
+                try
+                {
+                    bytesRead = await pendingReadTask;
+                }
+                catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+                {
+                    throw new UpstreamConnectException("Upstream read stalled.", UpstreamFailureKind.TimeoutOrStall, null, ex);
+                }
+                finally
+                {
+                    pendingReadTask = null;
+                }
+
+                if (bytesRead == 0)
+                {
+                    throw new UpstreamConnectException("Upstream EOF.", UpstreamFailureKind.EndOfStream);
+                }
+
+                var resetStallTimer = await PublishUpstreamBytesAsync(readBuffer.AsMemory(0, bytesRead));
+                if (resetStallTimer)
+                {
+                    stallCts.Dispose();
+                    stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    stallCts.CancelAfter(ResolveCurrentStallTimeout());
+                }
+            }
+        }
+        finally
+        {
+            stallCts.Dispose();
+        }
+    }
+
+    private async Task<bool> PublishUpstreamBytesAsync(ReadOnlyMemory<byte> data)
+    {
+        var bytesRead = data.Length;
+        _lastUpstreamByteUtc = DateTimeOffset.UtcNow;
+        if (_awaitingFirstByte)
+        {
+            _awaitingFirstByte = false;
+            _lastFirstByteLatencyMs = _connectAttemptStartedUtc is { } started
+                ? (_lastUpstreamByteUtc.Value - started).TotalMilliseconds
+                : null;
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.FirstUpstreamByte,
+                firstByteLatencyMs: _lastFirstByteLatencyMs,
+                message: "Received first upstream byte after connect.");
+        }
+
+        Interlocked.Add(ref _totalBytesRelayed, bytesRead);
+        Interlocked.Add(ref _bytesSinceReconnect, bytesRead);
+
+        var resetStallTimer = true;
+        if (IsMpegTsRelay() && ShouldPacketizeMpegTs(data.Span))
+        {
+            var batch = _mpegTsScanner.Process(data.Span);
+            if (batch is null)
+                return false;
+
+            if (batch.DroppedByteCount > 0 || batch.SyncLost)
+            {
+                RecordDiagnostic(
+                    StreamDiagnosticEventKind.MpegTsSyncLost,
+                    message: $"MPEG-TS sync rescan dropped {batch.DroppedByteCount} byte(s).");
             }
 
-            if (slowSubscribers is not null)
+            if (batch.Data.Length == 0)
+                return false;
+
+            resetStallTimer = HasNonNullTsContent(batch.Data);
+            Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
+            using var published = _buffer.Write(batch.Data);
+            MarkMpegTsSafeStartIfReady(published, batch.StartupKind);
+            await PublishToSubscribersAsync(published);
+        }
+        else
+        {
+            using var published = _buffer.Write(data);
+            await PublishToSubscribersAsync(published);
+        }
+
+        PublishSnapshotsIfDue();
+        return resetStallTimer;
+    }
+
+    private async Task PublishToSubscribersAsync(BufferLease published)
+    {
+        List<SubscriberConnection>? slowSubscribers = null;
+
+        foreach (var subscriber in _subscribers.Values)
+        {
+            var perSubscriber = published.Duplicate();
+            if (!subscriber.TryEnqueue(perSubscriber))
             {
-                foreach (var slow in slowSubscribers)
-                    await slow.CompleteAsync(SubscriberDisconnectReason.SlowClient);
+                perSubscriber.Dispose();
+                if (subscriber.IsCompleted)
+                    continue;
+
+                RecordDiagnostic(
+                    StreamDiagnosticEventKind.SubscriberQueueFull,
+                    subscriber: subscriber,
+                    disconnectReason: SubscriberDisconnectReason.SlowClient,
+                    queueDepth: Math.Max(1, subscriber.QueueDepth),
+                    message: "Subscriber queue rejected live stream chunk; removing subscriber as slow client.");
+                slowSubscribers ??= [];
+                slowSubscribers.Add(subscriber);
+                continue;
             }
 
-            var tick = Environment.TickCount64;
-            if (tick - _lastPublishTick >= 100)
-            {
-                _lastPublishTick = tick;
-                PublishSnapshots();
-            }
+            if (!subscriber.IsInternal)
+                _registry.UpsertClient(subscriber.Snapshot());
+        }
+
+        if (slowSubscribers is not null)
+        {
+            foreach (var slow in slowSubscribers)
+                await slow.CompleteAsync(SubscriberDisconnectReason.SlowClient);
+        }
+    }
+
+    private BufferSnapshot CreateSubscriberStartupSnapshot(bool isInternal)
+    {
+        if (IsMpegTsRelay() && isInternal)
+            return _buffer.CreateSafeStartSnapshot();
+
+        return _buffer.CreateLiveEdgeSnapshot();
+    }
+
+    private bool IsMpegTsRelay()
+        => _contentType?.Contains("MP2T", StringComparison.OrdinalIgnoreCase) == true
+           || _contentType?.Contains("mpegts", StringComparison.OrdinalIgnoreCase) == true;
+
+    private bool ShouldInjectMpegTsKeepalive()
+        => IsMpegTsRelay() && HasNonHdhrExternalSubscriber();
+
+    private bool HasNonHdhrExternalSubscriber()
+        => _subscribers.Values.Any(subscriber =>
+            !subscriber.IsInternal
+            && StreamLogClassification.ClassifyRoute(subscriber.RequestPath) != StreamLogClassification.HdhrRoute);
+
+    private async Task PublishMpegTsKeepaliveAsync()
+    {
+        using var published = _buffer.Write(MpegTsNullPacket);
+        await PublishToSubscribersAsync(published);
+        PublishSnapshotsIfDue();
+    }
+
+    private void PublishSnapshotsIfDue()
+    {
+        var tick = Environment.TickCount64;
+        if (tick - _lastPublishTick < 100)
+            return;
+
+        _lastPublishTick = tick;
+        PublishSnapshots();
+    }
+
+    private TimeSpan ResolveCurrentStallTimeout()
+    {
+        if (!IsMpegTsRelay())
+            return _reconnectOptions.ReadStallTimeout;
+
+        if (_reconnectOptions.ContentStallTimeout <= TimeSpan.Zero)
+            return _reconnectOptions.ReadStallTimeout;
+
+        return _reconnectOptions.ContentStallTimeout < _reconnectOptions.ReadStallTimeout
+            ? _reconnectOptions.ContentStallTimeout
+            : _reconnectOptions.ReadStallTimeout;
+    }
+
+    private static bool HasNonNullTsContent(ReadOnlySpan<byte> data)
+    {
+        for (var offset = 0; offset + MpegTsBoundaryScanner.PacketSize <= data.Length; offset += MpegTsBoundaryScanner.PacketSize)
+        {
+            if (data[offset] != 0x47)
+                continue;
+
+            var pid = ((data[offset + 1] & 0x1f) << 8) | data[offset + 2];
+            if (pid != 0x1fff)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static byte[] CreateMpegTsNullPacket()
+    {
+        var packet = new byte[MpegTsBoundaryScanner.PacketSize];
+        Array.Fill(packet, (byte)0xff);
+        packet[0] = 0x47;
+        packet[1] = 0x1f;
+        packet[2] = 0xff;
+        packet[3] = 0x10;
+        return packet;
+    }
+
+    private void ResetMpegTsBoundaryState()
+    {
+        _mpegTsScanner.Reset();
+        _mpegTsSafeStartSelected = false;
+        _mpegTsCandidateSafeStartGeneration = null;
+        _mpegTsCandidateSafeStartSequence = null;
+        _mpegTsProbeBytes = 0;
+        _mpegTsPacketModeKnown = false;
+        _mpegTsPacketizeEnabled = false;
+        Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
+    }
+
+    private bool ShouldPacketizeMpegTs(ReadOnlySpan<byte> data)
+    {
+        if (_mpegTsPacketModeKnown)
+            return _mpegTsPacketizeEnabled;
+
+        if (HasLikelyMpegTsSync(data))
+        {
+            _mpegTsPacketModeKnown = true;
+            _mpegTsPacketizeEnabled = true;
+            return true;
+        }
+
+        _mpegTsProbeBytes += data.Length;
+        if (_mpegTsProbeBytes < MpegTsBoundaryScanner.PacketSize * 4)
+            return true;
+
+        _mpegTsPacketModeKnown = true;
+        _mpegTsPacketizeEnabled = false;
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.MpegTsPacketizerDisabled,
+            message: "MPEG-TS packetizer disabled after probe found no sync byte; using pass-through relay.");
+        return false;
+    }
+
+    private static bool HasLikelyMpegTsSync(ReadOnlySpan<byte> data)
+    {
+        for (var i = 0; i < data.Length; i++)
+        {
+            if (data[i] != 0x47)
+                continue;
+
+            if (i + MpegTsBoundaryScanner.PacketSize >= data.Length
+                || data[i + MpegTsBoundaryScanner.PacketSize] == 0x47)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void MarkMpegTsSafeStartIfReady(BufferLease lease, MpegTsStartupKind kind)
+    {
+        var fallbackBytes = Math.Min(Math.Max(MpegTsBoundaryScanner.PacketSize, _bufferOptions.MaxBytesPerSession / 2), 512 * 1024);
+
+        if (kind == MpegTsStartupKind.PatPmt && _mpegTsCandidateSafeStartSequence is null)
+        {
+            _mpegTsCandidateSafeStartGeneration = lease.Generation;
+            _mpegTsCandidateSafeStartSequence = lease.Sequence;
+        }
+
+        var selected = kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt;
+        var fallback = false;
+        if (!selected && !_mpegTsSafeStartSelected && Interlocked.Read(ref _mpegTsBytesSinceReset) >= fallbackBytes)
+        {
+            selected = true;
+            fallback = true;
+        }
+
+        if (!selected)
+            return;
+
+        if (kind == MpegTsStartupKind.H264Idr
+            && _mpegTsCandidateSafeStartGeneration is { } generation
+            && _mpegTsCandidateSafeStartSequence is { } sequence)
+            _buffer.MarkSafeStart(generation, sequence);
+        else
+            _buffer.MarkSafeStart(lease);
+
+        if (!_mpegTsSafeStartSelected)
+        {
+            _mpegTsSafeStartSelected = true;
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.MpegTsSafeStartSelected,
+                message: $"MPEG-TS safe start selected: {(fallback ? "FallbackPacketBoundary" : kind)}.");
         }
     }
 
@@ -429,6 +839,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         => kind is UpstreamFailureKind.UpstreamAuth
             or UpstreamFailureKind.UpstreamNotFound
             or UpstreamFailureKind.StartupFatal;
+
+    private static bool ShouldCooldownImmediately(UpstreamFailureKind kind)
+        => kind is UpstreamFailureKind.UpstreamProxyAuthRequired
+            or UpstreamFailureKind.UpstreamRateLimited;
+
+    private TimeSpan ResolveCooldownDuration(Exception ex)
+    {
+        if (ex is UpstreamConnectException { RetryAfter: { } retryAfter })
+        {
+            if (retryAfter <= TimeSpan.Zero)
+                return TimeSpan.FromSeconds(1);
+
+            return _reconnectOptions.StrikeCooldown > retryAfter
+                ? _reconnectOptions.StrikeCooldown
+                : retryAfter;
+        }
+
+        return _reconnectOptions.StrikeCooldown > TimeSpan.Zero
+            ? _reconnectOptions.StrikeCooldown
+            : TimeSpan.FromSeconds(1);
+    }
 
     private TimeSpan GetReconnectDelay(int attempt)
     {
@@ -589,6 +1020,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         return idleGrace;
     }
 
+    private static string ResolveStreamType(string streamUrl)
+    {
+        var kind = LiveClassifier.ClassifyContent(streamUrl);
+        return kind is "vod" or "series" ? kind : "live";
+    }
+
+    private static string ResolveProtocol(string streamUrl)
+        => streamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ? "hls" : "mpegts";
+
     private void LogSubscriberAttached(SubscriberConnection subscriber)
     {
         _logger.LogInformation(
@@ -687,6 +1127,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private void LogStopTrigger(string stopTrigger, string? subscriberDisconnectReason = null, TimeSpan? delay = null)
     {
+        _lastStopTrigger = stopTrigger;
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.StopTriggered,
+            stopTrigger: stopTrigger,
+            reconnectDelay: delay,
+            message: "Stream stop trigger recorded.");
         _logger.LogInformation(
             "Stream stop trigger: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RouteClassification={RouteClassification} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} PendingAttachCount={PendingAttachCount} StopTrigger={StopTrigger} SubscriberDisconnectReason={SubscriberDisconnectReason} DelayMs={DelayMs}",
             _sessionId,
@@ -753,7 +1199,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             StartedUtc: _startedUtc,
             LastUpstreamByteUtc: _lastUpstreamByteUtc,
             ReconnectAttempts: _reconnectAttempts,
-            LastFailureKind: _lastFailureKind);
+            LastFailureKind: _lastFailureKind,
+            FirstByteLatencyMs: _lastFirstByteLatencyMs,
+            BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            LastDisconnectReason: _lastDisconnectReason,
+            LastStopTrigger: _lastStopTrigger,
+            LastUpstreamStatusCode: _lastUpstreamStatusCode,
+            LastCooldownSeconds: _lastCooldownSeconds,
+            RelayMode: _relayMode,
+            LastRelayFallbackReason: _lastRelayFallbackReason);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(
@@ -764,7 +1218,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastUpstreamByteUtc: _lastUpstreamByteUtc,
             ReconnectAttempts: _reconnectAttempts,
             LastFailureKind: _lastFailureKind,
-            ContentType: _contentType));
+            ContentType: _contentType,
+            FirstByteLatencyMs: _lastFirstByteLatencyMs,
+            BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            LastUpstreamStatusCode: _lastUpstreamStatusCode,
+            LastCooldownSeconds: _lastCooldownSeconds,
+            RelayMode: _relayMode,
+            LastRelayFallbackReason: _lastRelayFallbackReason));
     }
 
     private async Task NotifyClosedAsync()
@@ -776,7 +1236,103 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             "Shared stream session {SessionId} closed with state {State}.",
             _sessionId,
             _state);
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.SessionClosed,
+            stopTrigger: _lastStopTrigger,
+            message: "Shared stream session closed.");
         await _onClosed(Key, this);
+    }
+
+    private void RecordDiagnostic(
+        StreamDiagnosticEventKind kind,
+        SubscriberConnection? subscriber = null,
+        UpstreamFailureKind? upstreamFailureKind = null,
+        int? httpStatusCode = null,
+        int? reconnectAttempt = null,
+        TimeSpan? reconnectDelay = null,
+        double? firstByteLatencyMs = null,
+        SubscriberDisconnectReason? disconnectReason = null,
+        string? stopTrigger = null,
+        double? cooldownSeconds = null,
+        int? retryAfterSeconds = null,
+        int? queueDepth = null,
+        string? message = null)
+    {
+        _diagnosticsStore.Record(new StreamDiagnosticEvent(
+            EventId: Guid.NewGuid().ToString("N"),
+            TimestampUtc: DateTimeOffset.UtcNow,
+            Kind: kind,
+            SessionId: _sessionId,
+            ProviderId: _source.ProviderId,
+            ProviderChannelId: _source.ProviderChannelId,
+            DisplayName: _source.DisplayName,
+            RequestedRoute: _source.RequestedRoute,
+            RouteClassification: RouteClassification,
+            ClientId: subscriber?.ClientId,
+            RemoteIp: subscriber?.RemoteIp,
+            UserAgent: subscriber?.UserAgent,
+            HttpStatusCode: httpStatusCode,
+            UpstreamFailureKind: upstreamFailureKind,
+            ReconnectAttempt: reconnectAttempt,
+            ReconnectDelayMs: reconnectDelay?.TotalMilliseconds,
+            FirstByteLatencyMs: firstByteLatencyMs,
+            BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            TotalBytesRelayed: Interlocked.Read(ref _totalBytesRelayed),
+            BytesSent: subscriber?.BytesSent,
+            QueueDepth: queueDepth ?? subscriber?.QueueDepth,
+            DisconnectReason: disconnectReason,
+            StopTrigger: stopTrigger,
+            CooldownSeconds: cooldownSeconds,
+            RetryAfterSeconds: retryAfterSeconds,
+            Message: message));
+    }
+
+    private async Task PublishUnstableProviderEventAsync(string detail)
+    {
+        try
+        {
+            await _eventService.PublishAsync(
+                SystemEventSeverity.Warning,
+                SystemEventTypes.ProviderStreamUnstable,
+                $"Provider stream unstable: {_source.DisplayName}",
+                detail,
+                providerId: _source.ProviderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish ProviderStreamUnstable event for provider {ProviderId}.",
+                _source.ProviderId);
+        }
+    }
+
+    private async Task PublishRecoveredProviderEventIfNeededAsync(CancellationToken ct)
+    {
+        try
+        {
+            var hasUnstable = await _eventService.HasEventAsync(
+                SystemEventTypes.ProviderStreamUnstable,
+                providerId: _source.ProviderId,
+                ct: ct);
+
+            if (!hasUnstable)
+                return;
+
+            await _eventService.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.ProviderStreamRecovered,
+                $"Provider stream recovered: {_source.DisplayName}",
+                "Upstream stream recovered after reconnect.",
+                providerId: _source.ProviderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to publish ProviderStreamRecovered event for provider {ProviderId}.",
+                _source.ProviderId);
+        }
     }
 
     private string RouteClassification => StreamLogClassification.ClassifyRoute(_source.RequestedRoute);

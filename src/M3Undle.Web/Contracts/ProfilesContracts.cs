@@ -12,6 +12,7 @@ public sealed class ProfileProviderInfoDto
     public string Name { get; set; } = string.Empty;
     public int Priority { get; set; }
     public bool Enabled { get; set; }
+    public DateTime? PlaylistExpiresUtc { get; set; }
 }
 
 public sealed class ProfilePageItemDto

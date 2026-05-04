@@ -2,6 +2,7 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
 @inject ProfilesPageService ProfilesService
+@inject IRefreshScheduleService RefreshSchedule
 @inject NavigationManager Nav
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
@@ -104,6 +105,33 @@ else
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Created</MudText>
                         <MudText Typo="Typo.body2">@profile.CreatedUtc.ToString("u")</MudText>
                     </MudStack>
+                    @{
+                        var earliestExpiry = profile.Providers
+                            .Where(p => p.PlaylistExpiresUtc.HasValue)
+                            .Select(p => p.PlaylistExpiresUtc!.Value)
+                            .OrderBy(d => d)
+                            .Cast<DateTime?>()
+                            .FirstOrDefault();
+                    }
+                    @if (earliestExpiry.HasValue)
+                    {
+                        var eDays = (earliestExpiry.Value - DateTime.UtcNow).TotalDays;
+                        var eColor = eDays < 0 ? Color.Error : eDays <= 7 ? Color.Error : eDays <= 30 ? Color.Warning : Color.Default;
+                        var eLabel = eDays < 0 ? $"Expired {earliestExpiry.Value:yyyy-MM-dd}"
+                                   : eDays < 1 ? $"Expires today ({earliestExpiry.Value:yyyy-MM-dd})"
+                                   : $"{earliestExpiry.Value:yyyy-MM-dd} (in {(int)eDays + 1}d)";
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Earliest Expiry</MudText>
+                            @if (eColor == Color.Default)
+                            {
+                                <MudText Typo="Typo.body2">@eLabel</MudText>
+                            }
+                            else
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="@eColor" Variant="Variant.Outlined">@eLabel</MudChip>
+                            }
+                        </MudStack>
+                    }
                 </MudStack>
             </MudPaper>
         </MudItem>
@@ -187,6 +215,7 @@ else
                             <tr>
                                 <th>Provider</th>
                                 <th>Priority</th>
+                                <th>Expires</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
@@ -196,6 +225,29 @@ else
                                 <tr>
                                     <td>@p.Name</td>
                                     <td>@p.Priority</td>
+                                    <td>
+                                        @if (!p.PlaylistExpiresUtc.HasValue)
+                                        {
+                                            <span>—</span>
+                                        }
+                                        else
+                                        {
+                                            var pd = (p.PlaylistExpiresUtc.Value - DateTime.UtcNow).TotalDays;
+                                            var pc = pd <= 7 ? Color.Error : pd <= 30 ? Color.Warning : Color.Default;
+                                            var pl = pd < 0 ? $"Expired {p.PlaylistExpiresUtc.Value:yyyy-MM-dd}"
+                                                   : pd < 1 ? "Expires today"
+                                                   : pd <= 30 ? $"{p.PlaylistExpiresUtc.Value:yyyy-MM-dd} (in {(int)pd + 1}d)"
+                                                   : p.PlaylistExpiresUtc.Value.ToString("yyyy-MM-dd");
+                                            @if (pc == Color.Default)
+                                            {
+                                                <span>@pl</span>
+                                            }
+                                            else
+                                            {
+                                                <MudChip T="string" Size="Size.Small" Color="@pc" Variant="Variant.Outlined">@pl</MudChip>
+                                            }
+                                        }
+                                    </td>
                                     <td>
                                         @if (!p.Enabled)
                                         {
@@ -210,6 +262,87 @@ else
                             }
                         </tbody>
                     </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <!-- Refresh Schedule -->
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.h6" Class="mb-3">Refresh Schedule</MudText>
+
+                @if (_loadingRefreshSchedule)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    @if (!profile.IsActive)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            This profile is not active — schedule settings apply when this profile is set active.
+                        </MudAlert>
+                    }
+
+                    <MudSwitch T="bool"
+                               Label="Use profile-specific schedule"
+                               @bind-Value="_profileScheduleOverride"
+                               Color="Color.Primary"
+                               Class="mb-2" />
+
+                    @if (_profileScheduleOverride)
+                    {
+                        <RefreshIntervalSelect Value="@ProfileRefreshIntervalHoursAdapter"
+                                               ValueChanged="@(v => ProfileRefreshIntervalHoursAdapter = v)"
+                                               Label="Profile Refresh Schedule"
+                                               NoneLabel="Manual only" />
+
+                        @if (_profileScheduleKind == _globalScheduleKind)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-1 mb-1">
+                                Same as global default — no meaningful override will be saved.
+                            </MudText>
+                        }
+
+                        <MudSwitch T="bool"
+                                   Label="Startup catch-up"
+                                   @bind-Value="_profileStartupCatchup"
+                                   Color="Color.Primary"
+                                   Class="mt-2 mb-2" />
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                            Inherits global default: @FormatSchedule(_globalScheduleKind).
+                        </MudText>
+                    }
+
+                    @if (_nextProfileRefreshUtc.HasValue)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                            Next scheduled refresh: <strong>@_nextProfileRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                        </MudText>
+                    }
+                    else if (_effectiveScheduleKind == "manual")
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                            Automatic refresh is disabled for this profile.
+                        </MudText>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(_refreshScheduleError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                            @_refreshScheduleError
+                        </MudAlert>
+                    }
+
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Disabled="_savingRefreshSchedule"
+                               OnClick="SaveProfileRefreshScheduleAsync">
+                        @(_savingRefreshSchedule ? "Saving..." : "Save Refresh Schedule")
+                    </MudButton>
                 }
             </MudPaper>
         </MudItem>
@@ -280,6 +413,21 @@ else
     private ProfileDetailDto? _detail;
     private bool _isLoading;
     private string? _loadError;
+    private bool _loadingRefreshSchedule;
+    private bool _savingRefreshSchedule;
+    private bool _profileScheduleOverride;
+    private string _profileScheduleKind = "6h";
+    private bool _profileStartupCatchup = true;
+    private string _globalScheduleKind = "6h";
+    private string _effectiveScheduleKind = "6h";
+    private DateTime? _nextProfileRefreshUtc;
+    private string? _refreshScheduleError;
+
+    private int? ProfileRefreshIntervalHoursAdapter
+    {
+        get => _profileScheduleKind == "manual" ? null : int.TryParse(_profileScheduleKind.TrimEnd('h'), out var h) ? h : (int?)null;
+        set => _profileScheduleKind = value is null ? "manual" : $"{value}h";
+    }
 
     private async Task SetActiveAsync()
     {
@@ -290,6 +438,7 @@ else
             if (error is not null) { Snackbar.Add(error, Severity.Error); return; }
             Snackbar.Add($"Profile \"{name}\" is now active.", Severity.Success);
             _detail = await ProfilesService.GetProfileDetailAsync(ProfileId, CancellationToken.None);
+            await LoadProfileRefreshScheduleAsync();
         }
         catch (Exception ex)
         {
@@ -329,6 +478,7 @@ else
         try
         {
             _detail = await ProfilesService.GetProfileDetailAsync(ProfileId, CancellationToken.None);
+            await LoadProfileRefreshScheduleAsync();
         }
         catch (Exception ex)
         {
@@ -339,4 +489,66 @@ else
             _isLoading = false;
         }
     }
+
+    private async Task LoadProfileRefreshScheduleAsync()
+    {
+        _loadingRefreshSchedule = true;
+        _refreshScheduleError = null;
+
+        try
+        {
+            var effective = await RefreshSchedule.GetEffectiveSettingsAsync(ProfileId, CancellationToken.None);
+            _profileScheduleOverride = effective.UsesProfileOverride;
+            _globalScheduleKind = effective.GlobalSettings.ScheduleKind;
+            _effectiveScheduleKind = effective.Settings.ScheduleKind;
+            _profileScheduleKind = effective.Settings.ScheduleKind;
+            _profileStartupCatchup = effective.Settings.StartupCatchup;
+            _nextProfileRefreshUtc = await RefreshSchedule.GetNextScheduledRefreshUtcAsync(ProfileId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _refreshScheduleError = $"Failed to load refresh schedule: {ex.Message}";
+        }
+        finally
+        {
+            _loadingRefreshSchedule = false;
+        }
+    }
+
+    private async Task SaveProfileRefreshScheduleAsync()
+    {
+        _savingRefreshSchedule = true;
+        _refreshScheduleError = null;
+
+        try
+        {
+            var (succeeded, error) = await RefreshSchedule.UpdateProfileAsync(
+                ProfileId,
+                new ProfileRefreshScheduleSettings(
+                    InheritGlobal: !_profileScheduleOverride,
+                    ScheduleKind: _profileScheduleKind,
+                    StartupCatchup: _profileStartupCatchup),
+                CancellationToken.None);
+
+            if (!succeeded)
+            {
+                _refreshScheduleError = error ?? "Failed to save refresh schedule.";
+                return;
+            }
+
+            await LoadProfileRefreshScheduleAsync();
+            Snackbar.Add("Refresh schedule saved.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _refreshScheduleError = $"Failed to save refresh schedule: {ex.Message}";
+        }
+        finally
+        {
+            _savingRefreshSchedule = false;
+        }
+    }
+
+    private static string FormatSchedule(string scheduleKind)
+        => scheduleKind == "manual" ? "manual only" : $"every {scheduleKind.TrimEnd('h')} hour{(scheduleKind == "1h" ? "" : "s")}";
 }

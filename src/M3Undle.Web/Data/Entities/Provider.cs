@@ -14,13 +14,12 @@ public sealed class Provider
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 
-    // Config source tracking
-    public string? ConfigSourcePath { get; set; }  // Path to config.yaml if imported from there
-    public bool NeedsEnvVarSubstitution { get; set; }  // True if URL contains %VAR% placeholders
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
 
     public bool ForceMpegTs { get; set; }
+
+    public string CleanRelayMode { get; set; } = "off";
 
     // Xtream Codes API provider fields
     public string? XtreamBaseUrl { get; set; }
@@ -28,10 +27,15 @@ public sealed class Provider
     public string? XtreamEncryptedPassword { get; set; }
     public bool XtreamIncludeXmltv { get; set; }
 
+    // Set true when player_api.php probe succeeds for an M3U URL with embedded credentials
+    public bool XtreamDetectedCapable { get; set; }
+
+    // UTC expiry from the Xtream player_api.php user_info.exp_date; null if unknown or not Xtream-capable
+    public DateTime? PlaylistExpiresUtc { get; set; }
+
     public ICollection<ProfileProvider> ProfileProviders { get; set; } = new List<ProfileProvider>();
     public ICollection<FetchRun> FetchRuns { get; set; } = new List<FetchRun>();
     public ICollection<ProviderGroup> ProviderGroups { get; set; } = new List<ProviderGroup>();
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();
     public ICollection<ChannelSource> ChannelSources { get; set; } = new List<ChannelSource>();
 }
-

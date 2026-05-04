@@ -45,7 +45,7 @@ public sealed class SubscriberConnection
         {
             SingleReader = true,
             SingleWriter = false,
-            FullMode = BoundedChannelFullMode.DropWrite,
+            FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false,
         };
 
@@ -78,6 +78,8 @@ public sealed class SubscriberConnection
     public long BytesSent => Interlocked.Read(ref _bytesSent);
 
     public int QueueDepth => Math.Max(0, Volatile.Read(ref _queueDepth));
+
+    public bool IsCompleted => Volatile.Read(ref _completed) == 1;
 
     public Task Completion => _pumpTask ?? Task.CompletedTask;
 
@@ -144,6 +146,8 @@ public sealed class SubscriberConnection
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _context.RequestAborted);
         var token = linkedCts.Token;
+        var snapshotGeneration = initialSnapshot.Generation;
+        var snapshotLastSequence = initialSnapshot.LastSequence;
 
         try
         {
@@ -162,6 +166,9 @@ public sealed class SubscriberConnection
                     Interlocked.Decrement(ref _queueDepth);
                     using (lease)
                     {
+                        if (lease.Generation == snapshotGeneration && lease.Sequence <= snapshotLastSequence)
+                            continue;
+
                         await WriteLeaseAsync(lease, token);
                     }
                 }

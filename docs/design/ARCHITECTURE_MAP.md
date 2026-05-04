@@ -5,6 +5,7 @@ A single unified process (`M3Undle.Web`) provides:
 - Web UI (configuration + status) — Blazor Server
 - Internal application services used directly by Blazor components (no loopback HTTP required)
 - REST API (`/api/v1/*`) for management/integration clients and external tooling
+- Observability endpoints for metrics, health probes, and admin diagnostics
 - HTTP compatibility endpoints for Media Players:
   - M3U — `/m3u/m3undle.m3u` (output name locked in Core)
   - XMLTV — `/xmltv/m3undle.xml`
@@ -17,6 +18,7 @@ A single unified process (`M3Undle.Web`) provides:
 - Profile: scopes a set of providers, published versions, and stream keys to a named output (display name + output name). User-facing profile management via `/profiles` and profile detail pages. Multiple named profiles with distinct output endpoints are a future feature.
 - StreamKey: stable token used in published `/stream/<streamKey>` URLs. **In V1**, derived from stable channel properties (tvg-id when present, otherwise `displayName + "\u001f" + streamUrl`), SHA-256 hashed with profileId, truncated to 16 base64url chars. Keys are stable across refreshes as long as the channel identity is stable.
 - Snapshot: atomic published output for a profile (M3U + XMLTV + channel index JSON). Staged then promoted to active.
+- Observability: service-owned metrics, health, and diagnostics surfaces for operators. Prometheus scrapes use `/metrics`; probes use `/livez`, `/readyz`, and `/healthz`; deep JSON diagnostics use `/api/admin/diagnostics/*`.
 
 ## Key Alpha Requirements
 
@@ -37,4 +39,15 @@ These constraints held for Alpha 1 (pass-through) and continue to apply in curre
 - The output endpoint is always `/m3u/m3undle.m3u` — clients should be pointed here.
 
 Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Alpha 5 added channel reorder, custom tvg-id, HLS compatibility, CORS, dashboard redesign, profile UX, new-channel inbox/review queue, dynamic event-tracking groups, custom groups, configurable refresh schedule, downstream integrations, and active profile switching.
+
+## Observability Architecture
+
+- `M3UndleMetrics` owns the `M3Undle` meter and records provider, stream, lineup, EPG, HDHomeRun, application, and HTTP metrics.
+- OpenTelemetry collects the `M3Undle` meter and serves Prometheus-compatible scrape output from the configured metrics path, default `/metrics`.
+- `MetricsEndpointSecurityMiddleware` enforces metrics access mode before the scrape endpoint runs.
+- Metrics access mode is resolved from startup options and persisted site settings. Runtime UI settings can disable metrics, use local-only CIDR checks, require tokens, or allow public scraping.
+- Metrics tokens are stored in `metrics_tokens` as password hashes. Plain tokens are returned only once at creation time.
+- ASP.NET Core health checks expose `/livez`, `/readyz`, `/healthz`, and `/health/ready`.
+- `/api/admin/diagnostics/*` endpoints require UI/admin authorization and return JSON snapshots for providers, streams, lineup, and EPG state.
+- Labels are intentionally low-cardinality. Raw URLs, usernames, tokens, client IPs, and channel names are not metrics labels.
 

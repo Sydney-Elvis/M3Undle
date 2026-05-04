@@ -212,7 +212,24 @@ def fetch_expected_device(base_url: str, timeout: float) -> tuple[Optional[Expec
     )
 
 
-def probe_ssdp(timeout: float, retries: int, expected: Optional[ExpectedDevice]) -> ProbeResult:
+def resolve_local_bind_host(target_ip: Optional[str], fallback_target: str, fallback_port: int) -> str:
+    target = target_ip or fallback_target
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as probe:
+            if target == BROADCAST_ADDR:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            probe.connect((target, fallback_port))
+            return probe.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+def probe_ssdp(
+    timeout: float,
+    retries: int,
+    expected: Optional[ExpectedDevice],
+    target_ip: Optional[str],
+) -> ProbeResult:
     msearch = "\r\n".join(
         [
             "M-SEARCH * HTTP/1.1",
@@ -232,7 +249,7 @@ def probe_ssdp(timeout: float, retries: int, expected: Optional[ExpectedDevice])
         try:
             sock.settimeout(timeout)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
-            sock.bind(("0.0.0.0", 0))
+            sock.bind((resolve_local_bind_host(target_ip, SSDP_MCAST_ADDR, SSDP_PORT), 0))
 
             for _ in range(max(1, retries)):
                 sock.sendto(msearch, (SSDP_MCAST_ADDR, SSDP_PORT))
@@ -321,7 +338,7 @@ def probe_silicondust(
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.bind(("0.0.0.0", 0))
+            sock.bind((resolve_local_bind_host(target_ip, BROADCAST_ADDR, SILICONDUST_DISCOVERY_PORT), 0))
 
             for _ in range(max(1, retries)):
                 for target in targets:
@@ -441,7 +458,7 @@ def main() -> int:
 
     results: list[ProbeResult] = []
     if not args.skip_ssdp:
-        results.append(probe_ssdp(args.timeout, args.retries, expected))
+        results.append(probe_ssdp(args.timeout, args.retries, expected, target_ip))
     if not args.skip_silicondust:
         results.append(probe_silicondust(args.timeout, args.retries, expected, target_ip))
 

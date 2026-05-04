@@ -32,6 +32,8 @@
     </PackageReference>
     <PackageReference Include="Microsoft.OpenApi" Version="2.3.0" />
     <PackageReference Include="MudBlazor" Version="9.4.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
     <PackageReference Include="Scalar.AspNetCore" Version="2.14.8" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />

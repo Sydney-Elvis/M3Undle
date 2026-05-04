@@ -6,6 +6,7 @@ using M3Undle.Web.Contracts;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Streaming.Configuration;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -42,10 +43,9 @@ public static class ProviderApiEndpoints
         providers.MapPost("/{providerId}/refresh-preview", RefreshPreviewAsync).WithSummary("Refresh provider preview");
         providers.MapGet("/{providerId}/status", GetProviderStatusAsync).WithSummary("Get provider status");
         providers.MapGet("/config/available", GetAvailableConfigProvidersAsync).WithSummary("List available provider configs");
-        providers.MapPost("/config/import", ImportConfigProviderAsync).WithSummary("Import a provider config");
-        providers.MapPost("/config/probe", ProbeConfigProviderAsync).WithSummary("Probe a provider config");
         providers.MapGet("/{providerId}/health", GetProviderHealthAsync).WithSummary("Get provider health");
         providers.MapPatch("/{providerId}/xtream-password", UpdateXtreamPasswordAsync).WithSummary("Rotate provider Xtream password");
+        providers.MapPost("/{providerId}/upgrade-to-xtream", UpgradeToXtreamAsync).WithSummary("Upgrade an M3U provider to Xtream Codes mode");
         providers.MapGet("/encryption-status", (SecretEncryptionService enc) =>
             TypedResults.Ok(new EncryptionStatusResponse(enc.IsAvailable)))
             .WithSummary("Get encryption status");
@@ -456,8 +456,11 @@ public static class ProviderApiEndpoints
             HeadersJson = isXtream ? null : (string.IsNullOrWhiteSpace(request.HeadersJson) ? null : request.HeadersJson),
             UserAgent = isXtream ? null : (string.IsNullOrWhiteSpace(request.UserAgent) ? null : request.UserAgent.Trim()),
             TimeoutSeconds = request.TimeoutSeconds,
+            MaxConcurrentStreams = request.MaxConcurrentStreams,
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
+            ForceMpegTs = request.ForceMpegTs,
+            CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode),
             XtreamBaseUrl = isXtream ? request.XtreamBaseUrl!.TrimEnd('/') : null,
             XtreamUsername = isXtream ? request.XtreamUsername?.Trim() : null,
             XtreamEncryptedPassword = isXtream ? encryption.Encrypt(request.XtreamPassword!) : null,
@@ -559,6 +562,8 @@ public static class ProviderApiEndpoints
             existing.IncludeSeries = request.IncludeSeries;
             existing.Enabled = request.Enabled;
             existing.MaxConcurrentStreams = request.MaxConcurrentStreams;
+            existing.ForceMpegTs = request.ForceMpegTs;
+            existing.CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode);
             existing.UpdatedUtc = DateTime.UtcNow;
 
             await db.SaveChangesAsync(cancellationToken);
@@ -590,6 +595,8 @@ public static class ProviderApiEndpoints
             IncludeVod = request.IncludeVod,
             IncludeSeries = request.IncludeSeries,
             MaxConcurrentStreams = request.MaxConcurrentStreams,
+            ForceMpegTs = request.ForceMpegTs,
+            CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode),
             CreatedUtc = now,
             UpdatedUtc = now,
         };
@@ -698,6 +705,9 @@ public static class ProviderApiEndpoints
         provider.TimeoutSeconds = request.TimeoutSeconds;
         provider.IncludeVod = request.IncludeVod;
         provider.IncludeSeries = request.IncludeSeries;
+        provider.MaxConcurrentStreams = request.MaxConcurrentStreams;
+        provider.ForceMpegTs = request.ForceMpegTs;
+        provider.CleanRelayMode = CleanRelayModes.Normalize(request.CleanRelayMode);
         provider.UpdatedUtc = DateTime.UtcNow;
 
         if (isXtream)
@@ -905,204 +915,6 @@ public static class ProviderApiEndpoints
         }).ToList();
 
         return TypedResults.Ok(dtos);
-    }
-
-    private static async Task<Results<Ok<ProbeConfigProviderResultDto>, ValidationProblem>> ProbeConfigProviderAsync(
-        ProbeConfigProviderRequest request,
-        ConfigYamlService configService,
-        EnvironmentVariableService envVarService,
-        ProviderFetcher fetcher,
-        CancellationToken cancellationToken)
-    {
-        var configProviders = await configService.LoadProvidersAsync();
-        var configProvider = configProviders.FirstOrDefault(p => p.Name == request.Name);
-
-        if (configProvider is null)
-        {
-            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["name"] = [$"Provider '{request.Name}' not found in config.yaml"]
-            });
-        }
-
-        var (isValid, missing) = envVarService.ValidateVariables(configProvider.PlaylistUrl);
-        if (!isValid)
-        {
-            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["environment"] = [$"Missing environment variables: {string.Join(", ", missing)}"]
-            });
-        }
-
-        var probe = new Provider
-        {
-            ProviderId = "(probe)",
-            Name = configProvider.Name,
-            PlaylistUrl = configProvider.PlaylistUrl,
-            XmltvUrl = configProvider.XmltvUrl,
-            HeadersJson = configProvider.Headers is not null
-                ? JsonSerializer.Serialize(configProvider.Headers)
-                : null,
-            UserAgent = configProvider.UserAgent,
-            TimeoutSeconds = configProvider.TimeoutSeconds,
-            Enabled = true,
-            CreatedUtc = DateTime.UtcNow,
-            UpdatedUtc = DateTime.UtcNow,
-        };
-
-        try
-        {
-            var result = await fetcher.FetchPlaylistAsync(probe, cancellationToken);
-            return TypedResults.Ok(new ProbeConfigProviderResultDto
-            {
-                Ok = true,
-                ChannelCount = result.Channels.Count,
-            });
-        }
-        catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException)
-        {
-            return TypedResults.Ok(new ProbeConfigProviderResultDto
-            {
-                Ok = false,
-                Error = ex.Message,
-            });
-        }
-    }
-
-    private static async Task<Results<Created<ProviderDto>, ValidationProblem, Conflict<string>>> ImportConfigProviderAsync(
-        ImportConfigProviderRequest request,
-        ConfigYamlService configService,
-        EnvironmentVariableService envVarService,
-        SecretEncryptionService encryption,
-        ApplicationDbContext db,
-        AppEventBus eventBus,
-        IRefreshTrigger refreshTrigger,
-        ILogger<ProviderApiLog> logger,
-        CancellationToken cancellationToken)
-    {
-        var configProviders = await configService.LoadProvidersAsync();
-        var configProvider = configProviders.FirstOrDefault(p => p.Name == request.Name);
-
-        if (configProvider is null)
-        {
-            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["name"] = [$"Provider '{request.Name}' not found in config.yaml"]
-            });
-        }
-
-        // Validate that all required env vars are defined
-        var (isValid, missing) = envVarService.ValidateVariables(configProvider.PlaylistUrl);
-        if (!isValid)
-        {
-            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["environment"] = [$"Missing environment variables: {string.Join(", ", missing)}"]
-            });
-        }
-
-        // Check if provider already exists
-        var existing = await db.Providers.AsNoTracking().FirstOrDefaultAsync(p => p.Name == configProvider.Name, cancellationToken);
-        if (existing is not null)
-        {
-            return TypedResults.Conflict($"Provider '{configProvider.Name}' already exists");
-        }
-
-        var now = DateTime.UtcNow;
-        var resolvedUrl = envVarService.SubstituteEnvVars(configProvider.PlaylistUrl);
-        string xtreamBaseUrl = string.Empty, xtreamUsername = string.Empty, xtreamPassword = string.Empty;
-        var isXtream = request.ImportAsXtream && TryParseXtreamUrl(resolvedUrl, out xtreamBaseUrl, out xtreamUsername, out xtreamPassword);
-
-        if (isXtream && !encryption.IsAvailable)
-        {
-            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["encryption"] = ["M3UNDLE_ENCRYPTION_KEY must be set to import this provider as Xtream Codes."]
-            });
-        }
-
-        Provider provider;
-        if (isXtream)
-        {
-            provider = new Provider
-            {
-                ProviderId = Guid.NewGuid().ToString(),
-                Name = configProvider.Name,
-                XtreamBaseUrl = xtreamBaseUrl,
-                XtreamUsername = xtreamUsername,
-                XtreamEncryptedPassword = encryption.Encrypt(xtreamPassword),
-                XtreamIncludeXmltv = false,
-                TimeoutSeconds = configProvider.TimeoutSeconds,
-                Enabled = configProvider.Enabled,
-                IncludeVod = request.IncludeVod,
-                IncludeSeries = request.IncludeSeries,
-                ConfigSourcePath = configProvider.SourcePath,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-        }
-        else
-        {
-            provider = new Provider
-            {
-                ProviderId = Guid.NewGuid().ToString(),
-                Name = configProvider.Name,
-                PlaylistUrl = configProvider.PlaylistUrl,
-                XmltvUrl = configProvider.XmltvUrl,
-                HeadersJson = configProvider.Headers is not null
-                    ? JsonSerializer.Serialize(configProvider.Headers)
-                    : null,
-                UserAgent = configProvider.UserAgent,
-                TimeoutSeconds = configProvider.TimeoutSeconds,
-                Enabled = configProvider.Enabled,
-                IncludeVod = request.IncludeVod,
-                IncludeSeries = request.IncludeSeries,
-                ConfigSourcePath = configProvider.SourcePath,
-                NeedsEnvVarSubstitution = envVarService.RequiresSubstitution(configProvider.PlaylistUrl),
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-        }
-
-        db.Providers.Add(provider);
-
-        var profileIdsToApply = request.AssociateToProfileIds
-            ?.Where(x => !string.IsNullOrWhiteSpace(x))
-            .ToList();
-
-        if (profileIdsToApply is null or { Count: 0 })
-        {
-            var profileName = await GetUniqueProfileNameAsync(db, configProvider.Name, cancellationToken);
-            var profile = new Profile
-            {
-                ProfileId = Guid.NewGuid().ToString(),
-                Name = profileName,
-                OutputName = "m3undle",
-                MergeMode = "replace",
-                Enabled = true,
-                CreatedUtc = now,
-                UpdatedUtc = now,
-            };
-            db.Profiles.Add(profile);
-            profileIdsToApply = [profile.ProfileId];
-        }
-
-        ApplyProviderProfiles(db, provider.ProviderId, profileIdsToApply);
-
-        await db.SaveChangesAsync(cancellationToken);
-
-        var linkedProfileId = profileIdsToApply.FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(linkedProfileId))
-            await AutoActivateProfileIfNoneAsync(db, refreshTrigger, eventBus, linkedProfileId, cancellationToken);
-        refreshTrigger.TriggerRefresh();
-
-        var dto = (await BuildProviderDtosAsync(db, [provider], cancellationToken)).Single();
-
-        using var importScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Provider" });
-        logger.LogInformation("Provider imported from config: {ProviderId} '{Name}'.", provider.ProviderId, provider.Name);
-        eventBus.Publish(AppEventKind.ProviderChanged);
-
-        return TypedResults.Created($"/api/v1/providers/{provider.ProviderId}", dto);
     }
 
     // -------------------------------------------------------------------------
@@ -1598,10 +1410,14 @@ public static class ProviderApiEndpoints
                     TimeoutSeconds = provider.TimeoutSeconds,
                     IncludeVod = provider.IncludeVod,
                     IncludeSeries = provider.IncludeSeries,
+                    MaxConcurrentStreams = provider.MaxConcurrentStreams,
+                    ForceMpegTs = provider.ForceMpegTs,
+                    CleanRelayMode = CleanRelayModes.Normalize(provider.CleanRelayMode),
                     AssociatedProfileIds = associatedProfileIds,
                     XtreamBaseUrl = provider.XtreamBaseUrl,
                     XtreamUsername = provider.XtreamUsername,
                     XtreamIncludeXmltv = provider.XtreamIncludeXmltv,
+                    PlaylistExpiresUtc = provider.PlaylistExpiresUtc,
                     LastRefresh = latestRefresh is null
                         ? null
                         : new ProviderLastRefreshDto
@@ -1736,6 +1552,25 @@ public static class ProviderApiEndpoints
         logger.LogInformation("Xtream password updated for provider {ProviderId}.", providerId);
 
         return TypedResults.NoContent();
+    }
+
+    private static async Task<Results<Ok<ProviderDto>, NotFound, ValidationProblem>> UpgradeToXtreamAsync(
+        string providerId,
+        UpgradeToXtreamRequest request,
+        ProviderPageService providerPageService,
+        CancellationToken cancellationToken)
+    {
+        var (dto, error) = await providerPageService.UpgradeProviderToXtreamAsync(providerId, request, cancellationToken);
+        if (dto is null)
+        {
+            if (error == "Provider not found.")
+                return TypedResults.NotFound();
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["upgrade"] = [error!]
+            });
+        }
+        return TypedResults.Ok(dto);
     }
 
     private static Results<Ok<FileBrowseDto>, BadRequest<string>> BrowseFilesystemAsync(

@@ -15,6 +15,7 @@ public sealed class SnapshotRefreshService(
     IServiceScopeFactory scopeFactory,
     IOptions<RefreshOptions> refreshOptions,
     AppEventBus eventBus,
+    IEventService eventService,
     TimeProvider timeProvider,
     ILogger<SnapshotRefreshService> logger)
     : BackgroundService, IRefreshTrigger
@@ -160,20 +161,20 @@ public sealed class SnapshotRefreshService(
 
                 try
                 {
-                    RefreshScheduleSettings settings;
+                    EffectiveRefreshScheduleSettings? effectiveSettings;
                     DateTime? lastSnapshotUtc;
 
                     await using (var scope = scopeFactory.CreateAsyncScope())
                     {
                         var scheduleService = scope.ServiceProvider.GetRequiredService<IRefreshScheduleService>();
-                        settings = await scheduleService.GetSettingsAsync(stoppingToken);
+                        effectiveSettings = await scheduleService.GetActiveProfileSettingsAsync(stoppingToken);
 
-                        if (!settings.IsManual)
+                        if (effectiveSettings is not null && !effectiveSettings.Settings.IsManual)
                         {
                             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
                             lastSnapshotUtc = await db.Snapshots
                                 .AsNoTracking()
-                                .Where(s => s.Status == "active")
+                                .Where(s => s.ProfileId == effectiveSettings.ProfileId && s.Status == "active")
                                 .OrderByDescending(s => s.CreatedUtc)
                                 .Select(s => (DateTime?)s.CreatedUtc)
                                 .FirstOrDefaultAsync(stoppingToken);
@@ -184,10 +185,19 @@ public sealed class SnapshotRefreshService(
                         }
                     }
 
+                    if (effectiveSettings is null)
+                    {
+                        logger.LogDebug("Refresh schedule: no active profile — waiting for profile activation or schedule change.");
+                        await WaitIndefinitelyAsync(waitCts.Token);
+                        continue;
+                    }
+
+                    var settings = effectiveSettings.Settings;
                     if (settings.IsManual)
                     {
                         // Park until the schedule is changed or the service stops
-                        logger.LogDebug("Refresh schedule: manual — waiting for explicit trigger or schedule change.");
+                        logger.LogDebug("Refresh schedule: manual for active profile {ProfileId} — waiting for explicit trigger or schedule change.",
+                            effectiveSettings.ProfileId);
                         await WaitIndefinitelyAsync(waitCts.Token);
                         continue;
                     }
@@ -243,6 +253,11 @@ public sealed class SnapshotRefreshService(
                 logger.LogInformation("Refresh schedule changed — waking schedule loop.");
                 _scheduleWaitCts?.Cancel();
             }
+            else if (evt.Kind is AppEventKind.ProviderActivated or AppEventKind.ProviderChanged)
+            {
+                logger.LogInformation("Profile state changed — waking schedule loop.");
+                _scheduleWaitCts?.Cancel();
+            }
         }
     }
 
@@ -275,7 +290,14 @@ public sealed class SnapshotRefreshService(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var scheduleService = scope.ServiceProvider.GetRequiredService<IRefreshScheduleService>();
-            var settings = await scheduleService.GetSettingsAsync(stoppingToken);
+            var effectiveSettings = await scheduleService.GetActiveProfileSettingsAsync(stoppingToken);
+            if (effectiveSettings is null)
+            {
+                logger.LogInformation("Startup recovery: no active profile — skipping startup refresh.");
+                return;
+            }
+
+            var settings = effectiveSettings.Settings;
 
             if (!settings.StartupCatchup)
             {
@@ -286,7 +308,7 @@ public sealed class SnapshotRefreshService(
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var lastSnapshotUtc = await db.Snapshots
                 .AsNoTracking()
-                .Where(s => s.Status == "active")
+                .Where(s => s.ProfileId == effectiveSettings.ProfileId && s.Status == "active")
                 .OrderByDescending(s => s.CreatedUtc)
                 .Select(s => (DateTime?)s.CreatedUtc)
                 .FirstOrDefaultAsync(stoppingToken);
@@ -347,6 +369,9 @@ public sealed class SnapshotRefreshService(
         _currentRunCts = runCts;
         runCts.CancelAfter(TimeSpan.FromMinutes(timeoutMinutes));
 
+        try { await eventService.CleanupOldEventsAsync(stoppingToken); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning(ex, "Event cleanup failed."); }
+
         logger.LogInformation("Snapshot refresh started.");
         eventBus.Publish(AppEventKind.RefreshStarted);
         bool succeeded = false;
@@ -362,6 +387,16 @@ public sealed class SnapshotRefreshService(
             if (channelsByProvider.Count > 0)
                 _cachedChannels = channelsByProvider;
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
+            if (cc == ChangeClasses.Breaking)
+            {
+                try
+                {
+                    await eventService.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.BreakingLineupChange,
+                        "Breaking lineup change detected",
+                        "More than 20% of channels changed — connected clients may need to rescan.");
+                }
+                catch (Exception ex) { logger.LogWarning(ex, "Failed to publish BreakingLineupChange event."); }
+            }
         }
         catch (OperationCanceledException) when (_cancelledByUser && !stoppingToken.IsCancellationRequested)
         {

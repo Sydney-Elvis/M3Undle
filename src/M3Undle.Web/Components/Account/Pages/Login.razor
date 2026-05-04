@@ -9,6 +9,7 @@
 @inject SignInManager<ApplicationUser> SignInManager
 @inject UserManager<ApplicationUser> UserManager
 @inject IAdaptiveLockoutService AdaptiveLockoutService
+@inject IEventService EventService
 @inject ILogger<Login> Logger
 @inject NavigationManager NavigationManager
 @inject IdentityRedirectManager RedirectManager
@@ -201,13 +202,39 @@
                         remoteIp,
                         (int)lockout.LockoutDuration.GetValueOrDefault().TotalSeconds,
                         lockout.Escalated);
+                    await PublishSystemEventBestEffortAsync(
+                        SystemEventSeverity.Error,
+                        SystemEventTypes.AccountLocked,
+                        "Account locked out",
+                        $"Too many failed login attempts from {remoteIp}. Locked for {(int)lockout.LockoutDuration.GetValueOrDefault().TotalSeconds}s.");
                     RedirectManager.RedirectTo("Account/Lockout");
                     return;
                 }
             }
 
             Logger.LogWarning("UI login failed due to invalid credentials. client={Client}", remoteIp);
+            await PublishSystemEventBestEffortAsync(
+                SystemEventSeverity.Warning,
+                SystemEventTypes.LoginFailed,
+                "Login failed",
+                $"Invalid credentials from {remoteIp}.");
             errorMessage = "Error: Invalid username or password.";
+        }
+    }
+
+    private async Task PublishSystemEventBestEffortAsync(
+        SystemEventSeverity severity,
+        string eventType,
+        string title,
+        string? detail = null)
+    {
+        try
+        {
+            await EventService.PublishAsync(severity, eventType, title, detail);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "Failed to publish system event {EventType}.", eventType);
         }
     }
 

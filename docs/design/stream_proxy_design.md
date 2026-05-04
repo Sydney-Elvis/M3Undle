@@ -278,6 +278,22 @@ The connector must:
 -   detect timeouts
 -   restart connections when necessary
 
+MPEG-TS relay notes:
+
+-   direct HTTP MPEG-TS sessions may inject 188-byte null PID packets
+    during brief upstream silence to keep stall-sensitive players alive
+-   keepalive packets are subscriber-driven: they are emitted only when
+    at least one external non-HDHomeRun subscriber is attached
+-   HDHomeRun-only sessions receive plain upstream bytes so downstream
+    DVR/transcode pipelines do not build empty HLS windows from null
+    packets
+-   keepalive timing must not cancel an in-flight upstream `ReadAsync`;
+    the pending read is preserved and checked alongside a short delay
+-   internal relay subscribers, such as generated-HLS FFmpeg workers, start
+    from the MPEG-TS safe-start snapshot when one is available
+-   external viewers join at the live edge to avoid replaying old PCR values
+    immediately before current live PCR values
+
 ------------------------------------------------------------------------
 
 # 10. Reconnect Logic
@@ -311,6 +327,11 @@ Phase 1 reconnect scope:
 -   session ends if outage window is exceeded
 -   full `ReconnectPolicy` classification moves to Phase 2
 
+MPEG-TS content-stall detection uses a shorter content timeout than the
+raw read timeout. Real audio/video/PSI packets reset this timer; null PID
+packets do not. A prolonged CDN gap therefore reconnects before waiting
+for the generic stalled-read timeout.
+
 Authorization during shared sessions:
 
 -   authorization is checked once per request at subscriber attach time
@@ -332,6 +353,16 @@ continues while subscribers exist.
 Idle grace period:
 
 after last subscriber leaves, keep session alive briefly.
+
+Admission and idle capacity:
+
+-   zero-consumer idle-grace sessions do not count against the hard
+    active-upstream admission checks
+-   if tracked session capacity is still full because an idle-grace
+    session is waiting to expire, the manager preempts a qualifying idle
+    session before admitting the new tune
+-   active sessions, HLS admission slots, and sessions with real
+    consumers still count against the configured caps
 
 Teardown:
 
@@ -414,6 +445,12 @@ But the default path remains:
 
 Provider → Native Proxy → Stream Session
 
+For explicit upstream HLS (`.m3u8`) sources, FFmpeg may remux HLS to MPEG-TS
+before the shared session so downstream clients still receive a single relay
+format. Heuristic HLS URL guessing must stay limited to provider/route cases
+that explicitly request MPEG-TS conversion; generic Xtream numeric URLs often
+already serve direct MPEG-TS and should not be forced through FFmpeg.
+
 ------------------------------------------------------------------------
 
 # 16. Implementation Mistakes to Avoid
@@ -492,14 +529,19 @@ Use layered configuration for robustness and operational control:
 
 Not every internal tuning value should be exposed in UI.
 
-Recommended adjustable controls include:
+Recommended settings-page controls include:
 
 -   streaming enable/disable
 -   max concurrent sessions
 -   per-session buffer limit
 -   idle grace window
 -   stall timeout and reconnect outage window
--   status retention window
--   provider max concurrent upstreams (global and optional per-provider)
+-   optional per-provider max concurrent upstreams
+
+Advanced env/config-only controls include:
+
+-   global provider max concurrent upstreams
+-   MPEG-TS content-stall timeout for null-packet/CDN-gap recovery
+-   detailed stream status retention windows
 
 Client IP visibility in stream status is full-value for admin operators.
