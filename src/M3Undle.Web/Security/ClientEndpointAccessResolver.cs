@@ -38,9 +38,11 @@ internal sealed class ClientEndpointAccessResolver(
                 UrlCredential: null));
         }
 
-        if (!TryReadCredentials(context, out var username, out var password, out var transport))
+        var credentials = await TryReadCredentialsAsync(context, cancellationToken);
+        if (credentials is null)
             return ClientAccessResolutionResult.Fail(ClientAccessFailureReason.MissingCredentials);
 
+        var (username, password, transport) = credentials.Value;
         var credential = await credentialValidator.ValidateAsync(username, password, cancellationToken);
         if (credential is null)
             return ClientAccessResolutionResult.Fail(ClientAccessFailureReason.InvalidCredentials);
@@ -50,7 +52,7 @@ internal sealed class ClientEndpointAccessResolver(
         if (string.IsNullOrWhiteSpace(activeProfileId))
             return ClientAccessResolutionResult.Fail(ClientAccessFailureReason.NoActiveProfile);
 
-        var urlCredential = transport == ClientCredentialTransport.QueryString
+        var urlCredential = transport is ClientCredentialTransport.QueryString or ClientCredentialTransport.Form
             ? new AccessUrlCredential(username, password)
             : null;
 
@@ -65,28 +67,23 @@ internal sealed class ClientEndpointAccessResolver(
             UrlCredential: urlCredential));
     }
 
-    private static bool TryReadCredentials(
+    private static async ValueTask<(string Username, string Password, ClientCredentialTransport Transport)?> TryReadCredentialsAsync(
         HttpContext context,
-        out string username,
-        out string password,
-        out ClientCredentialTransport transport)
+        CancellationToken cancellationToken)
     {
+        string username;
+        string password;
         if (TryReadBasicHeaderCredentials(context.Request, out username, out password))
-        {
-            transport = ClientCredentialTransport.AuthorizationHeaderBasic;
-            return true;
-        }
+            return (username, password, ClientCredentialTransport.AuthorizationHeaderBasic);
 
         if (TryReadQueryCredentials(context.Request, out username, out password))
-        {
-            transport = ClientCredentialTransport.QueryString;
-            return true;
-        }
+            return (username, password, ClientCredentialTransport.QueryString);
 
-        username = string.Empty;
-        password = string.Empty;
-        transport = ClientCredentialTransport.None;
-        return false;
+        var form = await TryReadFormAsync(context.Request, cancellationToken);
+        if (form is not null && TryReadNameValueCredentials(form, out username, out password))
+            return (username, password, ClientCredentialTransport.Form);
+
+        return null;
     }
 
     private static bool TryReadBasicHeaderCredentials(HttpRequest request, out string username, out string password)
@@ -131,7 +128,16 @@ internal sealed class ClientEndpointAccessResolver(
         username = string.Empty;
         password = string.Empty;
 
-        var query = request.Query;
+        return TryReadNameValueCredentials(request.Query, out username, out password);
+    }
+
+    private static bool TryReadNameValueCredentials(
+        IEnumerable<KeyValuePair<string, Microsoft.Extensions.Primitives.StringValues>> values,
+        out string username,
+        out string password)
+    {
+        username = string.Empty;
+        password = string.Empty;
 
         foreach (var (userKey, passKey) in new (string User, string Pass)[]
                  {
@@ -140,7 +146,7 @@ internal sealed class ClientEndpointAccessResolver(
                      ("u", "p"),
                  })
         {
-            if (!query.TryGetValue(userKey, out var userValues) || !query.TryGetValue(passKey, out var passValues))
+            if (!TryGetValue(values, userKey, out var userValues) || !TryGetValue(values, passKey, out var passValues))
                 continue;
 
             var candidateUser = userValues.ToString().Trim();
@@ -154,5 +160,38 @@ internal sealed class ClientEndpointAccessResolver(
         }
 
         return false;
+    }
+
+    private static bool TryGetValue(
+        IEnumerable<KeyValuePair<string, Microsoft.Extensions.Primitives.StringValues>> values,
+        string key,
+        out Microsoft.Extensions.Primitives.StringValues value)
+    {
+        foreach (var pair in values)
+        {
+            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = pair.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static async Task<IFormCollection?> TryReadFormAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.HasFormContentType)
+            return null;
+
+        try
+        {
+            return await request.ReadFormAsync(cancellationToken);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
     }
 }

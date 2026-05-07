@@ -104,6 +104,28 @@ public sealed class ClientEndpointAccessResolverTests
     }
 
     [TestMethod]
+    public async Task ResolveAsync_WhenEndpointSecurityEnabled_WithFormCredentials_ResolvesBinding()
+    {
+        var credential = MakeCredential();
+        var resolver = BuildResolver(enabled: true, credential: credential, profileId: "profile-1");
+
+        var context = new DefaultHttpContext();
+        var body = "username=endpoint-user&password=secret";
+        context.Request.Method = HttpMethods.Post;
+        context.Request.ContentType = "application/x-www-form-urlencoded";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        context.Request.ContentLength = context.Request.Body.Length;
+
+        var result = await resolver.ResolveAsync(context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.AreEqual(ClientCredentialTransport.Form, result.Access!.Transport);
+        Assert.IsNotNull(result.Access.UrlCredential);
+        Assert.AreEqual("endpoint-user", result.Access.UrlCredential.Username);
+        Assert.AreEqual("secret", result.Access.UrlCredential.Password);
+    }
+
+    [TestMethod]
     public async Task ResolveAsync_WhenEndpointSecurityEnabled_WithBasicAuthHeader_ResolvesBinding()
     {
         var credential = MakeCredential();

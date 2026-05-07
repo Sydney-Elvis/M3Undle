@@ -22,7 +22,7 @@ namespace M3Undle.Web.Api;
 /// <summary>
 /// Implements the Xtream Codes-compatible API surface:
 ///   GET/POST /player_api.php   — account info, category lists, stream lists
-///   GET      /get.php          — M3U playlist (Xtream-style URL)
+///   GET/POST /get.php          — M3U playlist (Xtream-style URL)
 ///   GET      /live/{user}/{pass}/{id}[/{*tail}]
 ///   GET      /movie/{user}/{pass}/{id}[/{*tail}]
 ///   GET      /series/{user}/{pass}/{id}[/{*tail}]
@@ -45,10 +45,10 @@ public static class XtreamEndpoints
 
     public static IEndpointRouteBuilder MapXtreamEndpoints(this IEndpointRouteBuilder app)
     {
-        // player_api.php and get.php use query-string auth — handled by MapClientSurface
+        // player_api.php and get.php use query-string/form auth — handled by MapClientSurface
         var client = app.MapClientSurface();
-        client.MapGet("player_api.php", ServePlayerApiAsync);
-        client.MapGet("get.php", ServeGetM3uAsync);
+        client.MapMethods("player_api.php", ["GET", "POST"], ServePlayerApiAsync);
+        client.MapMethods("get.php", ["GET", "POST"], ServeGetM3uAsync);
 
         // Xtream path-embedded-credential streaming: /live/{user}/{pass}/{id}[.ext]
         // These use a dedicated filter that reads credentials from the route values.
@@ -80,7 +80,8 @@ public static class XtreamEndpoints
         CancellationToken cancellationToken)
     {
         var access = context.GetResolvedClientAccess();
-        var action = context.Request.Query["action"].ToString();
+        var form = await TryReadFormAsync(context.Request, cancellationToken);
+        var action = GetRequestValue(context.Request, form, "action");
 
         // No action or explicit get_account_info → return account + server info
         if (string.IsNullOrEmpty(action) || action == "get_account_info")
@@ -104,10 +105,10 @@ public static class XtreamEndpoints
             "get_live_categories"   => BuildCategoriesResult(lineup, "live"),
             "get_vod_categories"    => BuildCategoriesResult(lineup, "vod"),
             "get_series_categories" => BuildCategoriesResult(lineup, "series"),
-            "get_live_streams"      => BuildStreamsResult(context, lineup, "live"),
-            "get_vod_streams"       => BuildStreamsResult(context, lineup, "vod"),
-            "get_series"            => BuildSeriesListResult(context, lineup),
-            "get_series_info"       => BuildSeriesInfoResult(context, lineup),
+            "get_live_streams"      => BuildStreamsResult(context, form, lineup, "live"),
+            "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod"),
+            "get_series"            => BuildSeriesListResult(context, form, lineup),
+            "get_series_info"       => BuildSeriesInfoResult(context, form, lineup),
             _                       => Results.Json(Array.Empty<object>(), JsonOptions),
         };
     }
@@ -173,13 +174,13 @@ public static class XtreamEndpoints
         return Results.Json(categories, JsonOptions);
     }
 
-    private static IResult BuildStreamsResult(HttpContext context, RenderedLineup lineup, string contentType)
+    private static IResult BuildStreamsResult(HttpContext context, IFormCollection? form, RenderedLineup lineup, string contentType)
     {
         var access = context.GetResolvedClientAccess();
         var baseUrl = GetBaseUrl(context);
         var username = access.Credential.Username;
         var password = access.UrlCredential?.Password ?? string.Empty;
-        var categoryFilter = context.Request.Query["category_id"].ToString();
+        var categoryFilter = GetRequestValue(context.Request, form, "category_id");
         var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
 
         var channels = lineup.Channels
@@ -244,9 +245,9 @@ public static class XtreamEndpoints
     /// Returns one entry per unique series title (grouped from individual episodes),
     /// matching how the standard Xtream Codes API serves the series list.
     /// </summary>
-    private static IResult BuildSeriesListResult(HttpContext context, RenderedLineup lineup)
+    private static IResult BuildSeriesListResult(HttpContext context, IFormCollection? form, RenderedLineup lineup)
     {
-        var categoryFilter = context.Request.Query["category_id"].ToString();
+        var categoryFilter = GetRequestValue(context.Request, form, "category_id");
         var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
 
         var seriesChannels = lineup.Channels
@@ -290,9 +291,9 @@ public static class XtreamEndpoints
     /// Returns full series info with episodes grouped by season for a given series_id,
     /// matching the standard Xtream Codes get_series_info response shape.
     /// </summary>
-    private static IResult BuildSeriesInfoResult(HttpContext context, RenderedLineup lineup)
+    private static IResult BuildSeriesInfoResult(HttpContext context, IFormCollection? form, RenderedLineup lineup)
     {
-        var seriesIdParam = context.Request.Query["series_id"].ToString();
+        var seriesIdParam = GetRequestValue(context.Request, form, "series_id");
         if (!int.TryParse(seriesIdParam, out var requestedSeriesId))
             return Results.Json(new { }, JsonOptions);
 
@@ -925,6 +926,36 @@ public static class XtreamEndpoints
             return (season, episode);
         }
         return (1, 1);
+    }
+
+    private static string GetRequestValue(HttpRequest request, IFormCollection? form, string key)
+    {
+        if (request.Query.TryGetValue(key, out var queryValues))
+        {
+            var queryValue = queryValues.ToString();
+            if (!string.IsNullOrEmpty(queryValue))
+                return queryValue;
+        }
+
+        if (form is not null && form.TryGetValue(key, out var formValues))
+            return formValues.ToString();
+
+        return string.Empty;
+    }
+
+    private static async Task<IFormCollection?> TryReadFormAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.HasFormContentType)
+            return null;
+
+        try
+        {
+            return await request.ReadFormAsync(cancellationToken);
+        }
+        catch (InvalidDataException)
+        {
+            return null;
+        }
     }
 
     private static string GetBaseUrl(HttpContext context) =>
