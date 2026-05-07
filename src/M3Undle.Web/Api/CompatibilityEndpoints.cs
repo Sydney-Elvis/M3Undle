@@ -69,6 +69,7 @@ public static class CompatibilityEndpoints
         // Internal relay: lets Generated HLS sessions read from the shared ring buffer instead
         // of opening a second provider connection. Protected by startup-generated secret header.
         app.MapGet("/internal/relay/{providerId}/{channelId}", ServeInternalRelayAsync).AllowAnonymous();
+        app.MapGet("/internal/relay/{providerId}/{channelId}.ts", ServeInternalRelayAsync).AllowAnonymous();
 
         app.MapGet("/status", ServeStatusAsync).AllowAnonymous();
         app.MapGet("/health/ready", ServeReadinessAsync).AllowAnonymous();
@@ -661,7 +662,7 @@ public static class CompatibilityEndpoints
                 var sk = resolved.SourceDescriptor.SessionKey;
                 parentStreamSessionId = parentSession.SessionId;
                 generatedStreamUrl =
-                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
+                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}.ts";
                 generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
             }
 

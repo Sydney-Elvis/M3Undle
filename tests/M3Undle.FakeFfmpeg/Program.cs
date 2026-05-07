@@ -31,6 +31,11 @@ var sessionDir = Path.GetDirectoryName(manifestPath) ?? ".";
 var hlsDir = Path.GetDirectoryName(sessionDir) ?? ".";
 var rootDir = Path.GetDirectoryName(hlsDir) ?? ".";
 var flagFile = Path.Combine(rootDir, "write.flag");
+var inputUrl = GetInputUrl(args);
+
+var argsOut = GetQueryValue(inputUrl, "argsOut");
+if (!string.IsNullOrWhiteSpace(argsOut))
+    await File.WriteAllTextAsync(argsOut, string.Join("\n", args));
 
 if (File.Exists(flagFile))
 {

@@ -410,6 +410,8 @@ public sealed class GeneratedHlsSessionManager(
             // does not inherit stale timestamps from an arbitrary position in the source GOP.
             info.ArgumentList.Add("-fflags");
             info.ArgumentList.Add("+genpts");
+            info.ArgumentList.Add("-f");
+            info.ArgumentList.Add("mpegts");
         }
         else
         {

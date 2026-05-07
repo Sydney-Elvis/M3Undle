@@ -121,6 +121,34 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task CreateSessionAsync_ForInternalRelay_MarksInputAsMpegTs()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: $"http://127.0.0.1:8080/internal/relay/provider/channel.ts?argsOut={Uri.EscapeDataString(argsFile)}",
+                DisplayName: "Internal Relay",
+                InternalRelaySecret: "secret"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        var args = await File.ReadAllLinesAsync(argsFile);
+        var inputIndex = Array.IndexOf(args, "-i");
+        Assert.IsTrue(inputIndex > 2);
+        Assert.AreEqual("-f", args[inputIndex - 2]);
+        Assert.AreEqual("mpegts", args[inputIndex - 1]);
+        Assert.IsFalse(args.Contains("-allowed_extensions"));
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task TrackClient_WhenKnownProbeUserAgent_DoesNotCountSubscriber()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);

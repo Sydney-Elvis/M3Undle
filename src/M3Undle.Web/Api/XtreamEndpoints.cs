@@ -569,7 +569,7 @@ public static class XtreamEndpoints
                 var sk = resolved.SourceDescriptor.SessionKey;
                 parentStreamSessionId = parentSession.SessionId;
                 generatedStreamUrl =
-                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}";
+                    $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}.ts";
                 generatedRelaySecret = context.RequestServices.GetRequiredService<InternalRelaySecretService>().Secret;
             }
 
