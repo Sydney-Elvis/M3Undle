@@ -415,6 +415,9 @@ public sealed class GeneratedHlsSessionManager(
         }
         else
         {
+            var isHlsInput = request.StreamUrl.Contains(".m3u8",
+                StringComparison.OrdinalIgnoreCase);
+
             var (userAgent, headersJson) = await ResolveProviderMetadataAsync(
                 request.ProviderId,
                 request.ProviderUserAgent,
@@ -433,6 +436,12 @@ public sealed class GeneratedHlsSessionManager(
             {
                 info.ArgumentList.Add("-headers");
                 info.ArgumentList.Add(headersArg);
+            }
+
+            if (isHlsInput)
+            {
+                info.ArgumentList.Add("-allowed_extensions");
+                info.ArgumentList.Add("ALL");
             }
         }
 

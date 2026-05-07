@@ -149,6 +149,57 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task CreateSessionAsync_ForProviderHlsInput_AddsAllowedExtensions()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: $"https://provider.test/live/channel.m3u8?argsOut={Uri.EscapeDataString(argsFile)}",
+                DisplayName: "Provider HLS"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        var args = await File.ReadAllLinesAsync(argsFile);
+        var allowedExtIdx = Array.IndexOf(args, "-allowed_extensions");
+        Assert.IsTrue(allowedExtIdx >= 0, "-allowed_extensions should be present for HLS input");
+        Assert.AreEqual("ALL", args[allowedExtIdx + 1]);
+        Assert.IsFalse(args.Any(a => a.Contains("X-M3Undle-Internal-Relay")), "Relay secret header should not be present");
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task CreateSessionAsync_ForProviderTsInput_DoesNotAddAllowedExtensions()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: $"https://provider.test/live/channel.ts?argsOut={Uri.EscapeDataString(argsFile)}",
+                DisplayName: "Provider TS",
+                ProviderUserAgent: "TestApp/1.0"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        var args = await File.ReadAllLinesAsync(argsFile);
+        Assert.IsFalse(args.Contains("-allowed_extensions"), "-allowed_extensions should not be present for TS input");
+        Assert.IsTrue(args.Contains("-user_agent"), "-user_agent should be present when ProviderUserAgent is set");
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task TrackClient_WhenKnownProbeUserAgent_DoesNotCountSubscriber()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
