@@ -258,6 +258,7 @@ public sealed class GeneratedHlsSessionManagerTests
         Assert.AreEqual("192.168.1.100", clients[0].RemoteIp);
         Assert.AreEqual("Mozilla/5.0 IPTVnator", clients[0].UserAgent);
         Assert.AreEqual(handle.SessionId, clients[0].SessionId);
+        Assert.AreEqual(ClientTransport.GeneratedHls, clients[0].Transport);
 
         // Generated HLS sessions are internal — use TryGetSession (no IsInternal filter).
         var session = registry.TryGetSession(handle.SessionId);

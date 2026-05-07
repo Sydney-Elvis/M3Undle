@@ -257,7 +257,7 @@ public sealed class GeneratedHlsSessionManager(
             registry.UpsertClient(new StreamClientSnapshot(
                 record.ClientId, record.SessionId, record.RequestedRoute,
                 record.RemoteIp, record.UserAgent, record.ConnectedUtc,
-                BytesSent: 0, QueueDepth: 0));
+                BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls));
         }
 
         registry.UpsertSession(session.ToSnapshot());

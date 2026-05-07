@@ -132,15 +132,33 @@ else
             <RowTemplate>
                 <MudTd DataLabel="Route">
                     <MudText Typo="Typo.body2">@context.RequestedRoute</MudText>
+                    @if (context.Transport == ClientTransport.GeneratedHls)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">HLS (inferred)</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
                 </MudTd>
                 <MudTd DataLabel="Sent">
-                    <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                    @if (context.Transport == ClientTransport.GeneratedHls)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="Queue">
-                    <MudText Typo="Typo.body2">@context.QueueDepth</MudText>
+                    @if (context.Transport == ClientTransport.GeneratedHls)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2">@context.QueueDepth</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="Connected">
                     <MudTooltip Text="@context.ConnectedUtc.ToString("u")">
