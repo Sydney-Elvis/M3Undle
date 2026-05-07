@@ -335,8 +335,7 @@ public sealed class GeneratedHlsSessionManagerTests
             ffmpeg.Root,
             ffmpeg.ExePath,
             startupTimeoutSeconds: 3,
-            registry: registry,
-            retuneEvictionGraceSeconds: 0);
+            registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -373,46 +372,104 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
-    public async Task TrackClient_SameFingerprintWithinGrace_DoesNotEvictOlderSession()
+    public async Task TrackClient_SameFingerprintRapidRetune_EvictsOlderSessionImmediately()
     {
+        // Verifies that retune eviction fires even when the client switches channels
+        // back-to-back with no delay — the former grace period prevented this.
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(
-            ffmpeg.Root,
-            ffmpeg.ExePath,
-            startupTimeoutSeconds: 3,
-            registry: registry,
-            retuneEvictionGraceSeconds: 5);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
         var firstHandle = await manager.CreateSessionAsync(
             new GeneratedHlsSessionRequest(
                 StreamUrl: "https://provider.test/live/stream-a.ts",
-                DisplayName: "Grace A"),
+                DisplayName: "Rapid Retune A"),
             CancellationToken.None);
 
         var secondHandle = await manager.CreateSessionAsync(
             new GeneratedHlsSessionRequest(
                 StreamUrl: "https://provider.test/live/stream-b.ts",
-                DisplayName: "Grace B"),
+                DisplayName: "Rapid Retune B"),
             CancellationToken.None);
 
         Assert.IsNotNull(firstHandle);
         Assert.IsNotNull(secondHandle);
 
         manager.TrackClient(firstHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/a/index.m3u8");
+        // Immediate retune with no delay — should evict from the first session.
         manager.TrackClient(secondHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/b/index.m3u8");
 
         var clients = registry.GetActiveClients();
-        Assert.HasCount(2, clients, "Grace window should prevent immediate retune eviction.");
+        Assert.HasCount(1, clients, "Rapid retune should evict the older session immediately.");
+        Assert.AreEqual(secondHandle.SessionId, clients[0].SessionId);
 
         var firstSession = registry.TryGetSession(firstHandle.SessionId);
         var secondSession = registry.TryGetSession(secondHandle.SessionId);
         Assert.IsNotNull(firstSession);
         Assert.IsNotNull(secondSession);
-        Assert.AreEqual(1, firstSession.SubscriberCount);
+        Assert.AreEqual(0, firstSession.SubscriberCount);
         Assert.AreEqual(1, secondSession.SubscriberCount);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task NotifyDirectClientActive_SameFingerprintOnDifferentChannel_EvictsHlsSession()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var hlsHandle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/cbs.ts",
+                DisplayName: "CBS HLS",
+                ParentStreamSessionId: "cbs-parent-session-id"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(hlsHandle);
+
+        manager.TrackClient(hlsHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/cbs/index.m3u8");
+        Assert.HasCount(1, registry.GetActiveClients());
+
+        // Client attaches as a direct subscriber to a different channel (different parent session).
+        manager.NotifyDirectClientActive("192.168.1.100", "Mozilla/5.0 IPTVnator", "fox-parent-session-id");
+
+        Assert.HasCount(0, registry.GetActiveClients(), "Direct subscriber on a different channel should evict the stale HLS session client.");
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task NotifyDirectClientActive_SameFingerprintOnSameChannel_DoesNotEvict()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        const string parentSessionId = "cbs-parent-session-id";
+        var hlsHandle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/cbs.ts",
+                DisplayName: "CBS HLS",
+                ParentStreamSessionId: parentSessionId),
+            CancellationToken.None);
+
+        Assert.IsNotNull(hlsHandle);
+
+        manager.TrackClient(hlsHandle.SessionId, "192.168.1.100", "Mozilla/5.0 IPTVnator", "/hls/generated/cbs/index.m3u8");
+        Assert.HasCount(1, registry.GetActiveClients());
+
+        // Direct subscriber on the SAME channel should not evict the HLS session client.
+        manager.NotifyDirectClientActive("192.168.1.100", "Mozilla/5.0 IPTVnator", parentSessionId);
+
+        Assert.HasCount(1, registry.GetActiveClients(), "Direct subscriber on the same channel should not evict its own HLS session client.");
 
         await manager.StopAsync(CancellationToken.None);
     }
@@ -446,8 +503,7 @@ public sealed class GeneratedHlsSessionManagerTests
         string root,
         string ffmpegPath,
         int startupTimeoutSeconds,
-        StreamingRegistry? registry = null,
-        int retuneEvictionGraceSeconds = 5)
+        StreamingRegistry? registry = null)
     {
         var options = Options.Create(new GeneratedHlsOptions
         {
@@ -460,7 +516,6 @@ public sealed class GeneratedHlsSessionManagerTests
             StartupTimeoutSeconds = startupTimeoutSeconds,
             InactivityTimeoutSeconds = 120,
             CleanupIntervalSeconds = 120,
-            RetuneEvictionGraceSeconds = retuneEvictionGraceSeconds,
             StartupStaleAgeHours = 1,
         });
 

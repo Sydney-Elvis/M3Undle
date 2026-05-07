@@ -613,6 +613,10 @@ public static class XtreamEndpoints
                 var session = await channelSessionManager.GetOrCreateAsync(
                     resolved.SourceDescriptor, cancellationToken);
                 subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
+                generatedHlsSessionManager.NotifyDirectClientActive(
+                    subscriber.RemoteIp,
+                    subscriber.UserAgent,
+                    session.SessionId);
                 await subscriber.Completion;
                 return;
             }

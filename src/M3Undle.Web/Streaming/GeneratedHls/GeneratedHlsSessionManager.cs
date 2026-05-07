@@ -280,37 +280,57 @@ public sealed class GeneratedHlsSessionManager(
         }
     }
 
+    // Called when a client fingerprint appears on a new Generated HLS session.
+    // Skips the session the client just arrived at; evicts from all others immediately.
     private void EvictRetunedClients(
         string currentSessionId,
         string? remoteIp,
         string? userAgent,
         DateTimeOffset observedAtUtc)
     {
+        EvictFingerprintFromSessions(
+            remoteIp, userAgent, observedAtUtc,
+            shouldSkip: s => string.Equals(s.SessionId, currentSessionId, StringComparison.Ordinal));
+    }
+
+    // Called when a client fingerprint appears on a direct (non-HLS) subscriber connection.
+    // Skips HLS sessions that belong to the same parent channel; evicts from all others.
+    public void NotifyDirectClientActive(string? remoteIp, string? userAgent, string? directStreamSessionId)
+    {
+        EvictFingerprintFromSessions(
+            remoteIp, userAgent, DateTimeOffset.UtcNow,
+            shouldSkip: s => directStreamSessionId is not null
+                && string.Equals(s.ParentStreamSessionId, directStreamSessionId, StringComparison.Ordinal));
+    }
+
+    private void EvictFingerprintFromSessions(
+        string? remoteIp,
+        string? userAgent,
+        DateTimeOffset observedAtUtc,
+        Func<GeneratedHlsSession, bool> shouldSkip)
+    {
         if (!GeneratedHlsSession.HasClientFingerprint(remoteIp, userAgent))
             return;
 
         var clientKey = GeneratedHlsSession.CreateClientKey(remoteIp, userAgent);
-        var graceSeconds = Math.Max(0, _options.RetuneEvictionGraceSeconds);
-        var cutoff = observedAtUtc - TimeSpan.FromSeconds(graceSeconds);
 
-        foreach (var otherSession in _sessions.Values)
+        foreach (var session in _sessions.Values)
         {
-            if (string.Equals(otherSession.SessionId, currentSessionId, StringComparison.Ordinal))
+            if (shouldSkip(session))
                 continue;
 
-            if (!otherSession.TryEvictClient(clientKey, cutoff, out var evictedClient))
+            if (!session.TryEvictClient(clientKey, observedAtUtc, out var evictedClient))
                 continue;
 
             registry.RemoveClient(evictedClient.ClientId);
-            registry.UpsertSession(otherSession.ToSnapshot());
-            LogObservedHlsClientRemoved(otherSession, evictedClient, "retune_detected");
+            registry.UpsertSession(session.ToSnapshot());
+            LogObservedHlsClientRemoved(session, evictedClient, "retune_detected");
 
-            // If the eviction emptied a relay-backed session, tear it down immediately
-            // instead of waiting up to InactivityTimeoutSeconds for the sweep loop.
-            // This stops the stale internal relay subscriber from continuing to drain the
-            // parent ring buffer alongside the new session's subscriber.
-            if (otherSession.HlsClientCount == 0 && otherSession.ParentStreamSessionId is not null)
-                _ = RemoveSessionAsync(otherSession.SessionId, "retune_orphaned");
+            // Tear down the now-empty relay-backed session immediately rather than waiting
+            // for the inactivity sweep — stops the stale relay subscriber from draining
+            // the parent ring buffer alongside the new session's subscriber.
+            if (session.HlsClientCount == 0 && session.ParentStreamSessionId is not null)
+                _ = RemoveSessionAsync(session.SessionId, "retune_orphaned");
         }
     }
 

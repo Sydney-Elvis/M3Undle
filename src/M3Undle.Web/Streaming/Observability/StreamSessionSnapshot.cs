@@ -18,6 +18,7 @@ public sealed record StreamSessionSnapshot(
     string? LastFailureKind,
     bool IsInternal = false,
     string? ParentStreamSessionId = null,
+    int InferredHlsSubscriberCount = 0,
     double? FirstByteLatencyMs = null,
     long BytesSinceReconnect = 0,
     string? LastDisconnectReason = null,

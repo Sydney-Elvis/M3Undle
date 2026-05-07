@@ -771,6 +771,10 @@ public static class CompatibilityEndpoints
 
                 var session = await channelSessionManager.GetOrCreateAsync(resolved.SourceDescriptor, cancellationToken);
                 subscriber = await session.AttachSubscriberAsync(context, cancellationToken);
+                generatedHlsSessionManager.NotifyDirectClientActive(
+                    subscriber.RemoteIp,
+                    subscriber.UserAgent,
+                    session.SessionId);
 
                 if (tunerReservation is not null)
                 {

@@ -2029,7 +2029,6 @@ public sealed class ChannelSessionIntegrationTests
             StartupTimeoutSeconds = 3,
             InactivityTimeoutSeconds = 120,
             CleanupIntervalSeconds = 120,
-            RetuneEvictionGraceSeconds = 5,
             StartupStaleAgeHours = 1,
         });
 
