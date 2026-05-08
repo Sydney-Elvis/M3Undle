@@ -47,7 +47,19 @@ else
                 <MudTd DataLabel="State">
                     <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
                 </MudTd>
-                <MudTd DataLabel="Clients">@context.SubscriberCount</MudTd>
+                <MudTd DataLabel="Clients">
+                    @if (context.InferredHlsSubscriberCount > 0)
+                    {
+                        var direct = context.SubscriberCount - context.InferredHlsSubscriberCount;
+                        <MudTooltip Text="@($"{direct} direct connection(s) + {context.InferredHlsSubscriberCount} HLS-tracked (inferred from segment activity)")">
+                            <MudText Typo="Typo.body2">@context.SubscriberCount <MudText Typo="Typo.caption" Color="Color.Secondary" Inline="true">(~@context.InferredHlsSubscriberCount HLS)</MudText></MudText>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        @context.SubscriberCount
+                    }
+                </MudTd>
                 <MudTd DataLabel="Buffer" Style="min-width:130px;">
                     @if (context.BufferMaxBytes > 0)
                     {
@@ -120,15 +132,33 @@ else
             <RowTemplate>
                 <MudTd DataLabel="Route">
                     <MudText Typo="Typo.body2">@context.RequestedRoute</MudText>
+                    @if (context.Transport == ClientTransport.GeneratedHls)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">HLS (inferred)</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
                 </MudTd>
                 <MudTd DataLabel="Sent">
-                    <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                    @if (context.Transport == ClientTransport.GeneratedHls)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="Queue">
-                    <MudText Typo="Typo.body2">@context.QueueDepth</MudText>
+                    @if (context.Transport == ClientTransport.GeneratedHls)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2">@context.QueueDepth</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="Connected">
                     <MudTooltip Text="@context.ConnectedUtc.ToString("u")">

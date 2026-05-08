@@ -20,7 +20,5 @@ public sealed class GeneratedHlsOptions
 
     public int CleanupIntervalSeconds { get; set; } = 15;
 
-    public int RetuneEvictionGraceSeconds { get; set; } = 5;
-
     public int StartupStaleAgeHours { get; set; } = 24;
 }

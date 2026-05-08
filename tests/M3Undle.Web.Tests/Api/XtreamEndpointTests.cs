@@ -1,0 +1,153 @@
+using System.Net;
+using System.Text.Json;
+using M3Undle.Web.Application;
+using M3Undle.Web.Data;
+using M3Undle.Web.Security;
+using M3Undle.Web.Tests.TestSupport;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace M3Undle.Web.Tests.Api;
+
+[TestClass]
+public sealed class XtreamEndpointTests
+{
+    [TestMethod]
+    public async Task PlayerApi_PostFormAction_ReturnsLiveStreams()
+    {
+        await using var factory = new XtreamApiFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsync("/player_api.php", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["username"] = "test-user",
+            ["password"] = "secret",
+            ["action"] = "get_live_streams",
+        }));
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual(JsonValueKind.Array, json.RootElement.ValueKind);
+        var streams = json.RootElement.EnumerateArray().ToArray();
+        Assert.HasCount(2, streams);
+        Assert.IsTrue(streams.All(x => x.GetProperty("stream_type").GetString() == "live"));
+    }
+
+    [TestMethod]
+    public async Task GetPhp_PostFormCredentials_ReturnsM3uPlaylist()
+    {
+        await using var factory = new XtreamApiFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsync("/get.php", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["username"] = "test-user",
+            ["password"] = "secret",
+        }));
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual("application/x-mpegurl", response.Content.Headers.ContentType?.MediaType);
+
+        var body = await response.Content.ReadAsStringAsync();
+        StringAssert.StartsWith(body, "#EXTM3U");
+        StringAssert.Contains(body, "Alpha");
+    }
+
+    private sealed class XtreamApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
+    {
+        private readonly string _tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-xtream-endpoints-{Guid.NewGuid():N}");
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            Directory.CreateDirectory(_tempDataDir);
+
+            builder.ConfigureAppConfiguration((_, configBuilder) =>
+            {
+                configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["M3Undle:Paths:DataDirectory"] = _tempDataDir,
+                });
+            });
+
+            builder.ConfigureTestServices(services =>
+            {
+                var dbDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>));
+                if (dbDescriptor is not null)
+                    services.Remove(dbDescriptor);
+
+                services.AddDbContext<ApplicationDbContext>(options =>
+                    options.UseSqlite(WebApplicationFactoryTestCleanup.CreateSqliteConnectionString(_tempDataDir))
+                           .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning)));
+
+                services.RemoveAll<IAccessResolver>();
+                services.AddScoped<IAccessResolver, StubAccessResolver>();
+
+                services.RemoveAll<ILineupRenderer>();
+                services.AddScoped<ILineupRenderer, StubLineupRenderer>();
+            });
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync();
+            await WebApplicationFactoryTestCleanup.DeleteDirectoryWhenUnlockedAsync(_tempDataDir);
+        }
+    }
+
+    private sealed class StubAccessResolver : IAccessResolver
+    {
+        public ValueTask<ClientAccessResolutionResult> ResolveAsync(HttpContext context, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var credential = new AccessCredential(
+                Id: "test-credential",
+                Username: "test-user",
+                PasswordHash: string.Empty,
+                Enabled: true,
+                AuthType: AccessCredentialAuthType.UsernamePassword);
+
+            var access = new ResolvedClientAccess(
+                Credential: credential,
+                Binding: new AccessBinding(
+                    CredentialId: credential.Id,
+                    ActiveProfileId: "profile-1",
+                    AllowedProfileIds: ["profile-1"],
+                    VirtualTunerId: "hdhr-main"),
+                Transport: ClientCredentialTransport.Form,
+                UrlCredential: new AccessUrlCredential("test-user", "secret"));
+
+            return ValueTask.FromResult(ClientAccessResolutionResult.Success(access));
+        }
+    }
+
+    private sealed class StubLineupRenderer : ILineupRenderer
+    {
+        public Task<RenderedLineup?> TryRenderActiveLineupAsync(string? profileId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return Task.FromResult<RenderedLineup?>(new RenderedLineup(
+                SnapshotId: "snapshot-1",
+                ProfileId: profileId ?? "profile-1",
+                SnapshotCreatedUtc: DateTime.UtcNow,
+                ChannelIndexPath: "unused",
+                XmltvPath: null,
+                Channels:
+                [
+                    new RenderedLineupChannel("live-1", "Alpha", "alpha.tv", "Alpha", null, "News", 11, "http://example.com/live/alpha.ts", "live"),
+                    new RenderedLineupChannel("vod-1", "Movie One", "movie.one", "Movie One", null, "Movies", null, "http://example.com/movie/one.mkv", "vod"),
+                    new RenderedLineupChannel("live-2", "Bravo", "bravo.tv", "Bravo HD", null, "News", null, "http://example.com/live/bravo.ts", "live"),
+                ]));
+        }
+    }
+}

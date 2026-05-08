@@ -11,6 +11,7 @@ public enum ClientCredentialTransport
     None = 0,
     AuthorizationHeaderBasic = 1,
     QueryString = 2,
+    Form = 3,
 }
 
 public enum ClientAccessFailureReason

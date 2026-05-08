@@ -84,20 +84,21 @@ public sealed class StreamingRegistry(IOptions<StreamProxyOptions> options)
 
     private StreamSessionSnapshot AggregateVisibleSession(StreamSessionSnapshot snapshot)
     {
-        var additionalSubscribers = _sessions.Values
+        var hlsSubscribers = _sessions.Values
             .Where(x => x.IsInternal
                 && !string.IsNullOrWhiteSpace(x.ParentStreamSessionId)
                 && string.Equals(x.ParentStreamSessionId, snapshot.SessionId, StringComparison.Ordinal))
             .Sum(x => x.SubscriberCount);
 
-        if (additionalSubscribers == 0)
+        if (hlsSubscribers == 0)
             return snapshot;
 
-        var totalSubscribers = snapshot.SubscriberCount + additionalSubscribers;
+        var totalSubscribers = snapshot.SubscriberCount + hlsSubscribers;
         return snapshot with
         {
             SubscriberCount = totalSubscribers,
             IsShared = totalSubscribers > 1,
+            InferredHlsSubscriberCount = hlsSubscribers,
         };
     }
 }

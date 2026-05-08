@@ -18,7 +18,10 @@ M3Undle is a self-hosted IPTV lineup manager and proxy for large M3U, XMLTV, Xtr
 
 It helps you filter out provider groups you do not care about, collect the channels you do want into your own groups, assign stable channel numbers, and publish a smaller lineup to DVRs, media servers, browser-based players, and IPTV apps.
 
-Works with clients such as NextPVR, Jellyfin, Emby, Plex, IPTVnator, IPTV Smarters, and other apps that consume M3U, XMLTV, Xtream, or HDHomeRun-compatible endpoints.
+Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and other apps that consume M3U, XMLTV, Xtream, or HDHomeRun-compatible endpoints.
+
+> [!NOTE]
+> **Emby** and **Plex** support Live TV and DVR only with a paid subscription (Emby Premiere and Plex Pass respectively). Full compatibility with M3Undle has not been validated without those subscriptions.
 
 ![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/images/readme-dashboard.png)
 
@@ -96,7 +99,7 @@ Start by reducing the provider catalog to something your clients should actually
 4. Add selected channels from one or more provider groups into that output group.
 5. Number and order those channels the way you want them to appear.
 6. Publish the lineup.
-7. Point NextPVR, Jellyfin, Emby, Plex, IPTVnator, IPTV Smarters, or another client at the published output.
+7. Point NextPVR, Jellyfin, IPTVnator, IPTV Smarters, or another client at the published output.
 
 Instead of making every client parse the full provider list, M3Undle publishes only the lineup you built.
 
