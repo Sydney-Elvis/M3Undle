@@ -25,7 +25,7 @@ Works with clients such as NextPVR, Jellyfin, Emby, Plex, IPTVnator, IPTV Smarte
 > [!IMPORTANT]
 > **Alpha Status**
 >
-> M3Undle is in the final alpha stage: the main workflow is implemented, most planned features are in place, and the remaining Alpha 6 work is focused on user experience, provider onboarding, profile and refresh behavior, stream stability, monitoring, client compatibility, and first-run documentation.
+> M3Undle has completed Alpha 6. The core workflow is implemented, streaming has been hardened with shared-stream support and relay fallback for unstable providers, and observability endpoints are in place. Alpha 7 is focused on interface polish before moving into beta.
 >
 > It is stable enough for real LAN testing and personal use, but it is still alpha software. Expect rough edges and possible provider or client-specific issues before beta.
 
@@ -79,7 +79,7 @@ Port `8080` serves the web UI, M3U, XMLTV, Xtream, and general compatibility end
 
 The `config` folder is bind-mounted so configuration files stay easy to inspect and back up. Runtime state, logs, snapshots, and browser playback working files use the Docker-managed `m3undle_data` volume.
 
-Use `alpha` for the latest alpha build. Pin a specific version, such as `v1.0.0-alpha.5`, if you want repeatable updates.
+Use `alpha` for the latest alpha build. Specific release tags are listed on the [M3Undle container registry page](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle).
 
 `latest` is not used during alpha or beta. It will be introduced no earlier than the release candidate track.
 
@@ -138,7 +138,7 @@ Use named profiles, switch the active published profile, keep published history,
 
 ### Administration
 
-Configure global refresh defaults, per-profile refresh overrides, endpoint security, optional UI authentication, downstream notifications, provider stream limits, and service behavior from the web UI or Docker configuration.
+Configure global refresh defaults, per-profile and per-provider refresh schedules, endpoint security, optional UI authentication, downstream notifications, provider stream limits, and service behavior from the web UI or Docker configuration.
 
 ## Client endpoints
 
@@ -236,14 +236,15 @@ When reporting an issue, include the M3Undle version tag, Docker compose file wi
 
 ## Roadmap
 
-Current work is focused on finishing Alpha 6, then moving into beta testing.
+Alpha 6 is released. Current work is Alpha 7 interface polish before moving into beta.
 
 Planned release path:
 
-1. Alpha 6: final feature cleanup, diagnostics, monitoring, stream hardening, and UI polish.
-2. Beta: broader testing, documentation cleanup, client compatibility work, and bug fixes.
-3. Release candidate: final validation and packaging.
-4. v1.0.0: stable release.
+1. Alpha 6 — released.
+2. Alpha 7 — interface polish and UX improvements.
+3. Beta — broader testing, documentation cleanup, and client compatibility work.
+4. Release candidate — final validation and packaging.
+5. v1.0.0 — stable release.
 
 After v1.0.0, planned work moves toward more advanced provider handling:
 
