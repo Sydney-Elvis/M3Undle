@@ -671,6 +671,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (IsMpegTsRelay() && isInternal)
             return _buffer.CreateSafeStartSnapshot();
 
+        // External MPEG-TS subscribers include the current buffer so they don't miss data
+        // that arrived between headers-ready and subscriber registration (race window).
+        if (IsMpegTsRelay())
+            return _buffer.CreateSnapshot();
+
         return _buffer.CreateLiveEdgeSnapshot();
     }
 

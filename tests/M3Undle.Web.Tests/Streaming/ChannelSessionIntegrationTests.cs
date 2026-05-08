@@ -972,7 +972,7 @@ public sealed class ChannelSessionIntegrationTests
         await WaitUntilAsync(() => hdhrSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(2));
 
         var smartersSubscriber = await session.AttachSubscriberAsync(smartersCapture.Context, cts.Token);
-        await WaitUntilAsync(() => smartersSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => smartersSubscriber.BytesSent >= 188 * 2, TimeSpan.FromSeconds(3));
 
         cts.Cancel();
         await smartersSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
@@ -981,10 +981,8 @@ public sealed class ChannelSessionIntegrationTests
         await hdhrSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
 
         var data = smartersCapture.Body.ToArray();
-        Assert.IsGreaterThanOrEqualTo(188, data.Length);
-        Assert.AreEqual(0x47, data[0]);
-        Assert.AreEqual(0x1f, data[1]);
-        Assert.AreEqual(0xff, data[2]);
+        Assert.IsGreaterThanOrEqualTo(188 * 2, data.Length);
+        Assert.IsTrue(ContainsNullTsPacket(data), "Smarters subscriber must receive at least one MPEG-TS null packet during upstream stall.");
         Assert.AreEqual(1, handler.ConnectionCount);
 
         await session.DisposeAsync();
@@ -2107,6 +2105,16 @@ public sealed class ChannelSessionIntegrationTests
         }
 
         return -1;
+    }
+
+    private static bool ContainsNullTsPacket(byte[] data)
+    {
+        for (var i = 0; i + 3 <= data.Length; i += 188)
+        {
+            if (data[i] == 0x47 && data[i + 1] == 0x1f && data[i + 2] == 0xff)
+                return true;
+        }
+        return false;
     }
 
     private static byte[] PatPacket(int pmtPid)
