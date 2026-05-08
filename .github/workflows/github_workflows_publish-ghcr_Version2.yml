@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -34,17 +34,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute image tag from git ref
+      - name: Compute image tags from git ref
         id: vars
         run: |
-          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          TAG="${GITHUB_REF_NAME}"
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          echo "ghcr.io/sydney-elvis/m3undle:${TAG}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *"-alpha."* || "$TAG" == *"-alpha-test."* ]]; then
+            echo "ghcr.io/sydney-elvis/m3undle:alpha" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == *"-beta."* ]]; then
+            echo "ghcr.io/sydney-elvis/m3undle:beta" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" == *"-rc."* ]]; then
+            echo "ghcr.io/sydney-elvis/m3undle:rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "ghcr.io/sydney-elvis/m3undle:latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/sydney-elvis/m3undle:${{ steps.vars.outputs.tag }}
+          tags: ${{ steps.vars.outputs.tags }}
           build-args: |
             BUILD_NUMBER=${{ github.run_number }}
             BUILD_DATE_UTC=${{ github.event.head_commit.timestamp }}
