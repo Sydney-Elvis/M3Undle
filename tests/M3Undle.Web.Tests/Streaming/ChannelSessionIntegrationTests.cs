@@ -931,7 +931,7 @@ public sealed class ChannelSessionIntegrationTests
 
         var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
         await WaitUntilAsync(() => subscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
-        await Task.Delay(1100, cts.Token);
+        await Task.Delay(1100, CancellationToken.None);
 
         Assert.AreEqual(188, subscriber.BytesSent);
         Assert.AreEqual(1, handler.ConnectionCount);
