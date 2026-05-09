@@ -1,0 +1,18 @@
+.user-menu-card {
+    width: 240px;
+    padding: 14px;
+}
+
+.user-menu-header {
+    min-width: 0;
+}
+
+.user-menu-identity {
+    min-width: 0;
+}
+
+.user-menu-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
