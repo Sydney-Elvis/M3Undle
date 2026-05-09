@@ -52,13 +52,29 @@ public sealed class M3UndleReadinessHealthCheck(
         if (reasons.Count == 0)
             return HealthCheckResult.Healthy("ready", new Dictionary<string, object> { ["ready"] = true });
 
+        var reason = string.Join("; ", reasons);
+
         return HealthCheckResult.Unhealthy(
-            "not ready",
+            $"not ready: {reason}",
             data: new Dictionary<string, object>
             {
                 ["ready"] = false,
-                ["reasons"] = reasons,
+                ["reason"] = reason,
+                ["reasons"] = new ReadinessReasons(reasons),
             });
+    }
+
+    private sealed class ReadinessReasons(IReadOnlyList<string> reasons) : IReadOnlyList<string>
+    {
+        public int Count => reasons.Count;
+
+        public string this[int index] => reasons[index];
+
+        public IEnumerator<string> GetEnumerator() => reasons.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public override string ToString() => string.Join("; ", reasons);
     }
 }
 
@@ -76,9 +92,11 @@ public static class M3UndleHealthResponseWriters
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        var reason = string.Join("; ", reasons);
+
         object payload = report.Status == HealthStatus.Healthy
             ? new { ready = true, status = report.Status.ToString() }
-            : new { ready = false, status = report.Status.ToString(), reasons };
+            : new { ready = false, status = report.Status.ToString(), reason, reasons };
 
         context.Response.ContentType = "application/json; charset=utf-8";
         return JsonSerializer.SerializeAsync(context.Response.Body, payload, JsonOptions);
@@ -92,6 +110,7 @@ public static class M3UndleHealthResponseWriters
             {
                 status = x.Value.Status.ToString(),
                 description = x.Value.Description,
+                reason = TryGetReason(x.Value.Data),
                 reasons = TryGetReasons(x.Value.Data),
                 durationMilliseconds = x.Value.Duration.TotalMilliseconds,
             },
@@ -120,4 +139,9 @@ public static class M3UndleHealthResponseWriters
                 yield return reason;
         }
     }
+
+    private static string? TryGetReason(IReadOnlyDictionary<string, object> data)
+        => data.TryGetValue("reason", out var value) && value is string reason
+            ? reason
+            : null;
 }

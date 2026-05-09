@@ -1161,9 +1161,11 @@ public static class CompatibilityEndpoints
         if (refreshTrigger.IsRefreshing)
             reasons.Add("refresh in progress");
 
+        var reason = string.Join("; ", reasons);
+
         return reasons.Count == 0
             ? Results.Ok(new { ready = true })
-            : Results.Json(new { ready = false, reasons }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            : Results.Json(new { ready = false, reason, reasons }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     private static IResult ServeDebugStrikesAsync(UpstreamFailureStrikeStore strikeStore)

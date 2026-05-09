@@ -10,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace M3Undle.Web.Tests.Status;
@@ -27,12 +28,27 @@ public sealed class ReadinessEndpointTests
         Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
 
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("no active profile", json.RootElement.GetProperty("reason").GetString());
+
         var reasons = json.RootElement.GetProperty("reasons").EnumerateArray()
             .Select(x => x.GetString())
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .ToList();
 
         CollectionAssert.Contains(reasons, "no active profile");
+    }
+
+    [TestMethod]
+    public async Task M3UndleReadyHealthData_ReasonsToString_ReturnsReadableReasons()
+    {
+        await using var factory = new ReadinessApiFactory();
+        var healthChecks = factory.Services.GetRequiredService<HealthCheckService>();
+
+        var report = await healthChecks.CheckHealthAsync(
+            registration => registration.Name == "m3undle_ready");
+
+        var data = report.Entries["m3undle_ready"].Data;
+        Assert.AreEqual("no active profile", data["reasons"].ToString());
     }
 
     [TestMethod]
@@ -65,6 +81,8 @@ public sealed class ReadinessEndpointTests
         Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
 
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("no active snapshot for active profile", json.RootElement.GetProperty("reason").GetString());
+
         var reasons = json.RootElement.GetProperty("reasons").EnumerateArray()
             .Select(x => x.GetString())
             .Where(x => !string.IsNullOrWhiteSpace(x))
