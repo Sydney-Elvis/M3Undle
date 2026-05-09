@@ -116,6 +116,7 @@
         await EventService.DismissAllAsync();
         _events.Clear();
         await OnCountChanged.InvokeAsync();
+        await CloseAsync();
         StateHasChanged();
     }
 
