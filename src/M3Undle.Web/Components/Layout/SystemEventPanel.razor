@@ -2,21 +2,26 @@
 @using M3Undle.Web.Data.Entities
 @inject IEventService EventService
 
-<MudDrawer @bind-Open="Open" Anchor="Anchor.End" Variant="DrawerVariant.Temporary" Width="420px">
-    <MudDrawerHeader Style="padding: 12px 16px;">
+<MudDrawer Open="@Open" OpenChanged="HandleOpenChangedAsync" Anchor="Anchor.End" Variant="DrawerVariant.Persistent" Width="380px"
+           Style="height: calc(100vh - 28px); overflow: hidden;">
+    <MudDrawerHeader Style="padding: 12px 8px 12px 16px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%;">
             <MudText Typo="Typo.h6">System Events</MudText>
-            @if (_events.Count > 0)
-            {
-                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                           OnClick="ClearAllAsync">Clear all</MudButton>
-            }
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                @if (_events.Count > 0)
+                {
+                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                               OnClick="ClearAllAsync">Clear all</MudButton>
+                }
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               Color="Color.Default" OnClick="CloseAsync" />
+            </MudStack>
         </MudStack>
     </MudDrawerHeader>
 
     <MudDivider />
 
-    <div style="overflow-y: auto; flex: 1;">
+    <div style="overflow-y: auto; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;">
         @if (_loading)
         {
             <div class="pa-4">
@@ -25,8 +30,9 @@
         }
         else if (_events.Count == 0)
         {
-            <div class="pa-6" style="text-align: center;">
-                <MudText Typo="Typo.body2" Color="Color.Secondary">No recent events</MudText>
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:flex-start; flex: 1 1 auto; min-height: 0; padding:32px; opacity:0.45;">
+                <MudIcon Icon="@Icons.Material.Outlined.NotificationsNone" Style="font-size:64px;" />
+                <MudText Typo="Typo.body1" Style="margin-top:12px;">No system events</MudText>
             </div>
         }
         else
@@ -80,6 +86,13 @@
         if (Open)
             await LoadAsync();
     }
+
+    private async Task HandleOpenChangedAsync(bool value)
+    {
+        await OpenChanged.InvokeAsync(value);
+    }
+
+    private Task CloseAsync() => OpenChanged.InvokeAsync(false);
 
     private async Task LoadAsync()
     {

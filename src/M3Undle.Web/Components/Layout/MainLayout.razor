@@ -23,6 +23,37 @@
 <MudSnackbarProvider />
 
 <MudLayout>
+    <MudAppBar Elevation="0">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
+        <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;">
+            <img src="favicon-32x32.png" alt="" aria-hidden="true" style="width:28px;height:28px;margin-left:8px;" />
+            <MudText Typo="Typo.h6" Class="ms-2">M3Undle</MudText>
+        </a>
+        <MudSpacer />
+        @if (_isRefreshing)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
+                <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
+            </MudStack>
+        }
+        <MudTooltip Text="@(_eventSummary.Count == 0 ? "No system events" : $"{_eventSummary.Count} system event{(_eventSummary.Count == 1 ? "" : "s")}")"
+                    Placement="Placement.Bottom">
+            <MudBadge Content="@((object)_eventSummary.Count)"
+                      Color="@EventBadgeColor" Overlap="true" Bordered="true"
+                      Visible="@(_eventSummary.Count > 0)">
+                <MudIconButton Icon="@Icons.Material.Filled.Notifications"
+                               Color="Color.Inherit"
+                               Disabled="@(!_canViewEvents)"
+                               OnClick="OpenEventPanel" />
+            </MudBadge>
+        </MudTooltip>
+        <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
+            <MudIconButton Icon="@ThemeModeIcon" Color="Color.Inherit" OnClick="CycleThemeMode" />
+        </MudTooltip>
+        <LoginDisplay />
+    </MudAppBar>
+
     <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.Start" Variant="DrawerVariant.Mini" Breakpoint="Breakpoint.None">
         <MudDrawerHeader Style="white-space: nowrap; padding: 0;">
             @if (_drawerOpen)
@@ -42,39 +73,9 @@
         <NavMenu OnNavigate="CloseDrawer" />
     </MudDrawer>
 
+    <SystemEventPanel Open="@_eventPanelOpen" OpenChanged="OnEventPanelChanged" OnCountChanged="RefreshEventCountAsync" />
+
     <MudMainContent>
-        <MudAppBar Elevation="0">
-            <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
-            <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;">
-                <img src="favicon-32x32.png" alt="" aria-hidden="true" style="width:28px;height:28px;margin-left:8px;" />
-                <MudText Typo="Typo.h6" Class="ms-2">M3Undle</MudText>
-            </a>
-            <MudSpacer />
-            @if (_isRefreshing)
-            {
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
-                    <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
-                    <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
-                </MudStack>
-            }
-            <MudTooltip Text="@(_eventSummary.Count == 0 ? "No system events" : $"{_eventSummary.Count} system event{(_eventSummary.Count == 1 ? "" : "s")}")"
-                        Placement="Placement.Bottom">
-                <MudBadge Content="@(_eventSummary.Count > 0 ? (object)_eventSummary.Count : null)"
-                          Color="@EventBadgeColor" Overlap="true" Bordered="true">
-                    <MudIconButton Icon="@Icons.Material.Filled.Notifications"
-                                   Color="Color.Inherit"
-                                   Disabled="@(!_canViewEvents)"
-                                   OnClick="OpenEventPanel" />
-                </MudBadge>
-            </MudTooltip>
-            <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
-                <MudIconButton Icon="@ThemeModeIcon" Color="Color.Inherit" OnClick="CycleThemeMode" />
-            </MudTooltip>
-            <LoginDisplay />
-        </MudAppBar>
-
-        <SystemEventPanel @bind-Open="_eventPanelOpen" OnCountChanged="RefreshEventCountAsync" />
-
         <MudContainer MaxWidth="MaxWidth.False" Class="pa-6">
             @Body
         </MudContainer>
@@ -122,6 +123,7 @@
 
 @code {
     private bool _drawerOpen;
+    private bool _drawerWasOpen;
     private bool _isDarkMode;
     private ChannelMappingStatsDto? _channelStats;
     private bool _systemIsDark;
@@ -286,7 +288,22 @@
 
     private void OpenEventPanel()
     {
-        _eventPanelOpen = true;
+        if (!_eventPanelOpen)
+        {
+            _drawerWasOpen = _drawerOpen;
+            _drawerOpen = false;
+        }
+        _eventPanelOpen = !_eventPanelOpen;
+    }
+
+    private void OnEventPanelChanged(bool value)
+    {
+        _eventPanelOpen = value;
+        if (!value)
+        {
+            _drawerOpen = _drawerWasOpen;
+            _drawerWasOpen = false;
+        }
     }
 
     private async Task RefreshEventCountAsync()
