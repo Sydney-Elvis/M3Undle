@@ -39,39 +39,10 @@
     </MudNavLink>
 </MudNavMenu>
 
-@if (_authEnabled)
-{
-    <MudDivider Class="my-4" />
-
-    <AuthorizeView>
-        <Authorized>
-            <MudNavMenu>
-                <MudNavLink Icon="@Icons.Material.Filled.Person">@context.User.Identity?.Name</MudNavLink>
-            </MudNavMenu>
-            <form action="Account/Logout" method="post" class="mt-2">
-                <AntiforgeryToken />
-                <input type="hidden" name="ReturnUrl" value="@_currentPath" />
-                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Logout" OnClick="HandleNavClick">
-                    Logout
-                </MudButton>
-            </form>
-        </Authorized>
-        <NotAuthorized>
-            <MudNavMenu>
-                <MudNavLink Href="Account/Login" Icon="@Icons.Material.Filled.Login" OnClick="HandleNavClick">Login</MudNavLink>
-            </MudNavMenu>
-        </NotAuthorized>
-    </AuthorizeView>
-}
-
 @code {
     [Parameter]
     public EventCallback OnNavigate { get; set; }
 
-    [Inject]
-    private NavigationManager NavigationManager { get; set; } = default!;
-
-    private string _currentPath = string.Empty;
     private bool _isRefreshing;
     private bool _authEnabled;
     private int _pendingReviewCount;
@@ -83,7 +54,6 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _currentPath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
         _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
 
         var reader = EventBus.Subscribe(out _eventSubscription);

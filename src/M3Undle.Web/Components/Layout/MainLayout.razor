@@ -54,7 +54,7 @@
         <LoginDisplay />
     </MudAppBar>
 
-    <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.Start" Variant="DrawerVariant.Mini" Breakpoint="Breakpoint.None">
+    <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.Start" Variant="DrawerVariant.Mini" Breakpoint="Breakpoint.None" Style="@DrawerViewportStyle">
         <MudDrawerHeader Style="white-space: nowrap; padding: 0;">
             @if (_drawerOpen)
             {
@@ -122,6 +122,8 @@
 </MudLayout>
 
 @code {
+    private const int FooterHeightPx = 28;
+
     private bool _drawerOpen;
     private bool _drawerWasOpen;
     private bool _isDarkMode;
@@ -147,6 +149,8 @@
 
     private enum ThemeMode { Auto, Light, Dark }
     private ThemeMode _mode = ThemeMode.Auto;
+
+    private string DrawerViewportStyle => $"height: calc(100dvh - {FooterHeightPx}px); bottom: {FooterHeightPx}px;";
 
     private string ThemeModeIcon => _mode switch
     {
