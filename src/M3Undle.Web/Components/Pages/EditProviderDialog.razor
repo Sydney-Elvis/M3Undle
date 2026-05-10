@@ -1,4 +1,5 @@
 @using M3Undle.Web.Contracts.Providers
+@using M3Undle.Web.Components.ProviderForms
 @inject M3Undle.Web.Application.ProviderPageService ProviderPageService
 
 <MudDialog Style="min-width:620px">
@@ -54,6 +55,48 @@
                                   HelperText="e.g. http://yourserver.com:8080" />
                     <MudTextField Label="Username" @bind-Value="_model.XtreamUsername"
                                   Required="true" RequiredError="Username is required." />
+
+                    @if (!string.IsNullOrWhiteSpace(_passwordError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true">@_passwordError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_passwordSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">@_passwordSuccess</MudAlert>
+                    }
+                    @if (!_editingPassword)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudTextField T="string" Value="@("••••••••")" Label="Password"
+                                          ReadOnly="true" Style="flex:1" />
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                       Disabled="!_encryptionAvailable"
+                                       OnClick="StartPasswordEdit">Change</MudButton>
+                        </MudStack>
+                        @if (!_encryptionAvailable)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-n2">
+                                M3UNDLE_ENCRYPTION_KEY must be configured to change the password.
+                            </MudText>
+                        }
+                    }
+                    else
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudTextField @bind-Value="_newPassword" Label="New Password"
+                                          InputType="InputType.Password" Style="flex:1"
+                                          Disabled="_isChangingPassword" />
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       Disabled="@(_isChangingPassword || string.IsNullOrWhiteSpace(_newPassword))"
+                                       OnClick="ChangePasswordAsync">
+                                @(_isChangingPassword ? "Saving..." : "Save")
+                            </MudButton>
+                            <MudButton Variant="Variant.Text" Size="Size.Small"
+                                       Disabled="_isChangingPassword"
+                                       OnClick="CancelPasswordEdit">Cancel</MudButton>
+                        </MudStack>
+                    }
+
                     <MudSwitch @bind-Value="_model.XtreamIncludeXmltv" Color="Color.Primary"
                                Label="Include XMLTV guide from same server" />
                 }
@@ -71,21 +114,25 @@
                     <MudTextField Label="XMLTV URL (optional)" @bind-Value="_model.XmltvUrl" />
                 }
 
-                <MudSelect T="string" Label="Associated Profile" @bind-Value="_model.ProfileId"
-                           ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(None)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
+                <MudSelect T="string" Label="Associated Profile"
+                           Value="_model.ProfileId" ValueChanged="HandleProfileChanged"
+                           ToStringFunc="@(id => string.IsNullOrEmpty(id) || id == NewProfileSentinel
+                               ? "(None)"
+                               : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
                     <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
                     @foreach (var profile in AvailableProfiles)
                     {
                         <MudSelectItem T="string" Value="@profile.ProfileId">@profile.Name</MudSelectItem>
                     }
+                    <MudSelectItem T="string" Value="@NewProfileSentinel">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Add" Size="Size.Small" />
+                            <MudText>New Profile...</MudText>
+                        </MudStack>
+                    </MudSelectItem>
                 </MudSelect>
 
-                @if (!_showCreateProfile)
-                {
-                    <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
-                               OnClick="ShowCreateProfile" Style="align-self:flex-start">New Profile</MudButton>
-                }
-                else
+                @if (_showCreateProfile)
                 {
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                         <MudTextField Label="New Profile Name" @bind-Value="_newProfileName" Style="flex:1"
@@ -97,21 +144,11 @@
                     </MudStack>
                 }
 
-                <MudDivider Class="my-1" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
-                <MudSwitch @bind-Value="_model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
-                <MudSwitch @bind-Value="_model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
+                <ProviderContentToggles @bind-IncludeVod="_model.IncludeVod"
+                                        @bind-IncludeSeries="_model.IncludeSeries" />
 
-                <MudDivider Class="my-1" />
-                <MudSwitch @bind-Value="_model.LimitConcurrentStreams" Color="Color.Primary" Label="Limit concurrent streams" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2">
-                    M3Undle will reject new stream requests once this limit is reached, protecting active viewers
-                    from being cut off. Set it to your subscription's maximum simultaneous connections.
-                </MudText>
-                @if (_model.LimitConcurrentStreams)
-                {
-                    <MudNumericField T="int" Label="Stream limit" @bind-Value="_model.ConcurrentStreamLimit" Min="1" Max="100" />
-                }
+                <ProviderConcurrentStreams @bind-LimitConcurrentStreams="_model.LimitConcurrentStreams"
+                                           @bind-ConcurrentStreamLimit="_model.ConcurrentStreamLimit" />
 
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
 
@@ -131,70 +168,13 @@
                         }
                         <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800"
                                          HelperText="How long to wait for the provider to respond before giving up. 120 s is suitable for most providers." />
-                        <MudDivider Class="my-1" />
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
-                        <MudSwitch @bind-Value="_model.ForceMpegTs" Color="Color.Warning" Label="Force MPEG-TS" />
-                        @if (Provider.IsXtreamProvider)
-                        {
-                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2 mb-2">
-                                Disables HLS delivery to clients and instructs the Xtream server to serve MPEG-TS output.
-                                Enable only if streams stutter or your player handles TS containers better than HLS segments.
-                            </MudText>
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2 mb-2">
-                                Requests MPEG-TS transport from the provider instead of HLS. Playlist URLs containing
-                                <code>output=m3u8</code> are automatically rewritten to <code>output=ts</code>, and HLS
-                                delivery to clients is disabled for this provider. Enable only if streams stutter or
-                                your player handles TS containers better than HLS segments.
-                            </MudText>
-                        }
-                        <MudSwitch @bind-Value="_model.CleanRelayRemux" Color="Color.Warning" Label="Clean relay remux" />
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2">
-                            Passes live streams through FFmpeg to repair broken timestamps and malformed packets before
-                            forwarding to clients. Fixes playback stalls caused by corrupted stream data, at the cost
-                            of added CPU usage and ~1–2 s of startup latency per stream.
-                        </MudText>
+                        <ProviderStreamFormat @bind-ForceMpegTs="_model.ForceMpegTs"
+                                              @bind-CleanRelayRemux="_model.CleanRelayRemux"
+                                              IsXtream="Provider.IsXtreamProvider" />
                     </MudStack>
                 </MudCollapse>
             </MudStack>
         </MudForm>
-
-        @if (Provider.IsXtreamProvider)
-        {
-            <MudDivider Class="my-4" />
-            <MudText Typo="Typo.subtitle2" Class="mb-2">Change Password</MudText>
-
-            @if (!_encryptionAvailable)
-            {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-2">
-                    <MudText Typo="Typo.body2">
-                        <strong>M3UNDLE_ENCRYPTION_KEY is not set.</strong> Password changes require encryption to be configured.
-                    </MudText>
-                </MudAlert>
-            }
-            else
-            {
-                @if (!string.IsNullOrWhiteSpace(_passwordError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-2">@_passwordError</MudAlert>
-                }
-                @if (!string.IsNullOrWhiteSpace(_passwordSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-2">@_passwordSuccess</MudAlert>
-                }
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                    <MudTextField @bind-Value="_newPassword" Label="New Password" InputType="InputType.Password"
-                                  Style="flex:1" Disabled="_isChangingPassword" />
-                    <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                               Disabled="@(_isChangingPassword || string.IsNullOrWhiteSpace(_newPassword))"
-                               OnClick="ChangePasswordAsync">
-                        @(_isChangingPassword ? "Updating..." : "Update")
-                    </MudButton>
-                </MudStack>
-            }
-        }
     </DialogContent>
     <DialogActions>
         <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
@@ -212,9 +192,12 @@
     [Parameter] public List<ProviderDto> Providers { get; set; } = [];
     [Parameter] public EventCallback OnSaved { get; set; }
 
+    private const string NewProfileSentinel = "__new_profile__";
+
     private MudForm? _form;
     private bool _isSaving;
     private bool _isChangingPassword;
+    private bool _editingPassword;
     private bool _isUpgrading;
     private bool _showAdvanced;
     private string? _error;
@@ -278,10 +261,7 @@
 
         if (Provider.IsXtreamProvider || Provider.XtreamDetectedCapable)
         {
-            try
-            {
-                _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync();
-            }
+            try { _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync(); }
             catch { _encryptionAvailable = false; }
         }
     }
@@ -312,10 +292,18 @@
 
     private void Cancel() => MudDialog.Cancel();
 
-    private void ShowCreateProfile()
+    private void HandleProfileChanged(string value)
     {
-        _newProfileName = string.Empty;
-        _showCreateProfile = true;
+        if (value == NewProfileSentinel)
+        {
+            _newProfileName = string.Empty;
+            _showCreateProfile = true;
+        }
+        else
+        {
+            _model.ProfileId = value;
+            _showCreateProfile = false;
+        }
     }
 
     private void CancelCreateProfile()
@@ -340,6 +328,38 @@
         }
         catch (Exception ex) { _error = $"Failed to create profile: {ex.Message}"; }
         finally { _isCreatingProfile = false; }
+    }
+
+    private void StartPasswordEdit()
+    {
+        _newPassword = string.Empty;
+        _passwordError = null;
+        _passwordSuccess = null;
+        _editingPassword = true;
+    }
+
+    private void CancelPasswordEdit()
+    {
+        _newPassword = string.Empty;
+        _passwordError = null;
+        _editingPassword = false;
+    }
+
+    private async Task ChangePasswordAsync()
+    {
+        _passwordError = null;
+        _passwordSuccess = null;
+        _isChangingPassword = true;
+        try
+        {
+            var error = await ProviderPageService.UpdateXtreamPasswordAsync(Provider.ProviderId, _newPassword, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(error)) { _passwordError = error; return; }
+            _passwordSuccess = "Password updated.";
+            _newPassword = string.Empty;
+            _editingPassword = false;
+        }
+        catch (Exception ex) { _passwordError = $"Failed to update password: {ex.Message}"; }
+        finally { _isChangingPassword = false; }
     }
 
     private async Task SaveAsync()
@@ -401,37 +421,18 @@
         finally { _isSaving = false; }
     }
 
-    private async Task ChangePasswordAsync()
-    {
-        _passwordError = null;
-        _passwordSuccess = null;
-        _isChangingPassword = true;
-        try
-        {
-            var error = await ProviderPageService.UpdateXtreamPasswordAsync(Provider.ProviderId, _newPassword, CancellationToken.None);
-            if (!string.IsNullOrWhiteSpace(error)) { _passwordError = error; return; }
-            _passwordSuccess = "Password updated successfully.";
-            _newPassword = string.Empty;
-        }
-        catch (Exception ex) { _passwordError = $"Failed to update password: {ex.Message}"; }
-        finally { _isChangingPassword = false; }
-    }
-
     private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 
     private sealed class EditModel
     {
         public string Name { get; set; } = string.Empty;
-        // URL/File fields
         public string? PlaylistUrl { get; set; }
         public string? XmltvUrl { get; set; }
         public string? UserAgent { get; set; }
         public string? HeadersJson { get; set; }
-        // Xtream fields
         public string XtreamBaseUrl { get; set; } = string.Empty;
         public string XtreamUsername { get; set; } = string.Empty;
         public bool XtreamIncludeXmltv { get; set; }
-        // Common
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
         public bool LimitConcurrentStreams { get; set; }
