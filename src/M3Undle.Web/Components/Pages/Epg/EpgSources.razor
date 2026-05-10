@@ -366,7 +366,7 @@ else
     private ProviderListItemDto? _selectedProvider;
     private ProfileListItemDto? _selectedProfile;
     private int _activeTab;
-    private bool _isLoading;
+    private bool _isLoading = true;
     private bool _isMappingsLoading;
     private string? _error;
     private EpgSourceTestResult? _testResult;
@@ -381,7 +381,13 @@ else
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
+    {
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task InitializeAsync()
     {
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);

@@ -231,7 +231,7 @@
     private readonly List<ProviderDto> _providers = [];
     private readonly List<ProfileListItemDto> _profiles = [];
 
-    private bool _isLoading;
+    private bool _isLoading = true;
     private bool _isRefreshing;
     private bool _isPreviewLoading;
     private string? _previewLoadingProviderId;
@@ -247,7 +247,13 @@
     private IDisposable? _eventSubscription;
     private PeriodicTimer? _autoRefreshTimer;
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
+    {
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task InitializeAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
 

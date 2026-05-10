@@ -22,7 +22,7 @@
                        OnClick="OpenCreateDialogAsync">
                 New Profile
             </MudButton>
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="ReloadAsync" Disabled="_isLoading" />
         </MudStack>
     </MudStack>
 </MudPaper>
@@ -218,7 +218,7 @@ else
 
 @code {
     private List<ProfilePageItemDto> _profiles = [];
-    private bool _isLoading;
+    private bool _isLoading = true;
     private string? _loadError;
 
     private string? _activatingProfileId;
@@ -235,19 +235,26 @@ else
         CloseOnEscapeKey = true,
     };
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
     {
-        await LoadAsync();
+        _ = InitializeAsync();
+        return Task.CompletedTask;
     }
 
-    private async Task LoadAsync()
+    private async Task InitializeAsync()
+    {
+        await LoadAsync(includePendingCounts: false);
+        _ = RefreshPendingCountsAsync();
+    }
+
+    private async Task LoadAsync(bool includePendingCounts = true)
     {
         _isLoading = true;
         _loadError = null;
 
         try
         {
-            _profiles = await ProfilesService.GetProfilesAsync(CancellationToken.None);
+            _profiles = await ProfilesService.GetProfilesAsync(CancellationToken.None, includePendingCounts);
         }
         catch (Exception ex)
         {
@@ -257,6 +264,36 @@ else
         {
             _isLoading = false;
             StateHasChanged();
+        }
+    }
+
+    private Task ReloadAsync() => LoadAsync();
+
+    private async Task RefreshPendingCountsAsync()
+    {
+        try
+        {
+            var counts = await ProfilesService.GetPendingReviewCountsAsync(CancellationToken.None);
+
+            foreach (var profile in _profiles)
+            {
+                if (counts.TryGetValue(profile.ProfileId, out var value))
+                {
+                    profile.GroupsPendingReview = value.Groups;
+                    profile.ChannelsPendingReview = value.Channels;
+                }
+                else
+                {
+                    profile.GroupsPendingReview = 0;
+                    profile.ChannelsPendingReview = 0;
+                }
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            // Keep initial profile data visible even if deferred counter refresh fails.
         }
     }
 

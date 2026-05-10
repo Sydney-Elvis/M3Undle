@@ -51,15 +51,27 @@
     [CascadingParameter]
     private Task<AuthenticationState>? AuthStateTask { get; set; }
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
     {
-        _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
 
-        if (await CanAccessApiAsync())
-            await LoadStatsAsync();
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task InitializeAsync()
+    {
+        try
+        {
+            _authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+
+            if (await CanAccessApiAsync())
+                await LoadStatsAsync();
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task<bool> CanAccessApiAsync()

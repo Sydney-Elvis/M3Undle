@@ -265,23 +265,33 @@
         }
     };
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
 
-        var canAccess = await CanAccessApiAsync();
-        if (canAccess)
+    private async Task InitializeAsync()
+    {
+        try
         {
-            _ = LoadChannelStatsAsync();
-            _ = LoadHdhrStatusAsync();
-            _ = PollHdhrStatusAsync(_cts.Token);
-        }
+            var canAccess = await CanAccessApiAsync();
+            if (canAccess)
+            {
+                _ = LoadChannelStatsAsync();
+                _ = LoadHdhrStatusAsync();
+                _ = PollHdhrStatusAsync(_cts.Token);
+            }
 
-        var authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        _canViewEvents = !authEnabled || canAccess;
-        await RefreshEventCountAsync();
+            var authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+            _canViewEvents = !authEnabled || canAccess;
+            await RefreshEventCountAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task<bool> CanAccessApiAsync()

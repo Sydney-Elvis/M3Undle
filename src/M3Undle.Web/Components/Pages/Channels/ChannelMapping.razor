@@ -1298,7 +1298,7 @@ else
     private string? _profileId;
     private List<ProfileStubDto> _allProfiles = [];
     private List<GroupFilterDto> _allFilters = [];
-    private bool _isLoading;
+    private bool _isLoading = true;
     private bool _isRefreshing;
     private string? _error;
 
@@ -1622,7 +1622,13 @@ else
         return true;
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
+    {
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task InitializeAsync()
     {
         _allProfiles = await ProfilesService.GetProfileStubsAsync(_cts.Token);
         if (!string.IsNullOrEmpty(InitialProfile) && _allProfiles.Any(p => p.ProfileId == InitialProfile))
