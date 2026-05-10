@@ -1,0 +1,28 @@
+<MudDivider Class="my-1" />
+<MudSwitch Value="LimitConcurrentStreams" ValueChanged="@(async (bool v) => await OnLimitChangedAsync(v))"
+           Color="Color.Primary" Label="Limit concurrent streams" Disabled="Disabled" />
+<MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2">
+    M3Undle will reject new stream requests once this limit is reached, protecting active viewers
+    from being cut off. Set it to your subscription's maximum simultaneous connections.
+</MudText>
+@if (LimitConcurrentStreams)
+{
+    <MudNumericField T="int" Label="Stream limit"
+                     Value="ConcurrentStreamLimit" ValueChanged="ConcurrentStreamLimitChanged"
+                     Min="1" Max="100" Disabled="Disabled" />
+}
+
+@code {
+    [Parameter] public bool LimitConcurrentStreams { get; set; }
+    [Parameter] public EventCallback<bool> LimitConcurrentStreamsChanged { get; set; }
+    [Parameter] public int ConcurrentStreamLimit { get; set; } = 1;
+    [Parameter] public EventCallback<int> ConcurrentStreamLimitChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private async Task OnLimitChangedAsync(bool value)
+    {
+        if (value && ConcurrentStreamLimit < 1)
+            await ConcurrentStreamLimitChanged.InvokeAsync(1);
+        await LimitConcurrentStreamsChanged.InvokeAsync(value);
+    }
+}

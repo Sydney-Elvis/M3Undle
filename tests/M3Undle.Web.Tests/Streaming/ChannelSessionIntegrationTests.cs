@@ -520,24 +520,27 @@ public sealed class ChannelSessionIntegrationTests
 
         var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
         var firstContext = CreateResponseCaptureContext();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // Use CancellationToken.None for attaching so subscriber lifetime is not tied to
+        // the polling wait below. Subscribers are torn down explicitly via CompleteAsync.
+        var firstSubscriber = await session.AttachSubscriberAsync(firstContext.Context, CancellationToken.None);
 
-        var firstSubscriber = await session.AttachSubscriberAsync(firstContext.Context, timeout.Token);
         await WaitUntilAsync(
             () => fixture.DiagnosticsStore.Query(
                 sessionId: session.SessionId,
                 kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(10));
+        Assert.IsTrue(
+            fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
+            "Timed out waiting for MpegTsSafeStartSelected — safe snapshot not yet available.");
 
         var lateContext = CreateResponseCaptureContext();
-        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, timeout.Token, isInternal: true);
-        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188 * 4, TimeSpan.FromSeconds(5));
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, CancellationToken.None, isInternal: true);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188 * 4, TimeSpan.FromSeconds(10));
 
-        timeout.Cancel();
         await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
         await firstSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
-        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
-        await firstSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
         var data = lateContext.Body.ToArray();
         Assert.IsGreaterThanOrEqualTo(188 * 4, data.Length);

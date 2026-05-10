@@ -1,0 +1,368 @@
+@inject ProviderPageService ProviderPageService
+
+<div class="pt-3">
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+    }
+
+    @* File browser unavailable warning (File mode only) *@
+    @if (Mode == UrlProviderMode.File && _fileBrowseRootMissing)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
+            <MudText Typo="Typo.body2">@(_fileBrowseError ?? "File browser unavailable.")</MudText>
+        </MudAlert>
+    }
+
+    <MudForm @ref="_form">
+        <MudStack Spacing="2">
+            <MudTextField Label="Name" @bind-Value="_model.Name"
+                          Required="true" RequiredError="Name is required." />
+
+            @* ---- URL mode: playlist URL input ---- *@
+            @if (Mode == UrlProviderMode.Url)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudTextField Label="Playlist URL" @bind-Value="_model.PlaylistUrl"
+                                  Required="true" RequiredError="A playlist URL is required."
+                                  HelperText="http/https only. Use %VAR_NAME% for credentials stored in .env"
+                                  Style="flex:1" />
+                    <MudTooltip Text="@_urlHelperText" Placement="Placement.Left">
+                        <MudIconButton Icon="@Icons.Material.Filled.Help" Size="Size.Small" Color="Color.Info" />
+                    </MudTooltip>
+                </MudStack>
+
+                @* Xtream detection *@
+                @if (LooksLikeXtreamUrl(_model.PlaylistUrl))
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                        <MudStack Spacing="1">
+                            <MudText Typo="Typo.body2">
+                                <strong>Xtream API detected.</strong> Xtream Codes mode gives you richer channel data,
+                                stable stream IDs, and subscription expiry tracking.
+                            </MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-1">
+                                <MudSpacer />
+                                <MudButton Variant="Variant.Filled" Color="Color.Info" Size="Size.Small"
+                                           Disabled="!EncryptionAvailable"
+                                           OnClick="SwitchToXtreamAsync">
+                                    Switch to Xtream Codes →
+                                </MudButton>
+                            </MudStack>
+                            @if (!EncryptionAvailable)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Warning">
+                                    M3UNDLE_ENCRYPTION_KEY must be configured to use Xtream Codes mode.
+                                </MudText>
+                            }
+                        </MudStack>
+                    </MudAlert>
+                }
+
+                <MudTextField Label="XMLTV URL (optional)" @bind-Value="_model.XmltvUrl"
+                              HelperText="http/https URL for EPG guide data" />
+            }
+
+            @* ---- File mode: file browser ---- *@
+            @if (Mode == UrlProviderMode.File)
+            {
+                <MudStack Spacing="1">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudTextField Label="Selected file" Value="@_model.PlaylistUrl" ReadOnly="true"
+                                      Placeholder="(no file selected)" Style="flex:1"
+                                      HelperText="Browse to select an .m3u or .m3u8 file on the server" />
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   OnClick="OpenFileBrowserAsync" Disabled="_fileBrowseRootMissing">Browse</MudButton>
+                    </MudStack>
+
+                    @if (_showFileBrowser)
+                    {
+                        <MudPaper Outlined="true" Class="pa-2" Style="max-height:260px;overflow-y:auto">
+                            @if (_browseLoading)
+                            {
+                                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                            }
+                            else
+                            {
+                                @if (_browseData?.ParentPath is not null)
+                                {
+                                    <MudListItem T="string" Icon="@Icons.Material.Filled.ArrowUpward"
+                                                 OnClick="() => BrowseToAsync(_browseData.ParentPath)"
+                                                 Dense="true">
+                                        ..
+                                    </MudListItem>
+                                }
+                                @if (_browseData is not null)
+                                {
+                                    @foreach (var entry in _browseData.Entries)
+                                    {
+                                        if (entry.IsDirectory)
+                                        {
+                                            <MudListItem T="string" Icon="@Icons.Material.Filled.Folder"
+                                                         OnClick="() => BrowseToAsync(entry.Path)"
+                                                         Dense="true">
+                                                @entry.Name
+                                            </MudListItem>
+                                        }
+                                        else
+                                        {
+                                            <MudListItem T="string" Icon="@Icons.Material.Filled.AudioFile"
+                                                         OnClick="() => SelectFileAsync(entry.Path)"
+                                                         Dense="true"
+                                                         Style="@(_model.PlaylistUrl == $"file://{entry.Path}" ? "background:var(--mud-palette-primary-lighten)" : "")">
+                                                @entry.Name
+                                            </MudListItem>
+                                        }
+                                    }
+                                    @if (!_browseData.Entries.Any())
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="pa-2">
+                                            No .m3u or .m3u8 files found here.
+                                        </MudText>
+                                    }
+                                }
+                            }
+                        </MudPaper>
+                    }
+                </MudStack>
+
+                <MudTextField Label="XMLTV URL (optional)" @bind-Value="_model.XmltvUrl"
+                              HelperText="http/https URL or leave empty" />
+            }
+
+            <ProviderContentToggles @bind-IncludeVod="_model.IncludeVod"
+                                    @bind-IncludeSeries="_model.IncludeSeries" />
+
+            <ProviderConcurrentStreams @bind-LimitConcurrentStreams="_model.LimitConcurrentStreams"
+                                       @bind-ConcurrentStreamLimit="_model.ConcurrentStreamLimit" />
+
+            <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
+
+            <ProviderProfileSelect @bind-ProfileId="_model.ProfileId"
+                                   AvailableProfiles="AvailableProfiles"
+                                   AllProfiles="Profiles"
+                                   AllowAutocreate="true" />
+
+            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default" Class="mt-1"
+                       StartIcon="@(_showAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                       OnClick="@(() => _showAdvanced = !_showAdvanced)">
+                Advanced options
+            </MudButton>
+            <MudCollapse Expanded="_showAdvanced">
+                <MudStack Spacing="2" Class="mt-1">
+                    @if (Mode == UrlProviderMode.Url)
+                    {
+                        <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent"
+                                      HelperText="Custom User-Agent sent when fetching the playlist and streams. Leave blank to use the M3Undle default." />
+                        <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="2"
+                                      HelperText='Extra HTTP headers included with every request to this provider, e.g. {"X-Custom-Header":"value"}' />
+                    }
+                    <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds"
+                                     Min="1" Max="1800"
+                                     HelperText="How long to wait for the provider to respond before giving up. 120 s is suitable for most providers." />
+                    <ProviderStreamFormat @bind-ForceMpegTs="_model.ForceMpegTs"
+                                          @bind-CleanRelayRemux="_model.CleanRelayRemux"
+                                          IsXtream="false" />
+                </MudStack>
+            </MudCollapse>
+        </MudStack>
+    </MudForm>
+</div>
+
+@code {
+    [Parameter] public UrlProviderMode Mode { get; set; }
+    [Parameter] public List<ProfileListItemDto> Profiles { get; set; } = [];
+    [Parameter] public List<ProviderDto> ExistingProviders { get; set; } = [];
+    [Parameter] public bool EncryptionAvailable { get; set; }
+    [Parameter] public UrlProviderPrefill? Prefill { get; set; }
+    [Parameter] public EventCallback<ProviderDto> OnSaved { get; set; }
+    [Parameter] public EventCallback<XtreamPrefill> OnSwitchToXtream { get; set; }
+
+    private MudForm? _form;
+    private string? _error;
+    private bool _showAdvanced;
+
+    // File browser
+    private bool _fileBrowseRootMissing;
+    private string? _fileBrowseError;
+    private bool _showFileBrowser;
+    private bool _browseLoading;
+    private FileBrowseDto? _browseData;
+
+    private UrlProviderPrefill? _appliedPrefill;
+
+    private FormModel _model = new() { TimeoutSeconds = 120, Enabled = true };
+
+    private IEnumerable<ProfileListItemDto> AvailableProfiles => Profiles.Where(p =>
+        !ExistingProviders.Any(prov => prov.AssociatedProfileIds.Contains(p.ProfileId)));
+
+    private const string _urlHelperText =
+        "Enter an http/https URL.\n\n" +
+        "To keep credentials out of the database, place them in a .env file in M3UNDLE_CONFIG_DIR " +
+        "and reference them with %VAR_NAME% syntax.\n\n" +
+        "Example URL:\n" +
+        "  http://my.server:8080/get.php?username=alice&password=%MY_PASSWORD%\n\n" +
+        ".env file entry:\n" +
+        "  MY_PASSWORD=supersecret";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Mode == UrlProviderMode.File)
+        {
+            var browse = await ProviderPageService.BrowseFilesystemAsync(null);
+            _fileBrowseRootMissing = browse.Data is null;
+            if (_fileBrowseRootMissing)
+                _fileBrowseError = browse.Error;
+        }
+
+        var defaultProfile = AvailableProfiles.FirstOrDefault(x => x.Enabled);
+        if (defaultProfile is not null)
+            _model.ProfileId = defaultProfile.ProfileId;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (Prefill is not null && !ReferenceEquals(Prefill, _appliedPrefill))
+        {
+            _model.Name = Prefill.Name;
+            _model.PlaylistUrl = Prefill.Url;
+            _model.XmltvUrl = Prefill.XmltvUrl;
+            _appliedPrefill = Prefill;
+        }
+    }
+
+    public async Task TrySubmitAsync()
+    {
+        _error = null;
+
+        if (_form is not null) { await _form.ValidateAsync(); if (!_form.IsValid) return; }
+
+        if (Mode == UrlProviderMode.File && string.IsNullOrWhiteSpace(_model.PlaylistUrl))
+        {
+            _error = "Please select a file using the Browse button.";
+            StateHasChanged();
+            return;
+        }
+
+        var result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
+        {
+            Name = _model.Name.Trim(),
+            PlaylistUrl = _model.PlaylistUrl.Trim(),
+            XmltvUrl = NullIfEmpty(_model.XmltvUrl),
+            HeadersJson = NullIfEmpty(_model.HeadersJson),
+            UserAgent = NullIfEmpty(_model.UserAgent),
+            Enabled = _model.Enabled,
+            IncludeVod = _model.IncludeVod,
+            IncludeSeries = _model.IncludeSeries,
+            ForceMpegTs = _model.ForceMpegTs,
+            CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
+            TimeoutSeconds = _model.TimeoutSeconds,
+            MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
+            AssociateToProfileIds = ProfileIdList(_model.ProfileId),
+        }, CancellationToken.None);
+
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            _error = result.Error;
+            StateHasChanged();
+            return;
+        }
+
+        await OnSaved.InvokeAsync(result.Provider!);
+    }
+
+    private async Task SwitchToXtreamAsync()
+    {
+        var creds = ProviderPageService.ParseXtreamUrl(_model.PlaylistUrl.Trim());
+        if (creds is null) return;
+        await OnSwitchToXtream.InvokeAsync(new XtreamPrefill(
+            Name: string.IsNullOrWhiteSpace(_model.Name) ? string.Empty : _model.Name.Trim(),
+            BaseUrl: creds.Value.BaseUrl,
+            Username: creds.Value.Username,
+            Password: creds.Value.Password,
+            IncludeXmltv: true,
+            Enabled: _model.Enabled,
+            TimeoutSeconds: _model.TimeoutSeconds,
+            LimitConcurrentStreams: _model.LimitConcurrentStreams,
+            ConcurrentStreamLimit: _model.ConcurrentStreamLimit,
+            IncludeVod: _model.IncludeVod,
+            IncludeSeries: _model.IncludeSeries,
+            ForceMpegTs: _model.ForceMpegTs,
+            CleanRelayRemux: _model.CleanRelayRemux,
+            ProfileId: _model.ProfileId));
+    }
+
+    // ------------------------------------------------------------------
+    // File browser
+    // ------------------------------------------------------------------
+
+    private async Task OpenFileBrowserAsync()
+    {
+        _showFileBrowser = true;
+        await BrowseToAsync(null);
+    }
+
+    private async Task BrowseToAsync(string? path)
+    {
+        _browseLoading = true;
+        StateHasChanged();
+        try
+        {
+            var browse = await ProviderPageService.BrowseFilesystemAsync(path);
+            if (browse.Data is not null)
+                _browseData = browse.Data;
+            else
+            {
+                _fileBrowseRootMissing = true;
+                _fileBrowseError = browse.Error;
+            }
+        }
+        catch { _fileBrowseRootMissing = true; }
+        finally
+        {
+            _browseLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task SelectFileAsync(string filePath)
+    {
+        _model.PlaylistUrl = $"file://{filePath}";
+        _showFileBrowser = false;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    private static bool LooksLikeXtreamUrl(string? url) =>
+        !string.IsNullOrEmpty(url)
+        && url.Contains("/get.php", StringComparison.OrdinalIgnoreCase)
+        && url.Contains("username=", StringComparison.OrdinalIgnoreCase)
+        && url.Contains("password=", StringComparison.OrdinalIgnoreCase);
+
+    private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+    private static List<string>? ProfileIdList(string id) =>
+        string.IsNullOrWhiteSpace(id) ? null : [id];
+
+    private sealed class FormModel
+    {
+        public string Name { get; set; } = string.Empty;
+        public string PlaylistUrl { get; set; } = string.Empty;
+        public string? XmltvUrl { get; set; }
+        public string? UserAgent { get; set; }
+        public string? HeadersJson { get; set; }
+        public bool Enabled { get; set; } = true;
+        public int TimeoutSeconds { get; set; } = 120;
+        public bool LimitConcurrentStreams { get; set; }
+        public int ConcurrentStreamLimit { get; set; } = 1;
+        public bool IncludeVod { get; set; } = true;
+        public bool IncludeSeries { get; set; } = true;
+        public bool ForceMpegTs { get; set; }
+        public bool CleanRelayRemux { get; set; }
+        public string ProfileId { get; set; } = string.Empty;
+    }
+}

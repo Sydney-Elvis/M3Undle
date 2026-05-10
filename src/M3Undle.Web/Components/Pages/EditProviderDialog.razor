@@ -69,14 +69,7 @@
                         </MudTooltip>
                     </MudStack>
                     <MudTextField Label="XMLTV URL (optional)" @bind-Value="_model.XmltvUrl" />
-                    <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent" />
-                    <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="2"
-                                  HelperText='e.g. {"X-Custom-Header":"value"}' />
                 }
-
-                <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800" />
-                <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_model.MaxConcurrentStreams" Min="1" Max="100"
-                                 HelperText="Leave blank to use the global setting" />
 
                 <MudSelect T="string" Label="Associated Profile" @bind-Value="_model.ProfileId"
                            ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(None)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
@@ -108,27 +101,63 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
                 <MudSwitch @bind-Value="_model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
                 <MudSwitch @bind-Value="_model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
+
                 <MudDivider Class="my-1" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
-                <MudSwitch @bind-Value="_model.ForceMpegTs" Color="Color.Warning"
-                           Label="Force MPEG-TS (override HLS)"
-                           For="@(() => _model.ForceMpegTs)" />
-                @if (_model.ForceMpegTs)
+                <MudSwitch @bind-Value="_model.LimitConcurrentStreams" Color="Color.Primary" Label="Limit concurrent streams" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2">
+                    M3Undle will reject new stream requests once this limit is reached, protecting active viewers
+                    from being cut off. Set it to your subscription's maximum simultaneous connections.
+                </MudText>
+                @if (_model.LimitConcurrentStreams)
                 {
-                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                        Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
-                    </MudAlert>
+                    <MudNumericField T="int" Label="Stream limit" @bind-Value="_model.ConcurrentStreamLimit" Min="1" Max="100" />
                 }
-                <MudSwitch @bind-Value="_model.CleanRelayRemux" Color="Color.Warning"
-                           Label="Clean relay remux"
-                           For="@(() => _model.CleanRelayRemux)" />
-                @if (_model.CleanRelayRemux)
-                {
-                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                        Uses FFmpeg to remux live streams and repair timestamps. Adds CPU usage and some startup latency.
-                    </MudAlert>
-                }
+
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
+
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default" Class="mt-1"
+                           StartIcon="@(_showAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                           OnClick="@(() => _showAdvanced = !_showAdvanced)">
+                    Advanced options
+                </MudButton>
+                <MudCollapse Expanded="_showAdvanced">
+                    <MudStack Spacing="2" Class="mt-1">
+                        @if (!Provider.IsXtreamProvider)
+                        {
+                            <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent"
+                                          HelperText="Custom User-Agent sent when fetching the playlist and streams. Leave blank to use the M3Undle default." />
+                            <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="2"
+                                          HelperText='Extra HTTP headers included with every request to this provider, e.g. {"X-Custom-Header":"value"}' />
+                        }
+                        <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800"
+                                         HelperText="How long to wait for the provider to respond before giving up. 120 s is suitable for most providers." />
+                        <MudDivider Class="my-1" />
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
+                        <MudSwitch @bind-Value="_model.ForceMpegTs" Color="Color.Warning" Label="Force MPEG-TS" />
+                        @if (Provider.IsXtreamProvider)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2 mb-2">
+                                Disables HLS delivery to clients and instructs the Xtream server to serve MPEG-TS output.
+                                Enable only if streams stutter or your player handles TS containers better than HLS segments.
+                            </MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2 mb-2">
+                                Requests MPEG-TS transport from the provider instead of HLS. Playlist URLs containing
+                                <code>output=m3u8</code> are automatically rewritten to <code>output=ts</code>, and HLS
+                                delivery to clients is disabled for this provider. Enable only if streams stutter or
+                                your player handles TS containers better than HLS segments.
+                            </MudText>
+                        }
+                        <MudSwitch @bind-Value="_model.CleanRelayRemux" Color="Color.Warning" Label="Clean relay remux" />
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2">
+                            Passes live streams through FFmpeg to repair broken timestamps and malformed packets before
+                            forwarding to clients. Fixes playback stalls caused by corrupted stream data, at the cost
+                            of added CPU usage and ~1–2 s of startup latency per stream.
+                        </MudText>
+                    </MudStack>
+                </MudCollapse>
             </MudStack>
         </MudForm>
 
@@ -187,6 +216,7 @@
     private bool _isSaving;
     private bool _isChangingPassword;
     private bool _isUpgrading;
+    private bool _showAdvanced;
     private string? _error;
     private string? _passwordError;
     private string? _passwordSuccess;
@@ -220,7 +250,8 @@
                 XtreamIncludeXmltv = Provider.XtreamIncludeXmltv,
                 Enabled = Provider.Enabled,
                 TimeoutSeconds = Provider.TimeoutSeconds,
-                MaxConcurrentStreams = Provider.MaxConcurrentStreams,
+                LimitConcurrentStreams = Provider.MaxConcurrentStreams.HasValue,
+                ConcurrentStreamLimit = Provider.MaxConcurrentStreams ?? 1,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
@@ -236,7 +267,8 @@
                 HeadersJson = Provider.HeadersJson,
                 Enabled = Provider.Enabled,
                 TimeoutSeconds = Provider.TimeoutSeconds,
-                MaxConcurrentStreams = Provider.MaxConcurrentStreams,
+                LimitConcurrentStreams = Provider.MaxConcurrentStreams.HasValue,
+                ConcurrentStreamLimit = Provider.MaxConcurrentStreams ?? 1,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
@@ -331,7 +363,7 @@
                     XtreamIncludeXmltv = _model.XtreamIncludeXmltv,
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
-                    MaxConcurrentStreams = _model.MaxConcurrentStreams,
+                    MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
@@ -350,7 +382,7 @@
                     HeadersJson = NullIfEmpty(_model.HeadersJson),
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
-                    MaxConcurrentStreams = _model.MaxConcurrentStreams,
+                    MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
@@ -402,7 +434,8 @@
         // Common
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
-        public int? MaxConcurrentStreams { get; set; }
+        public bool LimitConcurrentStreams { get; set; }
+        public int ConcurrentStreamLimit { get; set; } = 1;
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
         public bool ForceMpegTs { get; set; }
