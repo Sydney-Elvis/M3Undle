@@ -8,7 +8,9 @@
 
 <PageTitle>Logs — M3Undle</PageTitle>
 
-<div class="d-flex align-center mb-4" style="gap:12px">
+<div style="display:flex; flex-direction:column; height:calc(100dvh - 140px); overflow:hidden">
+
+<div class="d-flex align-center mb-4" style="gap:12px; flex-shrink:0">
     <MudText Typo="Typo.h5">Live Log</MudText>
     @if (!_autoScroll)
     {
@@ -22,7 +24,7 @@
     }
 </div>
 
-<MudStack Row="true" Spacing="2" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+<MudStack Row="true" Spacing="2" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Style="flex-shrink:0">
     <MudTextField T="string"
                   @bind-Value="_searchTerm"
                   Placeholder="Search logs..."
@@ -38,7 +40,7 @@
     </MudChip>
 </MudStack>
 
-<MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
+<MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Style="flex-shrink:0">
     @foreach (var level in LogLevels)
     {
         <MudChip T="string"
@@ -51,9 +53,9 @@
     }
 </MudStack>
 
-<MudPaper Elevation="2" Class="pa-0" Style="overflow:hidden">
+<MudPaper Elevation="2" Class="pa-0" Style="overflow:hidden; flex:1; min-height:0">
     <div id="log-container"
-         style="overflow-y:auto; max-height:75vh; font-family:monospace; font-size:0.80rem; padding:8px 12px">
+         style="overflow-y:auto; height:100%; font-family:monospace; font-size:0.80rem; padding:8px 12px">
         @foreach (var entry in FilteredEntries)
         {
             <div style="margin-bottom:2px; white-space:pre-wrap; word-break:break-all">
@@ -73,6 +75,8 @@
         }
     </div>
 </MudPaper>
+
+</div>
 
 @code {
     private static readonly string[] DefaultLogLevels = ["Fatal", "Error", "Warning", "Information", "Debug", "Verbose"];
