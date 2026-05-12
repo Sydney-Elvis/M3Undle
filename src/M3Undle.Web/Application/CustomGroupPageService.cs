@@ -20,6 +20,7 @@ public sealed class CustomGroupPageService(IServiceScopeFactory scopeFactory, Ap
             .OrderBy(x => x.SortOverride == null ? 1 : 0)
             .ThenBy(x => x.SortOverride)
             .ThenBy(x => x.Name)
+            .AsSplitQuery()
             .ToListAsync(cancellationToken);
 
         return groups.Select(ToDto).ToList();
