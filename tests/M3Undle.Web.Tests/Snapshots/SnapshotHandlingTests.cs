@@ -419,6 +419,62 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_RefreshesActiveProfileProvidersBeforeStandbyProviders()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            var activeProfile = NewProfile("profile-active");
+            activeProfile.IsActive = true;
+
+            var standbyProvider = NewProvider("provider-standby");
+            standbyProvider.Name = "aaa-standby";
+            standbyProvider.PlaylistUrl = "http://standby.example/playlist.m3u";
+            standbyProvider.XmltvUrl = "http://standby.example/xmltv.xml";
+
+            var activeProvider = NewProvider("provider-active");
+            activeProvider.Name = "zzz-active";
+            activeProvider.PlaylistUrl = "http://active.example/playlist.m3u";
+            activeProvider.XmltvUrl = "http://active.example/xmltv.xml";
+
+            var unlinkedProvider = NewProvider("provider-unlinked");
+            unlinkedProvider.Name = "aaa-unlinked";
+            unlinkedProvider.PlaylistUrl = "http://unlinked.example/playlist.m3u";
+            unlinkedProvider.XmltvUrl = "http://unlinked.example/xmltv.xml";
+
+            setup.Profiles.AddRange(
+                activeProfile,
+                NewProfile("profile-standby"));
+            setup.Providers.AddRange(
+                standbyProvider,
+                activeProvider,
+                unlinkedProvider);
+            setup.ProfileProviders.AddRange(
+                NewProfileProvider("provider-standby", "profile-standby"),
+                NewProfileProvider("provider-active", "profile-active"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var handler = new TrackingHttpMessageHandler();
+            await using var db = fixture.CreateDbContext();
+            var builder = CreateBuilder(db, HttpStatusCode.OK, SampleM3u, tempDir, handler: handler);
+            await builder.RunAsync(CancellationToken.None);
+
+            CollectionAssert.AreEqual(
+                new[] { "active.example", "standby.example" },
+                handler.PlaylistRequestHosts);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_ProviderBackOnline_PublishesOnlyOnceForCurrentFailure()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -1024,10 +1080,11 @@ public sealed class SnapshotHandlingTests
         HttpStatusCode statusCode,
         string content,
         string tempDir,
-        IEventService? eventService = null)
+        IEventService? eventService = null,
+        HttpMessageHandler? handler = null)
     {
-        var handler = new FakeHttpMessageHandler(statusCode, content);
-        var factory = new FakeHttpClientFactory(handler);
+        var effectiveHandler = handler ?? new FakeHttpMessageHandler(statusCode, content);
+        var factory = new FakeHttpClientFactory(effectiveHandler);
         var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
         var fetcher = new ProviderFetcher(
             factory,
@@ -1220,6 +1277,30 @@ public sealed class SnapshotHandlingTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(content),
+            });
+        }
+    }
+
+    private sealed class TrackingHttpMessageHandler : HttpMessageHandler
+    {
+        public List<string> PlaylistRequestHosts { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (request.RequestUri?.AbsolutePath.EndsWith("/playlist.m3u", StringComparison.OrdinalIgnoreCase) == true)
+                PlaylistRequestHosts.Add(request.RequestUri.Host);
+
+            var content = request.RequestUri?.AbsolutePath.EndsWith("/xmltv.xml", StringComparison.OrdinalIgnoreCase) == true
+                ? "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv></tv>"
+                : request.RequestUri?.AbsolutePath.EndsWith("/playlist.m3u", StringComparison.OrdinalIgnoreCase) == true
+                    ? SampleM3u
+                    : "{}";
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(content),
             });

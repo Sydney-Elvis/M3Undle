@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Tests.TestSupport;
@@ -122,6 +123,61 @@ public sealed class ReadinessEndpointTests
         Assert.IsTrue(json.RootElement.GetProperty("ready").GetBoolean());
     }
 
+    [TestMethod]
+    public async Task HealthReady_WhenRefreshInProgressAndActiveSnapshotExists_ReturnsReadyTrue()
+    {
+        await using var factory = new ReadinessApiFactory(isRefreshing: true);
+        await factory.SeedAsync(db =>
+        {
+            var now = DateTime.UtcNow;
+            db.Profiles.Add(MakeProfile("profile-active", isActive: true, enabled: true, now));
+            db.Snapshots.Add(new Snapshot
+            {
+                SnapshotId = "snapshot-active",
+                ProfileId = "profile-active",
+                CreatedUtc = now,
+                Status = "active",
+                PlaylistPath = "playlist.m3u",
+                XmltvPath = "guide.xml",
+                ChannelIndexPath = "channel_index.ndjson",
+                StatusJsonPath = "status.json",
+                ChannelCountPublished = 22,
+                LiveChannelCount = 22,
+            });
+        });
+
+        using var client = factory.CreateClient();
+        using var response = await client.GetAsync("/health/ready");
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.IsTrue(json.RootElement.GetProperty("ready").GetBoolean());
+    }
+
+    [TestMethod]
+    public async Task HealthReady_WhenRefreshInProgressAndNoActiveSnapshot_Returns503WithSnapshotReason()
+    {
+        await using var factory = new ReadinessApiFactory(isRefreshing: true);
+        await factory.SeedAsync(db =>
+        {
+            var now = DateTime.UtcNow;
+            db.Profiles.Add(MakeProfile("profile-active", isActive: true, enabled: true, now));
+        });
+
+        using var client = factory.CreateClient();
+        using var response = await client.GetAsync("/health/ready");
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var reasons = json.RootElement.GetProperty("reasons").EnumerateArray()
+            .Select(x => x.GetString())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList();
+
+        CollectionAssert.Contains(reasons, "no active snapshot for active profile");
+        CollectionAssert.Contains(reasons, "refresh in progress");
+    }
+
     private static Profile MakeProfile(string profileId, bool isActive, bool enabled, DateTime now) => new()
     {
         ProfileId = profileId,
@@ -134,7 +190,7 @@ public sealed class ReadinessEndpointTests
         UpdatedUtc = now,
     };
 
-    private sealed class ReadinessApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
+    private sealed class ReadinessApiFactory(bool isRefreshing = false) : WebApplicationFactory<Program>, IAsyncDisposable
     {
         private readonly string _tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-readiness-{Guid.NewGuid():N}");
 
@@ -159,6 +215,11 @@ public sealed class ReadinessEndpointTests
                 services.AddDbContext<ApplicationDbContext>(options =>
                     options.UseSqlite(WebApplicationFactoryTestCleanup.CreateSqliteConnectionString(_tempDataDir))
                            .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning)));
+
+                foreach (var descriptor in services.Where(d => d.ServiceType == typeof(IRefreshTrigger)).ToList())
+                    services.Remove(descriptor);
+
+                services.AddSingleton<IRefreshTrigger>(new TestRefreshTrigger(isRefreshing));
             });
         }
 
@@ -174,6 +235,19 @@ public sealed class ReadinessEndpointTests
         {
             await base.DisposeAsync();
             await WebApplicationFactoryTestCleanup.DeleteDirectoryWhenUnlockedAsync(_tempDataDir);
+        }
+    }
+
+    private sealed class TestRefreshTrigger(bool isRefreshing) : IRefreshTrigger
+    {
+        public bool IsRefreshing { get; } = isRefreshing;
+
+        public bool TriggerRefresh() => false;
+
+        public bool TriggerBuildOnly() => false;
+
+        public void CancelRefresh()
+        {
         }
     }
 }

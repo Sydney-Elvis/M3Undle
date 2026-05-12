@@ -120,15 +120,17 @@ public sealed class SnapshotBuilder(
 
     private sealed record LineupMetricDeltas(int Added, int Removed, int Renamed, int MappingChanges);
 
+    private sealed record ProviderRefreshLink(
+        string ProviderId,
+        int Priority,
+        bool IsActiveProfile);
+
     /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
     public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunAsync(CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
-        var providers = await db.Providers
-            .AsNoTracking()
-            .Where(x => x.Enabled)
-            .ToListAsync(cancellationToken);
+        var providers = await GetOrderedEnabledProvidersAsync(cancellationToken);
 
         if (providers.Count == 0)
         {
@@ -169,10 +171,7 @@ public sealed class SnapshotBuilder(
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
-        var providers = await db.Providers
-            .AsNoTracking()
-            .Where(x => x.Enabled)
-            .ToListAsync(cancellationToken);
+        var providers = await GetOrderedEnabledProvidersAsync(cancellationToken);
 
         if (providers.Count == 0)
         {
@@ -196,6 +195,48 @@ public sealed class SnapshotBuilder(
         }
 
         return (anySucceeded, lastErrorSummary, aggregateChangeClass, aggregateProfileIds);
+    }
+
+    private async Task<List<Provider>> GetOrderedEnabledProvidersAsync(CancellationToken cancellationToken)
+    {
+        var providers = await db.Providers
+            .AsNoTracking()
+            .Where(x => x.Enabled)
+            .ToListAsync(cancellationToken);
+
+        if (providers.Count <= 1)
+            return providers;
+
+        var links = await db.ProfileProviders
+            .AsNoTracking()
+            .Where(x => x.Enabled && x.Provider.Enabled && x.Profile.Enabled)
+            .Select(x => new ProviderRefreshLink(x.ProviderId, x.Priority, x.Profile.IsActive))
+            .ToListAsync(cancellationToken);
+
+        var linkLookup = links.ToLookup(x => x.ProviderId, StringComparer.Ordinal);
+
+        return providers
+            .OrderBy(provider => GetProviderRefreshRank(linkLookup[provider.ProviderId]))
+            .ThenBy(provider => GetProviderRefreshPriority(linkLookup[provider.ProviderId]))
+            .ThenBy(provider => provider.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(provider => provider.ProviderId, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static int GetProviderRefreshRank(IEnumerable<ProviderRefreshLink> links)
+    {
+        var materialized = links as IReadOnlyCollection<ProviderRefreshLink> ?? links.ToArray();
+        if (materialized.Any(x => x.IsActiveProfile))
+            return 0;
+        if (materialized.Count > 0)
+            return 1;
+        return 2;
+    }
+
+    private static int GetProviderRefreshPriority(IEnumerable<ProviderRefreshLink> links)
+    {
+        var priorities = links.Select(x => x.Priority);
+        return priorities.Any() ? priorities.Min() : int.MaxValue;
     }
 
     private async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyList<ParsedProviderChannel> Channels, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunForProviderAsync(

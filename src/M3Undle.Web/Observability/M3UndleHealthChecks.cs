@@ -46,7 +46,7 @@ public sealed class M3UndleReadinessHealthCheck(
             reasons.Add($"database unavailable: {ex.Message}");
         }
 
-        if (refreshTrigger.IsRefreshing)
+        if (refreshTrigger.IsRefreshing && reasons.Count > 0)
             reasons.Add("refresh in progress");
 
         if (reasons.Count == 0)

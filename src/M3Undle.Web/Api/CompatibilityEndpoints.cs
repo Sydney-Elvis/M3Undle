@@ -1158,7 +1158,7 @@ public static class CompatibilityEndpoints
                 reasons.Add("no active snapshot for active profile");
         }
 
-        if (refreshTrigger.IsRefreshing)
+        if (refreshTrigger.IsRefreshing && reasons.Count > 0)
             reasons.Add("refresh in progress");
 
         var reason = string.Join("; ", reasons);
