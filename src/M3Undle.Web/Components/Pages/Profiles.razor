@@ -254,7 +254,7 @@ else
 
         try
         {
-            _profiles = await ProfilesService.GetProfilesAsync(CancellationToken.None, includePendingCounts);
+            _profiles = await Task.Run(() => ProfilesService.GetProfilesAsync(CancellationToken.None, includePendingCounts));
         }
         catch (Exception ex)
         {
@@ -263,7 +263,7 @@ else
         finally
         {
             _isLoading = false;
-            StateHasChanged();
+            try { await InvokeAsync(StateHasChanged); } catch { }
         }
     }
 
@@ -273,7 +273,7 @@ else
     {
         try
         {
-            var counts = await ProfilesService.GetPendingReviewCountsAsync(CancellationToken.None);
+            var counts = await Task.Run(() => ProfilesService.GetPendingReviewCountsAsync(CancellationToken.None));
 
             foreach (var profile in _profiles)
             {
@@ -289,7 +289,7 @@ else
                 }
             }
 
-            await InvokeAsync(StateHasChanged);
+            try { await InvokeAsync(StateHasChanged); } catch { }
         }
         catch
         {

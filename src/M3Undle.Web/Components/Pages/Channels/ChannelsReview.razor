@@ -213,7 +213,7 @@ else
     }
     else
     {
-        <MudTable Items="_queue.Items" Dense="true" Hover="true" Bordered="true">
+        <MudTable Items="_queue.Items" Dense="true" Hover="true" Bordered="true" RowsPerPage="50">
             <HeaderContent>
                 <MudTh><MudCheckBox T="bool" Value="@AllRowsSelected" ValueChanged="SetAllRowsSelected" Size="Size.Small" /></MudTh>
                 <MudTh>Channel</MudTh>
@@ -319,7 +319,7 @@ else
 
     private async Task InitializeAsync()
     {
-        _profiles = await ProfilesService.GetProfileStubsAsync(CancellationToken.None);
+        _profiles = await Task.Run(() => ProfilesService.GetProfileStubsAsync(CancellationToken.None));
 
         if (_profiles.Count > 0)
         {
@@ -330,7 +330,7 @@ else
             }
             else
             {
-                var active = await ChannelMappingService.GetActiveProfileAsync(CancellationToken.None);
+                var active = await Task.Run(() => ChannelMappingService.GetActiveProfileAsync(CancellationToken.None));
                 _profileId = active?.ProfileId ?? _profiles[0].ProfileId;
             }
             await LoadQueueAsync(includePendingSummary: false);
@@ -394,8 +394,8 @@ else
         _error = null;
         try
         {
-            _queue = await ChannelMappingService.ListReviewQueueAsync(
-                _profileId!, _groupFilter, _search, _notifyOnly, 1, 200, CancellationToken.None, includePendingSummary);
+            _queue = await Task.Run(() => ChannelMappingService.ListReviewQueueAsync(
+                _profileId!, _groupFilter, _search, _notifyOnly, 1, 200, CancellationToken.None, includePendingSummary));
             _groups = _queue.Items
                 .GroupBy(x => x.ProviderGroupId, StringComparer.Ordinal)
                 .Select(g => g.First())
@@ -411,6 +411,7 @@ else
         finally
         {
             _isLoading = false;
+            try { await InvokeAsync(StateHasChanged); } catch { }
         }
     }
 
@@ -423,7 +424,7 @@ else
 
         try
         {
-            var summary = await ChannelMappingService.ListReviewQueueAsync(
+            var summary = await Task.Run(() => ChannelMappingService.ListReviewQueueAsync(
                 _profileId!,
                 _groupFilter,
                 _search,
@@ -431,12 +432,12 @@ else
                 1,
                 1,
                 CancellationToken.None,
-                includePendingSummary: true);
+                includePendingSummary: true));
 
             _queue.PendingTotal = summary.PendingTotal;
             _queue.PendingNotified = summary.PendingNotified;
             _queue.Total = summary.Total;
-            await InvokeAsync(StateHasChanged);
+            try { await InvokeAsync(StateHasChanged); } catch { }
         }
         catch
         {

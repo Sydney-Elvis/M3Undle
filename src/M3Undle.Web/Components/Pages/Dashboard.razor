@@ -419,24 +419,23 @@
 
         _isRefreshing = RefreshTrigger.IsRefreshing;
         if (_isRefreshing)
-        {
             _refreshStartedAt = DateTime.UtcNow;
-        }
 
         var restoredFromPrerender = TryRestorePersistedState();
-        if (!restoredFromPrerender)
-        {
-            await LoadAllAsync();
-        }
-
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
 
-        if (!RendererInfo.IsInteractive) return;
-
-        if (_isRefreshing)
+        if (!RendererInfo.IsInteractive)
         {
-            StartElapsedTimer();
+            // SSR pass: block to populate state for the pre-rendered HTML.
+            if (!restoredFromPrerender)
+                await LoadAllAsync();
+            return;
         }
+
+        // Interactive pass: never block the circuit — fire-and-forget all data loads
+        // so user interactions (nav, events bell) remain responsive while data arrives.
+        if (_isRefreshing)
+            StartElapsedTimer();
 
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
@@ -445,10 +444,10 @@
         _streamTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
         _ = RunStreamTimerAsync(_streamTimer);
 
-        if (restoredFromPrerender)
-        {
+        if (!restoredFromPrerender)
+            _ = LoadAllAsync();
+        else
             _ = LoadRefreshScheduleAsync();
-        }
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -500,13 +499,15 @@
     {
         try
         {
-            var settings = await RefreshScheduleService.GetActiveProfileSettingsAsync(_cts.Token);
+            var ct = _cts.Token;
+            var settings = await Task.Run(() => RefreshScheduleService.GetActiveProfileSettingsAsync(ct), ct);
             _refreshScheduleKind = settings?.Settings.ScheduleKind ?? "manual";
             _nextRefreshUtc = settings?.ProfileId is null
                 ? null
-                : await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(settings.ProfileId, _cts.Token);
+                : await Task.Run(() => RefreshScheduleService.GetNextScheduledRefreshUtcAsync(settings.ProfileId, ct), ct);
         }
         catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
         catch { }
     }
 
@@ -517,7 +518,8 @@
 
         try
         {
-            _status = await StatusService.GetStatusAsync(_cts.Token);
+            var ct = _cts.Token;
+            _status = await Task.Run(() => StatusService.GetStatusAsync(ct), ct);
 
             // Keep the page-level refresh spinner/timer in sync with server state
             // when the page loads mid-refresh or event delivery is delayed.
@@ -535,10 +537,8 @@
                 StopElapsedTimer();
             }
         }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
+        catch (OperationCanceledException) { return; }
+        catch (ObjectDisposedException) { return; }
         catch (Exception ex)
         {
             _loadError = $"Failed to load status: {ex.Message}";
@@ -546,7 +546,7 @@
         finally
         {
             _isLoading = false;
-            StateHasChanged();
+            try { await InvokeAsync(StateHasChanged); } catch { }
         }
     }
 
@@ -554,11 +554,13 @@
     {
         try
         {
-            _dashboardStats = await DashboardStats.GetStatsAsync(_cts.Token);
+            var ct = _cts.Token;
+            _dashboardStats = await Task.Run(() => DashboardStats.GetStatsAsync(ct), ct);
         }
         catch (OperationCanceledException) { return; }
+        catch (ObjectDisposedException) { return; }
 
-        StateHasChanged();
+        try { await InvokeAsync(StateHasChanged); } catch { }
     }
 
     public void Dispose()

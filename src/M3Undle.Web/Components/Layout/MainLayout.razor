@@ -330,7 +330,8 @@
     {
         try
         {
-            _eventSummary = await EventService.GetSummaryAsync(_cts.Token);
+            var ct = _cts.Token;
+            _eventSummary = await Task.Run(() => EventService.GetSummaryAsync(ct));
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
@@ -340,7 +341,8 @@
     {
         try
         {
-            _channelStats = await StatsService.GetStatsAsync(_cts.Token);
+            var ct = _cts.Token;
+            _channelStats = await Task.Run(() => StatsService.GetStatsAsync(ct));
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
@@ -350,7 +352,8 @@
     {
         try
         {
-            var state = await HdhrSettingsService.GetSettingsAsync(_cts.Token);
+            var ct = _cts.Token;
+            var state = await Task.Run(() => HdhrSettingsService.GetSettingsAsync(ct));
             var activeLeaseCount = HdhrTunerManager.GetActiveLeases().Count;
             _hdhrStatus = new HdhrFooterStatus(
                 state.Applied.Enabled,
