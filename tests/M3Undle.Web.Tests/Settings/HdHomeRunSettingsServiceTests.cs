@@ -20,13 +20,12 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         // TunerCount option is 4 — no override in DB
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
 
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
         var state = await service.GetSettingsAsync();
 
         Assert.IsNull(state.Saved.TunerCountOverride, "No override should be saved by default.");
@@ -39,12 +38,11 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
 
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true,
@@ -71,12 +69,11 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
 
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         var tooLow = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: 0, FriendlyName: null,
@@ -99,12 +96,11 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
 
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         // Set an override first
         await service.UpdateAsync(new UpdateHdhrSettingsCommand(
@@ -128,11 +124,10 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true,
@@ -157,12 +152,11 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var options = Options.Create(new HdHomeRunOptions { TunerCount = 4, FriendlyName = "Configured Default" });
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory, options);
         var tunerResolver = new HdHomeRunTunerCountResolver(options, fixture.ScopeFactory);
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: null, FriendlyName: "Override Name",
@@ -185,11 +179,10 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: null,
@@ -207,12 +200,11 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var options = Options.Create(new HdHomeRunOptions { TunerCount = 4, FriendlyName = "Custom Config Name" });
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory, options);
         var tunerResolver = new HdHomeRunTunerCountResolver(options, fixture.ScopeFactory);
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         var state = await service.GetSettingsAsync();
 
@@ -229,11 +221,10 @@ public sealed class HdHomeRunSettingsServiceTests
         Environment.SetEnvironmentVariable("M3UNDLE_HDHR_ENABLED", null);
 
         await using var fixture = await CreateFixtureAsync();
-        await using var db = fixture.CreateDbContext();
 
         var deviceService = CreateDeviceService(fixture.ScopeFactory, fixture.TempDataDirectory);
         var tunerResolver = new HdHomeRunTunerCountResolver(Options.Create(new HdHomeRunOptions { TunerCount = 4 }), fixture.ScopeFactory);
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+            var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
 
         var loopbackUrls = new[]
         {
@@ -284,7 +275,7 @@ public sealed class HdHomeRunSettingsServiceTests
         settings.HdhrTunerCountOverride = 7;
         await db.SaveChangesAsync();
 
-        var service = new HdHomeRunSettingsService(db, deviceService, tunerResolver);
+        var service = new HdHomeRunSettingsService(fixture.ScopeFactory, deviceService, tunerResolver);
         var state = await service.GetSettingsAsync();
 
         Assert.IsFalse(state.Saved.Enabled);

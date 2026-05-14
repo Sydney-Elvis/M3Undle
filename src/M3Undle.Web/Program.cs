@@ -316,7 +316,7 @@ builder.Services.AddSingleton<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IAdaptiveLockoutService, AdaptiveLockoutService>();
 builder.Services.AddScoped<IEndpointSecurityService, EndpointSecurityService>();
 builder.Services.AddScoped<IStreamingSettingsService, StreamingSettingsService>();
-builder.Services.AddScoped<IHdHomeRunSettingsService, HdHomeRunSettingsService>();
+builder.Services.AddSingleton<IHdHomeRunSettingsService, HdHomeRunSettingsService>();
 builder.Services.AddScoped<IGeneratedHlsSettingsService, GeneratedHlsSettingsService>();
 builder.Services.AddScoped<IRefreshScheduleService, RefreshScheduleService>();
 builder.Services.AddScoped<IDownstreamIntegrationService, DownstreamIntegrationService>();
