@@ -1,181 +1,117 @@
 # Version Management Guide
 
-This document explains how build versions are managed in the M3Undle project.
+M3Undle now uses separate version files for the independently released pieces of the system.
 
-## Current Approach: Centralized Versioning
+## Version Files
 
-All projects in the solution share a common version defined in `src/Version.props` (imported by `src/Directory.Build.props`).
+`src/Directory.Build.props` imports one version file per source project:
 
-### Version Properties
+| Project | Version file | Release identity |
+| --- | --- | --- |
+| `M3Undle.Core` | `src/CoreVersion.props` | Private Core NuGet package version |
+| `M3Undle.Web` | `src/WebVersion.props` | Web/container product version |
 
-- **Version**: NuGet package version (e.g., `0.40.0`)
-- **AssemblyVersion**: Strong-name assembly version (e.g., `0.40.0.0`)
-- **FileVersion**: File version for Windows Explorer (e.g., `0.40.0.0`)
+The initial values may match, but they should not be treated as one shared version. Core can ship package updates without forcing a Web/container version bump, and Web can ship product updates without publishing a new Core package.
 
-### How to Update Version
+Common build metadata still lives in `src/Directory.Build.props`:
 
-1. **Edit `src/Version.props`**
-2. Update the `<Version>` property (and optionally `AssemblyVersion` and `FileVersion`)
-3. Build or publish - all projects will use the new version
+- `Company`
+- `Product`
+- `RepositoryUrl`
+- `BuildDateUtc`
+- `BuildNumber`
+- `IncludeSourceRevisionInInformationalVersion`
 
-```xml
-<PropertyGroup>
-  <Version>0.41.0</Version>
-  <AssemblyVersion>0.41.0.0</AssemblyVersion>
-  <FileVersion>0.41.0.0</FileVersion>
-</PropertyGroup>
-```
+## Core Package Version
 
-## Alternative Approaches
-
-### Option 1: Automatic Git-Based Versioning (Advanced)
-
-Use a tool like **MinVer** or **GitVersion** to automatically generate versions from Git tags.
-
-#### MinVer Example
-
-1. Add package to your projects:
-```bash
-dotnet add package MinVer --version 6.0.0
-```
-
-2. Update the version properties:
-```xml
-<PropertyGroup>
-  <MinVerTagPrefix>v</MinVerTagPrefix>
-  <MinVerMinimumMajorMinor>0.40</MinVerMinimumMajorMinor>
-  <MinVerVerbosity>minimal</MinVerVerbosity>
-</PropertyGroup>
-```
-
-3. Create a Git tag:
-```bash
-git tag v0.41.0
-```
-
-Version will be automatically calculated from tags and commits.
-
-### Option 2: CI/CD Version Injection
-
-Pass version as a build parameter in your CI/CD pipeline:
-
-```bash
-dotnet build -p:Version=0.41.0-alpha.1
-dotnet publish -p:Version=0.41.0 -p:FileVersion=0.41.0.$(Build.BuildId)
-```
-
-Example for GitHub Actions:
-```yaml
-- name: Build
-  run: dotnet build -c Release -p:Version=${{ github.ref_name }}
-```
-
-### Option 3: Manual Version Per Project
-
-If you need different versions per project, add version properties back to individual `.csproj` files.
-They will override the version values imported from `src/Version.props`.
+Edit `src/CoreVersion.props` when publishing a new `M3Undle.Core` package.
 
 ```xml
-<!-- src/M3Undle.Cli/M3Undle.Cli.csproj -->
-<PropertyGroup>
-  <Version>1.0.0</Version>
-</PropertyGroup>
+<Project>
+  <PropertyGroup>
+    <Version>1.0.0-alpha.7</Version>
+    <PackageVersion>$(Version)</PackageVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+</Project>
 ```
 
-## Checking Current Version
+Rules:
 
-### In Code
+- `Version` and `PackageVersion` identify the NuGet package.
+- Keep `AssemblyVersion` stable within a major release line to reduce binary binding churn.
+- Use `core-v*` tags for Core package releases, for example `core-v1.0.0-alpha.7`.
+- External consumers such as `m3undle-cli` should pin exact Core package versions.
+- Web does not pin a Core package version because it uses an in-repo `ProjectReference`.
 
-```csharp
-using System.Reflection;
+## Web Product Version
 
-var version = Assembly.GetExecutingAssembly()
-    .GetName()
-    .Version;
-    
-Console.WriteLine($"Version: {version}");
+Edit `src/WebVersion.props` when releasing the Web/container product.
+
+```xml
+<Project>
+  <PropertyGroup>
+    <Version>1.0.0-alpha.7</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+</Project>
 ```
 
-### From Command Line
+Rules:
 
-```bash
-# Check assembly version
-dotnet exec src/M3Undle.Cli/bin/Release/net10.0/bndl.dll --version
+- Use Web/container release tags such as `v1.0.0-alpha.7`.
+- Web continues to reference Core source directly through `ProjectReference`.
+- Web releases can include Core source changes without publishing a Core package unless external consumers need those changes.
 
-# Or inspect DLL properties
-dotnet --info
-```
+## CLI Product Version
 
-### From Published Binary
-
-```bash
-# Windows
-bndl.exe --version
-
-# Linux/macOS
-./bndl --version
-```
+The CLI now lives in the separate `m3undle-cli` repo. That repo owns its CLI version file and product release tags, and consumes Core through a pinned `PackageReference` to `M3Undle.Core`.
 
 ## Semantic Versioning
 
-We follow [Semantic Versioning 2.0.0](https://semver.org/):
+Use SemVer for Core package versions:
 
-- **MAJOR** version: Incompatible API changes
-- **MINOR** version: Add functionality (backwards-compatible)
-- **PATCH** version: Bug fixes (backwards-compatible)
+- `PATCH`: bug fixes only, no public API breaks.
+- `MINOR`: backwards-compatible additions.
+- `MAJOR`: breaking public API or behavior changes.
+- Prerelease labels: `alpha.N`, `beta.N`, `rc.N`.
+
+Web product versions can follow the same format, but their bump cadence is product-driven rather than tied to Core package releases.
 
 Examples:
-- `0.40.0` ? `0.41.0` (new features added)
-- `0.41.0` ? `0.41.1` (bug fixes)
-- `0.41.0` ? `1.0.0` (stable release with breaking changes)
 
-### Pre-release Versions
+- `1.0.0-alpha.7`: next alpha package or product release.
+- `1.0.0-beta.1`: beta candidate.
+- `1.0.0`: first stable release.
+- `1.1.0`: additive Core API release or product feature release.
+- `2.0.0`: breaking Core API release or product breaking release.
 
-For pre-release builds, append a suffix:
-- `0.41.0-alpha`
-- `0.41.0-beta.1`
-- `0.41.0-rc.2`
+## CI And Build Overrides
 
-```xml
-<Version>0.41.0-beta.1</Version>
+Local and CI builds may still override version properties explicitly:
+
+```bash
+dotnet build src/M3Undle.Core/M3Undle.Core.csproj -p:Version=1.0.0-alpha.8 -p:PackageVersion=1.0.0-alpha.8
+dotnet publish src/M3Undle.Web/M3Undle.Web.csproj -p:Version=1.0.0-alpha.8
 ```
 
-## Best Practices
+Use overrides sparingly. The checked-in props file should reflect intentional release versions before tagging.
 
-1. **Update version before release** - Don't forget to bump the version in `src/Version.props`
-2. **Tag Git commits** - Tag releases in Git for traceability:
-   ```bash
-   git tag -a v0.41.0 -m "Release version 0.41.0"
-   git push origin v0.41.0
-   ```
-3. **Keep versions synchronized** - All projects should generally share the same version
-4. **Document changes** - Update CHANGELOG or release notes when bumping version
-5. **Automate in CI/CD** - Consider automated version bumping in your build pipeline
+## Checking Versions
 
-## Troubleshooting
+Core package:
 
-### Version not updating after build
+```bash
+dotnet pack src/M3Undle.Core/M3Undle.Core.csproj --configuration Release --no-build --output artifacts/packages
+```
 
-1. Clean the solution:
-   ```bash
-   dotnet clean
-   ```
-2. Rebuild:
-   ```bash
-   dotnet build
-   ```
-
-### Different projects showing different versions
-
-Check for version overrides in individual `.csproj` files. Remove them to use the centralized version.
-
-### Assembly version conflicts
-
-If using strong-named assemblies, consider only updating `Version` and `FileVersion`, keeping `AssemblyVersion` constant for binary compatibility.
+The package filename and nuspec should reflect `src/CoreVersion.props`.
 
 ## Related Files
 
-- `src/Version.props` - Central version configuration
-- `src/Directory.Build.props` - Imports `Version.props` for all projects under `src/`
-- `src/*/**.csproj` - Individual project files (versions inherited)
-- `.git/refs/tags/` - Git version tags
+- `src/Directory.Build.props` - Common metadata and conditional version imports.
+- `src/CoreVersion.props` - Core NuGet package version.
+- `src/WebVersion.props` - Web/container product version.
+- `docs/spec/core_public_api.md` - Core package surface and compatibility policy.

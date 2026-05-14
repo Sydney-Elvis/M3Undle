@@ -127,7 +127,7 @@ logging:
 ---
 
 ## Environment Variable Expansion
-- Any string field may contain `%NAME%`; values are read from the `.env` file (see `docs/spec/env_usage.md`).
+- Any string field may contain `%NAME%`; values are read from the `.env` file by CLI-style consumers (see the `m3undle-cli` repo's `docs/spec/env_usage.md`).
 - Undefined variables → validation error, unless the entire field is optional and omitted by design.
 - The `%VAR%` format is shell-safe: not expanded by PowerShell, Bash, Zsh, or CMD.
 
@@ -278,4 +278,3 @@ Store this config alongside `m3undle/scripts/.env` so the `%PRIMARY_*%` and `%SE
 - `scheduling:` – cron/interval controls for server/daemon modes
 
 Keep existing names stable; add new optional fields rather than renaming.
-

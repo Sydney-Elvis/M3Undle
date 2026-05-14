@@ -4,7 +4,20 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- Version property now inherited from Directory.Build.props -->
+    <!-- Version properties are imported from src/CoreVersion.props. -->
+    <PackageId>M3Undle.Core</PackageId>
+    <Title>M3Undle Core</Title>
+    <Description>Product-neutral M3U, XMLTV, EPG, provider normalization, filtering, and IPTV utility logic shared by M3Undle Web, CLI, and external consumers.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageTags>m3u;xmltv;epg;iptv;m3undle</PackageTags>
+    <PackageProjectUrl>https://github.com/Sydney-Elvis/M3Undle</PackageProjectUrl>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +27,10 @@
   <ItemGroup>
     <!-- Preserve YamlDotNet types during trimming since it uses reflection -->
     <TrimmerRootAssembly Include="YamlDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>
