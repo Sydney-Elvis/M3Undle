@@ -128,7 +128,7 @@ internal sealed class LineupStatusService(
         if (isRefreshing)
             return LineupStatusCodes.Refreshing;
 
-        if (activeSnapshot is null)
+        if (activeSnapshot is null || activeSnapshot.LiveChannelCount <= 0)
             return LineupStatusCodes.NoActiveSnapshot;
 
         if (lastRefresh?.Status == "fail")

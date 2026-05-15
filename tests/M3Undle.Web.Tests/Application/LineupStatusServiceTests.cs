@@ -325,6 +325,53 @@ public sealed class LineupStatusServiceTests
         Assert.AreEqual(LineupSwitchStates.Requested, status.Lineup.SwitchState);
     }
 
+    [TestMethod]
+    public async Task GetStatusAsync_WhenActiveSnapshotHasNoLiveChannels_ReturnsNoActiveSnapshot()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedAsync(fixture.Connection, db =>
+        {
+            var now = DateTime.UtcNow;
+
+            db.Profiles.Add(MakeProfile("profile-active", "Active Profile", enabled: true, isActive: true, now));
+            db.Providers.Add(MakeProvider("provider-active", "Provider Active", enabled: true, now));
+            db.ProfileProviders.Add(new ProfileProvider
+            {
+                ProfileId = "profile-active",
+                ProviderId = "provider-active",
+                Priority = 1,
+                Enabled = true,
+            });
+
+            db.Snapshots.Add(new Snapshot
+            {
+                SnapshotId = "snapshot-vod-only",
+                ProfileId = "profile-active",
+                CreatedUtc = now,
+                Status = "active",
+                PlaylistPath = "playlist.m3u",
+                XmltvPath = "guide.xml",
+                ChannelIndexPath = "channels.json",
+                StatusJsonPath = "status.json",
+                ChannelCountPublished = 30,
+                LiveChannelCount = 0,
+                VodChannelCount = 20,
+                SeriesChannelCount = 10,
+            });
+        });
+
+        var service = new LineupStatusService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger());
+
+        var status = await service.GetStatusAsync(CancellationToken.None);
+
+        Assert.AreEqual(LineupStatusCodes.NoActiveSnapshot, status.Status);
+        Assert.IsNotNull(status.Lineup);
+        Assert.AreEqual(LineupStatusCodes.NoActiveSnapshot, status.Lineup.Status);
+        Assert.AreEqual("profile-active", status.Lineup.ActiveProfile?.ProfileId);
+    }
+
     private static async Task SeedAsync(SqliteConnection connection, Action<ApplicationDbContext> seed)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()
