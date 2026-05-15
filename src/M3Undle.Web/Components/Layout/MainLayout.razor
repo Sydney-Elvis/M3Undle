@@ -7,8 +7,9 @@
 @inject M3Undle.Web.Application.IEventService EventService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject M3Undle.Web.Application.IHdHomeRunSettingsService HdhrSettingsService
-@inject M3Undle.Web.Application.HdHomeRunTunerManager HdhrTunerManager
+@inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
+@inject M3Undle.Web.Application.LineupStatusService LineupStatusService
+@inject Microsoft.Extensions.Options.IOptionsMonitor<M3Undle.Web.Streaming.Configuration.StreamProxyOptions> StreamProxyOptions
 @using System.Reflection
 @using System.Threading.Channels
 @using Microsoft.AspNetCore.Components.Authorization
@@ -91,14 +92,8 @@
                Style="height:28px; min-height:28px; font-size:0.70rem; padding:0 12px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
             <MudText Typo="Typo.caption" Style="font-size:0.70rem; opacity:0.8;">v@(_version)</MudText>
-            @if (_hdhrStatus is not null)
-            {
-                <MudTooltip Text="@HdhrTooltipText" Placement="Placement.Top">
-                    <MudLink Href="settings" Color="@HdhrStatusColor" Style="font-size:0.70rem;">
-                        @HdhrStatusLabel
-                    </MudLink>
-                </MudTooltip>
-            }
+            <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">Streams @_streamCount/@_maxSessions max</MudLink>
+            <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">Clients @_clientCount</MudLink>
         </MudStack>
         <MudSpacer />
         @if (_channelStats is not null)
@@ -124,6 +119,10 @@
                 }
             </MudStack>
         }
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
+            <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
+            <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
+        </MudStack>
     </MudAppBar>
 </MudLayout>
 
@@ -140,7 +139,10 @@
     private SystemEventSummary _eventSummary = new(0, null);
     private bool _canViewEvents = true;
 
-    private HdhrFooterStatus? _hdhrStatus;
+    private int _streamCount;
+    private int _clientCount;
+    private int _maxSessions;
+    private string _lineupStatusCode = string.Empty;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
 
@@ -172,36 +174,32 @@
         _ => "Auto (system) — click for light"
     };
 
-    private string HdhrStatusLabel => _hdhrStatus switch
+    private string HealthLabel => _lineupStatusCode switch
     {
-        null => string.Empty,
-        { DisabledByEnvironment: true } => "HDHR off (env)",
-        { Enabled: false } => "HDHR off",
-        _ => $"HDHR {_hdhrStatus.ActiveLeaseCount}/{_hdhrStatus.EffectiveTunerCount}"
+        LineupStatusCodes.Ok => "Healthy",
+        LineupStatusCodes.Refreshing => "Refreshing",
+        LineupStatusCodes.Switching => "Switching",
+        LineupStatusCodes.Degraded => "Degraded",
+        LineupStatusCodes.NoActiveProfile => "Setup Needed",
+        LineupStatusCodes.NoActiveSnapshot => "No Published Lineup",
+        _ => "Unknown"
     };
 
-    private Color HdhrStatusColor => _hdhrStatus switch
+    private string HealthIcon => _lineupStatusCode switch
     {
-        null => Color.Inherit,
-        { DisabledByEnvironment: true } => Color.Warning,
-        { Enabled: false } => Color.Default,
-        { ActiveLeaseCount: > 0 } => Color.Success,
-        _ => Color.Info
+        LineupStatusCodes.Ok => Icons.Material.Filled.CheckCircle,
+        LineupStatusCodes.Refreshing or LineupStatusCodes.Switching => Icons.Material.Filled.Sync,
+        LineupStatusCodes.Degraded or LineupStatusCodes.NoActiveProfile or LineupStatusCodes.NoActiveSnapshot => Icons.Material.Filled.Warning,
+        _ => Icons.Material.Filled.Help
     };
 
-    private string HdhrTooltipText => _hdhrStatus is null
-        ? "HDHomeRun status unavailable."
-        : string.Join(" | ",
-        [
-            _hdhrStatus.DisabledByEnvironment ? "Disabled by M3UNDLE_HDHR_ENABLED" : _hdhrStatus.Enabled ? "Enabled" : "Disabled in Settings",
-            $"Tuners {_hdhrStatus.ActiveLeaseCount}/{_hdhrStatus.EffectiveTunerCount}",
-            _hdhrStatus.DiscoveryEnabled ? "Discovery on" : "Discovery off",
-            _hdhrStatus.SsdpEnabled ? "SSDP on" : "SSDP off",
-            _hdhrStatus.SiliconDustDiscoveryEnabled ? "SiliconDust on" : "SiliconDust off",
-            $"Base {_hdhrStatus.ResolvedBaseUrl}",
-            _hdhrStatus.RestartRequired ? "Restart required" : "Settings applied",
-            "Open Settings"
-        ]);
+    private Color HealthColor => _lineupStatusCode switch
+    {
+        LineupStatusCodes.Ok => Color.Success,
+        LineupStatusCodes.Refreshing or LineupStatusCodes.Switching => Color.Info,
+        LineupStatusCodes.Degraded or LineupStatusCodes.NoActiveProfile or LineupStatusCodes.NoActiveSnapshot => Color.Warning,
+        _ => Color.Default
+    };
 
     private static readonly MudTheme _theme = new()
     {
@@ -268,6 +266,7 @@
     protected override Task OnInitializedAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
+        _maxSessions = StreamProxyOptions.CurrentValue.MaxConcurrentSessions;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
         _ = InitializeAsync();
@@ -282,8 +281,8 @@
             if (canAccess)
             {
                 _ = LoadChannelStatsAsync();
-                _ = LoadHdhrStatusAsync();
-                _ = PollHdhrStatusAsync(_cts.Token);
+                _ = LoadLineupStatusAsync();
+                _ = PollStreamAndStatusAsync(_cts.Token);
             }
 
             var authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
@@ -348,24 +347,34 @@
         catch (OperationCanceledException) { }
     }
 
-    private async Task LoadHdhrStatusAsync()
+    private void RefreshStreamCounts()
+    {
+        _streamCount = StreamingRegistry.GetActiveSessions().Count;
+        _clientCount = StreamingRegistry.GetActiveClients().Count;
+    }
+
+    private async Task LoadLineupStatusAsync()
     {
         try
         {
             var ct = _cts.Token;
-            var state = await Task.Run(() => HdhrSettingsService.GetSettingsAsync(ct));
-            var activeLeaseCount = HdhrTunerManager.GetActiveLeases().Count;
-            _hdhrStatus = new HdhrFooterStatus(
-                state.Applied.Enabled,
-                state.DisabledByEnvironment,
-                state.Applied.EffectiveTunerCount,
-                activeLeaseCount,
-                state.Applied.DiscoveryEnabled,
-                state.Applied.SsdpEnabled,
-                state.Applied.SiliconDustDiscoveryEnabled,
-                state.Applied.ResolvedBaseUrl,
-                state.RestartRequired);
+            var status = await Task.Run(() => LineupStatusService.GetStatusAsync(ct), ct);
+            _lineupStatusCode = status.Status;
             await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task PollStreamAndStatusAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                RefreshStreamCounts();
+                await InvokeAsync(StateHasChanged);
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -397,13 +406,13 @@
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.GroupFiltersChanged)
                 {
                     await LoadChannelStatsAsync();
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.RefreshCompleted)
                 {
                     _isRefreshing = false;
                     await LoadChannelStatsAsync();
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                     await InvokeAsync(StateHasChanged);
 
                     if (!evt.Succeeded && evt.ErrorSummary is not null)
@@ -416,28 +425,17 @@
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderActivated)
                 {
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)
                 {
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.SystemEventPublished)
                 {
                     await RefreshEventCountAsync();
                 }
             }
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    private async Task PollHdhrStatusAsync(CancellationToken ct)
-    {
-        try
-        {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-            while (await timer.WaitForNextTickAsync(ct))
-                await LoadHdhrStatusAsync();
         }
         catch (OperationCanceledException) { }
     }
@@ -493,14 +491,4 @@
         return Task.CompletedTask;
     }
 
-    private sealed record HdhrFooterStatus(
-        bool Enabled,
-        bool DisabledByEnvironment,
-        int EffectiveTunerCount,
-        int ActiveLeaseCount,
-        bool DiscoveryEnabled,
-        bool SsdpEnabled,
-        bool SiliconDustDiscoveryEnabled,
-        string ResolvedBaseUrl,
-        bool RestartRequired);
 }
