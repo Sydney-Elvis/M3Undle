@@ -22,6 +22,105 @@
     <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_loadError</MudAlert>
 }
 
+@if (HasTodoItems)
+{
+    <MudAlert Severity="@TodoAlertSeverity" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.Warning">
+        <MudStack Spacing="2">
+            <div>
+                <MudText Typo="Typo.h6">@TodoAlertTitle</MudText>
+                <MudText Typo="Typo.body2">
+                    M3Undle needs the items below resolved before the output URLs can serve the expected lineup.
+                </MudText>
+            </div>
+
+            <MudStack Spacing="1">
+                @if (NeedsActiveProfile)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>No active profile.</strong>
+                            <MudLink Href="providers">Add a provider</MudLink>, or open <MudLink Href="profiles">Profiles</MudLink> and set an existing profile active.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (NeedsActiveProvider)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.CloudQueue" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>The active profile has no enabled provider.</strong>
+                            Open <MudLink Href="providers">Providers</MudLink> and add or enable a source for this profile.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (NeedsPublishedOutput)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.LiveTv" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>No channels are published.</strong>
+                            Open <MudLink Href="channels/mapping">Channel Mapping</MudLink>, include the groups or channels you want, then run a refresh.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @foreach (var ep in _dashboardStats?.ExpiringProviders ?? [])
+                {
+                    var daysLeft = (ep.ExpiresUtc - DateTime.UtcNow).TotalDays;
+                    var expirationText = daysLeft < 0
+                        ? $"expired on {ep.ExpiresUtc:yyyy-MM-dd}"
+                        : daysLeft < 1
+                            ? $"expires today ({ep.ExpiresUtc:yyyy-MM-dd})"
+                            : $"expires in {(int)daysLeft + 1}d on {ep.ExpiresUtc:yyyy-MM-dd}";
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.EventBusy" Size="Size.Small" Color="@(daysLeft <= 0 ? Color.Error : Color.Warning)" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>Provider subscription @expirationText.</strong>
+                            Renew provider "@ep.ProviderName" to avoid stream outages, then update it on <MudLink Href="providers">Providers</MudLink>.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (_dashboardStats?.GroupsPendingReview > 0)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.Rule" Size="Size.Small" Color="Color.Info" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>@_dashboardStats.GroupsPendingReview new group@(_dashboardStats.GroupsPendingReview == 1 ? "" : "s") need review.</strong>
+                            Open <MudLink Href="channels/mapping">Channel Mapping</MudLink> to include or exclude them.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (_dashboardStats?.ChannelsPendingReview > 0)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.PlaylistAddCheck" Size="Size.Small" Color="Color.Info" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>@_dashboardStats.ChannelsPendingReview new channel@(_dashboardStats.ChannelsPendingReview == 1 ? "" : "s") need review.</strong>
+                            Open <MudLink Href="channels/review">Channel Review</MudLink> to approve or dismiss them.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (_dashboardStats?.RefreshFailed == true)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>Last refresh failed.</strong>
+                            M3Undle is serving the last known-good version. Fix the provider or source issue, then run another refresh.
+                        </MudText>
+                    </MudStack>
+                }
+            </MudStack>
+        </MudStack>
+    </MudAlert>
+}
+
 <MudGrid Spacing="3">
     <!-- System Status -->
     <MudItem xs="12" md="6">
@@ -100,9 +199,7 @@
                     }
                     else
                     {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            No active profile — <MudLink Href="providers">add a provider</MudLink> or go to <MudLink Href="profiles">Profiles</MudLink> to set one active.
-                        </MudAlert>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">None selected</MudText>
                     }
 
                     <MudStack Spacing="1">
@@ -254,13 +351,6 @@
                 </MudChip>
             </MudStack>
 
-            @if (_dashboardStats is null || _dashboardStats.PublishedLiveCount == 0)
-            {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                    No channels published yet — configure <MudLink Href="channels/mapping">Channel Mapping</MudLink> to start serving content.
-                </MudAlert>
-            }
-
             <MudStack Spacing="4">
                 <div>
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">M3U Playlist</MudText>
@@ -334,49 +424,6 @@
             </MudPaper>
         </MudItem>
     }
-
-    <!-- Action Items -->
-    @if (HasActionItems)
-    {
-        <MudItem xs="12">
-            <MudPaper Class="pa-4" Elevation="1">
-                <MudText Typo="Typo.h6" Class="mb-3">Action Items</MudText>
-                <MudStack Spacing="2">
-                    @foreach (var ep in _dashboardStats!.ExpiringProviders)
-                    {
-                        var daysLeft = (ep.ExpiresUtc - DateTime.UtcNow).TotalDays;
-                        var expSeverity = daysLeft <= 7 ? Severity.Error : Severity.Warning;
-                        var expLabel = daysLeft < 0
-                            ? $"Provider \"{ep.ProviderName}\" subscription expired on {ep.ExpiresUtc:yyyy-MM-dd} — streams may be down."
-                            : daysLeft < 1
-                            ? $"Provider \"{ep.ProviderName}\" subscription expires today ({ep.ExpiresUtc:yyyy-MM-dd}) — renew now."
-                            : $"Provider \"{ep.ProviderName}\" subscription expires in {(int)daysLeft + 1}d on {ep.ExpiresUtc:yyyy-MM-dd}.";
-                        <MudAlert Severity="@expSeverity" Variant="Variant.Outlined" Dense="true">@expLabel</MudAlert>
-                    }
-                    @if (_dashboardStats!.GroupsPendingReview > 0)
-                    {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            @_dashboardStats.GroupsPendingReview new group@(_dashboardStats.GroupsPendingReview == 1 ? "" : "s") to review —
-                            <MudLink Href="channels/mapping">review now</MudLink>
-                        </MudAlert>
-                    }
-                    @if (_dashboardStats!.ChannelsPendingReview > 0)
-                    {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            @_dashboardStats.ChannelsPendingReview new channel@(_dashboardStats.ChannelsPendingReview == 1 ? "" : "s") to review —
-                            <MudLink Href="channels/review">review now</MudLink>
-                        </MudAlert>
-                    }
-                    @if (_dashboardStats!.RefreshFailed)
-                    {
-                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
-                            Last refresh failed — serving last known-good version.
-                        </MudAlert>
-                    }
-                </MudStack>
-            </MudPaper>
-        </MudItem>
-    }
 </MudGrid>
 
 @code {
@@ -405,11 +452,30 @@
     private string _refreshScheduleKind = "6h";
     private bool ShowRefreshing => _isRefreshing || _status?.IsRefreshing == true;
 
-    private bool HasActionItems => _dashboardStats is not null &&
+    private bool NeedsActiveProfile => _status?.Status == LineupStatusCodes.NoActiveProfile;
+
+    private bool NeedsActiveProvider => !NeedsActiveProfile &&
+        _status?.Lineup?.ActiveProfile is not null &&
+        _status.Lineup.ActiveProvider is null;
+
+    private bool NeedsPublishedOutput => !NeedsActiveProfile &&
+        !NeedsActiveProvider &&
+        (_status?.Status == LineupStatusCodes.NoActiveSnapshot ||
+         (_dashboardStats is not null && _dashboardStats.PublishedLiveCount == 0));
+
+    private bool HasDashboardActionItems => _dashboardStats is not null &&
         (_dashboardStats.ExpiringProviders.Count > 0 ||
          _dashboardStats.GroupsPendingReview > 0 ||
          _dashboardStats.ChannelsPendingReview > 0 ||
          _dashboardStats.RefreshFailed);
+
+    private bool HasTodoItems => NeedsActiveProfile || NeedsActiveProvider || NeedsPublishedOutput || HasDashboardActionItems;
+
+    private string TodoAlertTitle => NeedsActiveProfile || NeedsActiveProvider || NeedsPublishedOutput ? "Setup Required" : "Attention Needed";
+
+    private Severity TodoAlertSeverity => _dashboardStats?.ExpiringProviders.Any(x => x.ExpiresUtc <= DateTime.UtcNow) == true
+        ? Severity.Error
+        : Severity.Warning;
 
     protected override async Task OnInitializedAsync()
     {
