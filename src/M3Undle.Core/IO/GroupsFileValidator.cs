@@ -1,5 +1,3 @@
-using System.Reflection;
-
 namespace M3Undle.Core.IO;
 
 public static class GroupsFileValidator
@@ -8,11 +6,16 @@ public static class GroupsFileValidator
     private const string HeaderLine2 = "######  Lines without '#' will be DROPPED. Blank lines are ignored.               ######";
     private const string HeaderLine3 = "######  New groups are marked with '##' for easy identification.                  ######";
     private const string VersionPrefix = "######  Created with bndl version ";
+
+    /// <summary>
+    /// Current groups-file schema version. This is intentionally independent from
+    /// Core package, Web product, and CLI product versions.
+    /// </summary>
+    public static string CurrentSchemaVersion { get; } = "1.0.0";
     
     public static string GetCurrentVersion()
     {
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        return version != null ? $"{version.Major}.{version.Minor}.{version.Build}" : "1.0.0";
+        return CurrentSchemaVersion;
     }
 
     public static async Task<ValidationResult> ValidateFileAsync(string filePath, CancellationToken cancellationToken)
@@ -131,4 +134,3 @@ public static class GroupsFileValidator
 
     public sealed record ValidationResult(bool IsValid, string? FileVersion, string? ErrorMessage);
 }
-

@@ -200,7 +200,7 @@ The service builds on the same foundational ideas but adds:
 - HTTP endpoints
 - web-based management and visibility
 
-See: `CLI.md`
+See the `m3undle-cli` repository for CLI usage.
 
 ---
 

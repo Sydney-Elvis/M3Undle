@@ -1,4 +1,3 @@
 namespace M3Undle.Core.Channels;
 
-public record ChannelGroup(string Name, IReadOnlyCollection<ChannelDescriptor> Channels);
-
+internal record ChannelGroup(string Name, IReadOnlyCollection<ChannelDescriptor> Channels);

@@ -1,6 +1,7 @@
 <Project>
-  <!-- Import version information from a separate file for easier management -->
-  <Import Project="Version.props" />
+  <!-- Import project-specific version information so Core package releases can move independently. -->
+  <Import Project="CoreVersion.props" Condition="'$(MSBuildProjectName)' == 'M3Undle.Core'" />
+  <Import Project="WebVersion.props" Condition="'$(MSBuildProjectName)' == 'M3Undle.Web'" />
   
   <PropertyGroup>
     <!-- Optional: Additional metadata -->
@@ -12,7 +13,19 @@
     <!-- Optional: Build information -->
     <RepositoryUrl>https://github.com/Sydney-Elvis/M3Undle</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <BuildDateUtc Condition="'$(BuildDateUtc)' == ''">$([System.DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssK'))</BuildDateUtc>
+    <BuildNumber Condition="'$(BuildNumber)' == '' and '$(M3UNDLE_BUILD_NUMBER)' != ''">$(M3UNDLE_BUILD_NUMBER)</BuildNumber>
+    <BuildNumber Condition="'$(BuildNumber)' == '' and '$(GITHUB_RUN_NUMBER)' != ''">$(GITHUB_RUN_NUMBER)</BuildNumber>
+    <BuildNumber Condition="'$(BuildNumber)' == '' and '$(BUILD_BUILDNUMBER)' != ''">$(BUILD_BUILDNUMBER)</BuildNumber>
+    <BuildNumber Condition="'$(BuildNumber)' == '' and '$(BUILD_NUMBER)' != ''">$(BUILD_NUMBER)</BuildNumber>
+    <!-- Prevent git commit hash from being appended to the informational version. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="BuildDateUtc" Value="$(BuildDateUtc)" />
+    <AssemblyMetadata Include="BuildNumber" Value="$(BuildNumber)" Condition="'$(BuildNumber)' != ''" />
+  </ItemGroup>
 
   <!-- Normalize build output paths on non-Windows to avoid literal backslash directories (for example, "bin\Debug"). -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux')) Or $([MSBuild]::IsOSPlatform('OSX'))">
