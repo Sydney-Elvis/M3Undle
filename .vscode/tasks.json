@@ -15,18 +15,6 @@
 			"group": "build"
 		},
 		{
-			"label": "build-cli",
-			"type": "process",
-			"command": "dotnet",
-			"args": [
-				"build",
-				"${workspaceFolder}/src/M3Undle.Cli/M3Undle.Cli.csproj",
-				"/property:GenerateFullPaths=true",
-				"/consoleloggerparameters:NoSummary"
-			],
-			"problemMatcher": "$msCompile"
-		},
-		{
 			"label": "build-web",
 			"type": "process",
 			"command": "dotnet",

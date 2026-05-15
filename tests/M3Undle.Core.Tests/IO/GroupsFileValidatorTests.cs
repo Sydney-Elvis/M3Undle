@@ -362,11 +362,12 @@ News";
     }
 
     [TestMethod]
-    public void GetCurrentVersion_ReturnsValidVersion()
+    public void GetCurrentVersion_ReturnsSchemaVersion()
     {
         var version = GroupsFileValidator.GetCurrentVersion();
 
-        Assert.IsFalse(string.IsNullOrEmpty(version));
+        Assert.AreEqual(GroupsFileValidator.CurrentSchemaVersion, version);
+        Assert.AreEqual("1.0.0", version);
         StringAssert.Contains(version, ".");
         
         var parts = version.Split('.');
