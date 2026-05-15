@@ -9,7 +9,6 @@
 @inject ISnackbar Snackbar
 @inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @inject M3Undle.Web.Application.LineupStatusService LineupStatusService
-@inject Microsoft.Extensions.Options.IOptionsMonitor<M3Undle.Web.Streaming.Configuration.StreamProxyOptions> StreamProxyOptions
 @using System.Reflection
 @using System.Threading.Channels
 @using Microsoft.AspNetCore.Components.Authorization
@@ -92,7 +91,7 @@
                Style="height:28px; min-height:28px; font-size:0.70rem; padding:0 12px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
             <MudText Typo="Typo.caption" Style="font-size:0.70rem; opacity:0.8;">v@(_version)</MudText>
-            <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">Streams @_streamCount/@_maxSessions max</MudLink>
+            <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">@StreamsLabel</MudLink>
             <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">Clients @_clientCount</MudLink>
         </MudStack>
         <MudSpacer />
@@ -141,7 +140,7 @@
 
     private int _streamCount;
     private int _clientCount;
-    private int _maxSessions;
+    private int? _providerMaxStreams;
     private string _lineupStatusCode = string.Empty;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
@@ -173,6 +172,10 @@
         ThemeMode.Dark => "Dark mode — click for auto",
         _ => "Auto (system) — click for light"
     };
+
+    private string StreamsLabel => _providerMaxStreams.HasValue
+        ? $"Streams {_streamCount}/{_providerMaxStreams} max"
+        : $"Streams {_streamCount}";
 
     private string HealthLabel => _lineupStatusCode switch
     {
@@ -266,7 +269,6 @@
     protected override Task OnInitializedAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
-        _maxSessions = StreamProxyOptions.CurrentValue.MaxConcurrentSessions;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
         _ = InitializeAsync();
@@ -360,6 +362,7 @@
             var ct = _cts.Token;
             var status = await Task.Run(() => LineupStatusService.GetStatusAsync(ct), ct);
             _lineupStatusCode = status.Status;
+            _providerMaxStreams = status.Lineup?.ActiveProvider?.MaxConcurrentStreams;
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }

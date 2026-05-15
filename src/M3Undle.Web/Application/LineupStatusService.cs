@@ -91,7 +91,7 @@ internal sealed class LineupStatusService(
 
         var activeProviderInfo = activeProvider is null
             ? null
-            : new ActiveProviderInfo(activeProvider.ProviderId, activeProvider.Name);
+            : new ActiveProviderInfo(activeProvider.ProviderId, activeProvider.Name, activeProvider.MaxConcurrentStreams);
 
         var switchState = ComputeSwitchState(activeProfile, activeProviderInfo, activeSnapshot, lastRefresh, isRefreshing);
         var lineupStatus = ComputeLineupStatus(activeProfile, activeSnapshot, lastRefresh, isRefreshing);
@@ -186,7 +186,7 @@ internal sealed record LineupStatusInfo(
 
 internal sealed record ActiveProfileInfo(string ProfileId, string Name, DateTime UpdatedUtc);
 
-internal sealed record ActiveProviderInfo(string ProviderId, string Name);
+internal sealed record ActiveProviderInfo(string ProviderId, string Name, int? MaxConcurrentStreams);
 
 internal sealed record ActiveSnapshotInfo(
     string SnapshotId,
