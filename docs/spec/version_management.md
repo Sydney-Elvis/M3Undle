@@ -109,6 +109,21 @@ dotnet pack src/M3Undle.Core/M3Undle.Core.csproj --configuration Release --no-bu
 
 The package filename and nuspec should reflect `src/CoreVersion.props`.
 
+## Core Release Wiring Check
+
+Before creating `core-v*` tags, verify cross-repo release wiring so package publish and compatibility checks do not fail at runtime:
+
+1. In `Sydney-Elvis/M3Undle` repository settings, confirm secret `CLI_DISPATCH_TOKEN` exists.
+2. Confirm the token can trigger workflows in `Sydney-Elvis/m3undle-cli`.
+3. Confirm the token has `workflow` scope and is active.
+4. In `M3Undle.Core` package settings, grant `Sydney-Elvis/m3undle-cli` read access.
+5. Run a non-release `workflow_dispatch` dry run with publish enabled and confirm:
+  - Core package push succeeds.
+  - CLI compatibility trigger succeeds.
+  - A compatibility run appears in `m3undle-cli` Actions.
+
+If any of these checks fail, fix secrets or package permissions before tagging a Core release.
+
 ## Related Files
 
 - `src/Directory.Build.props` - Common metadata and conditional version imports.

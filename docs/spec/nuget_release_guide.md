@@ -102,6 +102,21 @@ These are intentionally separate so Core and Web releases can ship at different 
 
 Use `workflow_dispatch` in GitHub Actions and set `publish: false`. This builds, tests, packs, and uploads the package artifact without pushing to GitHub Packages. The CLI compatibility check is not triggered in dry-run mode. Use it to verify the package shape before tagging.
 
+## Secret Wiring And Cross-Repo Access Check
+
+Run this once per environment (or whenever org/repo permissions change) before tagging:
+
+1. In `Sydney-Elvis/M3Undle` repository settings, confirm secret `CLI_DISPATCH_TOKEN` exists.
+2. Confirm the token owner has permission to trigger workflows in `Sydney-Elvis/m3undle-cli`.
+3. Confirm the token has the `workflow` scope and is still active.
+4. In package settings for `M3Undle.Core`, grant `Sydney-Elvis/m3undle-cli` repository read access.
+5. Run a `workflow_dispatch` dry run with `publish: true` from a non-release branch and confirm:
+  - `Push Core package` succeeds.
+  - `Trigger CLI compatibility check` succeeds.
+  - A `Core Compatibility Check` run appears in `m3undle-cli` Actions.
+
+If step 5 fails with auth/permissions errors, fix secrets/package access first and rerun the dry run before creating `core-v*` tags.
+
 ## Private feed authentication for local development
 
 To restore `M3Undle.Core` locally in `m3undle-cli` without CI:
