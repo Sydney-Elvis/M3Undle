@@ -67,13 +67,13 @@ public sealed class MpegTsBoundaryScanner
 
         if (output.Count == 0)
             return dropped > 0 || syncLost
-                ? new MpegTsPacketBatch([], MpegTsStartupKind.None, dropped, syncLost)
+                ? new MpegTsPacketBatch([], MpegTsStartupKind.None, dropped, syncLost, _videoPid is not null)
                 : null;
 
         if (startupKind == MpegTsStartupKind.None)
             startupKind = MpegTsStartupKind.PacketBoundary;
 
-        return new MpegTsPacketBatch([.. output], startupKind, dropped, syncLost);
+        return new MpegTsPacketBatch([.. output], startupKind, dropped, syncLost, _videoPid is not null);
     }
 
     public void Reset()

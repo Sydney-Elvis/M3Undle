@@ -33,6 +33,7 @@ else
             <HeaderContent>
                 <MudTh>Channel</MudTh>
                 <MudTh>State</MudTh>
+                <MudTh>Relay</MudTh>
                 <MudTh>Clients</MudTh>
                 <MudTh>Buffer</MudTh>
                 <MudTh>Reconnects</MudTh>
@@ -45,7 +46,18 @@ else
                     <MudText Typo="Typo.caption" Color="Color.Secondary">@context.SessionId[..8]</MudText>
                 </MudTd>
                 <MudTd DataLabel="State">
-                    <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
+                    <MudTooltip Text="@RecoveryTooltip(context)" Placement="Placement.Right">
+                        <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
+                    </MudTooltip>
+                </MudTd>
+                <MudTd DataLabel="Relay">
+                    <MudText Typo="Typo.caption">@FormatRelayMode(context.RelayMode)</MudText>
+                    @if (!string.IsNullOrWhiteSpace(context.LastRelayFallbackReason))
+                    {
+                        <MudTooltip Text="@($"Fell back to direct: {context.LastRelayFallbackReason}")">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Color="Color.Warning" Style="vertical-align:middle; font-size:14px;" />
+                        </MudTooltip>
+                    }
                 </MudTd>
                 <MudTd DataLabel="Clients">
                     @if (context.InferredHlsSubscriberCount > 0)
@@ -178,7 +190,9 @@ else
                 <HeaderContent>
                     <MudTh>Channel</MudTh>
                     <MudTh>Final State</MudTh>
+                    <MudTh>Relay</MudTh>
                     <MudTh>Reconnects</MudTh>
+                    <MudTh>Last Recovery</MudTh>
                     <MudTh>Started</MudTh>
                 </HeaderContent>
                 <RowTemplate>
@@ -192,7 +206,24 @@ else
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@context.LastFailureKind</MudText>
                         }
                     </MudTd>
+                    <MudTd DataLabel="Relay">
+                        <MudText Typo="Typo.caption">@FormatRelayMode(context.RelayMode)</MudText>
+                    </MudTd>
                     <MudTd DataLabel="Reconnects">@context.ReconnectAttempts</MudTd>
+                    <MudTd DataLabel="Last Recovery">
+                        @if (context.LastSafeStartKind is not null)
+                        {
+                            <MudText Typo="Typo.caption">@context.LastSafeStartKind</MudText>
+                            @if (context.LastRecoveryOutputHeldMs is { } heldMs)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">held @heldMs.ToString("F0") ms</MudText>
+                            }
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        }
+                    </MudTd>
                     <MudTd DataLabel="Started">
                         <MudText Typo="Typo.body2">@context.StartedUtc.ToString("u")</MudText>
                     </MudTd>
@@ -248,8 +279,39 @@ else
         SessionState.Live => Color.Success,
         SessionState.Connecting or SessionState.Initializing => Color.Info,
         SessionState.Reconnecting => Color.Warning,
+        SessionState.HoldingOutput => Color.Warning,
         SessionState.Faulted => Color.Error,
         _ => Color.Default,
+    };
+
+    private static string RecoveryTooltip(StreamSessionSnapshot s)
+    {
+        if (s.State != SessionState.HoldingOutput && s.LastSafeStartKind is null)
+            return string.Empty;
+
+        var parts = new System.Text.StringBuilder();
+        if (s.State == SessionState.HoldingOutput)
+            parts.Append("Holding output — scanning for safe MPEG-TS restart point.");
+
+        if (s.LastSafeStartKind is not null)
+        {
+            if (parts.Length > 0) parts.Append('\n');
+            parts.Append($"Last recovery: {s.LastSafeStartKind}");
+            if (s.LastRecoveryOutputHeldMs is { } heldMs)
+                parts.Append($", held {heldMs:F0} ms");
+            if (s.LastRecoveryStartedUtc is { } ts)
+                parts.Append($" at {ts.ToLocalTime():HH:mm:ss}");
+        }
+
+        return parts.ToString();
+    }
+
+    private static string FormatRelayMode(string relayMode) => relayMode switch
+    {
+        "Direct" => "Direct",
+        "CleanRemux" => "Clean remux",
+        "HlsToMpegTs" => "HLS→TS",
+        _ => relayMode,
     };
 
     private static Color BufferColor(double pct) => pct switch

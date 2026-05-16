@@ -785,6 +785,176 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_MpegTsReconnect_HoldsExistingSubscriberUntilSafeStart()
+    {
+        var unsafeRecoveredPacket = FakeStreamingHandler.ValidTsPacket(0xDD);
+        var recoveredSequence = new[] { unsafeRecoveredPacket }
+            .Concat(MpegTsSafeStartupSequence())
+            .ToArray();
+        var handler = FakeStreamingHandler.StreamForeverSequence(recoveredSequence);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(8));
+        await WaitUntilAsync(() => subscriber.BytesSent >= 188 * 7, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188 * 6, data.Length);
+        Assert.AreEqual(-1, IndexOf(data, unsafeRecoveredPacket), "Unsafe post-reconnect packet must be suppressed.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, PatPacket(100)), "Recovered output should resume from PAT/PMT safe start.");
+
+        var resumed = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.RecoveryOutputResumed).First();
+        Assert.IsGreaterThan(0, resumed.BytesSuppressed.GetValueOrDefault());
+        Assert.IsGreaterThan(0, resumed.OutputHeldMs.GetValueOrDefault());
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_UnsafeRecoveryForcesControlledClose()
+    {
+        var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket(0xDD));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 4 * 188,
+                AllowPacketBoundaryRecoveryFallback = false,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Count > 0,
+            TimeSpan.FromSeconds(8));
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.AreEqual(SessionState.Faulted, session.State);
+        Assert.IsTrue(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe).Any());
+        Assert.IsTrue(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.SubscriberRemoved).Any(x =>
+                x.DisconnectReason == SubscriberDisconnectReason.SessionClosed));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(188 * 3, data.Length, "Only pre-reconnect bytes should reach the existing subscriber.");
+        Assert.AreEqual(-1, IndexOf(data, FakeStreamingHandler.ValidTsPacket(0xDD)));
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_NewExternalSubscriberDuringRecovery_DoesNotReceiveStalePreReconnectData()
+    {
+        // A new external subscriber that attaches while the session is holding output
+        // must receive data from the live edge (post-reconnect safe start), not stale
+        // pre-reconnect bytes still in the ring buffer.
+        var preReconnectPacket = FakeStreamingHandler.ValidTsPacket(0xA1);
+        var unsafeRecoveredPacket = FakeStreamingHandler.ValidTsPacket(0xDD);
+        var recoveredSequence = new[] { unsafeRecoveredPacket }
+            .Concat(MpegTsSafeStartupSequence())
+            .ToArray();
+        var handler = FakeStreamingHandler.StreamForeverSequence(recoveredSequence);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(preReconnectPacket, 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(3),
+                RecoverySafeStartSearchLimitBytes = 16 * 188,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+
+        // First subscriber attaches before the stall.
+        var firstCapture = CreateResponseCaptureContext();
+        using var firstCts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        var firstSubscriber = await session.AttachSubscriberAsync(firstCapture.Context, firstCts.Token);
+        await WaitUntilAsync(() => firstSubscriber.BytesSent > 0, TimeSpan.FromSeconds(5));
+
+        // Wait for the session to enter HoldingOutput state (reconnect + hold active).
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryStarted).Count > 0,
+            TimeSpan.FromSeconds(8));
+
+        // Late external subscriber attaches during HoldingOutput.
+        var lateCapture = CreateResponseCaptureContext();
+        using var lateCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var lateSubscriber = await session.AttachSubscriberAsync(lateCapture.Context, lateCts.Token);
+
+        // Wait for recovery to resume so both subscribers receive data.
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(8));
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
+
+        firstCts.Cancel();
+        lateCts.Cancel();
+        await firstSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await firstSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var lateData = lateCapture.Body.ToArray();
+
+        Assert.IsGreaterThanOrEqualTo(188, lateData.Length, "Late subscriber must have received at least one packet.");
+        Assert.AreEqual(0x47, lateData[0], "Late subscriber data must begin with a TS sync byte.");
+        Assert.AreEqual(-1, IndexOf(lateData, preReconnectPacket),
+            "Late subscriber must not receive pre-reconnect bytes.");
+        Assert.AreEqual(-1, IndexOf(lateData, unsafeRecoveredPacket),
+            "Late subscriber must not receive unsafe post-reconnect bytes suppressed during hold.");
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTs_PatPmtOnlyStream_SelectsPatPmtSafeStart()
     {
         // Stream has PAT + PMT but no H.264 video (audio-only). Safe start should be

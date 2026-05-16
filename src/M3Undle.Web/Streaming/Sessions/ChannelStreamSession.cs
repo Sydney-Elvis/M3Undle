@@ -69,6 +69,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private int _mpegTsProbeBytes;
     private bool _mpegTsPacketModeKnown;
     private bool _mpegTsPacketizeEnabled;
+    private bool _recoveryOutputHoldActive;
+    private DateTimeOffset? _recoveryOutputHoldStartedUtc;
+    private long _recoveryBytesSuppressed;
+    private bool _recoveryResumedSinceLastReconnect;
+    private string? _lastSafeStartKind;
+    private double? _lastRecoveryOutputHeldMs;
+    private DateTimeOffset? _lastRecoveryStartedUtc;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -215,6 +222,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             subscriber: subscriber,
             disconnectReason: reason,
             message: "Subscriber removed.");
+        if (_recoveryResumedSinceLastReconnect && reason == SubscriberDisconnectReason.ClientAborted)
+        {
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.ClientAbortAfterRecovery,
+                subscriber: subscriber,
+                disconnectReason: reason,
+                message: "Client aborted after MPEG-TS recovery resumed.");
+        }
 
         lock (_gate)
         {
@@ -352,20 +367,25 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             $"FFmpeg relay fell back to direct streaming ({_lastRelayFallbackReason}).");
                     }
 
-                    if (reconnectAttempt > 0)
+                    var recoveredAttempt = reconnectAttempt;
+                    var shouldHoldRecoveredOutput = recoveredAttempt > 0 && IsMpegTsRelay();
+                    if (recoveredAttempt > 0)
                     {
                         _metrics?.RecordStreamReconnect(_source.ProviderId);
                         _logger.LogInformation(
                             "Stream '{DisplayName}' recovered successfully after {Attempts} reconnect attempt(s).",
                             _source.DisplayName,
-                            reconnectAttempt);
+                            recoveredAttempt);
                         _buffer.ResetGeneration();
                         ResetMpegTsBoundaryState();
                         RecordDiagnostic(
                             StreamDiagnosticEventKind.ReconnectRecovered,
                             httpStatusCode: upstream.StatusCode,
-                            reconnectAttempt: reconnectAttempt,
+                            reconnectAttempt: recoveredAttempt,
                             message: "Upstream stream recovered after reconnect.");
+                        if (shouldHoldRecoveredOutput)
+                            BeginRecoveryOutputHold(recoveredAttempt);
+
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
                     }
                     else
@@ -375,7 +395,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
                     reconnectAttempt = 0;
                     outageStartedUtc = null;
-                    SetState(SessionState.Live);
+                    if (!_recoveryOutputHoldActive)
+                        SetState(SessionState.Live);
 
                     _logger.LogInformation(
                         "Stream '{DisplayName}' is live — content type: {ContentType}.",
@@ -469,8 +490,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         if (!_headersReadyTcs.Task.IsCompleted)
                             _headersReadyTcs.TrySetException(ex);
 
-                        MarkPendingStopTrigger("upstream_fault");
-                        LogStopTrigger("upstream_fault", subscriberDisconnectReason: kind.ToString());
+                        var fatalStopTrigger = GetPendingStopTrigger() == "recovery_failed_unsafe"
+                            ? "recovery_failed_unsafe"
+                            : "upstream_fault";
+                        MarkPendingStopTrigger(fatalStopTrigger);
+                        LogStopTrigger(fatalStopTrigger, subscriberDisconnectReason: kind.ToString());
                         SetState(SessionState.Faulted);
                         await ForceCloseSubscribersAsync();
                         break;
@@ -618,11 +642,33 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             resetStallTimer = HasNonNullTsContent(batch.Data);
             Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
             using var published = _buffer.Write(batch.Data);
-            MarkMpegTsSafeStartIfReady(published, batch.StartupKind);
+            var safeStart = MarkMpegTsSafeStartIfReady(
+                published,
+                batch.StartupKind,
+                batch.Data.Length,
+                batch.HasKnownH264VideoStream);
+            if (_recoveryOutputHoldActive)
+            {
+                _recoveryBytesSuppressed += batch.Data.Length;
+                if (safeStart.Selected)
+                {
+                    await ResumeRecoveryOutputAsync(safeStart.Kind);
+                }
+                else if (IsRecoveryHoldLimitExceeded())
+                {
+                    await FailRecoveryOutputAsync();
+                }
+
+                return resetStallTimer;
+            }
+
             await PublishToSubscribersAsync(published);
         }
         else
         {
+            if (_recoveryOutputHoldActive)
+                await FailRecoveryOutputAsync();
+
             using var published = _buffer.Write(data);
             await PublishToSubscribersAsync(published);
         }
@@ -668,6 +714,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private BufferSnapshot CreateSubscriberStartupSnapshot(bool isInternal)
     {
+        if (_recoveryOutputHoldActive)
+            return _buffer.CreateLiveEdgeSnapshot();
+
         if (IsMpegTsRelay() && isInternal)
             return _buffer.CreateSafeStartSnapshot();
 
@@ -684,7 +733,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
            || _contentType?.Contains("mpegts", StringComparison.OrdinalIgnoreCase) == true;
 
     private bool ShouldInjectMpegTsKeepalive()
-        => IsMpegTsRelay() && HasNonHdhrExternalSubscriber();
+        => IsMpegTsRelay() && !_recoveryOutputHoldActive && HasNonHdhrExternalSubscriber();
 
     private bool HasNonHdhrExternalSubscriber()
         => _subscribers.Values.Any(subscriber =>
@@ -798,28 +847,40 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         return false;
     }
 
-    private void MarkMpegTsSafeStartIfReady(BufferLease lease, MpegTsStartupKind kind)
+    private SafeStartDecision MarkMpegTsSafeStartIfReady(
+        BufferLease lease,
+        MpegTsStartupKind kind,
+        int batchLength,
+        bool hasKnownH264VideoStream)
     {
-        var fallbackBytes = Math.Min(Math.Max(MpegTsBoundaryScanner.PacketSize, _bufferOptions.MaxBytesPerSession / 2), 512 * 1024);
+        var fallbackBytes = ResolveRecoverySafeStartSearchLimitBytes();
 
         if (kind == MpegTsStartupKind.PatPmt && _mpegTsCandidateSafeStartSequence is null)
         {
             _mpegTsCandidateSafeStartGeneration = lease.Generation;
-            _mpegTsCandidateSafeStartSequence = lease.Sequence;
+            _mpegTsCandidateSafeStartSequence = batchLength == MpegTsBoundaryScanner.PacketSize
+                ? Math.Max(0, lease.Sequence - 1)
+                : lease.Sequence;
         }
 
-        var selected = kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt;
+        var selected = kind == MpegTsStartupKind.H264Idr
+            || (kind == MpegTsStartupKind.PatPmt && !hasKnownH264VideoStream);
         var fallback = false;
-        if (!selected && !_mpegTsSafeStartSelected && Interlocked.Read(ref _mpegTsBytesSinceReset) >= fallbackBytes)
+        if (!selected
+            && _reconnectOptions.AllowPacketBoundaryRecoveryFallback
+            && !_mpegTsSafeStartSelected
+            && Interlocked.Read(ref _mpegTsBytesSinceReset) >= fallbackBytes)
         {
             selected = true;
             fallback = true;
         }
 
         if (!selected)
-            return;
+            return SafeStartDecision.NotSelected;
 
-        if (kind == MpegTsStartupKind.H264Idr
+        var safeStartKind = fallback ? "FallbackPacketBoundary" : kind.ToString();
+
+        if (kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt
             && _mpegTsCandidateSafeStartGeneration is { } generation
             && _mpegTsCandidateSafeStartSequence is { } sequence)
             _buffer.MarkSafeStart(generation, sequence);
@@ -831,8 +892,136 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _mpegTsSafeStartSelected = true;
             RecordDiagnostic(
                 StreamDiagnosticEventKind.MpegTsSafeStartSelected,
-                message: $"MPEG-TS safe start selected: {(fallback ? "FallbackPacketBoundary" : kind)}.");
+                safeStartKind: safeStartKind,
+                message: $"MPEG-TS safe start selected: {safeStartKind}.");
         }
+
+        return new SafeStartDecision(true, safeStartKind);
+    }
+
+    private void BeginRecoveryOutputHold(int reconnectAttempt)
+    {
+        _recoveryOutputHoldActive = true;
+        _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
+        _lastRecoveryStartedUtc = _recoveryOutputHoldStartedUtc;
+        _recoveryBytesSuppressed = 0;
+        _recoveryResumedSinceLastReconnect = false;
+        SetState(SessionState.HoldingOutput);
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoveryStarted,
+            reconnectAttempt: reconnectAttempt,
+            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            message: "MPEG-TS recovery output hold started after reconnect.");
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoveryOutputHeld,
+            reconnectAttempt: reconnectAttempt,
+            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            message: "Downstream output is held while recovered MPEG-TS is scanned for a safe start.");
+        PublishSnapshots();
+    }
+
+    private async Task ResumeRecoveryOutputAsync(string safeStartKind)
+    {
+        if (!_recoveryOutputHoldActive)
+            return;
+
+        var heldDuration = GetRecoveryHoldDuration();
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoverySafeStartFound,
+            outputHeld: heldDuration,
+            safeStartKind: safeStartKind,
+            bytesSuppressed: _recoveryBytesSuppressed,
+            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            message: "Recovered MPEG-TS safe start found.");
+
+        var snapshot = _buffer.CreateSafeStartSnapshot();
+        try
+        {
+            foreach (var lease in snapshot.Chunks)
+            {
+                using (lease)
+                {
+                    await PublishToSubscribersAsync(lease);
+                }
+            }
+        }
+        finally
+        {
+            foreach (var lease in snapshot.Chunks)
+                lease.Dispose();
+        }
+
+        _recoveryOutputHoldActive = false;
+        _recoveryOutputHoldStartedUtc = null;
+        _recoveryResumedSinceLastReconnect = true;
+        _lastSafeStartKind = safeStartKind;
+        _lastRecoveryOutputHeldMs = heldDuration.TotalMilliseconds;
+        SetState(SessionState.Live);
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoveryOutputResumed,
+            outputHeld: heldDuration,
+            safeStartKind: safeStartKind,
+            bytesSuppressed: _recoveryBytesSuppressed,
+            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            message: "Downstream output resumed from recovered MPEG-TS safe start.");
+        PublishSnapshots();
+    }
+
+    private Task FailRecoveryOutputAsync()
+    {
+        var heldDuration = GetRecoveryHoldDuration();
+        var bytesSuppressed = _recoveryBytesSuppressed;
+        var searchLimitExceeded = bytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
+        RecordDiagnostic(
+            searchLimitExceeded
+                ? StreamDiagnosticEventKind.RecoveryFailedUnsafe
+                : StreamDiagnosticEventKind.RecoveryHoldLimitExceeded,
+            outputHeld: heldDuration,
+            bytesSuppressed: bytesSuppressed,
+            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            message: searchLimitExceeded
+                ? "MPEG-TS recovery safe-start search limit was exceeded."
+                : "MPEG-TS recovery output hold limit was exceeded.");
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoveryForcedRetune,
+            outputHeld: heldDuration,
+            bytesSuppressed: bytesSuppressed,
+            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            stopTrigger: "recovery_failed_unsafe",
+            message: "Closing downstream subscribers because recovery could not resume safely.");
+        MarkPendingStopTrigger("recovery_failed_unsafe");
+        LogStopTrigger("recovery_failed_unsafe");
+        SetState(SessionState.Faulted);
+        _recoveryOutputHoldActive = false;
+        _recoveryOutputHoldStartedUtc = null;
+
+        throw new UpstreamConnectException(
+            "Recovered MPEG-TS stream did not reach a safe restart point before the recovery hold limit.",
+            UpstreamFailureKind.StartupFatal);
+    }
+
+    private bool IsRecoveryHoldLimitExceeded()
+    {
+        if (!_recoveryOutputHoldActive)
+            return false;
+
+        return GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOutputHoldLimit
+            || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
+    }
+
+    private TimeSpan GetRecoveryHoldDuration()
+        => _recoveryOutputHoldStartedUtc is { } started
+            ? DateTimeOffset.UtcNow - started
+            : TimeSpan.Zero;
+
+    private int ResolveRecoverySafeStartSearchLimitBytes()
+    {
+        var currentFallbackWindow = Math.Min(
+            Math.Max(MpegTsBoundaryScanner.PacketSize, _bufferOptions.MaxBytesPerSession / 2),
+            512 * 1024);
+        return Math.Max(
+            MpegTsBoundaryScanner.PacketSize,
+            Math.Min(currentFallbackWindow, _reconnectOptions.RecoverySafeStartSearchLimitBytes));
     }
 
     private void SetState(SessionState state)
@@ -1173,6 +1362,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             : null;
     }
 
+    private string? GetPendingStopTrigger()
+    {
+        lock (_gate)
+        {
+            return GetPendingStopTriggerNoLock();
+        }
+    }
+
     private TimeSpan? GetTimeSinceLastUpstreamByte(DateTimeOffset now)
         => _lastUpstreamByteUtc is { } last ? now - last : null;
 
@@ -1212,7 +1409,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastUpstreamStatusCode: _lastUpstreamStatusCode,
             LastCooldownSeconds: _lastCooldownSeconds,
             RelayMode: _relayMode,
-            LastRelayFallbackReason: _lastRelayFallbackReason);
+            LastRelayFallbackReason: _lastRelayFallbackReason,
+            LastSafeStartKind: _lastSafeStartKind,
+            LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
+            LastRecoveryStartedUtc: _lastRecoveryStartedUtc);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(
@@ -1229,7 +1429,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastUpstreamStatusCode: _lastUpstreamStatusCode,
             LastCooldownSeconds: _lastCooldownSeconds,
             RelayMode: _relayMode,
-            LastRelayFallbackReason: _lastRelayFallbackReason));
+            LastRelayFallbackReason: _lastRelayFallbackReason,
+            LastSafeStartKind: _lastSafeStartKind,
+            LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
+            LastRecoveryStartedUtc: _lastRecoveryStartedUtc));
     }
 
     private async Task NotifyClosedAsync()
@@ -1261,6 +1464,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         double? cooldownSeconds = null,
         int? retryAfterSeconds = null,
         int? queueDepth = null,
+        TimeSpan? outputHeld = null,
+        string? safeStartKind = null,
+        long? bytesSuppressed = null,
+        TimeSpan? recoveryHoldLimit = null,
         string? message = null)
     {
         _diagnosticsStore.Record(new StreamDiagnosticEvent(
@@ -1289,6 +1496,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             StopTrigger: stopTrigger,
             CooldownSeconds: cooldownSeconds,
             RetryAfterSeconds: retryAfterSeconds,
+            OutputHeldMs: outputHeld?.TotalMilliseconds,
+            SafeStartKind: safeStartKind,
+            BytesSuppressed: bytesSuppressed,
+            RecoveryHoldLimitMs: recoveryHoldLimit?.TotalMilliseconds,
+            RelayMode: _relayMode,
             Message: message));
     }
 
@@ -1360,5 +1572,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         public void Dispose()
         {
         }
+    }
+
+    private readonly record struct SafeStartDecision(bool Selected, string Kind)
+    {
+        public static SafeStartDecision NotSelected => new(false, string.Empty);
     }
 }

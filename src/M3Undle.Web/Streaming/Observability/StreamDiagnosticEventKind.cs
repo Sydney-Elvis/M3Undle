@@ -20,5 +20,13 @@ public enum StreamDiagnosticEventKind
     MpegTsPacketizerDisabled = 15,
     FfmpegRelayStarted = 16,
     FfmpegRelayFallbackToDirect = 17,
+    RecoveryStarted = 18,
+    RecoveryOutputHeld = 19,
+    RecoverySafeStartFound = 20,
+    RecoveryOutputResumed = 21,
+    RecoveryHoldLimitExceeded = 22,
+    RecoveryFailedUnsafe = 23,
     SubscriberQueueFull = 24,
+    RecoveryForcedRetune = 25,
+    ClientAbortAfterRecovery = 26,
 }

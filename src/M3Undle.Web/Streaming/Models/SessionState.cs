@@ -6,6 +6,7 @@ public enum SessionState
     Connecting = 1,
     Live = 2,
     Reconnecting = 3,
+    HoldingOutput = 4,
     Closed = 5,
     Faulted = 6,
 }

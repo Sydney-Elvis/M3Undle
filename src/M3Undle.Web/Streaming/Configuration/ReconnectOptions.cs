@@ -17,5 +17,11 @@ public sealed class ReconnectOptions
 
     public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
+    public TimeSpan RecoveryOutputHoldLimit { get; set; } = TimeSpan.FromSeconds(3);
+
+    public int RecoverySafeStartSearchLimitBytes { get; set; } = 512 * 1024;
+
+    public bool AllowPacketBoundaryRecoveryFallback { get; set; } = true;
+
     public int[] FixedStepBackoffSeconds { get; set; } = [0, 1, 2, 5, 10, 15, 30];
 }
