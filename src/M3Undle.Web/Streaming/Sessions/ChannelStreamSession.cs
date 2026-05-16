@@ -917,6 +917,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             reconnectAttempt: reconnectAttempt,
             recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
             message: "Downstream output is held while recovered MPEG-TS is scanned for a safe start.");
+        _logger.LogInformation(
+            "Recovery hold started: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} ReconnectAttempt={ReconnectAttempt} HoldLimitMs={HoldLimitMs}",
+            _sessionId,
+            _source.DisplayName,
+            _source.ProviderId,
+            _source.ProviderChannelId,
+            _relayMode,
+            reconnectAttempt,
+            _reconnectOptions.RecoveryOutputHoldLimit.TotalMilliseconds);
         PublishSnapshots();
     }
 
@@ -964,6 +973,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             bytesSuppressed: _recoveryBytesSuppressed,
             recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
             message: "Downstream output resumed from recovered MPEG-TS safe start.");
+        _logger.LogInformation(
+            "Recovery resumed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
+            _sessionId,
+            _source.DisplayName,
+            _source.ProviderId,
+            _source.ProviderChannelId,
+            _relayMode,
+            safeStartKind,
+            heldDuration.TotalMilliseconds,
+            _recoveryBytesSuppressed);
         PublishSnapshots();
     }
 
@@ -982,6 +1001,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             message: searchLimitExceeded
                 ? "MPEG-TS recovery safe-start search limit was exceeded."
                 : "MPEG-TS recovery output hold limit was exceeded.");
+        _logger.LogWarning(
+            "Recovery failed — forced retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed} SearchLimitExceeded={SearchLimitExceeded}",
+            _sessionId,
+            _source.DisplayName,
+            _source.ProviderId,
+            _source.ProviderChannelId,
+            _relayMode,
+            heldDuration.TotalMilliseconds,
+            bytesSuppressed,
+            searchLimitExceeded);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryForcedRetune,
             outputHeld: heldDuration,
