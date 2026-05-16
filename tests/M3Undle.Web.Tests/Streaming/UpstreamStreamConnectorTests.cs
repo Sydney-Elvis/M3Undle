@@ -328,6 +328,11 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "-headers");
             StringAssert.Contains(argsText, "X-Auth-Token: abc123");
             StringAssert.Contains(argsText, "-reconnect_streamed");
+            StringAssert.Contains(argsText, "-avoid_negative_ts");
+            StringAssert.Contains(argsText, "make_zero");
+            Assert.IsFalse(
+                argsText.Contains("-use_wallclock_as_timestamps", StringComparison.Ordinal),
+                "Clean remux must not stamp live packets with wall-clock time; downstream HLS remuxers can preserve that as a large timeline jump.");
         }
         finally
         {

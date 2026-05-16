@@ -394,8 +394,6 @@ public sealed class UpstreamStreamConnector(
         {
             info.ArgumentList.Add("-err_detect");
             info.ArgumentList.Add("ignore_err");
-            info.ArgumentList.Add("-use_wallclock_as_timestamps");
-            info.ArgumentList.Add("1");
             info.ArgumentList.Add("-avoid_negative_ts");
             info.ArgumentList.Add("make_zero");
         }
