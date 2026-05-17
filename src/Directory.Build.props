@@ -27,6 +27,24 @@
     <AssemblyMetadata Include="BuildNumber" Value="$(BuildNumber)" Condition="'$(BuildNumber)' != ''" />
   </ItemGroup>
 
+  <!-- Embed the short git commit hash as assembly metadata at build time.
+       We add directly to @(AssemblyAttributes) rather than @(AssemblyMetadata) so the item
+       is available to GenerateAssemblyInfo regardless of GetAssemblyAttributes ordering. -->
+  <Target Name="EmbedGitHash" BeforeTargets="GenerateAssemblyInfo">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitShortHash" />
+    </Exec>
+    <PropertyGroup>
+      <_GitShortHash>$(_GitShortHash.Trim())</_GitShortHash>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(_GitShortHash)' != ''">
+      <AssemblyAttributes Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GitHash</_Parameter1>
+        <_Parameter2>$(_GitShortHash)</_Parameter2>
+      </AssemblyAttributes>
+    </ItemGroup>
+  </Target>
+
   <!-- Normalize build output paths on non-Windows to avoid literal backslash directories (for example, "bin\Debug"). -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux')) Or $([MSBuild]::IsOSPlatform('OSX'))">
     <BaseIntermediateOutputPath>obj/</BaseIntermediateOutputPath>

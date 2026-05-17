@@ -16,6 +16,7 @@
 @using M3Undle.Web.Contracts
 @inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject M3Undle.Web.Application.ISiteSettingsService SiteSettings
+@inject M3Undle.Core.AppBuildInfo BuildInfo
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
@@ -90,7 +91,8 @@
     <MudAppBar Bottom="true" Elevation="1" Dense="true"
                Style="height:28px; min-height:28px; font-size:0.70rem; padding:0 12px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-            <MudText Typo="Typo.caption" Style="font-size:0.70rem; opacity:0.8;">v@(_version)</MudText>
+            <MudLink OnClick="OpenAboutDialogAsync" Color="Color.Inherit" Underline="Underline.None"
+                     Style="font-size:0.70rem; opacity:0.8; cursor:pointer;">v@(BuildInfo.Version)</MudLink>
             <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">@StreamsLabel</MudLink>
             <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">Clients @_clientCount</MudLink>
         </MudStack>
@@ -148,11 +150,6 @@
     [CascadingParameter]
     private Task<AuthenticationState>? AuthStateTask { get; set; }
     private MudThemeProvider _themeProvider = default!;
-
-    private static readonly string _version =
-        typeof(MainLayout).Assembly
-            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "unknown";
 
     private enum ThemeMode { Auto, Light, Dark }
     private ThemeMode _mode = ThemeMode.Auto;
@@ -484,6 +481,15 @@
             ThemeMode.Dark => true,
             _ => _systemIsDark
         };
+    }
+
+    private Task OpenAboutDialogAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        return DialogService.ShowAsync<AboutDialog>("About M3Undle", new DialogParameters<AboutDialog>
+        {
+            { x => x.BuildInfo, BuildInfo }
+        }, options);
     }
 
     private void ToggleDrawer() => _drawerOpen = !_drawerOpen;

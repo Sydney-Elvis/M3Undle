@@ -1,0 +1,18 @@
+.about-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: 20px;
+    font-size: 0.72rem;
+    color: rgba(56, 189, 248, 0.5);
+    letter-spacing: 0.03em;
+}
+
+.about-footer {
+    font-size: 0.68rem;
+    color: var(--mud-palette-text-secondary);
+    opacity: 0.4;
+    text-align: center;
+    line-height: 1.5;
+}
