@@ -211,6 +211,10 @@ public sealed class ChannelSessionIntegrationTests
                 OutageWindow = TimeSpan.FromSeconds(30),
                 ConnectTimeout = TimeSpan.FromSeconds(5),
                 FixedStepBackoffSeconds = [0],
+                // One-packet search limit so the fallback triggers immediately — avoids
+                // hold-limit expiry races under slow CI timers (Task.Delay(5) ≈ 15ms on
+                // Windows, 174 packets × 15ms ≈ 2.6 s is close to the default 3 s limit).
+                RecoverySafeStartSearchLimitBytes = 188,
             });
 
         var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
@@ -791,8 +795,10 @@ public sealed class ChannelSessionIntegrationTests
         var recoveredSequence = new[] { unsafeRecoveredPacket }
             .Concat(MpegTsSafeStartupSequence())
             .ToArray();
-        var handler = FakeStreamingHandler.StreamForeverSequence(recoveredSequence);
+        var safeChunk = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(safeChunk);
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, safeChunk, ct));
 
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
@@ -889,11 +895,16 @@ public sealed class ChannelSessionIntegrationTests
         // pre-reconnect bytes still in the ring buffer.
         var preReconnectPacket = FakeStreamingHandler.ValidTsPacket(0xA1);
         var unsafeRecoveredPacket = FakeStreamingHandler.ValidTsPacket(0xDD);
+        var safeChunk = FakeStreamingHandler.ValidTsPacket(0xCC);
+        // Recovery sequence: one unsafe prefix packet followed by the full safe-start
+        // sequence.  After the safe-start is confirmed the session streams safeChunk
+        // forever — 0xDD never reappears so the assertion below is deterministic.
         var recoveredSequence = new[] { unsafeRecoveredPacket }
             .Concat(MpegTsSafeStartupSequence())
             .ToArray();
-        var handler = FakeStreamingHandler.StreamForeverSequence(recoveredSequence);
-        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(preReconnectPacket, 3, ct));
+        var handler = FakeStreamingHandler.StreamForever(safeChunk); // default (connection 3+)
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(preReconnectPacket, 3, ct));           // connection 1
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, safeChunk, ct)); // connection 2
 
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
@@ -2495,6 +2506,32 @@ public sealed class ChannelSessionIntegrationTests
                         var chunk = chunks[index++ % chunks.Count];
                         var result = await pipe.Writer.WriteAsync(chunk, ct);
                         if (result.IsCompleted) break;
+                        await Task.Delay(5, ct);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { }
+                finally { pipe.Writer.Complete(); }
+            });
+            return Task.FromResult(CreateStreamingResponse(pipe.Reader.AsStream()));
+        }
+
+        public static Task<HttpResponseMessage> WriteSequenceThenForever(IReadOnlyList<byte[]> once, byte[] forever, CancellationToken ct)
+        {
+            var pipe = new Pipe();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (var chunk in once)
+                    {
+                        await pipe.Writer.WriteAsync(chunk, ct);
+                        await Task.Delay(5, ct);
+                    }
+
+                    while (!ct.IsCancellationRequested)
+                    {
+                        await pipe.Writer.WriteAsync(forever, ct);
                         await Task.Delay(5, ct);
                     }
                 }
