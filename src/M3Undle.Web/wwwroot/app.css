@@ -1,5 +1,12 @@
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    overflow-x: hidden;
+}
+
+/* MudBlazor sets overflow-y:auto on .mud-drawer but omits overflow-x.
+   Without this, nav item text wider than the drawer leaks sideways. */
+.mud-drawer {
+    overflow-x: hidden;
 }
 
 html[data-prehydrate-theme="dark"] {

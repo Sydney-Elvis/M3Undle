@@ -10,22 +10,22 @@
 @implements IDisposable
 
 <MudNavMenu>
-    <MudTooltip Text="Overview" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Overview" Placement="Placement.Right">
         <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home" OnClick="HandleNavClick">Overview</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Providers" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Providers" Placement="Placement.Right">
         <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns" OnClick="HandleNavClick">Providers</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Channels" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Channels" Placement="Placement.Right">
         <MudNavLink Href="channels" Icon="@Icons.Material.Filled.LiveTv" OnClick="HandleNavClick">Channels</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Profiles" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Profiles" Placement="Placement.Right">
         <MudNavLink Href="profiles" Icon="@Icons.Material.Filled.AccountTree" OnClick="HandleNavClick">Profiles</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Channel Mapping" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Channel Mapping" Placement="Placement.Right">
         <MudNavLink Href="channels/mapping" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">Mapping</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="@ReviewQueueTooltip" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="@ReviewQueueTooltip" Placement="Placement.Right">
         <MudNavLink Href="channels/review" Icon="@Icons.Material.Filled.PlaylistAddCheck" OnClick="HandleNavClick">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                 <span>Review Queue</span>
@@ -36,16 +36,16 @@
             </MudStack>
         </MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="What's On" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="What's On" Placement="Placement.Right">
         <MudNavLink Href="channels/whats-on" Icon="@Icons.Material.Filled.Event" OnClick="HandleNavClick">What's On</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Guide / EPG" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Guide / EPG" Placement="Placement.Right">
         <MudNavLink Href="epg" Icon="@Icons.Material.Filled.Tv" OnClick="HandleNavClick">EPG</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Streams" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Streams" Placement="Placement.Right">
         <MudNavLink Href="streams" Icon="@Icons.Material.Filled.Sensors" OnClick="HandleNavClick">Streams</MudNavLink>
     </MudTooltip>
-    <MudTooltip Text="Logs" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="Logs" Placement="Placement.Right">
         <MudNavLink Href="logs" Icon="@Icons.Material.Filled.Article" OnClick="HandleNavClick">Logs</MudNavLink>
     </MudTooltip>
 </MudNavMenu>
@@ -53,7 +53,7 @@
 <MudDivider Class="my-2" />
 
 <MudNavMenu>
-    <MudTooltip Text="@(_isRefreshing ? "Refreshing…" : "Refresh Lineup")" Placement="Placement.Right">
+    <MudTooltip Inline="false" Text="@(_isRefreshing ? "Refreshing…" : "Refresh Lineup")" Placement="Placement.Right">
         <MudNavLink Icon="@Icons.Material.Filled.Refresh" OnClick="TriggerRefreshAsync" Disabled="_isRefreshing">
             @(_isRefreshing ? "Refreshing…" : "Refresh Lineup")
         </MudNavLink>
