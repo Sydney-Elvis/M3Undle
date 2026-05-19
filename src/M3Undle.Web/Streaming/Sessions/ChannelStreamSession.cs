@@ -21,6 +21,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly UpstreamFailureStrikeStore _strikeStore;
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
+    private readonly IStreamChannelHealthEventRecorder _healthEventRecorder;
     private readonly IEventService _eventService;
     private readonly M3UndleMetrics? _metrics;
     private readonly ILogger<ChannelStreamSession> _logger;
@@ -76,6 +77,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private string? _lastSafeStartKind;
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
+    private DateTimeOffset? _lastRecoveryResumedUtc;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -88,6 +90,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         UpstreamFailureStrikeStore strikeStore,
         StreamingRegistry registry,
         StreamingDiagnosticsStore diagnosticsStore,
+        IStreamChannelHealthEventRecorder healthEventRecorder,
         IEventService eventService,
         ILogger<ChannelStreamSession> logger,
         Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed,
@@ -101,6 +104,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _strikeStore = strikeStore;
         _registry = registry;
         _diagnosticsStore = diagnosticsStore;
+        _healthEventRecorder = healthEventRecorder;
         _eventService = eventService;
         _logger = logger;
         _onClosed = onClosed;
@@ -224,11 +228,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             message: "Subscriber removed.");
         if (_recoveryResumedSinceLastReconnect && reason == SubscriberDisconnectReason.ClientAborted)
         {
+            var abortDelay = _lastRecoveryResumedUtc is { } resumedUtc
+                ? DateTimeOffset.UtcNow - resumedUtc
+                : (TimeSpan?)null;
             RecordDiagnostic(
                 StreamDiagnosticEventKind.ClientAbortAfterRecovery,
                 subscriber: subscriber,
                 disconnectReason: reason,
+                clientAbortAfterRecoveryDelay: abortDelay,
                 message: "Client aborted after MPEG-TS recovery resumed.");
+            _logger.LogWarning(
+                "Client aborted after MPEG-TS recovery: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} LastOutputHeldMs={LastOutputHeldMs} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent} DisconnectReason={DisconnectReason}",
+                _sessionId,
+                _source.DisplayName,
+                _source.ProviderId,
+                _source.ProviderChannelId,
+                _relayMode,
+                _lastSafeStartKind,
+                _lastRecoveryOutputHeldMs,
+                abortDelay?.TotalMilliseconds,
+                subscriber.BytesSent,
+                reason);
         }
 
         lock (_gate)
@@ -935,9 +955,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             return;
 
         var heldDuration = GetRecoveryHoldDuration();
+        var recoveryDuration = _lastRecoveryStartedUtc is { } recoveryStartedUtc
+            ? DateTimeOffset.UtcNow - recoveryStartedUtc
+            : (TimeSpan?)null;
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoverySafeStartFound,
             outputHeld: heldDuration,
+            recoveryDuration: recoveryDuration,
             safeStartKind: safeStartKind,
             bytesSuppressed: _recoveryBytesSuppressed,
             recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
@@ -965,10 +989,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryResumedSinceLastReconnect = true;
         _lastSafeStartKind = safeStartKind;
         _lastRecoveryOutputHeldMs = heldDuration.TotalMilliseconds;
+        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
         SetState(SessionState.Live);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOutputResumed,
             outputHeld: heldDuration,
+            recoveryDuration: recoveryDuration,
             safeStartKind: safeStartKind,
             bytesSuppressed: _recoveryBytesSuppressed,
             recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
@@ -989,6 +1015,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private Task FailRecoveryOutputAsync()
     {
         var heldDuration = GetRecoveryHoldDuration();
+        var recoveryDuration = _lastRecoveryStartedUtc is { } recoveryStartedUtc
+            ? DateTimeOffset.UtcNow - recoveryStartedUtc
+            : (TimeSpan?)null;
         var bytesSuppressed = _recoveryBytesSuppressed;
         var searchLimitExceeded = bytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
         RecordDiagnostic(
@@ -996,6 +1025,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 ? StreamDiagnosticEventKind.RecoveryFailedUnsafe
                 : StreamDiagnosticEventKind.RecoveryHoldLimitExceeded,
             outputHeld: heldDuration,
+            recoveryDuration: recoveryDuration,
             bytesSuppressed: bytesSuppressed,
             recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
             message: searchLimitExceeded
@@ -1014,6 +1044,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryForcedRetune,
             outputHeld: heldDuration,
+            recoveryDuration: recoveryDuration,
             bytesSuppressed: bytesSuppressed,
             recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
             stopTrigger: "recovery_failed_unsafe",
@@ -1494,12 +1525,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         int? retryAfterSeconds = null,
         int? queueDepth = null,
         TimeSpan? outputHeld = null,
+        TimeSpan? recoveryDuration = null,
         string? safeStartKind = null,
         long? bytesSuppressed = null,
         TimeSpan? recoveryHoldLimit = null,
+        TimeSpan? clientAbortAfterRecoveryDelay = null,
         string? message = null)
     {
-        _diagnosticsStore.Record(new StreamDiagnosticEvent(
+        var diagnosticEvent = new StreamDiagnosticEvent(
             EventId: Guid.NewGuid().ToString("N"),
             TimestampUtc: DateTimeOffset.UtcNow,
             Kind: kind,
@@ -1526,11 +1559,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             CooldownSeconds: cooldownSeconds,
             RetryAfterSeconds: retryAfterSeconds,
             OutputHeldMs: outputHeld?.TotalMilliseconds,
+            RecoveryDurationMs: recoveryDuration?.TotalMilliseconds,
             SafeStartKind: safeStartKind,
             BytesSuppressed: bytesSuppressed,
             RecoveryHoldLimitMs: recoveryHoldLimit?.TotalMilliseconds,
+            ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelay?.TotalMilliseconds,
             RelayMode: _relayMode,
-            Message: message));
+            Message: message);
+        _diagnosticsStore.Record(diagnosticEvent);
+        _healthEventRecorder.Record(diagnosticEvent);
     }
 
     private async Task PublishUnstableProviderEventAsync(string detail)

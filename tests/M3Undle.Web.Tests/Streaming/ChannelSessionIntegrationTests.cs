@@ -2723,7 +2723,8 @@ public sealed class ChannelSessionIntegrationTests
             var diagnosticsStore = new StreamingDiagnosticsStore(proxyOpts);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
-                diagnosticsStore, new NullEventService(), NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
+                diagnosticsStore, NoopStreamChannelHealthEventRecorder.Instance, new NullEventService(),
+                NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
 
             var source = new StreamSourceDescriptor(
                 ProfileId: "profile-1",

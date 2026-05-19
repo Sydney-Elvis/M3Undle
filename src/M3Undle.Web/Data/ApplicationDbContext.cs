@@ -34,6 +34,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<ProfileEventInterestRule> ProfileEventInterestRules => Set<ProfileEventInterestRule>();
     public DbSet<SystemEvent> SystemEvents => Set<SystemEvent>();
     public DbSet<MetricsToken> MetricsTokens => Set<MetricsToken>();
+    public DbSet<StreamChannelHealthEvent> StreamChannelHealthEvents => Set<StreamChannelHealthEvent>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

@@ -21,6 +21,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly StreamAdmissionBackoffStore _admissionBackoffStore;
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
+    private readonly IStreamChannelHealthEventRecorder _healthEventRecorder;
     private readonly IEventService _eventService;
     private readonly M3UndleMetrics? _metrics;
     private readonly ILoggerFactory _loggerFactory;
@@ -45,6 +46,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         StreamAdmissionBackoffStore admissionBackoffStore,
         StreamingRegistry registry,
         StreamingDiagnosticsStore diagnosticsStore,
+        IStreamChannelHealthEventRecorder healthEventRecorder,
         IEventService eventService,
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider,
@@ -58,6 +60,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         _admissionBackoffStore = admissionBackoffStore;
         _registry = registry;
         _diagnosticsStore = diagnosticsStore;
+        _healthEventRecorder = healthEventRecorder;
         _eventService = eventService;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
@@ -207,6 +210,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         _strikeStore,
                         _registry,
                         _diagnosticsStore,
+                        _healthEventRecorder,
                         _eventService,
                         _loggerFactory.CreateLogger<ChannelStreamSession>(),
                         RemoveIfClosedAsync,
