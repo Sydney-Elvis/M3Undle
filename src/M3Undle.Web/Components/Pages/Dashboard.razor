@@ -142,16 +142,24 @@
                     var selectedProfile = SelectedProfileSummary;
                     var isActiveSelected = selectedProfile?.IsActive == true || (selectedProfile == null && lineup?.ActiveProfile is not null);
                 }
-                    @if (selectedProfile is not null)
+                    @if (_dashboardStats?.ProfileSummaries.Any(p => p.IsActive) == true)
                     {
-                        var activeChipColor = selectedProfile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning : Color.Success;
-                        var activeChipIcon = selectedProfile.HealthStatus == ProfileHealthStatus.Degraded
-                            ? Icons.Material.Filled.Warning
-                            : Icons.Material.Filled.CheckCircle;
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                            <MudChip T="string" Color="@activeChipColor" Icon="@activeChipIcon" Variant="Variant.Filled">
-                                @selectedProfile.DisplayName
-                            </MudChip>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                            @foreach (var profile in _dashboardStats.ProfileSummaries.Where(p => p.IsActive))
+                            {
+                                var isSelected = selectedProfile?.ProfileId == profile.ProfileId;
+                                var chipColor = profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning : Color.Success;
+                                var chipIcon = profile.HealthStatus == ProfileHealthStatus.Degraded
+                                    ? Icons.Material.Filled.Warning
+                                    : Icons.Material.Filled.CheckCircle;
+                                <MudChip T="string"
+                                         Color="@chipColor"
+                                         Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
+                                         Icon="@chipIcon"
+                                         OnClick="@(() => SelectProfile(profile.ProfileId))">
+                                    @profile.DisplayName
+                                </MudChip>
+                            }
                         </MudStack>
                     }
 
@@ -358,8 +366,13 @@
 </MudGrid>
 
 @code {
+    private string? _selectedProfileId;
+
     private DashboardProfileSummary? SelectedProfileSummary =>
-        _dashboardStats?.ProfileSummaries.FirstOrDefault(p => p.IsActive);
+        _dashboardStats?.ProfileSummaries.FirstOrDefault(p => p.ProfileId == _selectedProfileId && p.IsActive)
+        ?? _dashboardStats?.ProfileSummaries.FirstOrDefault(p => p.IsActive);
+
+    private void SelectProfile(string profileId) => _selectedProfileId = profileId;
 
     private LineupStatusResponse? _status;
     private DashboardStatsDto? _dashboardStats;
