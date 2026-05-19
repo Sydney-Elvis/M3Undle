@@ -21,10 +21,31 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             .OrderByDescending(s => s.CreatedUtc)
             .ToListAsync(ct);
 
-        var latestFetchRun = await db.FetchRuns
+        var profileProviders = await db.ProfileProviders
             .AsNoTracking()
-            .OrderByDescending(f => f.StartedUtc)
-            .FirstOrDefaultAsync(ct);
+            .Select(pp => new { pp.ProfileId, pp.ProviderId })
+            .ToListAsync(ct);
+
+        var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
+
+        // Latest fetch run status per provider, keyed by ProviderId
+        var latestRunsByProvider = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (relevantProviderIds.Count > 0)
+        {
+            var recentRuns = await db.FetchRuns
+                .AsNoTracking()
+                .Where(f => relevantProviderIds.Contains(f.ProviderId))
+                .Select(f => new { f.ProviderId, f.StartedUtc, f.Status })
+                .OrderByDescending(f => f.StartedUtc)
+                .ToListAsync(ct);
+
+            foreach (var run in recentRuns)
+                latestRunsByProvider.TryAdd(run.ProviderId, run.Status);
+        }
+
+        var profileProviderMap = profileProviders
+            .GroupBy(pp => pp.ProfileId)
+            .ToDictionary(g => g.Key, g => g.Select(pp => pp.ProviderId).ToList());
 
         var groupsPendingReview = await db.ProfileGroupFilters
             .AsNoTracking()
@@ -96,7 +117,11 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 }
             }
 
-            if (snapshot is not null && latestFetchRun?.Status == "fail")
+            var profileProviderIds = profileProviderMap.GetValueOrDefault(profile.ProfileId, []);
+            var profileHasFailed = profileProviderIds.Any(pid =>
+                latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
+
+            if (snapshot is not null && profileHasFailed)
                 health = ProfileHealthStatus.Degraded;
 
             summaries.Add(new DashboardProfileSummary
@@ -112,7 +137,11 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             });
         }
 
-        var refreshFailed = latestFetchRun is not null && latestFetchRun.Status == "fail";
+        var activeProviderIds = activeProfileId is not null
+            ? profileProviderMap.GetValueOrDefault(activeProfileId, [])
+            : [];
+        var refreshFailed = activeProviderIds.Any(pid =>
+            latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
 
         var now = DateTime.UtcNow;
         var expiryThreshold = now.AddDays(30);

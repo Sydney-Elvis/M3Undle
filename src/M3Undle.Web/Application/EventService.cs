@@ -186,7 +186,7 @@ public sealed class EventService(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var settings = await db.SiteSettings.AsNoTracking().FirstOrDefaultAsync(ct);
+        var settings = await db.SiteSettings.AsNoTracking().OrderBy(s => s.Id).FirstOrDefaultAsync(ct);
         return NormalizeRetentionDays(settings?.EventRetentionDays);
     }
 
@@ -205,7 +205,7 @@ public sealed class EventService(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            var settings = await db.SiteSettings.FirstOrDefaultAsync(ct);
+            var settings = await db.SiteSettings.OrderBy(s => s.Id).FirstOrDefaultAsync(ct);
             if (settings is not null)
             {
                 settings.EventRetentionDays = days;
@@ -226,7 +226,7 @@ public sealed class EventService(
             await using var scope = scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-            var settings = await db.SiteSettings.AsNoTracking().FirstOrDefaultAsync(ct);
+            var settings = await db.SiteSettings.AsNoTracking().OrderBy(s => s.Id).FirstOrDefaultAsync(ct);
             var retentionDays = NormalizeRetentionDays(settings?.EventRetentionDays);
             var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
 

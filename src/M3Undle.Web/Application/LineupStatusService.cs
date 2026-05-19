@@ -55,9 +55,9 @@ internal sealed class LineupStatusService(
             {
                 activeProvider = await db.Providers
                     .AsNoTracking()
-                    .FirstOrDefaultAsync(
-                        x => x.ProviderId == profileProvider.ProviderId && x.Enabled,
-                        cancellationToken);
+                    .Where(x => x.ProviderId == profileProvider.ProviderId && x.Enabled)
+                    .OrderBy(x => x.ProviderId)
+                    .FirstOrDefaultAsync(cancellationToken);
             }
         }
 

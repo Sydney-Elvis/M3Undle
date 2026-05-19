@@ -470,26 +470,27 @@ public sealed class SnapshotRefreshService(
         if (recentRunIds.Count < 2)
             return (0, 0);
 
-        var staleChannelIds = await db.ProviderChannels
-            .AsNoTracking()
+        // Use a subquery instead of loading IDs into memory — avoids SQLite's 999-parameter
+        // limit when a provider has a large channel list with multiple old fetch runs.
+        var staleChannelQuery = db.ProviderChannels
             .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.LastFetchRunId))
-            .Select(x => x.ProviderChannelId)
-            .ToListAsync(ct);
+            .Select(x => x.ProviderChannelId);
 
-        if (staleChannelIds.Count > 0)
+        var staleCount = await staleChannelQuery.CountAsync(ct);
+        if (staleCount > 0)
         {
             // Delete child rows explicitly — SQLite FK cascade requires PRAGMA foreign_keys = ON
             // which is not enabled; follow the same explicit-delete pattern as DeleteProfileAsync.
             await db.ProfileGroupChannelFilters
-                .Where(x => staleChannelIds.Contains(x.ProviderChannelId))
+                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
                 .ExecuteDeleteAsync(ct);
 
             await db.ChannelSources
-                .Where(x => staleChannelIds.Contains(x.ProviderChannelId))
+                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
                 .ExecuteDeleteAsync(ct);
 
             await db.ProfileCustomGroupChannels
-                .Where(x => staleChannelIds.Contains(x.ProviderChannelId))
+                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
                 .ExecuteDeleteAsync(ct);
 
             await db.ProviderChannels
@@ -502,7 +503,7 @@ public sealed class SnapshotRefreshService(
             .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.FetchRunId))
             .ExecuteDeleteAsync(ct);
 
-        return (staleChannelIds.Count, deletedRuns);
+        return (staleCount, deletedRuns);
     }
 
     private async Task RunBuildOnlyAsync(CancellationToken stoppingToken)

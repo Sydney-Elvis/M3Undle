@@ -294,7 +294,7 @@ public sealed class SnapshotBuilder(
         }
         catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or OperationCanceledException)
         {
-            logger.LogWarning(ex, "Playlist fetch/parse failed for provider {ProviderId} after {Elapsed}ms.", provider.ProviderId, sw.ElapsedMilliseconds);
+            logger.LogWarning(ex, "Playlist fetch/parse failed for provider \"{ProviderName}\" after {Elapsed}ms.", provider.Name, sw.ElapsedMilliseconds);
             metrics?.RecordProviderRefresh(provider.ProviderId, success: false, sw.Elapsed);
             await FailFetchRunAsync(fetchRun, ex.Message);
             await PublishSystemEventBestEffortAsync(

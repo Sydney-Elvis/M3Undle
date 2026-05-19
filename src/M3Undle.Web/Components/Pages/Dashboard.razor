@@ -8,7 +8,6 @@
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
-@inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @inject DashboardStatsService DashboardStats
 @inject LineupStatusService StatusService
 @inject IRefreshScheduleService RefreshScheduleService
@@ -125,19 +124,7 @@
     <!-- System Status -->
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
-            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
-                <MudText Typo="Typo.h6">System Status</MudText>
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                    @if (_streamSessions > 0)
-                    {
-                        <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.FiberManualRecord"
-                                 Size="Size.Small" OnClick="@(() => Nav.NavigateTo("streams"))">
-                            @_streamSessions session@(_streamSessions == 1 ? "" : "s"), @_streamClients client@(_streamClients == 1 ? "" : "s")
-                        </MudChip>
-                    }
-                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAllAsync" Disabled="_isLoading" />
-                </MudStack>
-            </MudStack>
+            <MudText Typo="Typo.h6" Class="mb-3">System Status</MudText>
 
             @if (_isLoading)
             {
@@ -155,26 +142,16 @@
                     var selectedProfile = SelectedProfileSummary;
                     var isActiveSelected = selectedProfile?.IsActive == true || (selectedProfile == null && lineup?.ActiveProfile is not null);
                 }
-                    @if (_dashboardStats?.ProfileSummaries.Count > 0)
+                    @if (selectedProfile is not null)
                     {
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
-                            @foreach (var profile in _dashboardStats.ProfileSummaries)
-                            {
-                                var isSelected = selectedProfile?.ProfileId == profile.ProfileId;
-                                var chipColor = profile.IsActive
-                                    ? (profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning : Color.Success)
-                                    : (profile.HealthStatus == ProfileHealthStatus.NoOutput ? Color.Default : Color.Info);
-                                var chipIcon = profile.IsActive
-                                    ? (profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning : Icons.Material.Filled.CheckCircle)
-                                    : (profile.HealthStatus == ProfileHealthStatus.NoOutput ? Icons.Material.Filled.RadioButtonUnchecked : Icons.Material.Filled.Inventory2);
-                                <MudChip T="string"
-                                         Color="@chipColor"
-                                         Variant="@(isSelected ? Variant.Filled : Variant.Outlined)"
-                                         Icon="@chipIcon"
-                                         OnClick="@(() => SelectProfile(profile.ProfileId))">
-                                    @profile.DisplayName
-                                </MudChip>
-                            }
+                        var activeChipColor = selectedProfile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning : Color.Success;
+                        var activeChipIcon = selectedProfile.HealthStatus == ProfileHealthStatus.Degraded
+                            ? Icons.Material.Filled.Warning
+                            : Icons.Material.Filled.CheckCircle;
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudChip T="string" Color="@activeChipColor" Icon="@activeChipIcon" Variant="Variant.Filled">
+                                @selectedProfile.DisplayName
+                            </MudChip>
                         </MudStack>
                     }
 
@@ -319,30 +296,6 @@
                             }
                         </MudStack>
                     }
-                    else if (selectedProfile is not null)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="@ProfileHealthChipColor(selectedProfile.HealthStatus)" Variant="Variant.Outlined">
-                            @ProfileHealthLabel(selectedProfile.HealthStatus)
-                        </MudChip>
-                        <MudStack Spacing="0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Published Channels</MudText>
-                            @if (selectedProfile.LiveCount > 0)
-                            {
-                                <MudText Typo="Typo.body2">@selectedProfile.LiveCount.ToString("N0") live channels</MudText>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.body2" Color="Color.Secondary">None</MudText>
-                            }
-                        </MudStack>
-                        @if (selectedProfile.LastPublishedUtc.HasValue)
-                        {
-                            <MudStack Spacing="0">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Last Published</MudText>
-                                <MudText Typo="Typo.body2">@selectedProfile.LastPublishedUtc.Value.ToString("u")</MudText>
-                            </MudStack>
-                        }
-                    }
                     else
                     {
                         <MudText Typo="Typo.body2" Color="Color.Secondary">None selected</MudText>
@@ -405,13 +358,8 @@
 </MudGrid>
 
 @code {
-    private string? _selectedProfileId;
-
     private DashboardProfileSummary? SelectedProfileSummary =>
-        _dashboardStats?.ProfileSummaries.FirstOrDefault(p => p.ProfileId == _selectedProfileId)
-        ?? _dashboardStats?.ProfileSummaries.FirstOrDefault(p => p.IsActive);
-
-    private void SelectProfile(string profileId) => _selectedProfileId = profileId;
+        _dashboardStats?.ProfileSummaries.FirstOrDefault(p => p.IsActive);
 
     private LineupStatusResponse? _status;
     private DashboardStatsDto? _dashboardStats;
@@ -426,11 +374,8 @@
     private IDisposable? _eventSubscription;
     private DateTime? _refreshStartedAt;
     private PeriodicTimer? _elapsedTimer;
-    private PeriodicTimer? _streamTimer;
     private PersistingComponentStateSubscription? _persistSubscription;
     private bool _isCancelling;
-    private int _streamSessions;
-    private int _streamClients;
 
     private DateTime? _nextRefreshUtc;
     private string _refreshScheduleKind = "6h";
@@ -489,10 +434,6 @@
 
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
-
-        RefreshStreamCounts();
-        _streamTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
-        _ = RunStreamTimerAsync(_streamTimer);
 
         if (!restoredFromPrerender)
             _ = LoadAllAsync();
@@ -620,23 +561,6 @@
         _cts.Dispose();
         _eventSubscription?.Dispose();
         _elapsedTimer?.Dispose();
-        _streamTimer?.Dispose();
-    }
-
-    private void RefreshStreamCounts()
-    {
-        _streamSessions = StreamingRegistry.GetActiveSessions().Count;
-        _streamClients = StreamingRegistry.GetActiveClients().Count;
-    }
-
-    private async Task RunStreamTimerAsync(PeriodicTimer timer)
-    {
-        try
-        {
-            while (await timer.WaitForNextTickAsync(_cts.Token))
-                await InvokeAsync(() => { RefreshStreamCounts(); StateHasChanged(); });
-        }
-        catch (OperationCanceledException) { }
     }
 
     private void StartElapsedTimer()
@@ -691,20 +615,6 @@
         ChangeClasses.Lineup    => Color.Primary,
         ChangeClasses.Breaking  => Color.Warning,
         _                       => Color.Default,
-    };
-
-    private static Color ProfileHealthChipColor(ProfileHealthStatus status) => status switch
-    {
-        ProfileHealthStatus.Ok => Color.Info,
-        ProfileHealthStatus.Degraded => Color.Warning,
-        _ => Color.Default,
-    };
-
-    private static string ProfileHealthLabel(ProfileHealthStatus status) => status switch
-    {
-        ProfileHealthStatus.Ok => "Standby",
-        ProfileHealthStatus.Degraded => "Degraded",
-        _ => "No Output",
     };
 
     private static Color ProviderExpirationChipColor(DateTime expiresUtc)
