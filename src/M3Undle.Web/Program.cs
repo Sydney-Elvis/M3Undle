@@ -143,6 +143,7 @@ builder.Services.AddScoped(sp =>
 });
 builder.Services.AddSingleton<PlaylistParser>();
 builder.Services.AddSingleton<EnvironmentVariableService>();
+builder.Services.AddSingleton<EndpointUrlService>();
 builder.Services.AddSingleton<SecretEncryptionService>();
 builder.Services.AddScoped<ConfigYamlService>();
 

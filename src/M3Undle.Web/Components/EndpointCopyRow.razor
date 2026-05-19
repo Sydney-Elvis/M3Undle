@@ -1,0 +1,47 @@
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
+    <MudTextField Value="@DefaultUrl" ReadOnly="true" Variant="Variant.Outlined"
+                  Margin="Margin.Dense" FullWidth="true" />
+    <MudTooltip Text="Copy" Placement="Placement.Top">
+        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                       Size="Size.Small" OnClick="CopyDefaultAsync" />
+    </MudTooltip>
+    @if (ExtraVariants is { Count: > 0 })
+    {
+        <MudMenu Icon="@Icons.Material.Filled.ArrowDropDown" Size="Size.Small" Dense="true"
+                 AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+            @foreach (var v in ExtraVariants)
+            {
+                var item = v;
+                <MudMenuItem OnClick="@(() => CopyAsync(item.Url))">@item.Label</MudMenuItem>
+            }
+        </MudMenu>
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired]
+    public string DefaultUrl { get; set; } = string.Empty;
+
+    [Parameter]
+    public IReadOnlyList<EndpointUrlVariant> ExtraVariants { get; set; } = [];
+
+    private Task CopyDefaultAsync() => CopyAsync(DefaultUrl);
+
+    private async Task CopyAsync(string text)
+    {
+        try
+        {
+            var copied = await JS.InvokeAsync<bool>("m3undleCopyText", text);
+            Snackbar.Add(
+                copied ? "Copied to clipboard" : "Copy failed. Please copy manually.",
+                copied ? Severity.Success : Severity.Warning);
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Copy failed. Please copy manually.", Severity.Warning);
+        }
+    }
+}

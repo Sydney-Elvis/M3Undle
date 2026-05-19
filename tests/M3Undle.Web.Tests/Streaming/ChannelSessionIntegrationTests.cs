@@ -138,6 +138,7 @@ public sealed class ChannelSessionIntegrationTests
                 OutageWindow = TimeSpan.FromSeconds(30),
                 ConnectTimeout = TimeSpan.FromSeconds(5),
                 FixedStepBackoffSeconds = [0],
+                RecoverySafeStartSearchLimitBytes = 188, // one-packet limit so fallback triggers immediately
             });
 
         var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);

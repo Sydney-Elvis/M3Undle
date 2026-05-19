@@ -23,7 +23,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
         var profileProviders = await db.ProfileProviders
             .AsNoTracking()
-            .Select(pp => new { pp.ProfileId, pp.ProviderId })
+            .Select(pp => new { pp.ProfileId, pp.ProviderId, pp.Enabled })
             .ToListAsync(ct);
 
         var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
@@ -46,6 +46,16 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
         var profileProviderMap = profileProviders
             .GroupBy(pp => pp.ProfileId)
             .ToDictionary(g => g.Key, g => g.Select(pp => pp.ProviderId).ToList());
+
+        var providerDetailsById = relevantProviderIds.Count > 0
+            ? await db.Providers
+                .AsNoTracking()
+                .Where(p => relevantProviderIds.Contains(p.ProviderId))
+                .Select(p => new { p.ProviderId, p.Name, p.MaxConcurrentStreams, p.PlaylistExpiresUtc, p.Enabled })
+                .ToListAsync(ct)
+            : [];
+
+        var providerDetailMap = providerDetailsById.ToDictionary(p => p.ProviderId);
 
         var groupsPendingReview = await db.ProfileGroupFilters
             .AsNoTracking()
@@ -124,6 +134,20 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             if (snapshot is not null && profileHasFailed)
                 health = ProfileHealthStatus.Degraded;
 
+            var enabledProfileProviderIds = profileProviders
+                .Where(pp => pp.ProfileId == profile.ProfileId && pp.Enabled)
+                .Select(pp => pp.ProviderId)
+                .ToList();
+
+            var profileProviderSummaries = enabledProfileProviderIds
+                .Where(pid => providerDetailMap.ContainsKey(pid) && providerDetailMap[pid].Enabled)
+                .Select(pid =>
+                {
+                    var p = providerDetailMap[pid];
+                    return new DashboardProviderSummary(p.ProviderId, p.Name, p.MaxConcurrentStreams, p.PlaylistExpiresUtc);
+                })
+                .ToList();
+
             summaries.Add(new DashboardProfileSummary
             {
                 ProfileId = profile.ProfileId,
@@ -131,9 +155,13 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 OutputName = profile.OutputName,
                 IsEnabled = profile.Enabled,
                 IsActive = profile.IsActive,
+                IsPublished = snapshot is not null,
                 LastPublishedUtc = snapshot?.CreatedUtc,
                 LiveCount = snapshot?.LiveChannelCount ?? 0,
+                MovieCount = snapshot?.VodChannelCount ?? 0,
+                SeriesCount = snapshot?.SeriesChannelCount ?? 0,
                 HealthStatus = health,
+                Providers = profileProviderSummaries,
             });
         }
 

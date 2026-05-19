@@ -20,6 +20,7 @@
 @inject IMetricsTokenService MetricsTokenService
 @inject IDialogService DialogService
 @inject IJSRuntime JS
+@inject EndpointUrlService EndpointUrlService
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
@@ -73,6 +74,12 @@
                     }
                 </MudStack>
             </MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Link"
+                       Variant="@(_section == "endpoints" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "endpoints" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => _section = "endpoints")">Endpoint URLs</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Cable"
@@ -837,6 +844,135 @@
                         }
                     </MudStack>
                 }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ ENDPOINT URLs ═════ *@
+        @if (_section == "endpoints")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">Endpoint URLs</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Configure alternate base URLs so the copy buttons on the Dashboard and HDHomeRun pages
+                    can offer Docker-network or external variants. Set these via environment variables;
+                    the values shown here are read-only.
+                </MudText>
+
+                @* Host / Public URL *@
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Host / Public Base URL</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                    Override the base URL derived from the browser for copy buttons. Useful if M3Undle runs
+                    behind a port mapping and the browser URL is not what clients should use.
+                </MudText>
+                @{
+                    var publicUrl = EndpointUrlService.GetPublicBaseUrl();
+                }
+                @if (publicUrl is not null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@publicUrl</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">from env</MudChip>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        Not configured — <code>M3UNDLE_PUBLIC_BASE_URL</code> not set.
+                    </MudText>
+                }
+
+                <MudDivider Class="my-4" />
+
+                @* Docker URL *@
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Docker Base URL</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                    The URL other containers on the same Docker network should use to reach M3Undle.
+                    Typically the Compose service name: <code>http://m3undle:8080</code>.
+                </MudText>
+                @{
+                    var dockerUrl = EndpointUrlService.GetDockerBaseUrl();
+                }
+                @if (dockerUrl is not null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@dockerUrl</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">from env</MudChip>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        Not configured — <code>M3UNDLE_DOCKER_BASE_URL</code> not set.
+                    </MudText>
+                }
+
+                <MudDivider Class="my-4" />
+
+                @* External URL *@
+                <MudText Typo="Typo.subtitle1" Class="mb-1">External / Reverse Proxy URL</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                    The publicly reachable URL when M3Undle is behind a reverse proxy.
+                    Example: <code>https://tv.example.com</code>.
+                </MudText>
+                @{
+                    var externalUrl = EndpointUrlService.GetExternalBaseUrl();
+                }
+                @if (externalUrl is not null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@externalUrl</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">from env</MudChip>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        Not configured — <code>M3UNDLE_EXTERNAL_BASE_URL</code> not set.
+                    </MudText>
+                }
+
+                <MudDivider Class="my-4" />
+
+                @* Container detection *@
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Container Detection</MudText>
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Container detected</MudText>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(EndpointUrlService.IsContainerDetected ? Color.Info : Color.Default)"
+                                 Variant="Variant.Outlined">
+                            @(EndpointUrlService.IsContainerDetected ? "Yes" : "No")
+                        </MudChip>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Detected hostname</MudText>
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@EndpointUrlService.DetectedHostname</MudText>
+                    </MudItem>
+                </MudGrid>
+
+                @if (EndpointUrlService.IsContainerDetected && EndpointUrlService.IsHostnameLikelyContainerId)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        Container detected, but the hostname (@EndpointUrlService.DetectedHostname) looks like a
+                        randomly generated container ID rather than a service name. Other containers may not be
+                        able to reach M3Undle using this hostname. Set <code>M3UNDLE_DOCKER_BASE_URL</code> to
+                        specify the Docker Compose service name (e.g. <code>http://m3undle:8080</code>).
+                    </MudAlert>
+                }
+                else if (EndpointUrlService.IsContainerDetected && dockerUrl is null)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        Container detected with hostname <strong>@EndpointUrlService.DetectedHostname</strong>.
+                        If this is the Docker Compose service name and other containers should use it,
+                        set <code>M3UNDLE_DOCKER_BASE_URL=http://@EndpointUrlService.DetectedHostname:8080</code>
+                        to enable Docker URL copy options on the Dashboard and HDHomeRun pages.
+                    </MudAlert>
+                }
+
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
+                    URL overrides are set via environment variables on the host or in your
+                    <code>docker-compose.yml</code>. Changes take effect after restarting M3Undle.
+                </MudText>
             </MudPaper>
         }
 
