@@ -344,11 +344,25 @@ internal sealed class ProfilesPageService(
                 .ToListAsync(ct)
             : [];
 
-        var lastFailedRun = await db.FetchRuns
-            .AsNoTracking()
-            .OrderByDescending(f => f.StartedUtc)
-            .Select(f => new { f.Status })
-            .FirstOrDefaultAsync(ct);
+        // Latest fetch run status per provider — used to scope health to each profile's own providers.
+        var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
+        var latestRunsByProvider = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (relevantProviderIds.Count > 0)
+        {
+            var recentRuns = await db.FetchRuns
+                .AsNoTracking()
+                .Where(f => relevantProviderIds.Contains(f.ProviderId))
+                .Select(f => new { f.ProviderId, f.StartedUtc, f.Status })
+                .OrderByDescending(f => f.StartedUtc)
+                .ToListAsync(ct);
+
+            foreach (var run in recentRuns)
+                latestRunsByProvider.TryAdd(run.ProviderId, run.Status);
+        }
+
+        var profileProviderMap = profileProviders
+            .GroupBy(pp => pp.ProfileId)
+            .ToDictionary(g => g.Key, g => g.Select(pp => pp.ProviderId).ToList());
 
         var pendingByProfile = groupsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
         var pendingChannelsByProfileMap = channelsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
@@ -382,9 +396,10 @@ internal sealed class ProfilesPageService(
             var health = ProfileHealthStatus.NoOutput;
             if (hasProviders && snapshot is not null)
             {
-                health = lastFailedRun?.Status == "fail"
-                    ? ProfileHealthStatus.Degraded
-                    : ProfileHealthStatus.Ok;
+                var profileProviderIds = profileProviderMap.GetValueOrDefault(profile.ProfileId, []);
+                var profileHasFailed = profileProviderIds.Any(pid =>
+                    latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
+                health = profileHasFailed ? ProfileHealthStatus.Degraded : ProfileHealthStatus.Ok;
             }
 
             result.Add(new ProfilePageItemDto

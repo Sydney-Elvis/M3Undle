@@ -112,7 +112,10 @@ builder.Services.ConfigureApplicationCookie(options =>
 
 var sqliteInterceptor = new SqliteConnectionInterceptor();
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlite(runtimePaths.DatabaseConnectionString).AddInterceptors(sqliteInterceptor));
+    options
+        .UseSqlite(runtimePaths.DatabaseConnectionString)
+        .AddInterceptors(sqliteInterceptor)
+        .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.FirstWithoutOrderByAndFilterWarning)));
 if (builder.Environment.IsDevelopment())
     builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
