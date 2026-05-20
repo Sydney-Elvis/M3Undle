@@ -14,6 +14,8 @@ public sealed record StreamChannelRecoveryPolicy(
     TimeSpan RecoveryOutputHoldLimit,
     int RecoverySafeStartSearchLimitBytes,
     bool AllowPacketBoundaryRecoveryFallback,
+    bool RequireDownstreamRetune,
+    string? DownstreamRetuneReason,
     string Reason)
 {
     public static StreamChannelRecoveryPolicy FromOptions(ReconnectOptions options)
@@ -22,6 +24,8 @@ public sealed record StreamChannelRecoveryPolicy(
             options.RecoveryOutputHoldLimit,
             options.RecoverySafeStartSearchLimitBytes,
             options.AllowPacketBoundaryRecoveryFallback,
+            RequireDownstreamRetune: false,
+            DownstreamRetuneReason: null,
             "No channel health history requires adaptive recovery.");
 }
 

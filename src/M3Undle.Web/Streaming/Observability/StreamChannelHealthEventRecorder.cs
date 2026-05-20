@@ -9,6 +9,9 @@ public sealed class StreamChannelHealthEventRecorder(
     IServiceScopeFactory scopeFactory,
     ILogger<StreamChannelHealthEventRecorder> logger) : BackgroundService, IStreamChannelHealthEventRecorder
 {
+    private static readonly TimeSpan PurgeInterval = TimeSpan.FromHours(4);
+    private static readonly TimeSpan RetentionWindow = TimeSpan.FromDays(7);
+
     private readonly Channel<StreamDiagnosticEvent> _queue = Channel.CreateBounded<StreamDiagnosticEvent>(
         new BoundedChannelOptions(2048)
         {
@@ -42,7 +45,10 @@ public sealed class StreamChannelHealthEventRecorder(
             await Task.Delay(10, ct);
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+        => Task.WhenAll(ProcessQueueAsync(stoppingToken), PurgeOldEventsAsync(stoppingToken));
+
+    private async Task ProcessQueueAsync(CancellationToken stoppingToken)
     {
         await foreach (var diagnosticEvent in _queue.Reader.ReadAllAsync(stoppingToken))
         {
@@ -70,6 +76,36 @@ public sealed class StreamChannelHealthEventRecorder(
         }
     }
 
+    private async Task PurgeOldEventsAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(PurgeInterval);
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            try
+            {
+                var cutoffUtc = DateTime.UtcNow - RetentionWindow;
+                using var scope = scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+                var deleted = await db.StreamChannelHealthEvents
+                    .Where(e => e.EventUtc < cutoffUtc)
+                    .ExecuteDeleteAsync(stoppingToken);
+                if (deleted > 0)
+                    logger.LogInformation(
+                        "Purged {Count} stream channel health events older than {RetentionDays} days.",
+                        deleted,
+                        (int)RetentionWindow.TotalDays);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to purge old stream channel health events.");
+            }
+        }
+    }
+
     private async Task PersistAsync(StreamDiagnosticEvent diagnosticEvent, CancellationToken ct)
     {
         var healthEvent = Map(diagnosticEvent);
@@ -91,7 +127,9 @@ public sealed class StreamChannelHealthEventRecorder(
 
         var isRecoveryFailure = diagnosticEvent.Kind is StreamDiagnosticEventKind.RecoveryHoldLimitExceeded
             or StreamDiagnosticEventKind.RecoveryFailedUnsafe;
-        var isForcedRetune = diagnosticEvent.Kind == StreamDiagnosticEventKind.RecoveryForcedRetune || isRecoveryFailure;
+        var isForcedRetune = diagnosticEvent.Kind is StreamDiagnosticEventKind.RecoveryForcedRetune
+            or StreamDiagnosticEventKind.ControlledDownstreamRetune
+            || isRecoveryFailure;
         var isAbortAfterRecovery = diagnosticEvent.Kind == StreamDiagnosticEventKind.ClientAbortAfterRecovery;
         var isTsSyncLoss = diagnosticEvent.Kind == StreamDiagnosticEventKind.MpegTsSyncLost;
 
@@ -128,5 +166,6 @@ public sealed class StreamChannelHealthEventRecorder(
             or StreamDiagnosticEventKind.RecoveryFailedUnsafe
             or StreamDiagnosticEventKind.RecoveryForcedRetune
             or StreamDiagnosticEventKind.ClientAbortAfterRecovery
-            or StreamDiagnosticEventKind.MpegTsSyncLost;
+            or StreamDiagnosticEventKind.MpegTsSyncLost
+            or StreamDiagnosticEventKind.ControlledDownstreamRetune;
 }

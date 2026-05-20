@@ -415,6 +415,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                                 _reconnectOptions,
                                 _sessionCts.Token);
                             BeginRecoveryOutputHold(recoveredAttempt);
+                            if (_currentRecoveryPolicy.RequireDownstreamRetune)
+                                await ExecuteControlledDownstreamRetuneAsync();
                         }
 
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
@@ -1157,6 +1159,33 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         foreach (var subscriber in _subscribers.Values)
         {
             await subscriber.CompleteAsync(SubscriberDisconnectReason.SessionClosed);
+        }
+    }
+
+    private async Task ExecuteControlledDownstreamRetuneAsync()
+    {
+        var policy = ResolveRecoveryPolicy();
+        var heldDuration = GetRecoveryHoldDuration();
+        _logger.LogInformation(
+            "Controlled downstream retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneRequired=true DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
+            _sessionId,
+            _source.DisplayName,
+            _source.ProviderId,
+            _source.ProviderChannelId,
+            policy.Profile,
+            policy.DownstreamRetuneReason,
+            heldDuration.TotalMilliseconds,
+            _recoveryBytesSuppressed);
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.ControlledDownstreamRetune,
+            outputHeld: heldDuration,
+            bytesSuppressed: _recoveryBytesSuppressed,
+            recoveryHoldLimit: policy.RecoveryOutputHoldLimit,
+            message: $"Closing external subscribers for controlled downstream retune. Reason: {policy.DownstreamRetuneReason}");
+        foreach (var subscriber in _subscribers.Values)
+        {
+            if (!subscriber.IsInternal)
+                await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
         }
     }
 

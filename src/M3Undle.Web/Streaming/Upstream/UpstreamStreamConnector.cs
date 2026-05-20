@@ -432,6 +432,11 @@ public sealed class UpstreamStreamConnector(
         info.ArgumentList.Add("0");
         info.ArgumentList.Add("-muxdelay");
         info.ArgumentList.Add("0");
+        if (includeCleanRepairFlags)
+        {
+            info.ArgumentList.Add("-bsf:v");
+            info.ArgumentList.Add("dump_extra=freq=keyframe");
+        }
         info.ArgumentList.Add("-mpegts_flags");
         info.ArgumentList.Add("+resend_headers");
         info.ArgumentList.Add("-f");

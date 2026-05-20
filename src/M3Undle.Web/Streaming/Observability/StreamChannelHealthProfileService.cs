@@ -47,6 +47,7 @@ public sealed class StreamChannelHealthProfileService(
                     g.Count(e => e.EventKind == "UpstreamFailure"),
                     g.Count(e => e.EventKind == "RecoveryOutputResumed"),
                     g.Count(e => e.EventKind == "RecoveryOutputResumed" && e.SafeStartKind == "FallbackPacketBoundary"),
+                    g.Count(e => e.EventKind == "RecoveryOutputResumed" && e.SafeStartKind == "H264Idr"),
                     g.Count(e => e.ClientAbortAfterRecovery),
                     g.Count(e => e.ForcedRetune),
                     g.Count(e => e.TsSyncLoss)))
@@ -74,6 +75,9 @@ public sealed class StreamChannelHealthProfileService(
     private static StreamChannelRecoveryPolicy BuildPolicy(HealthSummary summary, ReconnectOptions options)
     {
         var profile = DeriveProfile(summary);
+        var requireRetune = profile == StreamChannelHealthProfile.Unstable
+            && summary.ClientAbortAfterRecovery >= 2
+            && summary.IdrRecoveryResumes >= 1;
         return profile switch
         {
             StreamChannelHealthProfile.Unstable => new StreamChannelRecoveryPolicy(
@@ -81,12 +85,18 @@ public sealed class StreamChannelHealthProfileService(
                 Max(options.RecoveryOutputHoldLimit, UnstableHoldLimit),
                 Math.Max(options.RecoverySafeStartSearchLimitBytes, UnstableSearchLimitBytes),
                 AllowPacketBoundaryRecoveryFallback: false,
+                RequireDownstreamRetune: requireRetune,
+                DownstreamRetuneReason: requireRetune
+                    ? $"Channel has {summary.ClientAbortAfterRecovery} downstream client aborts after IDR recovery in the observation window."
+                    : null,
                 Reason: BuildReason(summary, profile)),
             _ => new StreamChannelRecoveryPolicy(
                 profile,
                 options.RecoveryOutputHoldLimit,
                 options.RecoverySafeStartSearchLimitBytes,
                 options.AllowPacketBoundaryRecoveryFallback,
+                RequireDownstreamRetune: false,
+                DownstreamRetuneReason: null,
                 BuildReason(summary, profile)),
         };
     }
@@ -127,10 +137,11 @@ public sealed class StreamChannelHealthProfileService(
         int UpstreamFailures,
         int RecoveryResumes,
         int FallbackRecoveryResumes,
+        int IdrRecoveryResumes,
         int ClientAbortAfterRecovery,
         int ForcedRetunes,
         int TsSyncLoss)
     {
-        public static HealthSummary Empty { get; } = new(0, 0, 0, 0, 0, 0);
+        public static HealthSummary Empty { get; } = new(0, 0, 0, 0, 0, 0, 0);
     }
 }

@@ -29,4 +29,5 @@ public enum StreamDiagnosticEventKind
     SubscriberQueueFull = 24,
     RecoveryForcedRetune = 25,
     ClientAbortAfterRecovery = 26,
+    ControlledDownstreamRetune = 27,
 }
