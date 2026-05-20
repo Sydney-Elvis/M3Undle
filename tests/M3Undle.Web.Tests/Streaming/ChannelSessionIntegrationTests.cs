@@ -889,6 +889,75 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_MpegTsReconnect_UnstableChannel_DisallowsPacketBoundaryFallback()
+    {
+        var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket(0xDD));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            bufferOptions: new BufferOptions
+            {
+                ReadChunkSizeBytes = 188,
+                SubscriberQueueCapacity = 128,
+                MaxBytesPerSession = 16 * 188,
+                MaxBytesHardCap = 4 * 1024 * 1024,
+            },
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 4 * 188,
+                AllowPacketBoundaryRecoveryFallback = true,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+        await fixture.SeedHealthEventsAsync(
+            new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = "provider-1",
+                ProviderChannelId = "channel-1",
+                DisplayName = "Test Channel",
+                EventKind = "ClientAbortAfterRecovery",
+                EventUtc = DateTime.UtcNow.AddMinutes(-10),
+                ClientAbortAfterRecovery = true,
+            },
+            new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = "provider-1",
+                ProviderChannelId = "channel-1",
+                DisplayName = "Test Channel",
+                EventKind = "ClientAbortAfterRecovery",
+                EventUtc = DateTime.UtcNow.AddMinutes(-5),
+                ClientAbortAfterRecovery = true,
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Count > 0,
+            TimeSpan.FromSeconds(8));
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.AreEqual(SessionState.Faulted, session.State);
+        Assert.IsFalse(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Any(x =>
+                string.Equals(x.SafeStartKind, "FallbackPacketBoundary", StringComparison.Ordinal)));
+        Assert.IsTrue(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Any());
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_NewExternalSubscriberDuringRecovery_DoesNotReceiveStalePreReconnectData()
     {
         // A new external subscriber that attaches while the session is holding output
@@ -2722,9 +2791,12 @@ public sealed class ChannelSessionIntegrationTests
                 : new StreamAdmissionBackoffStore(timeProvider);
             var registry = new StreamingRegistry(proxyOpts);
             var diagnosticsStore = new StreamingDiagnosticsStore(proxyOpts);
+            var healthProfileService = new StreamChannelHealthProfileService(
+                scopeFactory,
+                NullLogger<StreamChannelHealthProfileService>.Instance);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
-                diagnosticsStore, NoopStreamChannelHealthEventRecorder.Instance, new NullEventService(),
+                diagnosticsStore, NoopStreamChannelHealthEventRecorder.Instance, healthProfileService, new NullEventService(),
                 NullLoggerFactory.Instance, timeProvider ?? TimeProvider.System);
 
             var source = new StreamSourceDescriptor(
@@ -2739,6 +2811,14 @@ public sealed class ChannelSessionIntegrationTests
                 ForceMpegTs: forceMpegTs);
 
             return new SessionFixture(connection, serviceProvider, handler, strikeStore, registry, diagnosticsStore, manager, source);
+        }
+
+        public async Task SeedHealthEventsAsync(params StreamChannelHealthEvent[] events)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            db.StreamChannelHealthEvents.AddRange(events);
+            await db.SaveChangesAsync();
         }
 
         public async ValueTask DisposeAsync()

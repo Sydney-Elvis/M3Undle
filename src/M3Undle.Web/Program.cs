@@ -353,6 +353,7 @@ builder.Services.AddSingleton<StreamingDiagnosticsStore>();
 builder.Services.AddSingleton<StreamChannelHealthEventRecorder>();
 builder.Services.AddSingleton<IStreamChannelHealthEventRecorder>(sp => sp.GetRequiredService<StreamChannelHealthEventRecorder>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<StreamChannelHealthEventRecorder>());
+builder.Services.AddSingleton<IStreamChannelHealthProfileService, StreamChannelHealthProfileService>();
 builder.Services.AddSingleton<InternalRelaySecretService>();
 builder.Services.AddSingleton<UpstreamFailureStrikeStore>();
 builder.Services.AddSingleton<StreamAdmissionBackoffStore>();

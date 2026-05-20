@@ -22,6 +22,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
     private readonly IStreamChannelHealthEventRecorder _healthEventRecorder;
+    private readonly IStreamChannelHealthProfileService _healthProfileService;
     private readonly IEventService _eventService;
     private readonly M3UndleMetrics? _metrics;
     private readonly ILogger<ChannelStreamSession> _logger;
@@ -74,6 +75,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private DateTimeOffset? _recoveryOutputHoldStartedUtc;
     private long _recoveryBytesSuppressed;
     private bool _recoveryResumedSinceLastReconnect;
+    private StreamChannelRecoveryPolicy? _currentRecoveryPolicy;
     private string? _lastSafeStartKind;
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
@@ -91,6 +93,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         StreamingRegistry registry,
         StreamingDiagnosticsStore diagnosticsStore,
         IStreamChannelHealthEventRecorder healthEventRecorder,
+        IStreamChannelHealthProfileService healthProfileService,
         IEventService eventService,
         ILogger<ChannelStreamSession> logger,
         Func<ChannelSessionKey, ChannelStreamSession, Task> onClosed,
@@ -105,6 +108,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _registry = registry;
         _diagnosticsStore = diagnosticsStore;
         _healthEventRecorder = healthEventRecorder;
+        _healthProfileService = healthProfileService;
         _eventService = eventService;
         _logger = logger;
         _onClosed = onClosed;
@@ -404,7 +408,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             reconnectAttempt: recoveredAttempt,
                             message: "Upstream stream recovered after reconnect.");
                         if (shouldHoldRecoveredOutput)
+                        {
+                            _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
+                                _source.ProviderId,
+                                _source.ProviderChannelId,
+                                _reconnectOptions,
+                                _sessionCts.Token);
                             BeginRecoveryOutputHold(recoveredAttempt);
+                        }
 
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
                     }
@@ -887,7 +898,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             || (kind == MpegTsStartupKind.PatPmt && !hasKnownH264VideoStream);
         var fallback = false;
         if (!selected
-            && _reconnectOptions.AllowPacketBoundaryRecoveryFallback
+            && ResolveRecoveryPolicy().AllowPacketBoundaryRecoveryFallback
             && !_mpegTsSafeStartSelected
             && Interlocked.Read(ref _mpegTsBytesSinceReset) >= fallbackBytes)
         {
@@ -926,26 +937,32 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _lastRecoveryStartedUtc = _recoveryOutputHoldStartedUtc;
         _recoveryBytesSuppressed = 0;
         _recoveryResumedSinceLastReconnect = false;
+        _currentRecoveryPolicy ??= StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
+        var policy = ResolveRecoveryPolicy();
         SetState(SessionState.HoldingOutput);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryStarted,
             reconnectAttempt: reconnectAttempt,
-            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            recoveryHoldLimit: policy.RecoveryOutputHoldLimit,
             message: "MPEG-TS recovery output hold started after reconnect.");
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOutputHeld,
             reconnectAttempt: reconnectAttempt,
-            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            recoveryHoldLimit: policy.RecoveryOutputHoldLimit,
             message: "Downstream output is held while recovered MPEG-TS is scanned for a safe start.");
         _logger.LogInformation(
-            "Recovery hold started: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} ReconnectAttempt={ReconnectAttempt} HoldLimitMs={HoldLimitMs}",
+            "Recovery hold started: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} ReconnectAttempt={ReconnectAttempt} HoldLimitMs={HoldLimitMs} SearchLimitBytes={SearchLimitBytes} HealthProfile={HealthProfile} PacketBoundaryFallbackAllowed={PacketBoundaryFallbackAllowed} PolicyReason={PolicyReason}",
             _sessionId,
             _source.DisplayName,
             _source.ProviderId,
             _source.ProviderChannelId,
             _relayMode,
             reconnectAttempt,
-            _reconnectOptions.RecoveryOutputHoldLimit.TotalMilliseconds);
+            policy.RecoveryOutputHoldLimit.TotalMilliseconds,
+            ResolveRecoverySafeStartSearchLimitBytes(),
+            policy.Profile,
+            policy.AllowPacketBoundaryRecoveryFallback,
+            policy.Reason);
         PublishSnapshots();
     }
 
@@ -964,7 +981,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             recoveryDuration: recoveryDuration,
             safeStartKind: safeStartKind,
             bytesSuppressed: _recoveryBytesSuppressed,
-            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            recoveryHoldLimit: ResolveRecoveryPolicy().RecoveryOutputHoldLimit,
             message: "Recovered MPEG-TS safe start found.");
 
         var snapshot = _buffer.CreateSafeStartSnapshot();
@@ -997,7 +1014,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             recoveryDuration: recoveryDuration,
             safeStartKind: safeStartKind,
             bytesSuppressed: _recoveryBytesSuppressed,
-            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            recoveryHoldLimit: ResolveRecoveryPolicy().RecoveryOutputHoldLimit,
             message: "Downstream output resumed from recovered MPEG-TS safe start.");
         _logger.LogInformation(
             "Recovery resumed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
@@ -1027,12 +1044,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             outputHeld: heldDuration,
             recoveryDuration: recoveryDuration,
             bytesSuppressed: bytesSuppressed,
-            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            recoveryHoldLimit: ResolveRecoveryPolicy().RecoveryOutputHoldLimit,
             message: searchLimitExceeded
                 ? "MPEG-TS recovery safe-start search limit was exceeded."
                 : "MPEG-TS recovery output hold limit was exceeded.");
         _logger.LogWarning(
-            "Recovery failed — forced retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed} SearchLimitExceeded={SearchLimitExceeded}",
+            "Recovery failed — forced retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed} SearchLimitExceeded={SearchLimitExceeded} HealthProfile={HealthProfile} PacketBoundaryFallbackAllowed={PacketBoundaryFallbackAllowed} PolicyReason={PolicyReason}",
             _sessionId,
             _source.DisplayName,
             _source.ProviderId,
@@ -1040,13 +1057,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _relayMode,
             heldDuration.TotalMilliseconds,
             bytesSuppressed,
-            searchLimitExceeded);
+            searchLimitExceeded,
+            ResolveRecoveryPolicy().Profile,
+            ResolveRecoveryPolicy().AllowPacketBoundaryRecoveryFallback,
+            ResolveRecoveryPolicy().Reason);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryForcedRetune,
             outputHeld: heldDuration,
             recoveryDuration: recoveryDuration,
             bytesSuppressed: bytesSuppressed,
-            recoveryHoldLimit: _reconnectOptions.RecoveryOutputHoldLimit,
+            recoveryHoldLimit: ResolveRecoveryPolicy().RecoveryOutputHoldLimit,
             stopTrigger: "recovery_failed_unsafe",
             message: "Closing downstream subscribers because recovery could not resume safely.");
         MarkPendingStopTrigger("recovery_failed_unsafe");
@@ -1065,7 +1085,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (!_recoveryOutputHoldActive)
             return false;
 
-        return GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOutputHoldLimit
+        return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
     }
 
@@ -1076,13 +1096,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private int ResolveRecoverySafeStartSearchLimitBytes()
     {
+        var policy = ResolveRecoveryPolicy();
+        var configuredSearchLimit = Math.Max(
+            MpegTsBoundaryScanner.PacketSize,
+            policy.RecoverySafeStartSearchLimitBytes);
         var currentFallbackWindow = Math.Min(
             Math.Max(MpegTsBoundaryScanner.PacketSize, _bufferOptions.MaxBytesPerSession / 2),
-            512 * 1024);
+            Math.Max(512 * 1024, configuredSearchLimit));
         return Math.Max(
             MpegTsBoundaryScanner.PacketSize,
-            Math.Min(currentFallbackWindow, _reconnectOptions.RecoverySafeStartSearchLimitBytes));
+            Math.Min(currentFallbackWindow, configuredSearchLimit));
     }
+
+    private StreamChannelRecoveryPolicy ResolveRecoveryPolicy()
+        => _currentRecoveryPolicy ?? StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
 
     private void SetState(SessionState state)
     {
