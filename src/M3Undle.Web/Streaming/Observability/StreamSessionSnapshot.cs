@@ -31,4 +31,8 @@ public sealed record StreamSessionSnapshot(
     double? LastRecoveryOutputHeldMs = null,
     DateTimeOffset? LastRecoveryStartedUtc = null,
     long TotalBytesRelayed = 0,
-    long? UpstreamBytesPerSecond = null);
+    long? UpstreamBytesPerSecond = null,
+    StreamChannelHealthProfile? HealthProfile = null,
+    string? HealthProfileReason = null,
+    bool RequiresDownstreamRetune = false,
+    string? DownstreamRetuneReason = null);

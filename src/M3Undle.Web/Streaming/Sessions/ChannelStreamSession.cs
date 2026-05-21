@@ -1555,7 +1555,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastRelayFallbackReason: _lastRelayFallbackReason,
             LastSafeStartKind: _lastSafeStartKind,
             LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
-            LastRecoveryStartedUtc: _lastRecoveryStartedUtc);
+            LastRecoveryStartedUtc: _lastRecoveryStartedUtc,
+            HealthProfile: _currentRecoveryPolicy?.Profile,
+            HealthProfileReason: _currentRecoveryPolicy?.Reason,
+            RequiresDownstreamRetune: _currentRecoveryPolicy?.RequireDownstreamRetune ?? false,
+            DownstreamRetuneReason: _currentRecoveryPolicy?.DownstreamRetuneReason);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(

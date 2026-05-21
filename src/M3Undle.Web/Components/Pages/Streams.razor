@@ -8,22 +8,14 @@
 
 <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
     <MudText Typo="Typo.h5">Stream Monitor</MudText>
-    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        @if (_sessions.Count > 0)
-        {
-            <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.FiberManualRecord" Size="Size.Small">
-                @_sessions.Count active session@(_sessions.Count == 1 ? "" : "s"), @_clients.Count client@(_clients.Count == 1 ? "" : "s")
-            </MudChip>
-        }
-        <MudText Typo="Typo.caption" Color="Color.Secondary">Auto-refreshes every 3s</MudText>
-    </MudStack>
+    <MudText Typo="Typo.caption" Color="Color.Secondary">Auto-refreshes every 3s</MudText>
 </MudStack>
 
-<MudText Typo="Typo.h6" Class="mb-2">Active Sessions</MudText>
+<MudText Typo="Typo.h6" Class="mb-2">Active Streams</MudText>
 @if (_sessions.Count == 0)
 {
     <MudPaper Class="pa-4 mb-4" Elevation="1">
-        <MudText Color="Color.Secondary">No active stream sessions.</MudText>
+        <MudText Color="Color.Secondary">No active streams.</MudText>
     </MudPaper>
 }
 else
@@ -34,6 +26,7 @@ else
                 <MudTh>Channel</MudTh>
                 <MudTh>State</MudTh>
                 <MudTh>Relay</MudTh>
+                <MudTh>Health</MudTh>
                 <MudTh>Clients</MudTh>
                 <MudTh>Bitrate</MudTh>
                 <MudTh>Buffer</MudTh>
@@ -48,17 +41,37 @@ else
                     </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="State">
-                    <MudTooltip Text="@RecoveryTooltip(context)" Placement="Placement.Right">
+                    <MudTooltip Text="@StateTooltip(context)" Placement="Placement.Right">
                         <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
                     </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="Relay">
-                    <MudText Typo="Typo.caption">@FormatRelayMode(context.RelayMode)</MudText>
+                    <MudTooltip Text="@RelayTooltip(context.RelayMode)" Placement="Placement.Right">
+                        <MudText Typo="Typo.caption">@FormatRelayMode(context.RelayMode)</MudText>
+                    </MudTooltip>
                     @if (!string.IsNullOrWhiteSpace(context.LastRelayFallbackReason))
                     {
                         <MudTooltip Text="@($"Fell back to direct: {context.LastRelayFallbackReason}")">
                             <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Color="Color.Warning" Style="vertical-align:middle; font-size:14px;" />
                         </MudTooltip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Health">
+                    @if (context.HealthProfile is { } hp)
+                    {
+                        <MudTooltip Text="@HealthProfileTooltip(context)" Placement="Placement.Right">
+                            <MudChip T="string" Size="Size.Small" Color="@HealthProfileColor(hp)">@hp</MudChip>
+                        </MudTooltip>
+                        @if (context.RequiresDownstreamRetune)
+                        {
+                            <MudTooltip Text="@($"Downstream retune active: {context.DownstreamRetuneReason}")" Placement="Placement.Right">
+                                <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" Color="Color.Warning" Style="vertical-align:middle; font-size:14px;" />
+                            </MudTooltip>
+                        }
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
                     }
                 </MudTd>
                 <MudTd DataLabel="Clients">
@@ -154,16 +167,16 @@ else
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="Client">
-                    <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
-                    <MudTooltip Text="@(string.IsNullOrWhiteSpace(context.UserAgent) ? "No User-Agent" : context.UserAgent)" Placement="Placement.Right">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            @context.RequestedRoute
-                            @if (context.Transport == ClientTransport.GeneratedHls)
-                            {
-                                <span> · HLS</span>
-                            }
-                        </MudText>
+                    <MudTooltip Text="@ClientTypeTooltip(context.UserAgent)" Placement="Placement.Right">
+                        <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
                     </MudTooltip>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        @context.RequestedRoute
+                        @if (context.Transport == ClientTransport.GeneratedHls)
+                        {
+                            <span> · HLS</span>
+                        }
+                    </MudText>
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
@@ -242,7 +255,7 @@ else
                         <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
                         @if (context.LastFailureKind is not null)
                         {
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.LastFailureKind</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatFailureKind(context.LastFailureKind)</MudText>
                         }
                     </MudTd>
                     <MudTd DataLabel="Relay">
@@ -323,19 +336,23 @@ else
         _ => Color.Default,
     };
 
-    private static string RecoveryTooltip(StreamSessionSnapshot s)
+    private static string StateTooltip(StreamSessionSnapshot s)
     {
-        if (s.State != SessionState.HoldingOutput && s.LastSafeStartKind is null)
-            return string.Empty;
+        var desc = s.State switch
+        {
+            SessionState.Live => "Stream is active and data is flowing.",
+            SessionState.Initializing => "Session is initializing.",
+            SessionState.Connecting => "Connecting to the upstream provider.",
+            SessionState.Reconnecting => "Upstream connection lost — attempting to reconnect.",
+            SessionState.HoldingOutput => "Holding output while scanning for a safe MPEG-TS restart point.",
+            SessionState.Faulted => "Session has faulted and will not recover.",
+            _ => s.State.ToString(),
+        };
 
-        var parts = new System.Text.StringBuilder();
-        if (s.State == SessionState.HoldingOutput)
-            parts.Append("Holding output — scanning for safe MPEG-TS restart point.");
-
+        var parts = new System.Text.StringBuilder(desc);
         if (s.LastSafeStartKind is not null)
         {
-            if (parts.Length > 0) parts.Append('\n');
-            parts.Append($"Last recovery: {s.LastSafeStartKind}");
+            parts.Append($"\nLast recovery: {s.LastSafeStartKind}");
             if (s.LastRecoveryOutputHeldMs is { } heldMs)
                 parts.Append($", held {heldMs:F0} ms");
             if (s.LastRecoveryStartedUtc is { } ts)
@@ -343,6 +360,59 @@ else
         }
 
         return parts.ToString();
+    }
+
+    private static string RelayTooltip(string relayMode) => relayMode switch
+    {
+        "Direct" => "Direct relay: stream bytes are passed through unchanged.",
+        "CleanRemux" => "Clean remux: FFmpeg remuxes the stream to strip non-standard data and ensure clean MPEG-TS output.",
+        "HlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
+        _ => relayMode,
+    };
+
+    private static string ClientTypeTooltip(string? userAgent)
+    {
+        if (string.IsNullOrWhiteSpace(userAgent))
+            return "No User-Agent header — client type unknown.";
+        var type = DetectClientType(userAgent);
+        var note = type is "VLC" or "FFmpeg"
+            ? "\nNote: media servers (Jellyfin, Emby, Plex) use VLC or FFmpeg internally to fetch streams. This may be a server-side connection, not a direct player."
+            : string.Empty;
+        return $"User-Agent: {userAgent}{note}";
+    }
+
+    private static Color HealthProfileColor(StreamChannelHealthProfile profile) => profile switch
+    {
+        StreamChannelHealthProfile.Fast => Color.Success,
+        StreamChannelHealthProfile.Cautious => Color.Warning,
+        StreamChannelHealthProfile.Unstable => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static string HealthProfileTooltip(StreamSessionSnapshot s)
+    {
+        if (s.HealthProfile is null)
+            return "No channel health assessment available for this session.";
+
+        var desc = s.HealthProfile switch
+        {
+            StreamChannelHealthProfile.Fast => "Fast: No recent recovery failures — standard recovery policy.",
+            StreamChannelHealthProfile.Cautious => "Cautious: Recovery events detected — extended output hold applied.",
+            StreamChannelHealthProfile.Unstable => "Unstable: Significant recovery failures — aggressive policy, packet-boundary fallback disabled.",
+            _ => s.HealthProfile.ToString()!,
+        };
+
+        var sb = new System.Text.StringBuilder(desc);
+        if (!string.IsNullOrWhiteSpace(s.HealthProfileReason))
+            sb.Append($"\n\n{s.HealthProfileReason}");
+        if (s.RequiresDownstreamRetune)
+        {
+            sb.Append("\n\nDownstream retune: clients are disconnected on recovery to force a clean re-tune.");
+            if (!string.IsNullOrWhiteSpace(s.DownstreamRetuneReason))
+                sb.Append($"\n{s.DownstreamRetuneReason}");
+        }
+
+        return sb.ToString();
     }
 
     private static string FormatRelayMode(string relayMode) => relayMode switch
@@ -370,6 +440,7 @@ else
     private static string DetectClientType(string? userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent)) return "Unknown";
+        // Named apps — check before generic components they may use internally.
         if (userAgent.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return "TiviMate";
         if (userAgent.Contains("IPTV Smarters", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("IPTVSmarters", StringComparison.OrdinalIgnoreCase)) return "Smarters";
@@ -385,7 +456,10 @@ else
         if (userAgent.Contains("Perfect Player", StringComparison.OrdinalIgnoreCase)) return "Perfect Player";
         if (userAgent.Contains("GSE", StringComparison.OrdinalIgnoreCase)) return "GSE Player";
         if (userAgent.Contains("MrMC", StringComparison.OrdinalIgnoreCase)) return "MrMC";
+        // Generic media components — likely a media server's internal fetcher.
         if (userAgent.Contains("VLC", StringComparison.OrdinalIgnoreCase)) return "VLC";
+        // Lavf is the ffmpeg libavformat UA prefix used by Jellyfin/Emby LiveTV transcoder.
+        if (userAgent.StartsWith("Lavf", StringComparison.OrdinalIgnoreCase)) return "FFmpeg";
         if (userAgent.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase)) return "FFmpeg";
         if (userAgent.Contains("mpv", StringComparison.OrdinalIgnoreCase)) return "mpv";
         if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||

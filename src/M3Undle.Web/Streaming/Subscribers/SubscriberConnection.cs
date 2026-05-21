@@ -52,7 +52,10 @@ public sealed class SubscriberConnection
         _outbound = Channel.CreateBounded<BufferLease>(options);
         ClientId = Guid.NewGuid().ToString("N");
         ConnectedUtc = DateTimeOffset.UtcNow;
-        RemoteIp = context.Connection.RemoteIpAddress?.ToString();
+        var addr = context.Connection.RemoteIpAddress;
+        RemoteIp = addr is null ? null
+            : addr.IsIPv4MappedToIPv6 ? addr.MapToIPv4().ToString()
+            : addr.ToString();
         UserAgent = context.Request.Headers.UserAgent.ToString();
         RequestPath = context.Request.Path.Value ?? requestedRoute;
     }

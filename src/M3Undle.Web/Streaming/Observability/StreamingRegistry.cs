@@ -59,15 +59,17 @@ public sealed class StreamingRegistry(IOptions<StreamProxyOptions> options) : IH
         foreach (var (sessionId, snapshot) in _sessions)
         {
             var current = snapshot.TotalBytesRelayed;
-            if (_lastSessionBytes.TryGetValue(sessionId, out var prev) && current >= prev)
+            if (_lastSessionBytes.TryGetValue(sessionId, out var prev) && current > prev)
                 _sessionUpstreamRates[sessionId] = (long)((current - prev) / elapsed);
+            // If current == prev (no new bytes this window), keep the last known rate.
+            // The Last Data column already signals a stall; blanking the rate adds noise.
             _lastSessionBytes[sessionId] = current;
         }
 
         foreach (var (clientId, snapshot) in _clients)
         {
             var current = snapshot.BytesSent;
-            if (_lastClientBytes.TryGetValue(clientId, out var prev) && current >= prev)
+            if (_lastClientBytes.TryGetValue(clientId, out var prev) && current > prev)
                 _clientSendRates[clientId] = (long)((current - prev) / elapsed);
             _lastClientBytes[clientId] = current;
         }
