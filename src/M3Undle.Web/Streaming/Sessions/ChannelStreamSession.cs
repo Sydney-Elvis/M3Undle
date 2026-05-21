@@ -133,6 +133,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     public int InternalSubscriberCount => _subscribers.Values.Count(s => s.IsInternal);
 
+    public bool IsAcceptingSubscribers
+        => Volatile.Read(ref _stopRequested) == 0
+           && Volatile.Read(ref _closeNotified) == 0
+           && !_sessionCts.IsCancellationRequested;
+
     public bool CanPreemptIdleGraceForRemoteIp(string? remoteIp)
     {
         if (string.IsNullOrWhiteSpace(remoteIp))
@@ -168,8 +173,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         try
         {
+            if (!IsAcceptingSubscribers)
+                throw new OperationCanceledException(_sessionCts.Token);
+
             EnsureStarted();
             await _headersReadyTcs.Task.WaitAsync(requestCt);
+
+            if (!IsAcceptingSubscribers)
+                throw new OperationCanceledException(_sessionCts.Token);
 
             var subscriber = new SubscriberConnection(
                 sessionId: _sessionId,
@@ -1181,12 +1192,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             outputHeld: heldDuration,
             bytesSuppressed: _recoveryBytesSuppressed,
             recoveryHoldLimit: policy.RecoveryOutputHoldLimit,
-            message: $"Closing external subscribers for controlled downstream retune. Reason: {policy.DownstreamRetuneReason}");
+            stopTrigger: "controlled_downstream_retune",
+            message: $"Closing shared stream session for controlled downstream retune. Reason: {policy.DownstreamRetuneReason}");
+        Interlocked.Exchange(ref _stopRequested, 1);
+        MarkPendingStopTrigger("controlled_downstream_retune");
+        LogStopTrigger("controlled_downstream_retune", subscriberDisconnectReason: SubscriberDisconnectReason.Retuned.ToString());
+        _recoveryOutputHoldActive = false;
+        _recoveryOutputHoldStartedUtc = null;
+        SetState(SessionState.Closed);
         foreach (var subscriber in _subscribers.Values)
         {
             if (!subscriber.IsInternal)
                 await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
         }
+        foreach (var subscriber in _subscribers.Values)
+        {
+            if (subscriber.IsInternal)
+                await subscriber.CompleteAsync(SubscriberDisconnectReason.SessionClosed);
+        }
+
+        _sessionCts.Cancel();
+        throw new OperationCanceledException(_sessionCts.Token);
     }
 
     private void BeginSubscriberAttach()

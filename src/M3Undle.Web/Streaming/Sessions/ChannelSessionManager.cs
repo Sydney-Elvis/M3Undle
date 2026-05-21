@@ -146,12 +146,19 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
                 if (_sessions.TryGetValue(key, out var existing))
                 {
-                    _logger.LogDebug(
-                        "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
-                        existing.SessionId,
-                        source.DisplayName,
-                        existing.SubscriberCount);
-                    return existing;
+                    if (!existing.IsAcceptingSubscribers)
+                    {
+                        _sessions.TryRemove(key, out _);
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
+                            existing.SessionId,
+                            source.DisplayName,
+                            existing.SubscriberCount);
+                        return existing;
+                    }
                 }
 
                 EvictExpiredHlsSlotsLocked();
@@ -278,7 +285,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         bool useSharedSession,
         CancellationToken ct)
     {
-        if (_sessions.TryGetValue(source.SessionKey, out var existing))
+        if (_sessions.TryGetValue(source.SessionKey, out var existing) && existing.IsAcceptingSubscribers)
             return existing;
 
         if (!useSharedSession)
