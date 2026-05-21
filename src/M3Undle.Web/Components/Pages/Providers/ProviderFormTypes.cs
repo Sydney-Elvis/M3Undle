@@ -13,7 +13,7 @@ public sealed record XtreamPrefill(
     bool IncludeVod = true,
     bool IncludeSeries = true,
     bool ForceMpegTs = false,
-    bool CleanRelayRemux = false,
+    string CleanRelayMode = "auto",
     string ProfileId = "");
 
 public sealed record UrlProviderPrefill(

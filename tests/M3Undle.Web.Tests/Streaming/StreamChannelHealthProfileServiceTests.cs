@@ -2,6 +2,7 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Observability;
+using M3Undle.Web.Streaming.Upstream;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,45 @@ public sealed class StreamChannelHealthProfileServiceTests
         Assert.IsTrue(policy.AllowPacketBoundaryRecoveryFallback);
         Assert.AreEqual(TimeSpan.FromSeconds(3), policy.RecoveryOutputHoldLimit);
         Assert.AreEqual(512 * 1024, policy.RecoverySafeStartSearchLimitBytes);
+    }
+
+    [TestMethod]
+    public async Task GetRelayPolicyDecision_AutoUnstable_SelectsCleanRemux()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var policy = new StreamChannelRecoveryPolicy(
+            StreamChannelHealthProfile.Unstable,
+            TimeSpan.FromSeconds(5),
+            2 * 1024 * 1024,
+            AllowPacketBoundaryRecoveryFallback: false,
+            RequireDownstreamRetune: true,
+            DownstreamRetuneReason: "test",
+            Reason: "unstable test profile");
+
+        var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
+
+        Assert.AreEqual("auto", decision.ProviderRelayPolicy);
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, decision.SelectedRelayMode);
+        StringAssert.Contains(decision.Reason, "Unstable");
+    }
+
+    [TestMethod]
+    public async Task GetRelayPolicyDecision_OffUnstable_ForcesDirect()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var policy = new StreamChannelRecoveryPolicy(
+            StreamChannelHealthProfile.Unstable,
+            TimeSpan.FromSeconds(5),
+            2 * 1024 * 1024,
+            AllowPacketBoundaryRecoveryFallback: false,
+            RequireDownstreamRetune: true,
+            DownstreamRetuneReason: "test",
+            Reason: "unstable test profile");
+
+        var decision = fixture.Service.GetRelayPolicyDecision("off", policy);
+
+        Assert.AreEqual("off", decision.ProviderRelayPolicy);
+        Assert.AreEqual(UpstreamRelayModes.Direct, decision.SelectedRelayMode);
     }
 
     private static StreamChannelHealthEvent CreateHealthEvent(

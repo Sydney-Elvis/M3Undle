@@ -72,6 +72,29 @@ public sealed class StreamChannelHealthProfileService(
         }
     }
 
+    public StreamRelayPolicyDecision GetRelayPolicyDecision(
+        string providerRelayPolicy,
+        StreamChannelRecoveryPolicy recoveryPolicy)
+    {
+        var normalizedPolicy = CleanRelayModes.Normalize(providerRelayPolicy);
+        return normalizedPolicy switch
+        {
+            CleanRelayModes.On => StreamRelayPolicyDecision.CleanRemux(
+                normalizedPolicy,
+                "Provider relay policy is On; clean remux is forced for this provider."),
+            CleanRelayModes.Auto when recoveryPolicy.Profile == StreamChannelHealthProfile.Unstable =>
+                StreamRelayPolicyDecision.CleanRemux(
+                    normalizedPolicy,
+                    $"Provider relay policy is Auto and channel health is {recoveryPolicy.Profile}; clean remux selected. {recoveryPolicy.Reason}"),
+            CleanRelayModes.Auto => StreamRelayPolicyDecision.Direct(
+                normalizedPolicy,
+                $"Provider relay policy is Auto and channel health is {recoveryPolicy.Profile}; direct relay selected. {recoveryPolicy.Reason}"),
+            _ => StreamRelayPolicyDecision.Direct(
+                normalizedPolicy,
+                "Provider relay policy is Off; direct relay is forced for this provider."),
+        };
+    }
+
     private static StreamChannelRecoveryPolicy BuildPolicy(HealthSummary summary, ReconnectOptions options)
     {
         var profile = DeriveProfile(summary);

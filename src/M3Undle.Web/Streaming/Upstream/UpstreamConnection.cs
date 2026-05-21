@@ -16,7 +16,9 @@ public sealed class UpstreamConnection : IAsyncDisposable
         HttpResponseMessage response,
         Stream stream,
         string relayMode = UpstreamRelayModes.Direct,
-        string? relayFallbackReason = null)
+        string? relayFallbackReason = null,
+        string? relayPolicy = null,
+        string? relayDecisionReason = null)
     {
         _client = client;
         _response = response;
@@ -25,6 +27,8 @@ public sealed class UpstreamConnection : IAsyncDisposable
         _contentType = response.Content.Headers.ContentType?.ToString();
         RelayMode = relayMode;
         RelayFallbackReason = relayFallbackReason;
+        RelayPolicy = relayPolicy;
+        RelayDecisionReason = relayDecisionReason;
     }
 
     public UpstreamConnection(
@@ -32,13 +36,17 @@ public sealed class UpstreamConnection : IAsyncDisposable
         Stream stream,
         string contentType,
         int statusCode = 200,
-        string relayMode = UpstreamRelayModes.FfmpegHlsToMpegTs)
+        string relayMode = UpstreamRelayModes.FfmpegHlsToMpegTs,
+        string? relayPolicy = null,
+        string? relayDecisionReason = null)
     {
         _process = process;
         Stream = stream;
         _contentType = contentType;
         _statusCode = statusCode;
         RelayMode = relayMode;
+        RelayPolicy = relayPolicy;
+        RelayDecisionReason = relayDecisionReason;
     }
 
     public HttpResponseMessage? Response => _response;
@@ -52,6 +60,10 @@ public sealed class UpstreamConnection : IAsyncDisposable
     public string RelayMode { get; }
 
     public string? RelayFallbackReason { get; }
+
+    public string? RelayPolicy { get; }
+
+    public string? RelayDecisionReason { get; }
 
     public async ValueTask DisposeAsync()
     {

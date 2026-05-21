@@ -5,13 +5,27 @@ namespace M3Undle.Web.Streaming.Configuration;
 public static class CleanRelayModes
 {
     public const string Off = "off";
+    public const string On = "on";
+    public const string Auto = "auto";
     public const string Remux = "remux";
 
     public static string Normalize(string? value)
-        => string.Equals(value, Remux, StringComparison.OrdinalIgnoreCase) ? Remux : Off;
+    {
+        if (string.Equals(value, Auto, StringComparison.OrdinalIgnoreCase))
+            return Auto;
+        if (string.Equals(value, On, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, Remux, StringComparison.OrdinalIgnoreCase))
+            return On;
+        if (string.Equals(value, Off, StringComparison.OrdinalIgnoreCase))
+            return Off;
+        return Auto;
+    }
 
     public static bool IsRemux(string? value)
-        => string.Equals(value, Remux, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(Normalize(value), On, StringComparison.Ordinal);
+
+    public static bool IsAuto(string? value)
+        => string.Equals(Normalize(value), Auto, StringComparison.Ordinal);
 }
 
 public sealed class CleanRelayOptions

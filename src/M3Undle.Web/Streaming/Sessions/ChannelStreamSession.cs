@@ -76,6 +76,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long _recoveryBytesSuppressed;
     private bool _recoveryResumedSinceLastReconnect;
     private StreamChannelRecoveryPolicy? _currentRecoveryPolicy;
+    private string? _relayPolicy;
+    private string? _relayDecisionReason;
     private string? _lastSafeStartKind;
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
@@ -370,12 +372,24 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         StreamDiagnosticEventKind.UpstreamConnectStarted,
                         reconnectAttempt: reconnectAttempt,
                         message: "Opening upstream stream connection.");
-                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, _sessionCts.Token);
+                    if (_currentRecoveryPolicy is null || reconnectAttempt == 0)
+                    {
+                        _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
+                            _source.ProviderId,
+                            _source.ProviderChannelId,
+                            _reconnectOptions,
+                            _sessionCts.Token);
+                        PublishSnapshots();
+                    }
+
+                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, _currentRecoveryPolicy, _sessionCts.Token);
                     _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
                     _relayMode = upstream.RelayMode;
                     _lastRelayFallbackReason = upstream.RelayFallbackReason;
+                    _relayPolicy = upstream.RelayPolicy;
+                    _relayDecisionReason = upstream.RelayDecisionReason;
                     _headersReadyTcs.TrySetResult(true);
                     Interlocked.Exchange(ref _bytesSinceReconnect, 0);
                     RecordDiagnostic(
@@ -1577,9 +1591,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastStopTrigger: _lastStopTrigger,
             LastUpstreamStatusCode: _lastUpstreamStatusCode,
             LastCooldownSeconds: _lastCooldownSeconds,
-            RelayMode: _relayMode,
-            LastRelayFallbackReason: _lastRelayFallbackReason,
-            LastSafeStartKind: _lastSafeStartKind,
+                            RelayMode: _relayMode,
+                            LastRelayFallbackReason: _lastRelayFallbackReason,
+                            RelayPolicy: _relayPolicy,
+                            RelayDecisionReason: _relayDecisionReason,
+                            LastSafeStartKind: _lastSafeStartKind,
             LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
             LastRecoveryStartedUtc: _lastRecoveryStartedUtc,
             HealthProfile: _currentRecoveryPolicy?.Profile,
@@ -1603,6 +1619,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastCooldownSeconds: _lastCooldownSeconds,
             RelayMode: _relayMode,
             LastRelayFallbackReason: _lastRelayFallbackReason,
+            RelayPolicy: _relayPolicy,
+            RelayDecisionReason: _relayDecisionReason,
             LastSafeStartKind: _lastSafeStartKind,
             LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
             LastRecoveryStartedUtc: _lastRecoveryStartedUtc));

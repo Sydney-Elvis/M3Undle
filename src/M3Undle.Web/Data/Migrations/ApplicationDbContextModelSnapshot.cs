@@ -1349,7 +1349,7 @@ namespace M3Undle.Web.Data.Migrations
                         .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT")
-                        .HasDefaultValue("off")
+                        .HasDefaultValue("auto")
                         .HasColumnName("clean_relay_mode");
 
                     b.Property<DateTime>("CreatedUtc")

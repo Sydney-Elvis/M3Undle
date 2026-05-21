@@ -8,6 +8,7 @@ using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Observability;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -16,6 +17,7 @@ namespace M3Undle.Web.Streaming.Upstream;
 public sealed class UpstreamStreamConnector(
     IHttpClientFactory httpClientFactory,
     IServiceScopeFactory scopeFactory,
+    IStreamChannelHealthProfileService healthProfileService,
     IOptions<ReconnectOptions> reconnectOptions,
     IOptions<GeneratedHlsOptions> hlsOptions,
     IOptions<CleanRelayOptions> cleanRelayOptions,
@@ -25,7 +27,10 @@ public sealed class UpstreamStreamConnector(
     private readonly GeneratedHlsOptions _hlsOptions = hlsOptions.Value;
     private readonly CleanRelayOptions _cleanRelayOptions = cleanRelayOptions.Value;
 
-    public async Task<UpstreamConnection> ConnectAsync(StreamSourceDescriptor source, CancellationToken ct)
+    public async Task<UpstreamConnection> ConnectAsync(
+        StreamSourceDescriptor source,
+        StreamChannelRecoveryPolicy? recoveryPolicy,
+        CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -79,10 +84,18 @@ public sealed class UpstreamStreamConnector(
                 hlsCandidates[0]);
         }
 
+        var relayDecision = recoveryPolicy is null
+            ? ResolveLegacyRelayDecision(provider.CleanRelayMode)
+            : healthProfileService.GetRelayPolicyDecision(provider.CleanRelayMode, recoveryPolicy);
         string? relayFallbackReason = null;
-        if (CleanRelayModes.IsRemux(provider.CleanRelayMode))
+        if (string.Equals(relayDecision.SelectedRelayMode, UpstreamRelayModes.FfmpegCleanRemux, StringComparison.Ordinal))
         {
-            var cleanRelayConnection = await TryFfmpegCleanRemuxRelayAsync(effectiveStreamUrl, provider, source.DisplayName, ct);
+            logger.LogInformation(
+                "Clean remux selected for '{DisplayName}'. ProviderRelayPolicy={ProviderRelayPolicy} Reason={RelayDecisionReason}",
+                source.DisplayName,
+                relayDecision.ProviderRelayPolicy,
+                relayDecision.Reason);
+            var cleanRelayConnection = await TryFfmpegCleanRemuxRelayAsync(effectiveStreamUrl, provider, source.DisplayName, relayDecision, ct);
             if (cleanRelayConnection is not null)
                 return cleanRelayConnection;
 
@@ -189,7 +202,9 @@ public sealed class UpstreamStreamConnector(
                 response,
                 stream,
                 relayMode: UpstreamRelayModes.Direct,
-                relayFallbackReason: relayFallbackReason);
+                relayFallbackReason: relayFallbackReason,
+                relayPolicy: relayDecision.ProviderRelayPolicy,
+                relayDecisionReason: relayDecision.Reason);
             response = null; // ownership transferred to UpstreamConnection
             return connection;
         }
@@ -211,6 +226,17 @@ public sealed class UpstreamStreamConnector(
             client.Dispose();
             throw;
         }
+    }
+
+    public Task<UpstreamConnection> ConnectAsync(StreamSourceDescriptor source, CancellationToken ct)
+        => ConnectAsync(source, recoveryPolicy: null, ct);
+
+    private static StreamRelayPolicyDecision ResolveLegacyRelayDecision(string? cleanRelayMode)
+    {
+        var normalized = CleanRelayModes.Normalize(cleanRelayMode);
+        return CleanRelayModes.IsRemux(normalized)
+            ? StreamRelayPolicyDecision.CleanRemux(normalized, "Provider relay policy is On; clean remux is forced for this provider.")
+            : StreamRelayPolicyDecision.Direct(normalized, "Provider relay policy is Off; direct relay is forced for this provider.");
     }
 
     internal static string RewriteUrlForMpegTs(string url)
@@ -320,6 +346,7 @@ public sealed class UpstreamStreamConnector(
         string inputUrl,
         Provider provider,
         string displayName,
+        StreamRelayPolicyDecision relayDecision,
         CancellationToken ct)
     {
         var ffmpegPath = ResolveCleanRelayFfmpegPath();
@@ -339,6 +366,8 @@ public sealed class UpstreamStreamConnector(
             startupTimeout: TimeSpan.FromSeconds(_cleanRelayOptions.StartupTimeoutSeconds),
             startupBufferBytes: _cleanRelayOptions.MaxStartupBytes,
             relayMode: UpstreamRelayModes.FfmpegCleanRemux,
+            relayPolicy: relayDecision.ProviderRelayPolicy,
+            relayDecisionReason: relayDecision.Reason,
             relayDescription: "clean remux relay",
             includeCleanRepairFlags: true,
             isHlsInput: false,
@@ -361,7 +390,9 @@ public sealed class UpstreamStreamConnector(
         string relayDescription,
         bool includeCleanRepairFlags,
         bool isHlsInput,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? relayPolicy = null,
+        string? relayDecisionReason = null)
     {
         if (string.IsNullOrWhiteSpace(ffmpegPath))
             return null;
@@ -523,7 +554,9 @@ public sealed class UpstreamStreamConnector(
             process,
             new PrefixedStream(startupBuffer.AsMemory(0, startupBytes), stdout),
             "video/mp2t",
-            relayMode: relayMode);
+            relayMode: relayMode,
+            relayPolicy: relayPolicy,
+            relayDecisionReason: relayDecisionReason);
     }
 
     private static void TryKillProcess(Process process)

@@ -640,6 +640,68 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_AutoRelay_UnstableChannel_SelectsCleanRemuxAtStartup()
+    {
+        var handler = FakeStreamingHandler.ReturnStatus(HttpStatusCode.InternalServerError);
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            cleanRelayMode: "auto",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            streamUrl: "http://fake/stream?ffmpegMode=relay-ts-sequence&delayMs=1");
+        await fixture.SeedHealthEventsAsync(
+            new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = "provider-1",
+                ProviderChannelId = "channel-1",
+                DisplayName = "Test Channel",
+                EventKind = "ClientAbortAfterRecovery",
+                EventUtc = DateTime.UtcNow.AddMinutes(-5),
+                ClientAbortAfterRecovery = true,
+            },
+            new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = "provider-1",
+                ProviderChannelId = "channel-1",
+                DisplayName = "Test Channel",
+                EventKind = "ClientAbortAfterRecovery",
+                EventUtc = DateTime.UtcNow.AddMinutes(-4),
+                ClientAbortAfterRecovery = true,
+            },
+            new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = "provider-1",
+                ProviderChannelId = "channel-1",
+                DisplayName = "Test Channel",
+                EventKind = "RecoveryOutputResumed",
+                EventUtc = DateTime.UtcNow.AddMinutes(-3),
+                SafeStartKind = "H264Idr",
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), timeout.Token);
+
+        await WaitUntilAsync(
+            () => fixture.Registry.TryGetSession(session.SessionId)?.RelayMode == UpstreamRelayModes.FfmpegCleanRemux,
+            TimeSpan.FromSeconds(5));
+
+        var snapshot = fixture.Registry.TryGetSession(session.SessionId);
+        Assert.IsNotNull(snapshot);
+        Assert.AreEqual(StreamChannelHealthProfile.Unstable, snapshot.HealthProfile);
+        Assert.AreEqual("auto", snapshot.RelayPolicy);
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, snapshot.RelayMode);
+        StringAssert.Contains(snapshot.RelayDecisionReason!, "Unstable");
+        Assert.AreEqual(0, handler.ConnectionCount, "Direct HTTP must not be used for an unstable Auto channel when clean remux starts.");
+
+        timeout.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_CleanRelayReconnect_ResetsSafeStartAndRecovers()
     {
         // relay-ts-sequence with cycles=1 emits one PAT+PMT+SPS+PPS+IDR sequence then exits.
@@ -2900,8 +2962,11 @@ public sealed class ChannelSessionIntegrationTests
 
             var httpClientFactory = new FakeHttpClientFactory(handler);
             var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
+            var healthProfileService = new StreamChannelHealthProfileService(
+                scopeFactory,
+                NullLogger<StreamChannelHealthProfileService>.Instance);
             var connector = new UpstreamStreamConnector(
-                httpClientFactory, scopeFactory, reconnectOpts,
+                httpClientFactory, scopeFactory, healthProfileService, reconnectOpts,
                 Options.Create(new GeneratedHlsOptions { FfmpegPath = ffmpegPath ?? string.Empty }),
                 Options.Create(cleanRelayOptions ?? new CleanRelayOptions()),
                 NullLogger<UpstreamStreamConnector>.Instance);
@@ -2911,9 +2976,6 @@ public sealed class ChannelSessionIntegrationTests
                 : new StreamAdmissionBackoffStore(timeProvider);
             var registry = new StreamingRegistry(proxyOpts);
             var diagnosticsStore = new StreamingDiagnosticsStore(proxyOpts);
-            var healthProfileService = new StreamChannelHealthProfileService(
-                scopeFactory,
-                NullLogger<StreamChannelHealthProfileService>.Instance);
             var manager = new ChannelSessionManager(
                 bufOpts, proxyOpts, reconnectOpts, connector, strikeStore, admissionBackoffStore, registry,
                 diagnosticsStore, NoopStreamChannelHealthEventRecorder.Instance, healthProfileService, new NullEventService(),

@@ -72,7 +72,7 @@
                                      HelperText="How long to wait for the Xtream server to respond before giving up. 120 s is suitable for most providers."
                                      Disabled="!_encryptionAvailable" />
                     <ProviderStreamFormat @bind-ForceMpegTs="_model.ForceMpegTs"
-                                          @bind-CleanRelayRemux="_model.CleanRelayRemux"
+                                          @bind-CleanRelayMode="_model.CleanRelayMode"
                                           IsXtream="true"
                                           Disabled="!_encryptionAvailable" />
                 </MudStack>
@@ -126,7 +126,7 @@
             _model.IncludeVod = Prefill.IncludeVod;
             _model.IncludeSeries = Prefill.IncludeSeries;
             _model.ForceMpegTs = Prefill.ForceMpegTs;
-            _model.CleanRelayRemux = Prefill.CleanRelayRemux;
+            _model.CleanRelayMode = Prefill.CleanRelayMode;
             _model.ProfileId = Prefill.ProfileId;
             _appliedPrefill = Prefill;
         }
@@ -151,7 +151,7 @@
             IncludeVod = _model.IncludeVod,
             IncludeSeries = _model.IncludeSeries,
             ForceMpegTs = _model.ForceMpegTs,
-            CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
+            CleanRelayMode = _model.CleanRelayMode,
             TimeoutSeconds = _model.TimeoutSeconds,
             MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
             AssociateToProfileIds = ProfileIdList(_model.ProfileId),
@@ -184,7 +184,7 @@
         public bool IncludeVod { get; set; } = true;
         public bool IncludeSeries { get; set; } = true;
         public bool ForceMpegTs { get; set; }
-        public bool CleanRelayRemux { get; set; }
+        public string CleanRelayMode { get; set; } = "auto";
         public string ProfileId { get; set; } = string.Empty;
     }
 }

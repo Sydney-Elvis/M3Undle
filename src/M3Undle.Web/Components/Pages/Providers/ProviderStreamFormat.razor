@@ -16,19 +16,22 @@
         TS containers better than HLS segments.</text>
     }
 </MudText>
-<MudSwitch Value="CleanRelayRemux" ValueChanged="CleanRelayRemuxChanged"
-           Color="Color.Warning" Label="Clean relay remux" Disabled="Disabled" />
+<MudSelect T="string" Label="Relay policy" Value="CleanRelayMode" ValueChanged="CleanRelayModeChanged"
+           Disabled="Disabled" Dense="true">
+    <MudSelectItem T="string" Value="@("auto")">Auto</MudSelectItem>
+    <MudSelectItem T="string" Value="@("off")">Off</MudSelectItem>
+    <MudSelectItem T="string" Value="@("on")">On</MudSelectItem>
+</MudSelect>
 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-n2">
-    Passes live streams through FFmpeg to repair broken timestamps and malformed packets before
-    forwarding to clients. Fixes playback stalls caused by corrupted stream data, at the cost
-    of added CPU usage and ~1–2 s of startup latency per stream.
+    Auto keeps stable channels direct and uses clean remux for channels classified as unstable.
+    On forces FFmpeg clean remux for every channel on this provider. Off forces direct relay.
 </MudText>
 
 @code {
     [Parameter] public bool ForceMpegTs { get; set; }
     [Parameter] public EventCallback<bool> ForceMpegTsChanged { get; set; }
-    [Parameter] public bool CleanRelayRemux { get; set; }
-    [Parameter] public EventCallback<bool> CleanRelayRemuxChanged { get; set; }
+    [Parameter] public string CleanRelayMode { get; set; } = "auto";
+    [Parameter] public EventCallback<string> CleanRelayModeChanged { get; set; }
     [Parameter] public bool IsXtream { get; set; }
     [Parameter] public bool Disabled { get; set; }
 }

@@ -9,6 +9,7 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Observability;
 using M3Undle.Web.Streaming.Upstream;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -464,6 +465,7 @@ public sealed class UpstreamStreamConnectorTests
             var connector = new UpstreamStreamConnector(
                 new FakeHttpClientFactory(handler),
                 serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+                NoopStreamChannelHealthProfileService.Instance,
                 Options.Create(new ReconnectOptions
                 {
                     ConnectTimeout = TimeSpan.FromSeconds(5),

@@ -46,7 +46,7 @@ else
                     </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="Relay">
-                    <MudTooltip Text="@RelayTooltip(context.RelayMode)" Placement="Placement.Right">
+                    <MudTooltip Text="@RelayTooltip(context)" Placement="Placement.Right">
                         <MudText Typo="Typo.caption">@FormatRelayMode(context.RelayMode)</MudText>
                     </MudTooltip>
                     @if (!string.IsNullOrWhiteSpace(context.LastRelayFallbackReason))
@@ -368,13 +368,23 @@ else
         return parts.ToString();
     }
 
-    private static string RelayTooltip(string relayMode) => relayMode switch
+    private static string RelayTooltip(StreamSessionSnapshot s)
     {
-        "Direct" => "Direct relay: stream bytes are passed through unchanged.",
-        "FfmpegCleanRemux" => "Clean remux: FFmpeg remuxes the stream to strip non-standard data and ensure clean MPEG-TS output.",
-        "FfmpegHlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
-        _ => relayMode,
-    };
+        var desc = s.RelayMode switch
+        {
+            "Direct" => "Direct relay: stream bytes are passed through unchanged.",
+            "FfmpegCleanRemux" => "Clean remux: FFmpeg remuxes the stream to strip non-standard data and ensure clean MPEG-TS output.",
+            "FfmpegHlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
+            _ => s.RelayMode,
+        };
+
+        var sb = new System.Text.StringBuilder(desc);
+        if (!string.IsNullOrWhiteSpace(s.RelayPolicy))
+            sb.Append($"\nPolicy: {s.RelayPolicy}");
+        if (!string.IsNullOrWhiteSpace(s.RelayDecisionReason))
+            sb.Append($"\n{s.RelayDecisionReason}");
+        return sb.ToString();
+    }
 
     private static string IpTooltip(string? remoteIp)
     {
