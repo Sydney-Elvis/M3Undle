@@ -346,7 +346,7 @@ public sealed class ChannelSessionIntegrationTests
             {
                 ReadStallTimeout = TimeSpan.FromSeconds(30),
                 OutageWindow = TimeSpan.FromSeconds(30),
-                StrikeCooldown = TimeSpan.FromSeconds(20),
+                StrikeCooldown = TimeSpan.FromSeconds(300),
                 ConnectTimeout = TimeSpan.FromSeconds(2),
                 FixedStepBackoffSeconds = [0],
             });
@@ -357,16 +357,44 @@ public sealed class ChannelSessionIntegrationTests
 
         Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
         Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, ex.StatusCode);
-        Assert.AreEqual(20, ex.RetryAfterSeconds);
+        Assert.AreEqual(30, ex.RetryAfterSeconds);
         Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out var remaining));
         Assert.IsGreaterThan(TimeSpan.Zero, remaining);
+        Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(30), remaining);
+        Assert.AreEqual(1, handler.ConnectionCount);
+    }
+
+    [TestMethod]
+    public async Task Session_RateLimitedWithoutRetryAfter_UsesRateLimitFallbackCooldown()
+    {
+        var handler = FakeStreamingHandler.ReturnStatus((HttpStatusCode)429);
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(30),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                StrikeCooldown = TimeSpan.FromSeconds(300),
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var ex = await AssertThrowsAsync<StreamAdmissionException>(
+            () => session.AttachSubscriberAsync(new DefaultHttpContext(), CancellationToken.None));
+
+        Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
+        Assert.AreEqual(30, ex.RetryAfterSeconds);
+        Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out var remaining));
+        Assert.IsGreaterThan(TimeSpan.FromSeconds(30), remaining);
+        Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(60), remaining);
         Assert.AreEqual(1, handler.ConnectionCount);
     }
 
     [TestMethod]
     public async Task Session_RateLimited_UsesProviderRetryAfterForCooldown()
     {
-        // Provider Retry-After (12s) > StrikeCooldown (5s): provider value should win.
+        // Provider Retry-After should be honored directly instead of being raised to StrikeCooldown.
         var handler = FakeStreamingHandler.ReturnStatus((HttpStatusCode)429, response =>
             response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(12)));
         await using var fixture = await SessionFixture.CreateAsync(
@@ -375,7 +403,7 @@ public sealed class ChannelSessionIntegrationTests
             {
                 ReadStallTimeout = TimeSpan.FromSeconds(30),
                 OutageWindow = TimeSpan.FromSeconds(30),
-                StrikeCooldown = TimeSpan.FromSeconds(5),
+                StrikeCooldown = TimeSpan.FromSeconds(300),
                 ConnectTimeout = TimeSpan.FromSeconds(2),
                 FixedStepBackoffSeconds = [0],
             });
@@ -387,7 +415,7 @@ public sealed class ChannelSessionIntegrationTests
         Assert.AreEqual(StreamAdmissionFailureKind.Cooldown, ex.FailureKind);
         Assert.AreEqual(12, ex.RetryAfterSeconds);
         Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out var remaining));
-        Assert.IsGreaterThan(TimeSpan.FromSeconds(5), remaining);
+        Assert.IsGreaterThan(TimeSpan.Zero, remaining);
         Assert.IsLessThanOrEqualTo(TimeSpan.FromSeconds(12), remaining);
         Assert.AreEqual(1, handler.ConnectionCount);
 
@@ -406,7 +434,7 @@ public sealed class ChannelSessionIntegrationTests
     public async Task Session_RateLimited_ProviderRetryAfterExceedsStrikeCooldown_UsesProviderRetryAfter()
     {
         // Provider says wait 30s; StrikeCooldown is only 10s.
-        // ResolveCooldownDuration should use max(10, 30) = 30s so we don't retry too early.
+        // Provider Retry-After is honored even when it exceeds the fallback cooldown cap.
         var handler = FakeStreamingHandler.ReturnStatus((HttpStatusCode)429, response =>
             response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30)));
         await using var fixture = await SessionFixture.CreateAsync(

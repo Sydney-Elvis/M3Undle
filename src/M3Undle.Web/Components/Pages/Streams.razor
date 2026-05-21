@@ -365,8 +365,8 @@ else
     private static string RelayTooltip(string relayMode) => relayMode switch
     {
         "Direct" => "Direct relay: stream bytes are passed through unchanged.",
-        "CleanRemux" => "Clean remux: FFmpeg remuxes the stream to strip non-standard data and ensure clean MPEG-TS output.",
-        "HlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
+        "FfmpegCleanRemux" => "Clean remux: FFmpeg remuxes the stream to strip non-standard data and ensure clean MPEG-TS output.",
+        "FfmpegHlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
         _ => relayMode,
     };
 
@@ -418,8 +418,8 @@ else
     private static string FormatRelayMode(string relayMode) => relayMode switch
     {
         "Direct" => "Direct",
-        "CleanRemux" => "Clean remux",
-        "HlsToMpegTs" => "HLS→TS",
+        "FfmpegCleanRemux" => "Clean remux",
+        "FfmpegHlsToMpegTs" => "HLS→TS",
         _ => relayMode,
     };
 

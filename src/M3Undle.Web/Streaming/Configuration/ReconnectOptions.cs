@@ -13,7 +13,19 @@ public sealed class ReconnectOptions
 
     public TimeSpan OutageWindow { get; set; } = TimeSpan.FromSeconds(75);
 
+    /// <summary>
+    /// Maximum fallback cooldown when the provider does not send Retry-After.
+    /// Provider-supplied Retry-After values are honored separately.
+    /// </summary>
     public TimeSpan StrikeCooldown { get; set; } = TimeSpan.FromMinutes(5);
+
+    public TimeSpan ProxyAuthFallbackCooldown { get; set; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan RateLimitFallbackCooldown { get; set; } = TimeSpan.FromSeconds(60);
+
+    public TimeSpan UpstreamServerErrorFallbackCooldown { get; set; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan TransportFallbackCooldown { get; set; } = TimeSpan.FromSeconds(15);
 
     public TimeSpan ConnectTimeout { get; set; } = TimeSpan.FromSeconds(15);
 

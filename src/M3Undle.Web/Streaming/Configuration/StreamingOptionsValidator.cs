@@ -59,6 +59,21 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
         if (options.OutageWindow < options.ReadStallTimeout)
             errors.Add("Streaming:Reconnect:OutageWindow must be greater than or equal to ReadStallTimeout.");
 
+        if (options.StrikeCooldown <= TimeSpan.Zero)
+            errors.Add("Streaming:Reconnect:StrikeCooldown must be greater than zero.");
+
+        if (options.ProxyAuthFallbackCooldown <= TimeSpan.Zero)
+            errors.Add("Streaming:Reconnect:ProxyAuthFallbackCooldown must be greater than zero.");
+
+        if (options.RateLimitFallbackCooldown <= TimeSpan.Zero)
+            errors.Add("Streaming:Reconnect:RateLimitFallbackCooldown must be greater than zero.");
+
+        if (options.UpstreamServerErrorFallbackCooldown <= TimeSpan.Zero)
+            errors.Add("Streaming:Reconnect:UpstreamServerErrorFallbackCooldown must be greater than zero.");
+
+        if (options.TransportFallbackCooldown <= TimeSpan.Zero)
+            errors.Add("Streaming:Reconnect:TransportFallbackCooldown must be greater than zero.");
+
         if (options.ConnectTimeout <= TimeSpan.Zero)
             errors.Add("Streaming:Reconnect:ConnectTimeout must be greater than zero.");
 

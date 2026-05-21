@@ -488,7 +488,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
                     if (ShouldCooldownImmediately(kind))
                     {
-                        var retryAfter = ResolveCooldownDuration(ex);
+                        var retryAfter = ResolveCooldownDuration(kind, ex);
                         _lastCooldownSeconds = retryAfter.TotalSeconds;
                         _strikeStore.RecordStrike(Key, retryAfter);
                         _logger.LogWarning(
@@ -548,17 +548,21 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     var outageDuration = DateTimeOffset.UtcNow - outageStartedUtc.Value;
                     if (outageDuration >= _reconnectOptions.OutageWindow)
                     {
-                        _strikeStore.RecordStrike(Key, _reconnectOptions.StrikeCooldown);
+                        var cooldown = ResolveCooldownDuration(kind, ex);
+                        _lastCooldownSeconds = cooldown.TotalSeconds;
+                        _strikeStore.RecordStrike(Key, cooldown);
                         _headersReadyTcs.TrySetException(new TimeoutException("Reconnect outage window exhausted."));
                         MarkPendingStopTrigger("upstream_fault");
                         LogStopTrigger("upstream_fault", subscriberDisconnectReason: "outage_window_exhausted");
                         SetState(SessionState.Faulted);
                         await ForceCloseSubscribersAsync();
                         _logger.LogWarning(
-                            "Session {SessionId} outage window exhausted; entering cooldown for {ProviderId}/{ProviderChannelId}.",
+                            "Session {SessionId} outage window exhausted; entering cooldown for {ProviderId}/{ProviderChannelId}. kind={FailureKind} cooldownSeconds={CooldownSeconds:F0}.",
                             _sessionId,
                             _source.ProviderId,
-                            _source.ProviderChannelId);
+                            _source.ProviderChannelId,
+                            kind,
+                            cooldown.TotalSeconds);
                         break;
                     }
 
@@ -1138,21 +1142,38 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         => kind is UpstreamFailureKind.UpstreamProxyAuthRequired
             or UpstreamFailureKind.UpstreamRateLimited;
 
-    private TimeSpan ResolveCooldownDuration(Exception ex)
+    private TimeSpan ResolveCooldownDuration(UpstreamFailureKind kind, Exception ex)
     {
         if (ex is UpstreamConnectException { RetryAfter: { } retryAfter })
         {
             if (retryAfter <= TimeSpan.Zero)
                 return TimeSpan.FromSeconds(1);
 
-            return _reconnectOptions.StrikeCooldown > retryAfter
-                ? _reconnectOptions.StrikeCooldown
-                : retryAfter;
+            return retryAfter;
         }
 
-        return _reconnectOptions.StrikeCooldown > TimeSpan.Zero
+        var fallback = kind switch
+        {
+            UpstreamFailureKind.UpstreamRateLimited => _reconnectOptions.RateLimitFallbackCooldown,
+            UpstreamFailureKind.UpstreamProxyAuthRequired => _reconnectOptions.ProxyAuthFallbackCooldown,
+            UpstreamFailureKind.UpstreamServerError => _reconnectOptions.UpstreamServerErrorFallbackCooldown,
+            UpstreamFailureKind.Transport
+                or UpstreamFailureKind.TimeoutOrStall
+                or UpstreamFailureKind.EndOfStream => _reconnectOptions.TransportFallbackCooldown,
+            _ => _reconnectOptions.UpstreamServerErrorFallbackCooldown,
+        };
+
+        return CapFallbackCooldown(fallback);
+    }
+
+    private TimeSpan CapFallbackCooldown(TimeSpan fallback)
+    {
+        if (fallback <= TimeSpan.Zero)
+            fallback = TimeSpan.FromSeconds(1);
+
+        return _reconnectOptions.StrikeCooldown > TimeSpan.Zero && fallback > _reconnectOptions.StrikeCooldown
             ? _reconnectOptions.StrikeCooldown
-            : TimeSpan.FromSeconds(1);
+            : fallback;
     }
 
     private TimeSpan GetReconnectDelay(int attempt)
