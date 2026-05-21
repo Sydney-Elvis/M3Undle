@@ -435,6 +435,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                     else
                     {
                         ResetMpegTsBoundaryState();
+                        _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
+                            _source.ProviderId,
+                            _source.ProviderChannelId,
+                            _reconnectOptions,
+                            _sessionCts.Token);
                     }
 
                     reconnectAttempt = 0;

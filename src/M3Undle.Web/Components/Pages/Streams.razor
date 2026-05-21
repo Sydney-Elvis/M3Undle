@@ -71,7 +71,9 @@ else
                     }
                     else
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        <MudTooltip Text="Health profile will appear once the upstream connection is established." Placement="Placement.Right">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        </MudTooltip>
                     }
                 </MudTd>
                 <MudTd DataLabel="Clients">
@@ -84,7 +86,9 @@ else
                     }
                     else
                     {
-                        @context.SubscriberCount
+                        <MudTooltip Text="Number of downstream clients currently receiving this stream." Placement="Placement.Top">
+                            <MudText Typo="Typo.body2">@context.SubscriberCount</MudText>
+                        </MudTooltip>
                     }
                 </MudTd>
                 <MudTd DataLabel="Bitrate">
@@ -179,7 +183,9 @@ else
                     </MudText>
                 </MudTd>
                 <MudTd DataLabel="IP">
-                    <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
+                    <MudTooltip Text="@IpTooltip(context.RemoteIp)" Placement="Placement.Top">
+                        <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
+                    </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
@@ -369,6 +375,24 @@ else
         "FfmpegHlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
         _ => relayMode,
     };
+
+    private static string IpTooltip(string? remoteIp)
+    {
+        if (string.IsNullOrWhiteSpace(remoteIp))
+            return "Remote IP address unknown.";
+
+        var isPrivate = remoteIp.StartsWith("10.", StringComparison.Ordinal)
+            || remoteIp.StartsWith("192.168.", StringComparison.Ordinal)
+            || remoteIp.StartsWith("172.", StringComparison.Ordinal)
+            || remoteIp == "::1"
+            || remoteIp == "127.0.0.1";
+
+        var note = isPrivate
+            ? "\nPrivate/local address — may be a container, proxy, or media server fetching on behalf of a device."
+            : string.Empty;
+
+        return $"{remoteIp}{note}";
+    }
 
     private static string ClientTypeTooltip(string? userAgent)
     {
