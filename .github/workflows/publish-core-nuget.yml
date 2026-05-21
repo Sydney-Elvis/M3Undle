@@ -65,7 +65,7 @@ jobs:
         run: dotnet pack "$CORE_PROJECT" --configuration "$CONFIGURATION" --no-build --output "$PACKAGE_OUTPUT"
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: m3undle-core-packages
           path: |
