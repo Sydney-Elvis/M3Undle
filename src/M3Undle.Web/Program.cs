@@ -349,6 +349,7 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SnapshotRefreshSer
 builder.Services.AddHostedService<DownstreamNotificationService>();
 builder.Services.AddSingleton<HdHomeRunTunerManager>();
 builder.Services.AddSingleton<StreamingRegistry>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<StreamingRegistry>());
 builder.Services.AddSingleton<StreamingDiagnosticsStore>();
 builder.Services.AddSingleton<StreamChannelHealthEventRecorder>();
 builder.Services.AddSingleton<IStreamChannelHealthEventRecorder>(sp => sp.GetRequiredService<StreamChannelHealthEventRecorder>());

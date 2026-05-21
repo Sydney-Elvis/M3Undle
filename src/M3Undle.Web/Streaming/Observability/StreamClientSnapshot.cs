@@ -16,5 +16,6 @@ public sealed record StreamClientSnapshot(
     long BytesSent,
     int QueueDepth,
     bool IsInternal = false,
-    ClientTransport Transport = ClientTransport.DirectRelay);
+    ClientTransport Transport = ClientTransport.DirectRelay,
+    long? BytesPerSecond = null);
 

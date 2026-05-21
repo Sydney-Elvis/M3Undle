@@ -1520,6 +1520,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastFailureKind: _lastFailureKind,
             FirstByteLatencyMs: _lastFirstByteLatencyMs,
             BytesSinceReconnect: Interlocked.Read(ref _bytesSinceReconnect),
+            TotalBytesRelayed: Interlocked.Read(ref _totalBytesRelayed),
             LastDisconnectReason: _lastDisconnectReason,
             LastStopTrigger: _lastStopTrigger,
             LastUpstreamStatusCode: _lastUpstreamStatusCode,

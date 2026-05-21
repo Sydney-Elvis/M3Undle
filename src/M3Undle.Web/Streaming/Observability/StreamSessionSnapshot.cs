@@ -29,4 +29,6 @@ public sealed record StreamSessionSnapshot(
     string? LastRelayFallbackReason = null,
     string? LastSafeStartKind = null,
     double? LastRecoveryOutputHeldMs = null,
-    DateTimeOffset? LastRecoveryStartedUtc = null);
+    DateTimeOffset? LastRecoveryStartedUtc = null,
+    long TotalBytesRelayed = 0,
+    long? UpstreamBytesPerSecond = null);

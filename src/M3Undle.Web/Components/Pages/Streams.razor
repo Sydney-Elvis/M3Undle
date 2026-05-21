@@ -35,6 +35,7 @@ else
                 <MudTh>State</MudTh>
                 <MudTh>Relay</MudTh>
                 <MudTh>Clients</MudTh>
+                <MudTh>Bitrate</MudTh>
                 <MudTh>Buffer</MudTh>
                 <MudTh>Reconnects</MudTh>
                 <MudTh>Running</MudTh>
@@ -42,8 +43,9 @@ else
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="Channel">
-                    <MudText Typo="Typo.body2">@context.DisplayName</MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">@context.SessionId[..8]</MudText>
+                    <MudTooltip Text="@($"Session: {context.SessionId}")" Placement="Placement.Right">
+                        <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                    </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="State">
                     <MudTooltip Text="@RecoveryTooltip(context)" Placement="Placement.Right">
@@ -72,31 +74,40 @@ else
                         @context.SubscriberCount
                     }
                 </MudTd>
+                <MudTd DataLabel="Bitrate">
+                    <MudTooltip Text="Current upstream data rate from the provider." Placement="Placement.Top">
+                        <MudText Typo="Typo.body2">@FormatRate(context.UpstreamBytesPerSecond)</MudText>
+                    </MudTooltip>
+                </MudTd>
                 <MudTd DataLabel="Buffer" Style="min-width:130px;">
-                    @if (context.BufferMaxBytes > 0)
-                    {
-                        var pct = (double)context.BufferUsedBytes / context.BufferMaxBytes * 100.0;
-                        <MudProgressLinear Value="pct" Color="@BufferColor(pct)" Rounded="true" Size="Size.Small" Class="mb-1" />
-                        <MudText Typo="Typo.caption">@FormatBytes(context.BufferUsedBytes) / @FormatBytes(context.BufferMaxBytes)</MudText>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
-                    }
+                    <MudTooltip Text="Session ring buffer. A persistently high level means data is accumulating faster than downstream clients can consume it." Placement="Placement.Top">
+                        @if (context.BufferMaxBytes > 0)
+                        {
+                            var pct = (double)context.BufferUsedBytes / context.BufferMaxBytes * 100.0;
+                            <MudProgressLinear Value="pct" Color="@BufferColor(pct)" Rounded="true" Size="Size.Small" Class="mb-1" />
+                            <MudText Typo="Typo.caption">@FormatBytes(context.BufferUsedBytes) / @FormatBytes(context.BufferMaxBytes)</MudText>
+                        }
+                        else
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        }
+                    </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="Reconnects">
-                    @if (context.ReconnectAttempts > 0)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">@context.ReconnectAttempts</MudChip>
-                        @if (context.LastFailureKind is not null)
+                    <MudTooltip Text="Number of upstream reconnect attempts for this session." Placement="Placement.Top">
+                        @if (context.ReconnectAttempts > 0)
                         {
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">@context.LastFailureKind</MudText>
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">@context.ReconnectAttempts</MudChip>
+                            @if (context.LastFailureKind is not null)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatFailureKind(context.LastFailureKind)</MudText>
+                            }
                         }
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2">0</MudText>
-                    }
+                        else
+                        {
+                            <MudText Typo="Typo.body2">0</MudText>
+                        }
+                    </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="Running">
                     <MudTooltip Text="@context.StartedUtc.ToString("u")">
@@ -135,41 +146,69 @@ else
     <MudPaper Elevation="1" Class="mb-4">
         <MudTable T="StreamClientSnapshot" Items="_clients" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
             <HeaderContent>
-                <MudTh>Route</MudTh>
+                <MudTh>Client</MudTh>
                 <MudTh>IP</MudTh>
-                <MudTh>Sent</MudTh>
-                <MudTh>Queue</MudTh>
+                <MudTh>Transfer</MudTh>
+                <MudTh>Backlog</MudTh>
                 <MudTh>Connected</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd DataLabel="Route">
-                    <MudText Typo="Typo.body2">@context.RequestedRoute</MudText>
-                    @if (context.Transport == ClientTransport.GeneratedHls)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">HLS (inferred)</MudText>
-                    }
+                <MudTd DataLabel="Client">
+                    <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
+                    <MudTooltip Text="@(string.IsNullOrWhiteSpace(context.UserAgent) ? "No User-Agent" : context.UserAgent)" Placement="Placement.Right">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @context.RequestedRoute
+                            @if (context.Transport == ClientTransport.GeneratedHls)
+                            {
+                                <span> · HLS</span>
+                            }
+                        </MudText>
+                    </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
                 </MudTd>
-                <MudTd DataLabel="Sent">
+                <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
                     }
                     else
                     {
-                        <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                        var sessionUpstream = _sessions.FirstOrDefault(s => s.SessionId == context.SessionId)?.UpstreamBytesPerSecond;
+                        var isSlow = context.BytesPerSecond is > 0
+                            && sessionUpstream is > 0
+                            && context.BytesPerSecond.Value < sessionUpstream.Value / 4
+                            && context.QueueDepth > 2;
+                        var tooltipText = isSlow
+                            ? $"Receiving {FormatRate(context.BytesPerSecond)} vs {FormatRate(sessionUpstream)} stream rate — client may be slow or stalled. Total sent: {FormatBytes(context.BytesSent)}"
+                            : $"Total sent: {FormatBytes(context.BytesSent)}";
+                        <MudTooltip Text="@tooltipText" Placement="Placement.Top">
+                            @if (context.BytesPerSecond.HasValue)
+                            {
+                                <MudText Typo="Typo.body2" Color="@(isSlow ? Color.Warning : Color.Default)">@FormatRate(context.BytesPerSecond)</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatBytes(context.BytesSent) total</MudText>
+                            }
+                            else
+                            {
+                                <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">total</MudText>
+                            }
+                        </MudTooltip>
                     }
                 </MudTd>
-                <MudTd DataLabel="Queue">
+                <MudTd DataLabel="Backlog">
                     @if (context.Transport == ClientTransport.GeneratedHls)
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
                     }
                     else
                     {
-                        <MudText Typo="Typo.body2">@context.QueueDepth</MudText>
+                        <MudTooltip Text="Chunks waiting to be written to this client. A growing backlog can indicate a slow or stalled client." Placement="Placement.Top">
+                            <MudText Typo="Typo.body2" Color="@(context.QueueDepth > 5 ? Color.Warning : Color.Default)">
+                                @(context.QueueDepth == 0 ? "0" : $"{context.QueueDepth} chunk{(context.QueueDepth == 1 ? "" : "s")}")
+                            </MudText>
+                        </MudTooltip>
                     }
                 </MudTd>
                 <MudTd DataLabel="Connected">
@@ -312,6 +351,55 @@ else
         "CleanRemux" => "Clean remux",
         "HlsToMpegTs" => "HLS→TS",
         _ => relayMode,
+    };
+
+    private static string FormatFailureKind(string? kind) => kind switch
+    {
+        "TimeoutOrStall" => "Timeout/Stall",
+        "EndOfStream" => "End of stream",
+        "UpstreamAuth" => "Auth failure",
+        "UpstreamNotFound" => "Not found (404)",
+        "UpstreamServerError" => "Server error",
+        "UpstreamRateLimited" => "Rate limited",
+        "UpstreamProxyAuthRequired" => "Proxy auth required",
+        "Transport" => "Transport error",
+        "StartupFatal" => "Startup failure",
+        _ => kind ?? "Unknown",
+    };
+
+    private static string DetectClientType(string? userAgent)
+    {
+        if (string.IsNullOrWhiteSpace(userAgent)) return "Unknown";
+        if (userAgent.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return "TiviMate";
+        if (userAgent.Contains("IPTV Smarters", StringComparison.OrdinalIgnoreCase) ||
+            userAgent.Contains("IPTVSmarters", StringComparison.OrdinalIgnoreCase)) return "Smarters";
+        if (userAgent.Contains("Jellyfin", StringComparison.OrdinalIgnoreCase)) return "Jellyfin";
+        if (userAgent.Contains("Emby", StringComparison.OrdinalIgnoreCase)) return "Emby";
+        if (userAgent.Contains("Plex", StringComparison.OrdinalIgnoreCase)) return "Plex";
+        if (userAgent.Contains("Kodi", StringComparison.OrdinalIgnoreCase)) return "Kodi";
+        if (userAgent.Contains("NextPVR", StringComparison.OrdinalIgnoreCase)) return "NextPVR";
+        if (userAgent.Contains("Infuse", StringComparison.OrdinalIgnoreCase)) return "Infuse";
+        if (userAgent.Contains("IPTVnator", StringComparison.OrdinalIgnoreCase)) return "IPTVnator";
+        if (userAgent.Contains("Televizo", StringComparison.OrdinalIgnoreCase)) return "Televizo";
+        if (userAgent.Contains("OTTNavigator", StringComparison.OrdinalIgnoreCase)) return "OTT Navigator";
+        if (userAgent.Contains("Perfect Player", StringComparison.OrdinalIgnoreCase)) return "Perfect Player";
+        if (userAgent.Contains("GSE", StringComparison.OrdinalIgnoreCase)) return "GSE Player";
+        if (userAgent.Contains("MrMC", StringComparison.OrdinalIgnoreCase)) return "MrMC";
+        if (userAgent.Contains("VLC", StringComparison.OrdinalIgnoreCase)) return "VLC";
+        if (userAgent.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase)) return "FFmpeg";
+        if (userAgent.Contains("mpv", StringComparison.OrdinalIgnoreCase)) return "mpv";
+        if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
+            userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
+            userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
+        return "Unknown";
+    }
+
+    private static string FormatRate(long? bytesPerSecond) => bytesPerSecond switch
+    {
+        null or 0 => "—",
+        >= 1_048_576 => $"{bytesPerSecond.Value / 1_048_576.0:F1} MB/s",
+        >= 1_024 => $"{bytesPerSecond.Value / 1_024.0:F0} KB/s",
+        _ => $"{bytesPerSecond.Value} B/s",
     };
 
     private static Color BufferColor(double pct) => pct switch
