@@ -29,7 +29,7 @@ else
                 <MudTh>Health</MudTh>
                 <MudTh>Clients</MudTh>
                 <MudTh>Bitrate</MudTh>
-                <MudTh>Buffer</MudTh>
+                <MudTh>Backpressure</MudTh>
                 <MudTh>Reconnects</MudTh>
                 <MudTh>Running</MudTh>
                 <MudTh>Last Data</MudTh>
@@ -59,12 +59,12 @@ else
                 <MudTd DataLabel="Health">
                     @if (context.HealthProfile is { } hp)
                     {
-                        <MudTooltip Text="@HealthProfileTooltip(context)" Placement="Placement.Right">
+                        <MudTooltip Text="@HealthProfileTooltip(hp)" Placement="Placement.Right">
                             <MudChip T="string" Size="Size.Small" Color="@HealthProfileColor(hp)">@hp</MudChip>
                         </MudTooltip>
                         @if (context.RequiresDownstreamRetune)
                         {
-                            <MudTooltip Text="@($"Downstream retune active: {context.DownstreamRetuneReason}")" Placement="Placement.Right">
+                            <MudTooltip Text="Retune policy active. Clients may be disconnected during recovery to force a clean re-tune." Placement="Placement.Right">
                                 <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" Color="Color.Warning" Style="vertical-align:middle; font-size:14px;" />
                             </MudTooltip>
                         }
@@ -92,12 +92,12 @@ else
                     }
                 </MudTd>
                 <MudTd DataLabel="Bitrate">
-                    <MudTooltip Text="Current upstream data rate from the provider." Placement="Placement.Top">
-                        <MudText Typo="Typo.body2">@FormatRate(context.UpstreamBytesPerSecond)</MudText>
+                    <MudTooltip Text="Current upstream bitrate from the provider." Placement="Placement.Top">
+                        <MudText Typo="Typo.body2">@FormatBitrate(context.UpstreamBytesPerSecond)</MudText>
                     </MudTooltip>
                 </MudTd>
-                <MudTd DataLabel="Buffer" Style="min-width:130px;">
-                    <MudTooltip Text="Session ring buffer. A persistently high level means data is accumulating faster than downstream clients can consume it." Placement="Placement.Top">
+                <MudTd DataLabel="Backpressure" Style="min-width:130px;">
+                    <MudTooltip Text="Data waiting because downstream clients are not keeping up. Persistently high backpressure can indicate a slow or stalled client." Placement="Placement.Top">
                         @if (context.BufferMaxBytes > 0)
                         {
                             var pct = (double)context.BufferUsedBytes / context.BufferMaxBytes * 100.0;
@@ -171,11 +171,15 @@ else
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="Client">
-                    <MudTooltip Text="@ClientTypeTooltip(context.UserAgent)" Placement="Placement.Right">
+                    @{
+                        var clientSession = _sessions.FirstOrDefault(s => s.SessionId == context.SessionId);
+                        var channelName = clientSession?.DisplayName;
+                    }
+                    <MudTooltip Text="@ClientTypeTooltip(context.UserAgent, context.RequestedRoute)" Placement="Placement.Right">
                         <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
                     </MudTooltip>
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        @context.RequestedRoute
+                        @(channelName ?? context.RequestedRoute)
                         @if (context.Transport == ClientTransport.GeneratedHls)
                         {
                             <span> · HLS</span>
@@ -200,12 +204,12 @@ else
                             && context.BytesPerSecond.Value < sessionUpstream.Value / 4
                             && context.QueueDepth > 2;
                         var tooltipText = isSlow
-                            ? $"Receiving {FormatRate(context.BytesPerSecond)} vs {FormatRate(sessionUpstream)} stream rate — client may be slow or stalled. Total sent: {FormatBytes(context.BytesSent)}"
+                            ? $"Receiving {FormatBitrate(context.BytesPerSecond)} vs {FormatBitrate(sessionUpstream)} stream rate — client may be slow or stalled. Total sent: {FormatBytes(context.BytesSent)}"
                             : $"Total sent: {FormatBytes(context.BytesSent)}";
                         <MudTooltip Text="@tooltipText" Placement="Placement.Top">
                             @if (context.BytesPerSecond.HasValue)
                             {
-                                <MudText Typo="Typo.body2" Color="@(isSlow ? Color.Warning : Color.Default)">@FormatRate(context.BytesPerSecond)</MudText>
+                                <MudText Typo="Typo.body2" Color="@(isSlow ? Color.Warning : Color.Default)">@FormatBitrate(context.BytesPerSecond)</MudText>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatBytes(context.BytesSent) total</MudText>
                             }
                             else
@@ -404,50 +408,33 @@ else
         return $"{remoteIp}{note}";
     }
 
-    private static string ClientTypeTooltip(string? userAgent)
+    private static string ClientTypeTooltip(string? userAgent, string requestedRoute)
     {
-        if (string.IsNullOrWhiteSpace(userAgent))
-            return "No User-Agent header — client type unknown.";
+        var uaPart = string.IsNullOrWhiteSpace(userAgent)
+            ? "No User-Agent header — client type unknown."
+            : $"User-Agent: {userAgent}";
         var type = DetectClientType(userAgent);
         var note = type is "VLC" or "FFmpeg"
             ? "\nNote: media servers (Jellyfin, Emby, Plex) use VLC or FFmpeg internally to fetch streams. This may be a server-side connection, not a direct player."
             : string.Empty;
-        return $"User-Agent: {userAgent}{note}";
+        return $"{uaPart}{note}\nRoute: {requestedRoute}";
     }
 
     private static Color HealthProfileColor(StreamChannelHealthProfile profile) => profile switch
     {
-        StreamChannelHealthProfile.Fast => Color.Success,
+        StreamChannelHealthProfile.Stable => Color.Success,
         StreamChannelHealthProfile.Cautious => Color.Warning,
         StreamChannelHealthProfile.Unstable => Color.Error,
         _ => Color.Default,
     };
 
-    private static string HealthProfileTooltip(StreamSessionSnapshot s)
+    private static string HealthProfileTooltip(StreamChannelHealthProfile profile) => profile switch
     {
-        if (s.HealthProfile is null)
-            return "No channel health assessment available for this session.";
-
-        var desc = s.HealthProfile switch
-        {
-            StreamChannelHealthProfile.Fast => "Fast: No recent recovery failures — standard recovery policy.",
-            StreamChannelHealthProfile.Cautious => "Cautious: Recovery events detected — extended output hold applied.",
-            StreamChannelHealthProfile.Unstable => "Unstable: Significant recovery failures — aggressive policy, packet-boundary fallback disabled.",
-            _ => s.HealthProfile.ToString()!,
-        };
-
-        var sb = new System.Text.StringBuilder(desc);
-        if (!string.IsNullOrWhiteSpace(s.HealthProfileReason))
-            sb.Append($"\n\n{s.HealthProfileReason}");
-        if (s.RequiresDownstreamRetune)
-        {
-            sb.Append("\n\nDownstream retune: clients are disconnected on recovery to force a clean re-tune.");
-            if (!string.IsNullOrWhiteSpace(s.DownstreamRetuneReason))
-                sb.Append($"\n{s.DownstreamRetuneReason}");
-        }
-
-        return sb.ToString();
-    }
+        StreamChannelHealthProfile.Stable => "No recent recovery problems. Standard recovery policy is active.",
+        StreamChannelHealthProfile.Cautious => "Recent recovery events detected. M3Undle is using a more cautious recovery policy.",
+        StreamChannelHealthProfile.Unstable => "Repeated recovery failures or client aborts were detected recently.",
+        _ => profile.ToString()!,
+    };
 
     private static string FormatRelayMode(string relayMode) => relayMode switch
     {
@@ -509,6 +496,15 @@ else
         >= 1_024 => $"{bytesPerSecond.Value / 1_024.0:F0} KB/s",
         _ => $"{bytesPerSecond.Value} B/s",
     };
+
+    private static string FormatBitrate(long? bytesPerSecond)
+    {
+        if (bytesPerSecond is null or 0) return "—";
+        var bitsPerSec = bytesPerSecond.Value * 8;
+        return bitsPerSec >= 1_000_000
+            ? $"{bitsPerSec / 1_000_000.0:F1} Mbps"
+            : $"{bitsPerSec / 1_000.0:F0} Kbps";
+    }
 
     private static Color BufferColor(double pct) => pct switch
     {

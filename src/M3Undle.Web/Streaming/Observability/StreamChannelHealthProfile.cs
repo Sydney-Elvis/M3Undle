@@ -5,7 +5,7 @@ namespace M3Undle.Web.Streaming.Observability;
 
 public enum StreamChannelHealthProfile
 {
-    Fast = 0,
+    Stable = 0,
     Cautious = 1,
     Unstable = 2,
 }
@@ -21,7 +21,7 @@ public sealed record StreamChannelRecoveryPolicy(
 {
     public static StreamChannelRecoveryPolicy FromOptions(ReconnectOptions options)
         => new(
-            StreamChannelHealthProfile.Fast,
+            StreamChannelHealthProfile.Stable,
             options.RecoveryOutputHoldLimit,
             options.RecoverySafeStartSearchLimitBytes,
             options.AllowPacketBoundaryRecoveryFallback,

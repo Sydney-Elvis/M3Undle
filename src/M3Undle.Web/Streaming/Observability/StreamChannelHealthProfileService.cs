@@ -139,7 +139,7 @@ public sealed class StreamChannelHealthProfileService(
             || summary.TsSyncLoss > 0)
             return StreamChannelHealthProfile.Cautious;
 
-        return StreamChannelHealthProfile.Fast;
+        return StreamChannelHealthProfile.Stable;
     }
 
     private static string BuildReason(HealthSummary summary, StreamChannelHealthProfile profile)

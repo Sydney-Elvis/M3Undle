@@ -53,7 +53,7 @@ public sealed class StreamChannelHealthProfileServiceTests
                 AllowPacketBoundaryRecoveryFallback = true,
             });
 
-        Assert.AreEqual(StreamChannelHealthProfile.Fast, policy.Profile);
+        Assert.AreEqual(StreamChannelHealthProfile.Stable, policy.Profile);
         Assert.IsTrue(policy.AllowPacketBoundaryRecoveryFallback);
         Assert.AreEqual(TimeSpan.FromSeconds(3), policy.RecoveryOutputHoldLimit);
         Assert.AreEqual(512 * 1024, policy.RecoverySafeStartSearchLimitBytes);
