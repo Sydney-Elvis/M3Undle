@@ -302,6 +302,33 @@ else
 
     private PeriodicTimer? _timer;
     private readonly CancellationTokenSource _cts = new();
+    private int _lastFingerprint;
+
+    protected override bool ShouldRender()
+    {
+        var fp = ComputeFingerprint();
+        if (fp == _lastFingerprint) return false;
+        _lastFingerprint = fp;
+        return true;
+    }
+
+    private int ComputeFingerprint()
+    {
+        var hc = new HashCode();
+        foreach (var s in _sessions)
+        {
+            hc.Add(s.SessionId); hc.Add(s.State); hc.Add(s.ReconnectAttempts);
+            hc.Add(s.SubscriberCount); hc.Add(s.HealthProfile); hc.Add(s.RequiresDownstreamRetune);
+            hc.Add(s.RelayMode); hc.Add(s.UpstreamBytesPerSecond); hc.Add(s.BufferUsedBytes);
+            hc.Add(s.LastUpstreamByteUtc); hc.Add(s.LastFailureKind);
+        }
+        foreach (var c in _clients)
+        {
+            hc.Add(c.ClientId); hc.Add(c.BytesPerSecond); hc.Add(c.QueueDepth); hc.Add(c.BytesSent);
+        }
+        hc.Add(_recentEnded.Count);
+        return hc.ToHashCode();
+    }
 
     protected override void OnInitialized()
     {
@@ -317,9 +344,15 @@ else
         try
         {
             while (await timer.WaitForNextTickAsync(_cts.Token))
-                await InvokeAsync(() => { Refresh(); StateHasChanged(); });
+                await InvokeAsync(RefreshAndRender);
         }
         catch (OperationCanceledException) { }
+    }
+
+    private void RefreshAndRender()
+    {
+        Refresh();
+        StateHasChanged(); // ShouldRender() gates the actual re-render
     }
 
     private void Refresh()
