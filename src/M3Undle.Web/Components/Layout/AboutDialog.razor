@@ -15,7 +15,7 @@
                 @VersionDisplay
                 @if (!string.IsNullOrWhiteSpace(BuildInfo.BuildDateUtc))
                 {
-                    <span style="opacity:0.4;"> &middot; </span>@FormatBuildDate(BuildInfo.BuildDateUtc)
+                    <span>@($" {FormatBuildDate(BuildInfo.BuildDateUtc)}")</span>
                 }
             </MudText>
 
