@@ -17,6 +17,7 @@
 @inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject M3Undle.Web.Application.ISiteSettingsService SiteSettings
 @inject M3Undle.Core.AppBuildInfo BuildInfo
+@inject ILogger<MainLayout> Logger
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
@@ -120,6 +121,14 @@
                 }
             </MudStack>
         }
+        @if (HasStatusDelays)
+        {
+            <MudTooltip Text="@StatusDelaySummary" Placement="Placement.Top">
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Style="font-size:0.70rem; margin-left:8px;">
+                    Status delayed
+                </MudChip>
+            </MudTooltip>
+        }
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
             <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
             <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
@@ -129,6 +138,7 @@
 
 @code {
     private const int FooterHeightPx = 28;
+    private static readonly TimeSpan UiQueryTimeout = TimeSpan.FromSeconds(3);
 
     private bool _drawerOpen;
     private bool _drawerWasOpen;
@@ -139,6 +149,9 @@
     private bool _eventPanelOpen;
     private SystemEventSummary _eventSummary = new(0, null);
     private bool _canViewEvents = true;
+    private bool _eventSummaryDelayed;
+    private bool _channelStatsDelayed;
+    private bool _lineupStatusDelayed;
 
     private int _streamCount;
     private int _clientCount;
@@ -184,6 +197,22 @@
         LineupStatusCodes.NoActiveSnapshot => "Setup Required",
         _ => "Unknown"
     };
+
+    private bool HasStatusDelays => _eventSummaryDelayed || _channelStatsDelayed || _lineupStatusDelayed;
+
+    private string StatusDelaySummary
+    {
+        get
+        {
+            var delayed = new List<string>(3);
+            if (_eventSummaryDelayed) delayed.Add("system events");
+            if (_channelStatsDelayed) delayed.Add("channel stats");
+            if (_lineupStatusDelayed) delayed.Add("lineup status");
+            return delayed.Count == 0
+                ? "All status data is up to date."
+                : $"Delayed status data: {string.Join(", ", delayed)}.";
+        }
+    }
 
     private string HealthIcon => _lineupStatusCode switch
     {
@@ -328,8 +357,17 @@
     {
         try
         {
-            var ct = _cts.Token;
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
             _eventSummary = await Task.Run(() => EventService.GetSummaryAsync(ct));
+            _eventSummaryDelayed = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _eventSummaryDelayed = true;
+            Logger.LogWarning("Timed out loading event summary for layout status.");
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
@@ -339,8 +377,17 @@
     {
         try
         {
-            var ct = _cts.Token;
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
             _channelStats = await Task.Run(() => StatsService.GetStatsAsync(ct));
+            _channelStatsDelayed = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _channelStatsDelayed = true;
+            Logger.LogWarning("Timed out loading channel stats for layout status.");
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
@@ -356,10 +403,19 @@
     {
         try
         {
-            var ct = _cts.Token;
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
             var status = await Task.Run(() => LineupStatusService.GetStatusAsync(ct), ct);
             _lineupStatusCode = status.Status;
             _providerMaxStreams = status.Lineup?.ActiveProvider?.MaxConcurrentStreams;
+            _lineupStatusDelayed = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _lineupStatusDelayed = true;
+            Logger.LogWarning("Timed out loading lineup status for layout status.");
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }

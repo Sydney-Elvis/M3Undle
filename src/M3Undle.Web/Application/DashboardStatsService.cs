@@ -28,18 +28,20 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
         var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
 
-        // Latest fetch run status per provider, keyed by ProviderId
+        // Latest fetch run status per provider, keyed by ProviderId.
+        // Uses a NOT EXISTS correlated subquery so only the latest row per provider is fetched
+        // rather than loading the entire fetch_runs history and deduplicating in memory.
         var latestRunsByProvider = new Dictionary<string, string>(StringComparer.Ordinal);
         if (relevantProviderIds.Count > 0)
         {
-            var recentRuns = await db.FetchRuns
+            var latestRuns = await db.FetchRuns
                 .AsNoTracking()
-                .Where(f => relevantProviderIds.Contains(f.ProviderId))
-                .Select(f => new { f.ProviderId, f.StartedUtc, f.Status })
-                .OrderByDescending(f => f.StartedUtc)
+                .Where(f => relevantProviderIds.Contains(f.ProviderId)
+                    && !db.FetchRuns.Any(f2 => f2.ProviderId == f.ProviderId && f2.StartedUtc > f.StartedUtc))
+                .Select(f => new { f.ProviderId, f.Status })
                 .ToListAsync(ct);
 
-            foreach (var run in recentRuns)
+            foreach (var run in latestRuns)
                 latestRunsByProvider.TryAdd(run.ProviderId, run.Status);
         }
 
@@ -59,15 +61,12 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
         var groupsPendingReview = await db.ProfileGroupFilters
             .AsNoTracking()
-            .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProviderGroup.ContentType == "live"
                              && x.IsNew
                              && x.TrackNewChannels, ct);
 
         var channelsPendingReview = await db.ProfileGroupChannelFilters
             .AsNoTracking()
-            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
-            .Include(x => x.ProviderChannel)
             .CountAsync(x => x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
                              && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
                              && x.ProviderChannel.ContentType == "live"
@@ -77,11 +76,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                              && x.ProfileGroupFilter.TrackNewChannels, ct);
 
         // Counts shown next to the Output URLs reflect only the active profile's snapshot.
-        var activeProfileId = await db.Profiles
-            .AsNoTracking()
-            .Where(x => x.IsActive)
-            .Select(x => (string?)x.ProfileId)
-            .FirstOrDefaultAsync(ct);
+        var activeProfileId = profiles.FirstOrDefault(x => x.IsActive)?.ProfileId;
 
         DateTime? activeProfileProviderExpiresUtc = null;
         if (activeProfileId is not null)

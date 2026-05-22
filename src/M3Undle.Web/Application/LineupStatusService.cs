@@ -36,7 +36,6 @@ internal sealed class LineupStatusService(
         var activeProfile = await db.Profiles
             .AsNoTracking()
             .Where(x => x.IsActive && x.Enabled)
-            .OrderByDescending(x => x.UpdatedUtc)
             .Select(x => new ActiveProfileInfo(x.ProfileId, x.Name, x.UpdatedUtc))
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -45,20 +44,12 @@ internal sealed class LineupStatusService(
         Provider? activeProvider = null;
         if (activeProfileId is not null)
         {
-            var profileProvider = await db.ProfileProviders
+            activeProvider = await db.ProfileProviders
                 .AsNoTracking()
-                .Where(x => x.ProfileId == activeProfileId && x.Enabled)
+                .Where(x => x.ProfileId == activeProfileId && x.Enabled && x.Provider.Enabled)
                 .OrderBy(x => x.Priority)
+                .Select(x => x.Provider)
                 .FirstOrDefaultAsync(cancellationToken);
-
-            if (profileProvider is not null)
-            {
-                activeProvider = await db.Providers
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(
-                        x => x.ProviderId == profileProvider.ProviderId && x.Enabled,
-                        cancellationToken);
-            }
         }
 
         var activeSnapshot = activeProfileId is null

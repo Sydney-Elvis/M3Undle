@@ -664,15 +664,11 @@
         if (_isRefreshing)
             _refreshStartedAt = RefreshTrigger.RefreshStartedAt ?? DateTime.UtcNow;
 
+        if (!RendererInfo.IsInteractive)
+            return;
+
         var restoredFromPrerender = TryRestorePersistedState();
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
-
-        if (!RendererInfo.IsInteractive)
-        {
-            if (!restoredFromPrerender)
-                await LoadAllAsync();
-            return;
-        }
 
         if (_isRefreshing)
             StartElapsedTimer();

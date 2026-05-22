@@ -233,10 +233,7 @@ else
         _isEnabled = HdHomeRunDeviceService.IsEnabled;
 
         if (!RendererInfo.IsInteractive)
-        {
-            await LoadAsync();
             return;
-        }
 
         _ = LoadAsync();
     }

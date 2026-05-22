@@ -7,26 +7,27 @@
 @inject ISnackbar Snackbar
 @inject ISiteSettingsService SiteSettings
 @inject AppEventBus EventBus
+@inject ILogger<NavMenu> Logger
 @implements IDisposable
 
-<MudNavMenu>
+<MudNavMenu Color="Color.Primary">
     <MudTooltip Inline="false" Text="Overview" Placement="Placement.Right">
-        <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home" OnClick="HandleNavClick">Overview</MudNavLink>
+        <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">Overview</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Providers" Placement="Placement.Right">
-        <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns" OnClick="HandleNavClick">Providers</MudNavLink>
+        <MudNavLink Href="providers" Icon="@Icons.Material.Filled.Dns">Providers</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Channels" Placement="Placement.Right">
-        <MudNavLink Href="channels" Icon="@Icons.Material.Filled.LiveTv" OnClick="HandleNavClick">Channels</MudNavLink>
+        <MudNavLink Href="channels" Icon="@Icons.Material.Filled.LiveTv">Channels</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Profiles" Placement="Placement.Right">
-        <MudNavLink Href="profiles" Icon="@Icons.Material.Filled.AccountTree" OnClick="HandleNavClick">Profiles</MudNavLink>
+        <MudNavLink Href="profiles" Icon="@Icons.Material.Filled.AccountTree">Profiles</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Channel Mapping" Placement="Placement.Right">
-        <MudNavLink Href="channels/mapping" Icon="@Icons.Material.Filled.FilterList" OnClick="HandleNavClick">Mapping</MudNavLink>
+        <MudNavLink Href="channels/mapping" Icon="@Icons.Material.Filled.FilterList">Mapping</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="@ReviewQueueTooltip" Placement="Placement.Right">
-        <MudNavLink Href="channels/review" Icon="@Icons.Material.Filled.PlaylistAddCheck" OnClick="HandleNavClick">
+        <MudNavLink Href="channels/review" Icon="@Icons.Material.Filled.PlaylistAddCheck">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                 <span>Review Queue</span>
                 @if (_pendingReviewCount > 0)
@@ -37,19 +38,19 @@
         </MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="What's On" Placement="Placement.Right">
-        <MudNavLink Href="channels/whats-on" Icon="@Icons.Material.Filled.Event" OnClick="HandleNavClick">What's On</MudNavLink>
+        <MudNavLink Href="channels/whats-on" Icon="@Icons.Material.Filled.Event">What's On</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Guide / EPG" Placement="Placement.Right">
-        <MudNavLink Href="epg" Icon="@Icons.Material.Filled.Tv" OnClick="HandleNavClick">EPG</MudNavLink>
+        <MudNavLink Href="epg" Icon="@Icons.Material.Filled.Tv">EPG</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="HDHomeRun" Placement="Placement.Right">
-        <MudNavLink Href="hdhr" Icon="@Icons.Material.Filled.Router" OnClick="HandleNavClick">HDHomeRun</MudNavLink>
+        <MudNavLink Href="hdhr" Icon="@Icons.Material.Filled.Router">HDHomeRun</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Streams" Placement="Placement.Right">
-        <MudNavLink Href="streams" Icon="@Icons.Material.Filled.Sensors" OnClick="HandleNavClick">Streams</MudNavLink>
+        <MudNavLink Href="streams" Icon="@Icons.Material.Filled.Sensors">Streams</MudNavLink>
     </MudTooltip>
     <MudTooltip Inline="false" Text="Logs" Placement="Placement.Right">
-        <MudNavLink Href="logs" Icon="@Icons.Material.Filled.Article" OnClick="HandleNavClick">Logs</MudNavLink>
+        <MudNavLink Href="logs" Icon="@Icons.Material.Filled.Article">Logs</MudNavLink>
     </MudTooltip>
 </MudNavMenu>
 
@@ -61,15 +62,26 @@
             @(_isRefreshing ? "Refreshing…" : "Refresh Lineup")
         </MudNavLink>
     </MudTooltip>
+    @if (_statsDelayed)
+    {
+        <MudTooltip Inline="false" Text="Review queue counts are temporarily delayed." Placement="Placement.Right">
+            <MudNavLink Icon="@Icons.Material.Filled.Schedule" Disabled="true">
+                Review count delayed
+            </MudNavLink>
+        </MudTooltip>
+    }
 </MudNavMenu>
 
 @code {
+    private static readonly TimeSpan UiQueryTimeout = TimeSpan.FromSeconds(3);
+
     [Parameter]
     public EventCallback OnNavigate { get; set; }
 
     private bool _isRefreshing;
     private bool _authEnabled;
     private int _pendingReviewCount;
+    private bool _statsDelayed;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
 
@@ -130,9 +142,18 @@
     {
         try
         {
-            var stats = await StatsService.GetStatsAsync(_cts.Token);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var stats = await StatsService.GetStatsAsync(timeoutCts.Token);
             _pendingReviewCount = (stats?.GroupsNew ?? 0) + (stats?.PendingChannelsNotified ?? 0);
+            _statsDelayed = false;
             StateHasChanged();
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _statsDelayed = true;
+            Logger.LogWarning("Timed out loading nav menu review queue stats.");
+            await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
     }
@@ -142,16 +163,6 @@
         _cts.Cancel();
         _cts.Dispose();
         _eventSubscription?.Dispose();
-    }
-
-    private Task HandleNavClick(MouseEventArgs _)
-    {
-        if (OnNavigate.HasDelegate)
-        {
-            return OnNavigate.InvokeAsync();
-        }
-
-        return Task.CompletedTask;
     }
 
     private async Task TriggerRefreshAsync()

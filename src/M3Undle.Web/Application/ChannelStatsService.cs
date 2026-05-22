@@ -82,13 +82,16 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
 
             channelsInProvider = lastFetchRun?.ChannelCountSeen;
 
-            vodGroups = await db.ProviderGroups
+            var groupTypeCounts = await db.ProviderGroups
                 .AsNoTracking()
-                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", ct);
+                .Where(x => x.ProviderId == provider.ProviderId && x.Active
+                            && (x.ContentType == "vod" || x.ContentType == "series"))
+                .GroupBy(x => x.ContentType)
+                .Select(g => new { ContentType = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
 
-            seriesGroups = await db.ProviderGroups
-                .AsNoTracking()
-                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", ct);
+            vodGroups = groupTypeCounts.FirstOrDefault(x => x.ContentType == "vod")?.Count ?? 0;
+            seriesGroups = groupTypeCounts.FirstOrDefault(x => x.ContentType == "series")?.Count ?? 0;
         }
 
         var groupsIncluded = groupAggregates?.Included ?? 0;
