@@ -441,6 +441,7 @@ public sealed class LineupStatusServiceTests
         public bool IsRefreshingValue { get; set; }
 
         public bool IsRefreshing => IsRefreshingValue;
+        public DateTime? RefreshStartedAt => null;
 
         public bool TriggerRefresh() => true;
 

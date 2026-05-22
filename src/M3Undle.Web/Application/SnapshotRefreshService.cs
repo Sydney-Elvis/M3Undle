@@ -36,6 +36,7 @@ public sealed class SnapshotRefreshService(
     // Current run CTS — cancelled by CancelRefresh(); null when no run is active
     private volatile CancellationTokenSource? _currentRunCts;
     private volatile bool _cancelledByUser;
+    private DateTime? _refreshStartedAt;
 
     // Schedule loop wait CTS — cancelled when the user updates the refresh schedule
     private volatile CancellationTokenSource? _scheduleWaitCts;
@@ -45,6 +46,8 @@ public sealed class SnapshotRefreshService(
     // -------------------------------------------------------------------------
 
     public bool IsRefreshing => _executionGate.CurrentCount == 0;
+
+    public DateTime? RefreshStartedAt => _refreshStartedAt;
 
     public bool TriggerRefresh()
     {
@@ -373,6 +376,7 @@ public sealed class SnapshotRefreshService(
         catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning(ex, "Event cleanup failed."); }
 
         logger.LogInformation("Snapshot refresh started.");
+        _refreshStartedAt = timeProvider.GetUtcNow().UtcDateTime;
         eventBus.Publish(AppEventKind.RefreshStarted);
         bool succeeded = false;
         string? errorSummary = null;
@@ -417,6 +421,7 @@ public sealed class SnapshotRefreshService(
         }
         finally
         {
+            _refreshStartedAt = null;
             _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
                 affectedProfileIds.Count > 0 ? affectedProfileIds : null);
@@ -515,6 +520,7 @@ public sealed class SnapshotRefreshService(
         runCts.CancelAfter(TimeSpan.FromMinutes(timeoutMinutes));
 
         logger.LogInformation("Snapshot build-only started.");
+        _refreshStartedAt = timeProvider.GetUtcNow().UtcDateTime;
         eventBus.Publish(AppEventKind.RefreshStarted);
         bool succeeded = false;
         string? errorSummary = null;
@@ -544,6 +550,7 @@ public sealed class SnapshotRefreshService(
         }
         finally
         {
+            _refreshStartedAt = null;
             _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
                 affectedProfileIds.Count > 0 ? affectedProfileIds : null);

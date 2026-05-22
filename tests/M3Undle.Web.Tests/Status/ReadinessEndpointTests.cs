@@ -241,6 +241,7 @@ public sealed class ReadinessEndpointTests
     private sealed class TestRefreshTrigger(bool isRefreshing) : IRefreshTrigger
     {
         public bool IsRefreshing { get; } = isRefreshing;
+        public DateTime? RefreshStartedAt => null;
 
         public bool TriggerRefresh() => false;
 

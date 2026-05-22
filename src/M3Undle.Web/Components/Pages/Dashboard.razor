@@ -662,7 +662,7 @@
 
         _isRefreshing = RefreshTrigger.IsRefreshing;
         if (_isRefreshing)
-            _refreshStartedAt = DateTime.UtcNow;
+            _refreshStartedAt = RefreshTrigger.RefreshStartedAt ?? DateTime.UtcNow;
 
         var restoredFromPrerender = TryRestorePersistedState();
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
@@ -793,7 +793,7 @@
             if (_status.IsRefreshing && !_isRefreshing)
             {
                 _isRefreshing = true;
-                _refreshStartedAt ??= DateTime.UtcNow;
+                _refreshStartedAt ??= RefreshTrigger.RefreshStartedAt ?? DateTime.UtcNow;
                 StartElapsedTimer();
             }
             else if (!_status.IsRefreshing && _isRefreshing)

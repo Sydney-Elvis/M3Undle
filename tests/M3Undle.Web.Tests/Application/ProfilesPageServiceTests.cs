@@ -339,6 +339,7 @@ public sealed class ProfilesPageServiceTests
         public int TriggerRefreshCallCount { get; private set; }
 
         public bool IsRefreshing => IsRefreshingValue;
+        public DateTime? RefreshStartedAt => null;
 
         public bool TriggerRefresh()
         {

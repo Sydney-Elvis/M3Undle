@@ -276,6 +276,7 @@ public sealed class ProviderPageServiceValidationTests
     private sealed class TestRefreshTrigger(bool isRefreshing = false) : IRefreshTrigger
     {
         public bool IsRefreshing { get; private set; } = isRefreshing;
+        public DateTime? RefreshStartedAt => null;
         public bool TriggerRefresh()
         {
             IsRefreshing = true;
