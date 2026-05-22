@@ -19,21 +19,24 @@
                 <MudText Typo="Typo.h5">EPG Sources</MudText>
                 @if (_sources.Count > 0)
                 {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
-                        @_sources.Count @(_sources.Count == 1 ? "source" : "sources")
-                    </MudChip>
+                    <StatusChip Label="@($"{_sources.Count} {(_sources.Count == 1 ? "source" : "sources")}")"
+                                Size="Size.Small"
+                                Color="Color.Primary"
+                                Variant="Variant.Outlined" />
                 }
                 @if (_sources.Any(s => s.LastSuccessUtc.HasValue && (s.LastFailureUtc is null || s.LastSuccessUtc > s.LastFailureUtc)))
                 {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">
-                        @_sources.Count(s => s.LastSuccessUtc.HasValue && (s.LastFailureUtc is null || s.LastSuccessUtc > s.LastFailureUtc)) OK
-                    </MudChip>
+                    <StatusChip Label="@($"{_sources.Count(s => s.LastSuccessUtc.HasValue && (s.LastFailureUtc is null || s.LastSuccessUtc > s.LastFailureUtc))} OK")"
+                                Size="Size.Small"
+                                Color="Color.Success"
+                                Variant="Variant.Outlined" />
                 }
                 @if (_sources.Any(s => s.LastFailureUtc.HasValue && (s.LastSuccessUtc is null || s.LastFailureUtc > s.LastSuccessUtc)))
                 {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">
-                        @_sources.Count(s => s.LastFailureUtc.HasValue && (s.LastSuccessUtc is null || s.LastFailureUtc > s.LastSuccessUtc)) failed
-                    </MudChip>
+                    <StatusChip Label="@($"{_sources.Count(s => s.LastFailureUtc.HasValue && (s.LastSuccessUtc is null || s.LastFailureUtc > s.LastSuccessUtc))} failed")"
+                                Size="Size.Small"
+                                Color="Color.Error"
+                                Variant="Variant.Outlined" />
                 }
             </MudStack>
             <MudText Typo="Typo.body2" Color="Color.Secondary">
@@ -129,14 +132,15 @@ else
                                     <span>@context.Name</span>
                                     @if (!context.Enabled)
                                     {
-                                        <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                                        <StatusChip Label="Disabled" Size="Size.Small" Color="Color.Default" />
                                     }
                                 </MudStack>
                             </MudTd>
                             <MudTd>
-                                <MudChip T="string" Size="Size.Small" Color="@KindColor(context.Kind)" Variant="Variant.Outlined">
-                                    @KindLabel(context.Kind)
-                                </MudChip>
+                                <StatusChip Label="@KindLabel(context.Kind)"
+                                            Size="Size.Small"
+                                            Color="@KindColor(context.Kind)"
+                                            Variant="Variant.Outlined" />
                             </MudTd>
                             <MudTd>
                                 <MudText Typo="Typo.caption" Style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block">
@@ -151,19 +155,25 @@ else
                                 }
                                 @if (context.LastSuccessUtc.HasValue && !isFailed)
                                 {
-                                    <MudTooltip Text="@($"Last success: {context.LastSuccessUtc:u}")">
-                                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Outlined">OK</MudChip>
-                                    </MudTooltip>
+                                    <TooltipChip Label="OK"
+                                                 TooltipText="@($"Last success: {context.LastSuccessUtc:u}")"
+                                                 Color="Color.Success"
+                                                 Variant="Variant.Outlined" />
                                 }
                                 else if (isFailed)
                                 {
-                                    <MudTooltip Text="@FailedTooltip(context)" Placement="Placement.Left">
-                                        <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined">Failed</MudChip>
-                                    </MudTooltip>
+                                    <TooltipChip Label="Failed"
+                                                 TooltipText="@FailedTooltip(context)"
+                                                 Color="Color.Error"
+                                                 Variant="Variant.Outlined"
+                                                 Placement="Placement.Left" />
                                 }
                                 else
                                 {
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Never fetched</MudChip>
+                                    <StatusChip Label="Never fetched"
+                                                Size="Size.Small"
+                                                Color="Color.Default"
+                                                Variant="Variant.Outlined" />
                                 }
                             </MudTd>
                             <MudTd>
@@ -197,7 +207,9 @@ else
                                          Color="@(_testResult.Success ? Color.Success : Color.Error)" Size="Size.Small" />
                                 <MudText Typo="Typo.subtitle2">Test Result — @_testingSourceName</MudText>
                                 <MudSpacer />
-                                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => _testResult = null" />
+                                <MudTooltip Text="Dismiss test result" Arrow="true">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => _testResult = null" />
+                                </MudTooltip>
                             </MudStack>
                             @if (_testResult.Success)
                             {
@@ -276,20 +288,28 @@ else
                             var unmappedCount = _mappings.Count(m => string.IsNullOrEmpty(m.EpgChannelMappingId));
                             var manualCount = _mappings.Count(m => m.MappingMode == "manual");
                         }
-                        <MudChip T="string" Size="Size.Small" Color="Color.Primary"
-                                 Variant="@(_mappingFilter == "all" ? Variant.Filled : Variant.Outlined)"
-                                 OnClick="@(() => SetMappingFilter("all"))">@allCount total</MudChip>
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                                 Variant="@(_mappingFilter == "mapped" ? Variant.Filled : Variant.Outlined)"
-                                 OnClick="@(() => SetMappingFilter("mapped"))">@mappedCount mapped</MudChip>
-                        <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                                 Variant="@(_mappingFilter == "unmapped" ? Variant.Filled : Variant.Outlined)"
-                                 OnClick="@(() => SetMappingFilter("unmapped"))">@unmappedCount unmapped</MudChip>
+                        <ChipFilterToggle Label="@($"{allCount} total")"
+                                          Color="Color.Primary"
+                                          IsActive="@(_mappingFilter == "all")"
+                                          TooltipText="Show all channels."
+                                          OnClick="@((_) => SetMappingFilter("all"))" />
+                        <ChipFilterToggle Label="@($"{mappedCount} mapped")"
+                                          Color="Color.Success"
+                                          IsActive="@(_mappingFilter == "mapped")"
+                                          TooltipText="Show channels with an EPG mapping."
+                                          OnClick="@((_) => SetMappingFilter("mapped"))" />
+                        <ChipFilterToggle Label="@($"{unmappedCount} unmapped")"
+                                          Color="Color.Warning"
+                                          IsActive="@(_mappingFilter == "unmapped")"
+                                          TooltipText="Show channels missing an EPG mapping."
+                                          OnClick="@((_) => SetMappingFilter("unmapped"))" />
                         @if (manualCount > 0)
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Info"
-                                     Variant="@(_mappingFilter == "manual" ? Variant.Filled : Variant.Outlined)"
-                                     OnClick="@(() => SetMappingFilter("manual"))">@manualCount manual</MudChip>
+                            <ChipFilterToggle Label="@($"{manualCount} manual")"
+                                              Color="Color.Info"
+                                              IsActive="@(_mappingFilter == "manual")"
+                                              TooltipText="Show channels manually overridden."
+                                              OnClick="@((_) => SetMappingFilter("manual"))" />
                         }
                     </MudStack>
 
@@ -320,11 +340,10 @@ else
                                     <MudText Typo="Typo.caption">@(string.IsNullOrEmpty(context.XmltvChannelId) ? "—" : context.XmltvChannelId)</MudText>
                                 </MudTd>
                                 <MudTd>
-                                    <MudChip T="string" Size="Size.Small"
-                                             Color="@MappingModeColor(context.MappingMode)"
-                                             Variant="Variant.Outlined">
-                                        @MappingModeLabel(context.MappingMode)
-                                    </MudChip>
+                                    <StatusChip Label="@MappingModeLabel(context.MappingMode)"
+                                                Size="Size.Small"
+                                                Color="@MappingModeColor(context.MappingMode)"
+                                                Variant="Variant.Outlined" />
                                 </MudTd>
                                 <MudTd>
                                     <MudStack Row="true" Spacing="1">

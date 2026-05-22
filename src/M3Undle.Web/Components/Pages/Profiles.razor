@@ -22,7 +22,9 @@
                        OnClick="OpenCreateDialogAsync">
                 New Profile
             </MudButton>
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="ReloadAsync" Disabled="_isLoading" />
+            <MudTooltip Text="Reload profiles" Arrow="true">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="ReloadAsync" Disabled="_isLoading" />
+            </MudTooltip>
         </MudStack>
     </MudStack>
 </MudPaper>
@@ -91,17 +93,15 @@ else
                                     Output: <strong>@profile.OutputName</strong>
                                 </MudText>
                             </MudStack>
-                            <MudChip T="string" Size="Size.Small"
-                                     Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
-                                              : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
-                                              : Color.Default)"
-                                     Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
-                                              : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
-                                              : Icons.Material.Filled.RadioButtonUnchecked)">
-                                @(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
-                                  : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
-                                  : "No output")
-                            </MudChip>
+                                                        <StatusChip Label="@(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
+                                                                                                    : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
+                                                                                                    : "No output")"
+                                                                                Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
+                                                                                                 : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
+                                                                                                 : Color.Default)"
+                                                                                Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
+                                                                                                : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
+                                                                                                : Icons.Material.Filled.RadioButtonUnchecked)" />
                         </MudStack>
 
                         <MudDivider />
@@ -109,8 +109,10 @@ else
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.FlexEnd">
                             @if (profile.IsActive)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
-                                         Icon="@Icons.Material.Filled.Star">Active</MudChip>
+                                <StatusChip Label="Active"
+                                            Color="Color.Success"
+                                            Variant="Variant.Filled"
+                                            Icon="@Icons.Material.Filled.Star" />
                             }
                             else
                             {
@@ -140,28 +142,25 @@ else
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
                             @if (profile.LiveCount > 0 || profile.LastPublishedUtc.HasValue)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Primary"
-                                         Icon="@Icons.Material.Filled.LiveTv">
-                                    @profile.LiveCount live
-                                </MudChip>
+                                <StatusChip Label="@($"{profile.LiveCount} live")"
+                                            Color="Color.Primary"
+                                            Icon="@Icons.Material.Filled.LiveTv" />
                             }
                             @if (profile.MovieCount > 0)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Info"
-                                         Icon="@Icons.Material.Filled.Movie">
-                                    @profile.MovieCount movies
-                                </MudChip>
+                                <StatusChip Label="@($"{profile.MovieCount} movies")"
+                                            Color="Color.Info"
+                                            Icon="@Icons.Material.Filled.Movie" />
                             }
                             @if (profile.SeriesCount > 0)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Info"
-                                         Icon="@Icons.Material.Filled.Tv">
-                                    @profile.SeriesCount series
-                                </MudChip>
+                                <StatusChip Label="@($"{profile.SeriesCount} series")"
+                                            Color="Color.Info"
+                                            Icon="@Icons.Material.Filled.Tv" />
                             }
                             @if (!profile.Enabled)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                                <StatusChip Label="Disabled" Color="Color.Default" />
                             }
                         </MudStack>
 

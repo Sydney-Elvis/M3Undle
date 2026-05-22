@@ -225,22 +225,20 @@
                                 }
                                 else
                                 {
-                                    <MudChip T="string" Size="Size.Small"
-                                             Color="@ProfileStatusChipColor(selectedProfile)"
-                                             Variant="Variant.Outlined"
-                                             Style="align-self:flex-start;">
-                                        @ProfileStatusLabel(_status?.Status, selectedProfile)
-                                    </MudChip>
+                                    <TooltipChip Label="@ProfileStatusLabel(_status?.Status, selectedProfile)"
+                                                 TooltipText="@ProfileStatusTooltip(_status?.Status, selectedProfile)"
+                                                 Color="@ProfileStatusChipColor(selectedProfile)"
+                                                 Variant="Variant.Outlined"
+                                                 Style="align-self:flex-start;" />
                                 }
                             }
                             else
                             {
-                                <MudChip T="string" Size="Size.Small"
-                                         Color="@ProfileStatusChipColor(selectedProfile)"
-                                         Variant="Variant.Outlined"
-                                         Style="align-self:flex-start;">
-                                    @ProfileStatusLabel(null, selectedProfile)
-                                </MudChip>
+                                <TooltipChip Label="@ProfileStatusLabel(null, selectedProfile)"
+                                             TooltipText="@ProfileStatusTooltip(null, selectedProfile)"
+                                             Color="@ProfileStatusChipColor(selectedProfile)"
+                                             Variant="Variant.Outlined"
+                                             Style="align-self:flex-start;" />
                             }
                         </MudStack>
 
@@ -248,25 +246,21 @@
                         <MudStack Spacing="0">
                             <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Published Content</MudText>
                             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
-                                <MudChip T="string"
-                                         Color="@(selectedProfile.LiveCount > 0 ? Color.Success : Color.Warning)"
-                                         Icon="@Icons.Material.Filled.LiveTv"
-                                         Size="Size.Small"
-                                         OnClick="@(() => Nav.NavigateTo("channels"))">
-                                    Live @selectedProfile.LiveCount
-                                </MudChip>
-                                <MudChip T="string"
-                                         Color="@(selectedProfile.MovieCount > 0 ? Color.Info : Color.Default)"
-                                         Icon="@Icons.Material.Filled.Movie"
-                                         Size="Size.Small">
-                                    Movies @selectedProfile.MovieCount
-                                </MudChip>
-                                <MudChip T="string"
-                                         Color="@(selectedProfile.SeriesCount > 0 ? Color.Info : Color.Default)"
-                                         Icon="@Icons.Material.Filled.Tv"
-                                         Size="Size.Small">
-                                    Series @selectedProfile.SeriesCount
-                                </MudChip>
+                                <TooltipChip Label="@($"Live {selectedProfile.LiveCount}")"
+                                             TooltipText="View channel list for this profile"
+                                             Color="@(selectedProfile.LiveCount > 0 ? Color.Success : Color.Warning)"
+                                             Icon="@Icons.Material.Filled.LiveTv"
+                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                                <TooltipChip Label="@($"Movies {selectedProfile.MovieCount}")"
+                                             TooltipText="View channel list for this profile"
+                                             Color="@(selectedProfile.MovieCount > 0 ? Color.Info : Color.Default)"
+                                             Icon="@Icons.Material.Filled.Movie"
+                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                                <TooltipChip Label="@($"Series {selectedProfile.SeriesCount}")"
+                                             TooltipText="View channel list for this profile"
+                                             Color="@(selectedProfile.SeriesCount > 0 ? Color.Info : Color.Default)"
+                                             Icon="@Icons.Material.Filled.Tv"
+                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
                             </MudStack>
                         </MudStack>
 
@@ -924,6 +918,14 @@
             ProfileHealthStatus.Degraded => Color.Warning,
             _ => Color.Default,
         };
+    }
+
+    private string ProfileStatusTooltip(string? lineupStatus, DashboardProfileSummary profile)
+    {
+        var label = ProfileStatusLabel(lineupStatus, profile);
+        return profile.IsActive
+            ? $"Current main profile status: {label}."
+            : $"Profile status: {label}.";
     }
 
     private static Color ChangeClassChipColor(string? changeClass) => changeClass switch

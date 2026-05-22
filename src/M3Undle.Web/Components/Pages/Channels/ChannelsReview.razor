@@ -37,7 +37,9 @@
                        Href="@($"channels/mapping{(_profileId is not null ? $"?profile={_profileId}" : "")}")">
                 Group Review
             </MudButton>
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="ReloadQueueAsync" Disabled="_isLoading || _profileId is null" />
+            <MudTooltip Text="Reload review queue" Arrow="true">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="ReloadQueueAsync" Disabled="_isLoading || _profileId is null" />
+            </MudTooltip>
         </MudStack>
     </MudStack>
 </MudPaper>

@@ -35,21 +35,20 @@
                   Margin="Margin.Dense"
                   Variant="Variant.Outlined"
                   Style="min-width:260px; flex:1; max-width:460px;" />
-    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
-        @FilteredEntries.Count().ToString("N0") shown
-    </MudChip>
+    <TooltipChip Label="@($"{FilteredEntries.Count():N0} shown")"
+                 TooltipText="Log entries currently visible after level and search filters."
+                 Color="Color.Primary"
+                 Variant="Variant.Outlined" />
 </MudStack>
 
 <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Style="flex-shrink:0">
     @foreach (var level in LogLevels)
     {
-        <MudChip T="string"
-                 Size="Size.Small"
-                 Color="@LevelColor(level)"
-                 Variant="@(_enabledLevels.Contains(level) ? Variant.Filled : Variant.Outlined)"
-                 OnClick="@((chip) => ToggleLevel(level))">
-            @LevelDisplayName(level) @CountForLevel(level).ToString("N0")
-        </MudChip>
+        <ChipFilterToggle Label="@($"{LevelDisplayName(level)} {CountForLevel(level):N0}")"
+                          Color="@LevelColor(level)"
+                          IsActive="@_enabledLevels.Contains(level)"
+                          TooltipText="@LevelFilterTooltip(level)"
+                          OnClick="@((_) => ToggleLevel(level))" />
     }
 </MudStack>
 
@@ -168,6 +167,14 @@
     {
         if (!_enabledLevels.Add(level))
             _enabledLevels.Remove(level);
+    }
+
+    private string LevelFilterTooltip(string level)
+    {
+        var label = LevelDisplayName(level);
+        return _enabledLevels.Contains(level)
+            ? $"{label} log entries are visible. Click to hide this level."
+            : $"{label} log entries are hidden. Click to show this level.";
     }
 
     private void ClearSearch()

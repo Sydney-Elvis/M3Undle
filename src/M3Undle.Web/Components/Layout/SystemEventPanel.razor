@@ -50,10 +50,12 @@
                                     <MudText Typo="Typo.body2" Style="font-weight:600;">@evt.Title</MudText>
                                     @if (item.TotalOccurrences > 1)
                                     {
-                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@SeverityColor(evt.Severity)"
-                                                 Style="height:22px; flex-shrink:0;">
-                                            @($"{item.TotalOccurrences} times")
-                                        </MudChip>
+                                        <MudTooltip Text="@($"Occurred {item.TotalOccurrences} times")" Placement="Placement.Top">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@SeverityColor(evt.Severity)"
+                                                     Style="height:22px; flex-shrink:0;">
+                                                @($"{item.TotalOccurrences} times")
+                                            </MudChip>
+                                        </MudTooltip>
                                     }
                                 </MudStack>
                                 <MudTooltip Text="Dismiss" Placement="Placement.Left">

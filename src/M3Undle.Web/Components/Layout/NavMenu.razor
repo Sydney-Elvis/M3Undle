@@ -32,7 +32,9 @@
                 <span>Review Queue</span>
                 @if (_pendingReviewCount > 0)
                 {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ms-1">@_pendingReviewCount</MudChip>
+                    <MudTooltip Inline="false" Text="@($"{_pendingReviewCount} pending review item(s). Open Review Queue to process them.")" Placement="Placement.Right">
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="ms-1">@_pendingReviewCount</MudChip>
+                    </MudTooltip>
                 }
             </MudStack>
         </MudNavLink>

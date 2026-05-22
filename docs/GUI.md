@@ -11,6 +11,8 @@ The interface emphasizes:
 - Clear visibility
 - No hidden logic
 
+UI consistency rules used by contributors and AI agents are documented in `docs/dev/GUI_CONSISTENCY_CONTRACT.md`.
+
 ---
 
 ## UI Sections

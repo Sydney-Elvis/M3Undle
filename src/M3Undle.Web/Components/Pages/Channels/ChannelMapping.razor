@@ -47,7 +47,9 @@
                              DebounceInterval="600"
                              Immediate="true"
                              OnDebounceIntervalElapsed="SaveDefaultStartNumAsync" />
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+            <MudTooltip Text="Reload channel mapping data" Arrow="true">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+            </MudTooltip>
             <MudButton StartIcon="@Icons.Material.Filled.LiveTv"
                        Variant="Variant.Outlined"
                        Color="Color.Default"
@@ -173,23 +175,29 @@ else
         var chSelected = mapped.Sum(GetSelectedChannelCount);
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
-            <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                     Variant="@(_decisionFilterStates.Contains("used") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("used"))">@mapped.Count mapped · @chSelected.ToString("N0") ch used</MudChip>
-            <MudTooltip Text="Included groups with zero selected channels. Click to filter them." Arrow="true">
-                <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                         Variant="@(_decisionFilterStates.Contains("unmapped") ? Variant.Filled : Variant.Outlined)"
-                         OnClick="@((chip) => ToggleDecisionFilterState("unmapped"))">@unmapped.Count unmapped</MudChip>
-            </MudTooltip>
-            <MudChip T="string" Size="Size.Small" Color="Color.Default"
-                     Variant="@(_decisionFilterStates.Contains("exclude") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("exclude"))">@excluded.Count excluded</MudChip>
+            <ChipFilterToggle Label="@($"{mapped.Count} mapped · {chSelected:N0} ch used")"
+                              Color="Color.Success"
+                              IsActive="@_decisionFilterStates.Contains("used")"
+                              TooltipText="Included groups with selected channels. Click to toggle this filter."
+                              OnClick="@((_) => ToggleDecisionFilterState("used"))" />
+            <ChipFilterToggle Label="@($"{unmapped.Count} unmapped")"
+                              Color="Color.Warning"
+                              IsActive="@_decisionFilterStates.Contains("unmapped")"
+                              TooltipText="Included groups with zero selected channels. Click to filter them."
+                              OnClick="@((_) => ToggleDecisionFilterState("unmapped"))" />
+            <ChipFilterToggle Label="@($"{excluded.Count} excluded")"
+                              Color="Color.Default"
+                              IsActive="@_decisionFilterStates.Contains("exclude")"
+                              TooltipText="Excluded groups. Click to toggle this filter."
+                              OnClick="@((_) => ToggleDecisionFilterState("exclude"))" />
             @if (newCount > 0)
             {
                 <MudDivider Vertical="true" FlexItem="true" />
-                <MudChip T="string" Size="Size.Small" Color="Color.Info"
-                         Variant="@(_decisionFilterStates.Contains("new") ? Variant.Filled : Variant.Outlined)"
-                         OnClick="@((chip) => ToggleDecisionFilterState("new"))">@newCount new</MudChip>
+                <ChipFilterToggle Label="@($"{newCount} new")"
+                                  Color="Color.Info"
+                                  IsActive="@_decisionFilterStates.Contains("new")"
+                                  TooltipText="Groups marked as new since last sync. Click to toggle this filter."
+                                  OnClick="@((_) => ToggleDecisionFilterState("new"))" />
                 <MudTooltip Text="Dismiss all new flags" Arrow="true">
                     <MudIconButton Icon="@Icons.Material.Filled.DoneAll"
                                    Size="Size.Small"
@@ -1060,7 +1068,9 @@ else
         <MudStack Spacing="3">
             <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
                 <MudText Typo="Typo.h6">Group Settings</MudText>
-                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseSettingsDrawer" Size="Size.Small" />
+                <MudTooltip Text="Close group settings" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseSettingsDrawer" Size="Size.Small" />
+                </MudTooltip>
             </MudStack>
             <MudDivider />
 

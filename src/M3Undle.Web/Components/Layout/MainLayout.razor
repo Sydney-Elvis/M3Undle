@@ -26,7 +26,9 @@
 
 <MudLayout>
     <MudAppBar Elevation="0">
-        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
+        <MudTooltip Text="Toggle navigation" Placement="Placement.Bottom">
+            <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
+        </MudTooltip>
         <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;">
             <img src="favicon-32x32.png" alt="" aria-hidden="true" style="width:28px;height:28px;margin-left:8px;" />
             <MudText Typo="Typo.h6" Class="ms-2">M3Undle</MudText>

@@ -75,27 +75,24 @@ else
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="4">
                     <MudText Typo="Typo.caption" Color="Color.Secondary">HDHR</MudText>
-                    <MudChip T="string" Size="Size.Small"
-                             Color="@(_isEnabled ? Color.Success : Color.Default)"
-                             Variant="Variant.Outlined">
-                        @(_isEnabled ? "Enabled" : "Disabled")
-                    </MudChip>
+                    <StatusChip Label="@(_isEnabled ? "Enabled" : "Disabled")"
+                                Size="Size.Small"
+                                Color="@(_isEnabled ? Color.Success : Color.Default)"
+                                Variant="Variant.Outlined" />
                 </MudItem>
                 <MudItem xs="12" sm="4">
                     <MudText Typo="Typo.caption" Color="Color.Secondary">SSDP discovery</MudText>
-                    <MudChip T="string" Size="Size.Small"
-                             Color="@(_runtimeSnapshot?.SsdpEnabled == true ? Color.Success : Color.Default)"
-                             Variant="Variant.Outlined">
-                        @(_runtimeSnapshot?.SsdpEnabled == true ? "Enabled" : "Disabled")
-                    </MudChip>
+                    <StatusChip Label="@(_runtimeSnapshot?.SsdpEnabled == true ? "Enabled" : "Disabled")"
+                                Size="Size.Small"
+                                Color="@(_runtimeSnapshot?.SsdpEnabled == true ? Color.Success : Color.Default)"
+                                Variant="Variant.Outlined" />
                 </MudItem>
                 <MudItem xs="12" sm="4">
                     <MudText Typo="Typo.caption" Color="Color.Secondary">SiliconDust discovery</MudText>
-                    <MudChip T="string" Size="Size.Small"
-                             Color="@(_runtimeSnapshot?.SiliconDustDiscoveryEnabled == true ? Color.Success : Color.Default)"
-                             Variant="Variant.Outlined">
-                        @(_runtimeSnapshot?.SiliconDustDiscoveryEnabled == true ? "Enabled" : "Disabled")
-                    </MudChip>
+                    <StatusChip Label="@(_runtimeSnapshot?.SiliconDustDiscoveryEnabled == true ? "Enabled" : "Disabled")"
+                                Size="Size.Small"
+                                Color="@(_runtimeSnapshot?.SiliconDustDiscoveryEnabled == true ? Color.Success : Color.Default)"
+                                Variant="Variant.Outlined" />
                 </MudItem>
             </MudGrid>
 

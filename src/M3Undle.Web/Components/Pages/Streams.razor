@@ -41,9 +41,10 @@ else
                     </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="State">
-                    <MudTooltip Text="@StateTooltip(context)" Placement="Placement.Right">
-                        <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
-                    </MudTooltip>
+                    <TooltipChip Label="@context.State.ToString()"
+                                 TooltipText="@StateTooltip(context)"
+                                 Color="@StateColor(context.State)"
+                                 Placement="Placement.Right" />
                 </MudTd>
                 <MudTd DataLabel="Relay">
                     <MudTooltip Text="@RelayTooltip(context)" Placement="Placement.Right">
@@ -59,9 +60,10 @@ else
                 <MudTd DataLabel="Health">
                     @if (context.HealthProfile is { } hp)
                     {
-                        <MudTooltip Text="@HealthProfileTooltip(hp)" Placement="Placement.Right">
-                            <MudChip T="string" Size="Size.Small" Color="@HealthProfileColor(hp)">@hp</MudChip>
-                        </MudTooltip>
+                        <TooltipChip Label="@hp.ToString()"
+                                     TooltipText="@HealthProfileTooltip(hp)"
+                                     Color="@HealthProfileColor(hp)"
+                                     Placement="Placement.Right" />
                         @if (context.RequiresDownstreamRetune)
                         {
                             <MudTooltip Text="Retune policy active. Clients may be disconnected during recovery to force a clean re-tune." Placement="Placement.Right">
@@ -114,7 +116,9 @@ else
                     <MudTooltip Text="Number of upstream reconnect attempts for this session." Placement="Placement.Top">
                         @if (context.ReconnectAttempts > 0)
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">@context.ReconnectAttempts</MudChip>
+                            <StatusChip Label="@context.ReconnectAttempts.ToString()"
+                                        Color="Color.Warning"
+                                        Size="Size.Small" />
                             @if (context.LastFailureKind is not null)
                             {
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatFailureKind(context.LastFailureKind)</MudText>
@@ -262,7 +266,9 @@ else
                         <MudText Typo="Typo.body2">@context.DisplayName</MudText>
                     </MudTd>
                     <MudTd DataLabel="Final State">
-                        <MudChip T="string" Size="Size.Small" Color="@StateColor(context.State)">@context.State</MudChip>
+                        <StatusChip Label="@context.State.ToString()"
+                                    Color="@StateColor(context.State)"
+                                    Size="Size.Small" />
                         @if (context.LastFailureKind is not null)
                         {
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@FormatFailureKind(context.LastFailureKind)</MudText>
