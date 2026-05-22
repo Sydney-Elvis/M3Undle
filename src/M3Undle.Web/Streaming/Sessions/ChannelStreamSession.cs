@@ -570,6 +570,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         var cooldown = ResolveCooldownDuration(kind, ex);
                         _lastCooldownSeconds = cooldown.TotalSeconds;
                         _strikeStore.RecordStrike(Key, cooldown);
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.CooldownRecorded,
+                            upstreamFailureKind: kind,
+                            httpStatusCode: _lastUpstreamStatusCode,
+                            cooldownSeconds: cooldown.TotalSeconds,
+                            retryAfterSeconds: Math.Max(1, (int)Math.Ceiling(Math.Min(30, cooldown.TotalSeconds))),
+                            message: "Upstream cooldown recorded after outage window exhaustion.");
                         _headersReadyTcs.TrySetException(new TimeoutException("Reconnect outage window exhausted."));
                         MarkPendingStopTrigger("upstream_fault");
                         LogStopTrigger("upstream_fault", subscriberDisconnectReason: "outage_window_exhausted");

@@ -63,6 +63,11 @@ public sealed class OpenApiEndpointTests
         }
 
         Assert.IsTrue(foundProvidersListOperation, "Expected tagged/summary metadata for providers list operation.");
+        Assert.IsTrue(
+            paths.TryGetProperty("/api/v1/settings/streaming", out var streamingSettingsPath)
+            && streamingSettingsPath.TryGetProperty("get", out _)
+            && streamingSettingsPath.TryGetProperty("put", out _),
+            "Expected streaming settings API operations in management OpenAPI.");
     }
 
     [TestMethod]

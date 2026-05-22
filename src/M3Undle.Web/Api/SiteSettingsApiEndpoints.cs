@@ -15,6 +15,8 @@ public static class SiteSettingsApiEndpoints
 
         group.MapGet("/endpoint-security", GetEndpointSecurityAsync).WithSummary("Get endpoint security settings");
         group.MapPut("/endpoint-security", UpdateEndpointSecurityAsync).WithSummary("Update endpoint security settings");
+        group.MapGet("/streaming", GetStreamingSettingsAsync).WithSummary("Get streaming settings");
+        group.MapPut("/streaming", UpdateStreamingSettingsAsync).WithSummary("Update streaming settings");
         group.MapGet("/generated-hls", GetGeneratedHlsSettingsAsync).WithSummary("Get generated HLS settings");
         group.MapPut("/generated-hls", UpdateGeneratedHlsSettingsAsync).WithSummary("Update generated HLS settings");
         group.MapGet("/refresh-schedule", GetRefreshScheduleAsync).WithSummary("Get refresh schedule settings");
@@ -86,6 +88,51 @@ public static class SiteSettingsApiEndpoints
         bool HasCredential,
         string? ActiveProfileId,
         string? VirtualTunerId);
+
+    private static async Task<Ok<StreamingSettingsState>> GetStreamingSettingsAsync(
+        IStreamingSettingsService streamingSettingsService,
+        CancellationToken cancellationToken)
+        => TypedResults.Ok(await streamingSettingsService.GetSettingsAsync(cancellationToken));
+
+    private static async Task<Results<Ok<StreamingSettingsState>, ValidationProblem>> UpdateStreamingSettingsAsync(
+        StreamingSettingsUpdateRequest request,
+        IStreamingSettingsService streamingSettingsService,
+        CancellationToken cancellationToken)
+    {
+        var result = await streamingSettingsService.UpdateAsync(new UpdateStreamingSettingsCommand(
+            request.StreamingEnabled,
+            request.MaxConcurrentSessions,
+            request.IdleGraceSeconds,
+            request.IdleGraceHardCapSeconds,
+            request.BufferMaxBytesPerSession,
+            request.BufferMaxBytesHardCap,
+            request.BufferReadChunkSizeBytes,
+            request.ReconnectReadStallTimeoutSeconds,
+            request.ReconnectOutageWindowSeconds,
+            request.ReconnectConnectTimeoutSeconds), cancellationToken);
+
+        if (!result.Succeeded)
+        {
+            return TypedResults.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["streaming"] = [result.Error ?? "Streaming settings update failed."],
+            });
+        }
+
+        return TypedResults.Ok(await streamingSettingsService.GetSettingsAsync(cancellationToken));
+    }
+
+    private sealed record StreamingSettingsUpdateRequest(
+        bool StreamingEnabled,
+        int MaxConcurrentSessions,
+        int IdleGraceSeconds,
+        int IdleGraceHardCapSeconds,
+        int BufferMaxBytesPerSession,
+        int BufferMaxBytesHardCap,
+        int BufferReadChunkSizeBytes,
+        int ReconnectReadStallTimeoutSeconds,
+        int ReconnectOutageWindowSeconds,
+        int ReconnectConnectTimeoutSeconds);
 
     private static async Task<Ok<ObservabilitySettingsResponse>> GetObservabilitySettingsAsync(
         IObservabilitySettingsService settingsService,

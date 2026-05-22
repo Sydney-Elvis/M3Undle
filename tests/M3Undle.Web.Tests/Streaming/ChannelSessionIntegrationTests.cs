@@ -334,6 +334,11 @@ public sealed class ChannelSessionIntegrationTests
 
         Assert.AreEqual(SessionState.Faulted, session.State);
         Assert.IsTrue(fixture.StrikeStore.IsCoolingDown(fixture.Source.SessionKey, out _));
+        var cooldownEvents = fixture.DiagnosticsStore.Query(kind: StreamDiagnosticEventKind.CooldownRecorded);
+        Assert.IsTrue(cooldownEvents.Any(x =>
+            x.ProviderId == fixture.Source.ProviderId
+            && x.ProviderChannelId == fixture.Source.ProviderChannelId
+            && x.RetryAfterSeconds is > 0));
     }
 
     [TestMethod]
