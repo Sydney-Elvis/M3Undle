@@ -1639,7 +1639,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             StreamDiagnosticEventKind.SessionClosed,
             stopTrigger: _lastStopTrigger,
             message: "Shared stream session closed.");
+        RecordCleanWatchIfEligible();
         await _onClosed(Key, this);
+    }
+
+    private void RecordCleanWatchIfEligible()
+    {
+        if (_state != SessionState.Closed
+            || _reconnectAttempts > 0
+            || !string.IsNullOrWhiteSpace(_lastFailureKind)
+            || _lastUpstreamByteUtc is null
+            || Interlocked.Read(ref _totalBytesRelayed) <= 0)
+            return;
+
+        var duration = DateTimeOffset.UtcNow - _startedUtc;
+        if (duration <= TimeSpan.Zero)
+            return;
+
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.CleanWatchCompleted,
+            cleanWatchDuration: duration,
+            message: "Shared stream session completed without an observed upstream health incident.");
     }
 
     private void RecordDiagnostic(
@@ -1661,6 +1681,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         long? bytesSuppressed = null,
         TimeSpan? recoveryHoldLimit = null,
         TimeSpan? clientAbortAfterRecoveryDelay = null,
+        TimeSpan? cleanWatchDuration = null,
         string? message = null)
     {
         var diagnosticEvent = new StreamDiagnosticEvent(
@@ -1695,6 +1716,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             BytesSuppressed: bytesSuppressed,
             RecoveryHoldLimitMs: recoveryHoldLimit?.TotalMilliseconds,
             ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelay?.TotalMilliseconds,
+            CleanWatchDurationMs: cleanWatchDuration?.TotalMilliseconds,
             RelayMode: _relayMode,
             Message: message);
         _diagnosticsStore.Record(diagnosticEvent);

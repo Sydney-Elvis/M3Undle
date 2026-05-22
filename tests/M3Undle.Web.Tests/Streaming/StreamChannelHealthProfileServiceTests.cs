@@ -98,10 +98,55 @@ public sealed class StreamChannelHealthProfileServiceTests
         Assert.AreEqual(UpstreamRelayModes.Direct, decision.SelectedRelayMode);
     }
 
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_CleanWatchAfterAdverseEvent_DecaysUnstableToCautious()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(30).TotalMilliseconds));
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Cautious, policy.Profile);
+        Assert.AreEqual(1, evidence.CleanWatchEvents);
+        Assert.AreEqual(TimeSpan.FromMinutes(30), evidence.CleanWatchDuration);
+        Assert.AreEqual(StreamChannelHealthProfile.Cautious, evidence.RecoveryPolicy.Profile);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_CleanWatchBeforeAdverseEvent_DoesNotDecayUnstable()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(60).TotalMilliseconds, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Unstable, evidence.RecoveryPolicy.Profile);
+        Assert.AreEqual(0, evidence.CleanWatchEvents);
+        Assert.AreEqual(TimeSpan.Zero, evidence.CleanWatchDuration);
+    }
+
     private static StreamChannelHealthEvent CreateHealthEvent(
         string eventKind,
         bool clientAbortAfterRecovery = false,
-        string? safeStartKind = null)
+        string? safeStartKind = null,
+        double? cleanWatchDurationMs = null,
+        TimeSpan? age = null)
         => new()
         {
             StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
@@ -109,9 +154,10 @@ public sealed class StreamChannelHealthProfileServiceTests
             ProviderChannelId = "channel-1",
             DisplayName = "Test Channel",
             EventKind = eventKind,
-            EventUtc = DateTime.UtcNow.AddMinutes(-5),
+            EventUtc = DateTime.UtcNow - (age ?? TimeSpan.FromMinutes(5)),
             ClientAbortAfterRecovery = clientAbortAfterRecovery,
             SafeStartKind = safeStartKind,
+            CleanWatchDurationMs = cleanWatchDurationMs,
         };
 
     private sealed class ProfileFixture : IAsyncDisposable

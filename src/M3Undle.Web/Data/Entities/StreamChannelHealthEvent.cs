@@ -24,4 +24,5 @@ public sealed class StreamChannelHealthEvent
     public bool ForcedRetune { get; set; }
     public bool TsSyncLoss { get; set; }
     public long? BytesSuppressed { get; set; }
+    public double? CleanWatchDurationMs { get; set; }
 }

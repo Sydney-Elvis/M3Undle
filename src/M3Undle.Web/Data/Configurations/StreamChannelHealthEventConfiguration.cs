@@ -32,6 +32,7 @@ public sealed class StreamChannelHealthEventConfiguration : IEntityTypeConfigura
         builder.Property(e => e.ForcedRetune).HasColumnName("forced_retune");
         builder.Property(e => e.TsSyncLoss).HasColumnName("ts_sync_loss");
         builder.Property(e => e.BytesSuppressed).HasColumnName("bytes_suppressed");
+        builder.Property(e => e.CleanWatchDurationMs).HasColumnName("clean_watch_duration_ms");
 
         builder.HasIndex(e => new { e.ProviderId, e.ProviderChannelId, e.EventUtc })
             .HasDatabaseName("ix_stream_channel_health_events_provider_channel_event_utc");

@@ -42,6 +42,22 @@ public sealed record StreamRelayPolicyDecision(
         => new(providerRelayPolicy, UpstreamRelayModes.FfmpegCleanRemux, reason);
 }
 
+public sealed record StreamChannelHealthEvidence(
+    string ProviderId,
+    string ProviderChannelId,
+    StreamChannelRecoveryPolicy RecoveryPolicy,
+    StreamRelayPolicyDecision AutoRelayDecision,
+    int UpstreamFailures,
+    int RecoveryResumes,
+    int FallbackRecoveryResumes,
+    int IdrRecoveryResumes,
+    int ClientAbortAfterRecovery,
+    int ForcedRetunes,
+    int TsSyncLoss,
+    int CleanWatchEvents,
+    TimeSpan CleanWatchDuration,
+    DateTime? LastAdverseEventUtc);
+
 public interface IStreamChannelHealthProfileService
 {
     Task<StreamChannelRecoveryPolicy> GetRecoveryPolicyAsync(
@@ -53,6 +69,14 @@ public interface IStreamChannelHealthProfileService
     StreamRelayPolicyDecision GetRelayPolicyDecision(
         string providerRelayPolicy,
         StreamChannelRecoveryPolicy recoveryPolicy);
+
+    Task<StreamChannelHealthEvidence> GetEvidenceAsync(
+        string providerId,
+        string providerChannelId,
+        ReconnectOptions reconnectOptions,
+        CancellationToken ct = default);
+
+    void Invalidate(string providerId, string providerChannelId);
 }
 
 public sealed class NoopStreamChannelHealthProfileService : IStreamChannelHealthProfileService
@@ -75,4 +99,32 @@ public sealed class NoopStreamChannelHealthProfileService : IStreamChannelHealth
         StreamChannelRecoveryPolicy recoveryPolicy)
         => StreamRelayPolicyDecision.Direct(Configuration.CleanRelayModes.Normalize(providerRelayPolicy),
             "No channel health profile service is available; using direct relay.");
+
+    public Task<StreamChannelHealthEvidence> GetEvidenceAsync(
+        string providerId,
+        string providerChannelId,
+        ReconnectOptions reconnectOptions,
+        CancellationToken ct = default)
+    {
+        var policy = StreamChannelRecoveryPolicy.FromOptions(reconnectOptions);
+        return Task.FromResult(new StreamChannelHealthEvidence(
+            providerId,
+            providerChannelId,
+            policy,
+            GetRelayPolicyDecision(Configuration.CleanRelayModes.Auto, policy),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            TimeSpan.Zero,
+            null));
+    }
+
+    public void Invalidate(string providerId, string providerChannelId)
+    {
+    }
 }

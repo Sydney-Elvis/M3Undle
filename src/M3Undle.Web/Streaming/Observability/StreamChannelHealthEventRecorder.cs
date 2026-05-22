@@ -156,6 +156,7 @@ public sealed class StreamChannelHealthEventRecorder(
             ForcedRetune = isForcedRetune,
             TsSyncLoss = isTsSyncLoss,
             BytesSuppressed = diagnosticEvent.BytesSuppressed,
+            CleanWatchDurationMs = diagnosticEvent.CleanWatchDurationMs,
         };
     }
 
@@ -167,5 +168,6 @@ public sealed class StreamChannelHealthEventRecorder(
             or StreamDiagnosticEventKind.RecoveryForcedRetune
             or StreamDiagnosticEventKind.ClientAbortAfterRecovery
             or StreamDiagnosticEventKind.MpegTsSyncLost
-            or StreamDiagnosticEventKind.ControlledDownstreamRetune;
+            or StreamDiagnosticEventKind.ControlledDownstreamRetune
+            or StreamDiagnosticEventKind.CleanWatchCompleted;
 }

@@ -12,6 +12,7 @@ public sealed class StreamChannelHealthProfileService(
 {
     private static readonly TimeSpan ObservationWindow = TimeSpan.FromHours(24);
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CleanWatchDecayThreshold = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan UnstableHoldLimit = TimeSpan.FromSeconds(5);
     private const int UnstableSearchLimitBytes = 2 * 1024 * 1024;
 
@@ -34,26 +35,7 @@ public sealed class StreamChannelHealthProfileService(
 
         try
         {
-            var cutoffUtc = now.UtcDateTime - ObservationWindow;
-            using var scope = scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-            var rows = await db.StreamChannelHealthEvents
-                .AsNoTracking()
-                .Where(e => e.ProviderId == providerId
-                    && e.ProviderChannelId == providerChannelId
-                    && e.EventUtc >= cutoffUtc)
-                .GroupBy(_ => 1)
-                .Select(g => new HealthSummary(
-                    g.Count(e => e.EventKind == "UpstreamFailure"),
-                    g.Count(e => e.EventKind == "RecoveryOutputResumed"),
-                    g.Count(e => e.EventKind == "RecoveryOutputResumed" && e.SafeStartKind == "FallbackPacketBoundary"),
-                    g.Count(e => e.EventKind == "RecoveryOutputResumed" && e.SafeStartKind == "H264Idr"),
-                    g.Count(e => e.ClientAbortAfterRecovery),
-                    g.Count(e => e.ForcedRetune),
-                    g.Count(e => e.TsSyncLoss)))
-                .SingleOrDefaultAsync(ct);
-
-            var summary = rows ?? HealthSummary.Empty;
+            var summary = await LoadSummaryAsync(providerId, providerChannelId, now.UtcDateTime, ct);
             _cache[cacheKey] = new CacheEntry(now, summary);
             return BuildPolicy(summary, reconnectOptions);
         }
@@ -95,6 +77,85 @@ public sealed class StreamChannelHealthProfileService(
         };
     }
 
+    public async Task<StreamChannelHealthEvidence> GetEvidenceAsync(
+        string providerId,
+        string providerChannelId,
+        ReconnectOptions reconnectOptions,
+        CancellationToken ct = default)
+    {
+        var now = _timeProvider.GetUtcNow();
+        var summary = await LoadSummaryAsync(providerId, providerChannelId, now.UtcDateTime, ct);
+        _cache[$"{providerId}:{providerChannelId}"] = new CacheEntry(now, summary);
+        var policy = BuildPolicy(summary, reconnectOptions);
+        return new StreamChannelHealthEvidence(
+            providerId,
+            providerChannelId,
+            policy,
+            GetRelayPolicyDecision(CleanRelayModes.Auto, policy),
+            summary.UpstreamFailures,
+            summary.RecoveryResumes,
+            summary.FallbackRecoveryResumes,
+            summary.IdrRecoveryResumes,
+            summary.ClientAbortAfterRecovery,
+            summary.ForcedRetunes,
+            summary.TsSyncLoss,
+            summary.CleanWatchEvents,
+            summary.CleanWatchDuration,
+            summary.LastAdverseEventUtc);
+    }
+
+    public void Invalidate(string providerId, string providerChannelId)
+        => _cache.TryRemove($"{providerId}:{providerChannelId}", out _);
+
+    private async Task<HealthSummary> LoadSummaryAsync(
+        string providerId,
+        string providerChannelId,
+        DateTime nowUtc,
+        CancellationToken ct)
+    {
+        var cutoffUtc = nowUtc - ObservationWindow;
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var rows = await db.StreamChannelHealthEvents
+            .AsNoTracking()
+            .Where(e => e.ProviderId == providerId
+                && e.ProviderChannelId == providerChannelId
+                && e.EventUtc >= cutoffUtc)
+            .Select(e => new HealthEventRow(
+                e.EventKind,
+                e.EventUtc,
+                e.SafeStartKind,
+                e.ClientAbortAfterRecovery,
+                e.ForcedRetune,
+                e.TsSyncLoss,
+                e.CleanWatchDurationMs))
+            .ToListAsync(ct);
+
+        if (rows.Count == 0)
+            return HealthSummary.Empty;
+
+        var lastAdverseEventUtc = rows
+            .Where(IsAdverse)
+            .Select(e => (DateTime?)e.EventUtc)
+            .Max();
+        var cleanRows = rows.Where(e => e.EventKind == nameof(StreamDiagnosticEventKind.CleanWatchCompleted)
+            && (lastAdverseEventUtc is null || e.EventUtc > lastAdverseEventUtc.Value));
+        var cleanWatchMs = cleanRows.Sum(e => Math.Max(0, e.CleanWatchDurationMs ?? 0));
+
+        return new HealthSummary(
+            rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure)),
+            rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed)),
+            rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed) && e.SafeStartKind == "FallbackPacketBoundary"),
+            rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed) && e.SafeStartKind == "H264Idr"),
+            rows.Count(e => e.ClientAbortAfterRecovery),
+            rows.Count(e => e.ForcedRetune),
+            rows.Count(e => e.TsSyncLoss),
+            rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.CleanWatchCompleted)
+                && (lastAdverseEventUtc is null || e.EventUtc > lastAdverseEventUtc.Value)),
+            TimeSpan.FromMilliseconds(cleanWatchMs),
+            lastAdverseEventUtc);
+    }
+
     private static StreamChannelRecoveryPolicy BuildPolicy(HealthSummary summary, ReconnectOptions options)
     {
         var profile = DeriveProfile(summary);
@@ -126,35 +187,62 @@ public sealed class StreamChannelHealthProfileService(
 
     private static StreamChannelHealthProfile DeriveProfile(HealthSummary summary)
     {
+        StreamChannelHealthProfile profile;
         if (summary.ForcedRetunes > 0
             || summary.ClientAbortAfterRecovery >= 2
             || summary.FallbackRecoveryResumes >= 2
             || summary.TsSyncLoss >= 2)
-            return StreamChannelHealthProfile.Unstable;
-
-        if (summary.ClientAbortAfterRecovery > 0
+        {
+            profile = StreamChannelHealthProfile.Unstable;
+        }
+        else if (summary.ClientAbortAfterRecovery > 0
             || summary.FallbackRecoveryResumes > 0
             || summary.UpstreamFailures >= 2
             || summary.RecoveryResumes >= 2
             || summary.TsSyncLoss > 0)
-            return StreamChannelHealthProfile.Cautious;
+        {
+            profile = StreamChannelHealthProfile.Cautious;
+        }
+        else
+        {
+            profile = StreamChannelHealthProfile.Stable;
+        }
 
-        return StreamChannelHealthProfile.Stable;
+        if (profile == StreamChannelHealthProfile.Stable || summary.CleanWatchDuration < CleanWatchDecayThreshold)
+            return profile;
+
+        return profile == StreamChannelHealthProfile.Unstable
+            ? StreamChannelHealthProfile.Cautious
+            : StreamChannelHealthProfile.Stable;
     }
 
     private static string BuildReason(HealthSummary summary, StreamChannelHealthProfile profile)
         => profile switch
         {
             StreamChannelHealthProfile.Unstable =>
-                $"Recent health events classify channel as unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}.",
+                $"Recent health events classify channel as unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}, cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}.",
             StreamChannelHealthProfile.Cautious =>
-                $"Recent health events classify channel as cautious: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, tsSyncLoss={summary.TsSyncLoss}.",
-            _ => "No recent recovery failures or post-recovery aborts were found.",
+                $"Recent health events classify channel as cautious: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, tsSyncLoss={summary.TsSyncLoss}, cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}.",
+            _ => summary.CleanWatchDuration > TimeSpan.Zero
+                ? $"Recent clean watch evidence relaxed channel health: cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}."
+                : "No recent recovery failures or post-recovery aborts were found.",
         };
 
     private static TimeSpan Max(TimeSpan left, TimeSpan right) => left >= right ? left : right;
 
     private sealed record CacheEntry(DateTimeOffset CachedAt, HealthSummary Summary);
+
+    private static bool IsAdverse(HealthEventRow row)
+        => !string.Equals(row.EventKind, nameof(StreamDiagnosticEventKind.CleanWatchCompleted), StringComparison.Ordinal);
+
+    private sealed record HealthEventRow(
+        string EventKind,
+        DateTime EventUtc,
+        string? SafeStartKind,
+        bool ClientAbortAfterRecovery,
+        bool ForcedRetune,
+        bool TsSyncLoss,
+        double? CleanWatchDurationMs);
 
     private sealed record HealthSummary(
         int UpstreamFailures,
@@ -163,8 +251,11 @@ public sealed class StreamChannelHealthProfileService(
         int IdrRecoveryResumes,
         int ClientAbortAfterRecovery,
         int ForcedRetunes,
-        int TsSyncLoss)
+        int TsSyncLoss,
+        int CleanWatchEvents,
+        TimeSpan CleanWatchDuration,
+        DateTime? LastAdverseEventUtc)
     {
-        public static HealthSummary Empty { get; } = new(0, 0, 0, 0, 0, 0, 0);
+        public static HealthSummary Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, TimeSpan.Zero, null);
     }
 }

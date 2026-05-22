@@ -30,4 +30,5 @@ public enum StreamDiagnosticEventKind
     RecoveryForcedRetune = 25,
     ClientAbortAfterRecovery = 26,
     ControlledDownstreamRetune = 27,
+    CleanWatchCompleted = 28,
 }

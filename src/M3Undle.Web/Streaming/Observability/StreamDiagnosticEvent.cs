@@ -35,5 +35,6 @@ public sealed record StreamDiagnosticEvent(
     long? BytesSuppressed = null,
     double? RecoveryHoldLimitMs = null,
     double? ClientAbortAfterRecoveryDelayMs = null,
+    double? CleanWatchDurationMs = null,
     string? RelayMode = null,
     string? Message = null);

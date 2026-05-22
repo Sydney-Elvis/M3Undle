@@ -63,6 +63,24 @@ public sealed class StreamChannelHealthEventRecorderTests
     }
 
     [TestMethod]
+    public async Task Record_PersistsCleanWatchDuration()
+    {
+        await using var fixture = await RecorderFixture.CreateAsync();
+
+        await fixture.Recorder.StartAsync(CancellationToken.None);
+        fixture.Recorder.Record(CreateEvent(
+            StreamDiagnosticEventKind.CleanWatchCompleted,
+            cleanWatchDurationMs: 45_000));
+        await fixture.Recorder.FlushAsync();
+        await fixture.Recorder.StopAsync(CancellationToken.None);
+
+        await using var db = fixture.CreateDbContext();
+        var healthEvent = await db.StreamChannelHealthEvents.SingleAsync();
+        Assert.AreEqual("CleanWatchCompleted", healthEvent.EventKind);
+        Assert.AreEqual(45_000, healthEvent.CleanWatchDurationMs);
+    }
+
+    [TestMethod]
     public async Task Record_IgnoresNonHealthDiagnosticEvent()
     {
         await using var fixture = await RecorderFixture.CreateAsync();
@@ -83,7 +101,8 @@ public sealed class StreamChannelHealthEventRecorderTests
         double? recoveryDurationMs = null,
         long? bytesSuppressed = null,
         SubscriberDisconnectReason? disconnectReason = null,
-        double? clientAbortAfterRecoveryDelayMs = null)
+        double? clientAbortAfterRecoveryDelayMs = null,
+        double? cleanWatchDurationMs = null)
         => new(
             EventId: Guid.NewGuid().ToString("N"),
             TimestampUtc: DateTimeOffset.UtcNow,
@@ -101,6 +120,7 @@ public sealed class StreamChannelHealthEventRecorderTests
             SafeStartKind: safeStartKind,
             BytesSuppressed: bytesSuppressed,
             ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelayMs,
+            CleanWatchDurationMs: cleanWatchDurationMs,
             DisconnectReason: disconnectReason,
             RelayMode: "FfmpegCleanRemux");
 

@@ -2061,6 +2061,10 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("REAL")
                         .HasColumnName("client_abort_after_recovery_delay_ms");
 
+                    b.Property<double?>("CleanWatchDurationMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("clean_watch_duration_ms");
+
                     b.Property<string>("ClientDisconnectReason")
                         .HasColumnType("TEXT")
                         .HasColumnName("client_disconnect_reason");
