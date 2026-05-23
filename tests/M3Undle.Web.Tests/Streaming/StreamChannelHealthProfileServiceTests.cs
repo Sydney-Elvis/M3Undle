@@ -99,6 +99,46 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
+    public async Task GetEvidenceAsync_WithCleanWatchAfterAdverseEvent_ExposesLastCleanWatchUtc()
+    {
+        var cleanWatchTime = DateTime.UtcNow - TimeSpan.FromMinutes(10);
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(35).TotalMilliseconds, age: TimeSpan.FromMinutes(10)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.IsNotNull(evidence.LastCleanWatchUtc);
+        Assert.IsNotNull(evidence.LastAdverseEventUtc);
+        Assert.IsTrue(evidence.LastCleanWatchUtc > evidence.LastAdverseEventUtc,
+            "LastCleanWatchUtc should be more recent than LastAdverseEventUtc");
+        Assert.AreEqual(1, evidence.CleanWatchEvents);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_NoCleanWatchAfterAdverseEvent_LastCleanWatchUtcIsNull()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(60).TotalMilliseconds, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.IsNull(evidence.LastCleanWatchUtc,
+            "Clean watch before the adverse event should not count — LastCleanWatchUtc must be null");
+        Assert.AreEqual(0, evidence.CleanWatchEvents);
+    }
+
+    [TestMethod]
     public async Task GetRecoveryPolicyAsync_CleanWatchAfterAdverseEvent_DecaysUnstableToCautious()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
@@ -141,9 +181,139 @@ public sealed class StreamChannelHealthProfileServiceTests
         Assert.AreEqual(TimeSpan.Zero, evidence.CleanWatchDuration);
     }
 
+    [TestMethod]
+    public async Task GetEvidenceAsync_NoEvents_TrendIsUnknown()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Unknown, evidence.Trend.Trend);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_OnlyCleanWatchInRecentWindow_TrendIsStable()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(20).TotalMilliseconds, age: TimeSpan.FromMinutes(30)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Stable, evidence.Trend.Trend);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_ForcedRetuneInRecentWindow_TrendIsWorsening()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("ForcedRetune", forcedRetune: true, age: TimeSpan.FromMinutes(20)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Worsening, evidence.Trend.Trend);
+        StringAssert.Contains(evidence.Trend.Reason, "forced retune");
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_ClientAbortInRecentWindow_TrendIsWorsening()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromMinutes(10)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Worsening, evidence.Trend.Trend);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_AdverseOnlyInComparisonWindow_TrendIsImproving()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(90)),
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(35).TotalMilliseconds, age: TimeSpan.FromMinutes(20)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Improving, evidence.Trend.Trend);
+        Assert.AreEqual(0, evidence.Trend.RecentAdverseCount);
+        Assert.AreEqual(1, evidence.Trend.ComparisonAdverseCount);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_MoreAdverseInRecentThanComparison_TrendIsWorsening()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(90)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(30)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(25)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(20)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Worsening, evidence.Trend.Trend);
+        Assert.AreEqual(3, evidence.Trend.RecentAdverseCount);
+        Assert.AreEqual(1, evidence.Trend.ComparisonAdverseCount);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_FewerAdverseInRecentWithCleanWatch_TrendIsImproving()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(90)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(85)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(80)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(30)),
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(20).TotalMilliseconds, age: TimeSpan.FromMinutes(10)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Improving, evidence.Trend.Trend);
+        Assert.AreEqual(1, evidence.Trend.RecentAdverseCount);
+        Assert.AreEqual(3, evidence.Trend.ComparisonAdverseCount);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_EqualAdverseInBothWindows_TrendIsStable()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(90)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(85)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(30)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(25)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Stable, evidence.Trend.Trend);
+        Assert.AreEqual(2, evidence.Trend.RecentAdverseCount);
+        Assert.AreEqual(2, evidence.Trend.ComparisonAdverseCount);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_CleanWatchBeforeForcedRetune_TrendIsWorsening()
+    {
+        // Clean watch before the adverse event should not flip the trend to Improving
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(20).TotalMilliseconds, age: TimeSpan.FromMinutes(40)),
+            CreateHealthEvent("ForcedRetune", forcedRetune: true, age: TimeSpan.FromMinutes(15)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthTrend.Worsening, evidence.Trend.Trend);
+        Assert.AreEqual(TimeSpan.Zero, evidence.Trend.CleanWatchSinceLastAdverse);
+    }
+
     private static StreamChannelHealthEvent CreateHealthEvent(
         string eventKind,
         bool clientAbortAfterRecovery = false,
+        bool forcedRetune = false,
         string? safeStartKind = null,
         double? cleanWatchDurationMs = null,
         TimeSpan? age = null)
@@ -156,6 +326,7 @@ public sealed class StreamChannelHealthProfileServiceTests
             EventKind = eventKind,
             EventUtc = DateTime.UtcNow - (age ?? TimeSpan.FromMinutes(5)),
             ClientAbortAfterRecovery = clientAbortAfterRecovery,
+            ForcedRetune = forcedRetune,
             SafeStartKind = safeStartKind,
             CleanWatchDurationMs = cleanWatchDurationMs,
         };

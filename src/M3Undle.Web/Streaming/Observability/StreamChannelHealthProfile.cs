@@ -56,7 +56,9 @@ public sealed record StreamChannelHealthEvidence(
     int TsSyncLoss,
     int CleanWatchEvents,
     TimeSpan CleanWatchDuration,
-    DateTime? LastAdverseEventUtc);
+    DateTime? LastAdverseEventUtc,
+    DateTime? LastCleanWatchUtc,
+    StreamChannelHealthTrendResult Trend);
 
 public interface IStreamChannelHealthProfileService
 {
@@ -121,7 +123,9 @@ public sealed class NoopStreamChannelHealthProfileService : IStreamChannelHealth
             0,
             0,
             TimeSpan.Zero,
-            null));
+            LastAdverseEventUtc: null,
+            LastCleanWatchUtc: null,
+            StreamChannelHealthTrendResult.Insufficient("No channel health profile service is available.")));
     }
 
     public void Invalidate(string providerId, string providerChannelId)

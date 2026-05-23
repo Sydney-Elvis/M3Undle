@@ -1,0 +1,344 @@
+@using M3Undle.Web.Streaming.Configuration
+@using M3Undle.Web.Streaming.Observability
+@using Microsoft.Extensions.Options
+@inject IStreamChannelHealthProfileService HealthProfileService
+@inject IOptions<ReconnectOptions> ReconnectOptions
+
+<MudDialog Style="min-width:380px; max-width:540px;">
+    <TitleContent>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+            <MudIcon Icon="@Icons.Material.Filled.MonitorHeart" Size="Size.Small" Color="Color.Primary" />
+            <MudText Typo="Typo.h6" Style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">
+                @Session.DisplayName
+            </MudText>
+        </MudStack>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Class="mb-3" />
+        }
+
+        <MudText Typo="Typo.overline" Color="Color.Secondary">Health Profile</MudText>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+            @if (Session.HealthProfile is { } hp)
+            {
+                <MudChip T="string" Color="@HealthProfileColor(hp)" Size="Size.Small" Variant="Variant.Filled">
+                    @hp.ToString()
+                </MudChip>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Not yet derived</MudText>
+            }
+            <MudText Typo="Typo.caption" Color="Color.Secondary">24-hour observation window</MudText>
+        </MudStack>
+        @if (!string.IsNullOrWhiteSpace(Session.HealthProfileReason))
+        {
+            <MudText Typo="Typo.caption" Class="mb-3" Style="display:block;">@Session.HealthProfileReason</MudText>
+        }
+        else
+        {
+            <div class="mb-3" />
+        }
+
+        @if (_evidence is { } ev)
+        {
+            <MudText Typo="Typo.overline" Color="Color.Secondary">Evidence (last 24 h)</MudText>
+            <MudSimpleTable Dense="true" Elevation="0" Class="mb-2" Style="font-size:0.8rem;">
+                <tbody>
+                    <tr>
+                        <td>Upstream failures</td>
+                        <td>@ev.UpstreamFailures</td>
+                    </tr>
+                    <tr>
+                        <td>Recoveries</td>
+                        <td>@ev.RecoveryResumes</td>
+                    </tr>
+                    <tr>
+                        <td>Fallback recoveries</td>
+                        <td style="@(ev.FallbackRecoveryResumes > 0 ? "color:var(--mud-palette-warning);" : "")">
+                            @ev.FallbackRecoveryResumes
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Client aborts after recovery</td>
+                        <td style="@(ev.ClientAbortAfterRecovery > 0 ? "color:var(--mud-palette-warning);" : "")">
+                            @ev.ClientAbortAfterRecovery
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Forced retunes</td>
+                        <td style="@(ev.ForcedRetunes > 0 ? "color:var(--mud-palette-error);" : "")">
+                            @ev.ForcedRetunes
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>TS sync loss</td>
+                        <td style="@(ev.TsSyncLoss > 0 ? "color:var(--mud-palette-warning);" : "")">
+                            @ev.TsSyncLoss
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Clean watch</td>
+                        <td>@ev.CleanWatchDuration.TotalMinutes.ToString("F0") min (@ev.CleanWatchEvents sessions)</td>
+                    </tr>
+                </tbody>
+            </MudSimpleTable>
+
+            @if (ev.LastAdverseEventUtc.HasValue || ev.LastCleanWatchUtc.HasValue)
+            {
+                <MudStack Spacing="0" Class="mb-2">
+                    @if (ev.LastAdverseEventUtc.HasValue)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            Last adverse event: @ev.LastAdverseEventUtc.Value.ToLocalTime().ToString("g")
+                        </MudText>
+                    }
+                    @if (ev.LastCleanWatchUtc.HasValue)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            Last clean watch: @ev.LastCleanWatchUtc.Value.ToLocalTime().ToString("g")
+                        </MudText>
+                    }
+                </MudStack>
+            }
+
+            @if (ev.CleanWatchDuration > TimeSpan.Zero)
+            {
+                var decayPct = Math.Min(100.0, ev.CleanWatchDuration.TotalMinutes / 30.0 * 100.0);
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-3">
+                    <MudText Typo="Typo.caption" Style="white-space:nowrap;">Clean-watch toward decay:</MudText>
+                    <MudProgressLinear Value="decayPct" Color="Color.Success" Size="Size.Small"
+                                       Style="flex:1; min-width:60px;" Rounded="true" />
+                    <MudText Typo="Typo.caption" Style="white-space:nowrap;">@((int)Math.Round(decayPct))%</MudText>
+                </MudStack>
+            }
+            else
+            {
+                <div class="mb-3" />
+            }
+
+            <MudText Typo="Typo.overline" Color="Color.Secondary">Health Trend (1-hour windows)</MudText>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                <MudIcon Icon="@TrendIcon(ev.Trend.Trend)" Color="@TrendColor(ev.Trend.Trend)" Size="Size.Small" />
+                <MudChip T="string" Color="@TrendColor(ev.Trend.Trend)" Size="Size.Small" Variant="Variant.Filled">
+                    @ev.Trend.Trend.ToString()
+                </MudChip>
+            </MudStack>
+            @if (!string.IsNullOrWhiteSpace(ev.Trend.Reason))
+            {
+                <MudText Typo="Typo.caption" Class="mb-2" Style="display:block;">@ev.Trend.Reason</MudText>
+            }
+            @if (ev.Trend.Trend != StreamChannelHealthTrend.Unknown)
+            {
+                <MudSimpleTable Dense="true" Elevation="0" Class="mb-1" Style="font-size:0.8rem;">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th style="text-align:right;">Last hour</th>
+                            <th style="text-align:right;">Prior hour</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Adverse events</td>
+                            <td style="text-align:right;">@ev.Trend.RecentAdverseCount</td>
+                            <td style="text-align:right;">@ev.Trend.ComparisonAdverseCount</td>
+                        </tr>
+                        <tr>
+                            <td>Clean watch</td>
+                            <td style="text-align:right;">@ev.Trend.RecentCleanWatchDuration.TotalMinutes.ToString("F0") min</td>
+                            <td style="text-align:right;">@ev.Trend.ComparisonCleanWatchDuration.TotalMinutes.ToString("F0") min</td>
+                        </tr>
+                        @if (ev.Trend.RecentProfile.HasValue && ev.Trend.ComparisonProfile.HasValue)
+                        {
+                            <tr>
+                                <td>Window profile</td>
+                                <td style="text-align:right;">@ev.Trend.RecentProfile</td>
+                                <td style="text-align:right;">@ev.Trend.ComparisonProfile</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+                @if (ev.Trend.RecentAdverseCount > 0 || ev.Trend.ComparisonAdverseCount > 0)
+                {
+                    var maxAdverse = Math.Max(ev.Trend.RecentAdverseCount, ev.Trend.ComparisonAdverseCount);
+                    var recentPct = maxAdverse > 0 ? (double)ev.Trend.RecentAdverseCount / maxAdverse * 100.0 : 0;
+                    var compPct   = maxAdverse > 0 ? (double)ev.Trend.ComparisonAdverseCount / maxAdverse * 100.0 : 0;
+                    <MudStack Spacing="0" Class="mb-1" Style="font-size:0.75rem;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.caption" Style="min-width:52px; white-space:nowrap; color:var(--mud-palette-text-secondary);">Last hr</MudText>
+                            <MudProgressLinear Value="recentPct" Color="@TrendColor(ev.Trend.Trend)" Size="Size.Small"
+                                              Style="flex:1;" Rounded="true" />
+                            <MudText Typo="Typo.caption" Style="min-width:16px; text-align:right;">@ev.Trend.RecentAdverseCount</MudText>
+                        </MudStack>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.caption" Style="min-width:52px; white-space:nowrap; color:var(--mud-palette-text-secondary);">Prior hr</MudText>
+                            <MudProgressLinear Value="compPct" Color="Color.Default" Size="Size.Small"
+                                              Style="flex:1;" Rounded="true" />
+                            <MudText Typo="Typo.caption" Style="min-width:16px; text-align:right;">@ev.Trend.ComparisonAdverseCount</MudText>
+                        </MudStack>
+                    </MudStack>
+                }
+                @if (ev.Trend.CleanWatchSinceLastAdverse > TimeSpan.Zero)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3" Style="display:block;">
+                        @ev.Trend.CleanWatchSinceLastAdverse.TotalMinutes.ToString("F0") min clean watch since last adverse event
+                    </MudText>
+                }
+                else
+                {
+                    <div class="mb-3" />
+                }
+            }
+            else
+            {
+                <div class="mb-3" />
+            }
+
+            <MudText Typo="Typo.overline" Color="Color.Secondary">Effective Recovery Policy</MudText>
+            <MudSimpleTable Dense="true" Elevation="0" Class="mb-2" Style="font-size:0.8rem;">
+                <tbody>
+                    <tr>
+                        <td>Output hold limit</td>
+                        <td>@ev.RecoveryPolicy.RecoveryOutputHoldLimit.TotalSeconds.ToString("F0") s</td>
+                    </tr>
+                    <tr>
+                        <td>Safe-start search limit</td>
+                        <td>@(ev.RecoveryPolicy.RecoverySafeStartSearchLimitBytes / 1024) KiB</td>
+                    </tr>
+                    <tr>
+                        <td>Packet boundary fallback</td>
+                        <td>@(ev.RecoveryPolicy.AllowPacketBoundaryRecoveryFallback ? "Allowed" : "Blocked")</td>
+                    </tr>
+                    <tr>
+                        <td>Downstream retune</td>
+                        <td>@(ev.RecoveryPolicy.RequireDownstreamRetune ? "Required" : "Not required")</td>
+                    </tr>
+                </tbody>
+            </MudSimpleTable>
+            @if (!string.IsNullOrWhiteSpace(ev.RecoveryPolicy.DownstreamRetuneReason))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3" Style="display:block;">
+                    @ev.RecoveryPolicy.DownstreamRetuneReason
+                </MudText>
+            }
+            else
+            {
+                <div class="mb-3" />
+            }
+        }
+
+        <MudText Typo="Typo.overline" Color="Color.Secondary">Relay</MudText>
+        <MudSimpleTable Dense="true" Elevation="0" Class="mb-2" Style="font-size:0.8rem;">
+            <tbody>
+                <tr>
+                    <td>Provider relay policy</td>
+                    <td>@(FormatRelayPolicy(Session.RelayPolicy))</td>
+                </tr>
+                <tr>
+                    <td>Selected relay mode</td>
+                    <td>@FormatRelayMode(Session.RelayMode)</td>
+                </tr>
+                <tr>
+                    <td>Selection basis</td>
+                    <td>@(string.IsNullOrWhiteSpace(Session.LastRelayFallbackReason) ? "Startup decision" : "Fallback")</td>
+                </tr>
+            </tbody>
+        </MudSimpleTable>
+        @if (!string.IsNullOrWhiteSpace(Session.RelayDecisionReason))
+        {
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2" Style="display:block;">
+                @Session.RelayDecisionReason
+            </MudText>
+        }
+        @if (!string.IsNullOrWhiteSpace(Session.LastRelayFallbackReason))
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-2">
+                Fell back to direct relay: @Session.LastRelayFallbackReason
+            </MudAlert>
+        }
+
+        <MudDivider Class="mb-2 mt-1" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary">
+            Session @Session.SessionId · started @Session.StartedUtc.ToLocalTime().ToString("g")
+        </MudText>
+
+        @* TODO: Session lifecycle (stop reason, controlled retune reason, replacement session evidence)
+           requires structured per-session stop data not yet persisted in stream_channel_health_events.
+           Add when session-end diagnostics are promoted to durable storage. *@
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close" Variant="Variant.Text">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public StreamSessionSnapshot Session { get; set; } = null!;
+
+    private StreamChannelHealthEvidence? _evidence;
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _evidence = await HealthProfileService.GetEvidenceAsync(
+                Session.ProviderId,
+                Session.ProviderChannelId,
+                ReconnectOptions.Value);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void Close() => MudDialog.Close();
+
+    private static Color HealthProfileColor(StreamChannelHealthProfile profile) => profile switch
+    {
+        StreamChannelHealthProfile.Stable => Color.Success,
+        StreamChannelHealthProfile.Cautious => Color.Warning,
+        StreamChannelHealthProfile.Unstable => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static Color TrendColor(StreamChannelHealthTrend trend) => trend switch
+    {
+        StreamChannelHealthTrend.Improving => Color.Success,
+        StreamChannelHealthTrend.Stable => Color.Primary,
+        StreamChannelHealthTrend.Worsening => Color.Error,
+        _ => Color.Default,
+    };
+
+    private static string TrendIcon(StreamChannelHealthTrend trend) => trend switch
+    {
+        StreamChannelHealthTrend.Improving => Icons.Material.Filled.TrendingUp,
+        StreamChannelHealthTrend.Stable => Icons.Material.Filled.TrendingFlat,
+        StreamChannelHealthTrend.Worsening => Icons.Material.Filled.TrendingDown,
+        _ => Icons.Material.Outlined.HelpOutline,
+    };
+
+    private static string FormatRelayMode(string relayMode) => relayMode switch
+    {
+        "Direct" => "Direct",
+        "FfmpegCleanRemux" => "Clean remux",
+        "FfmpegHlsToMpegTs" => "HLS→TS",
+        _ => relayMode,
+    };
+
+    private static string FormatRelayPolicy(string? policy) => policy switch
+    {
+        "auto" => "Auto",
+        "on" or "remux" => "On (always remux)",
+        "off" => "Off (always direct)",
+        null or "" => "—",
+        _ => policy,
+    };
+}

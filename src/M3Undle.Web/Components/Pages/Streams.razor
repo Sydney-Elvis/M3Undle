@@ -2,6 +2,7 @@
 @using M3Undle.Web.Streaming.Observability
 @using M3Undle.Web.Streaming.Models
 @inject StreamingRegistry Registry
+@inject IDialogService DialogService
 @implements IDisposable
 
 <PageTitle>Streams — M3Undle</PageTitle>
@@ -29,10 +30,11 @@ else
                 <MudTh>Health</MudTh>
                 <MudTh>Clients</MudTh>
                 <MudTh>Bitrate</MudTh>
-                <MudTh>Backpressure</MudTh>
+                <MudTh>Buffer</MudTh>
                 <MudTh>Reconnects</MudTh>
                 <MudTh>Running</MudTh>
                 <MudTh>Last Data</MudTh>
+                <MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="Channel">
@@ -40,6 +42,7 @@ else
                         <MudText Typo="Typo.body2">@context.DisplayName</MudText>
                     </MudTooltip>
                 </MudTd>
+
                 <MudTd DataLabel="State">
                     <TooltipChip Label="@context.State.ToString()"
                                  TooltipText="@StateTooltip(context)"
@@ -52,7 +55,7 @@ else
                     </MudTooltip>
                     @if (!string.IsNullOrWhiteSpace(context.LastRelayFallbackReason))
                     {
-                        <MudTooltip Text="@($"Fell back to direct: {context.LastRelayFallbackReason}")">
+                        <MudTooltip Text="Relay fell back to direct. Click the details icon for reason." Placement="Placement.Right">
                             <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Color="Color.Warning" Style="vertical-align:middle; font-size:14px;" />
                         </MudTooltip>
                     }
@@ -66,7 +69,7 @@ else
                                      Placement="Placement.Right" />
                         @if (context.RequiresDownstreamRetune)
                         {
-                            <MudTooltip Text="Retune policy active. Clients may be disconnected during recovery to force a clean re-tune." Placement="Placement.Right">
+                            <MudTooltip Text="Retune policy active — clients disconnected on recovery. Click details icon." Placement="Placement.Right">
                                 <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" Color="Color.Warning" Style="vertical-align:middle; font-size:14px;" />
                             </MudTooltip>
                         }
@@ -98,12 +101,12 @@ else
                         <MudText Typo="Typo.body2">@FormatBitrate(context.UpstreamBytesPerSecond)</MudText>
                     </MudTooltip>
                 </MudTd>
-                <MudTd DataLabel="Backpressure" Style="min-width:130px;">
-                    <MudTooltip Text="Data waiting because downstream clients are not keeping up. Persistently high backpressure can indicate a slow or stalled client." Placement="Placement.Top">
+                <MudTd DataLabel="Buffer" Style="min-width:130px;">
+                    <MudTooltip Text="Ring buffer fill — shows how much of the recent-history buffer is in use. Full is normal for an active live stream." Placement="Placement.Top">
                         @if (context.BufferMaxBytes > 0)
                         {
                             var pct = (double)context.BufferUsedBytes / context.BufferMaxBytes * 100.0;
-                            <MudProgressLinear Value="pct" Color="@BufferColor(pct)" Rounded="true" Size="Size.Small" Class="mb-1" />
+                            <MudProgressLinear Value="pct" Color="Color.Default" Rounded="true" Size="Size.Small" Class="mb-1" />
                             <MudText Typo="Typo.caption">@FormatBytes(context.BufferUsedBytes) / @FormatBytes(context.BufferMaxBytes)</MudText>
                         }
                         else
@@ -149,6 +152,15 @@ else
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
                     }
+                </MudTd>
+                <MudTd DataLabel="">
+                    <MudTooltip Text="Channel health and relay details" Placement="Placement.Left">
+                        <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                       Size="Size.Small"
+                                       Color="Color.Default"
+                                       OnClick="@(() => OpenDetailsAsync(context))"
+                                       Style="padding:2px;" />
+                    </MudTooltip>
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -306,6 +318,16 @@ else
     private IReadOnlyList<StreamClientSnapshot> _clients = [];
     private IReadOnlyList<StreamSessionSnapshot> _recentEnded = [];
 
+    private async Task OpenDetailsAsync(StreamSessionSnapshot session)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = false, CloseButton = true };
+        var parameters = new DialogParameters<StreamSessionDetailsDialog>
+        {
+            { x => x.Session, session }
+        };
+        await DialogService.ShowAsync<StreamSessionDetailsDialog>(session.DisplayName, parameters, options);
+    }
+
     private PeriodicTimer? _timer;
     private readonly CancellationTokenSource _cts = new();
     private int _lastFingerprint;
@@ -415,18 +437,13 @@ else
     {
         var desc = s.RelayMode switch
         {
-            "Direct" => "Direct relay: stream bytes are passed through unchanged.",
-            "FfmpegCleanRemux" => "Clean remux: FFmpeg remuxes the stream to strip non-standard data and ensure clean MPEG-TS output.",
-            "FfmpegHlsToMpegTs" => "HLS→TS: the upstream HLS stream is repackaged as MPEG-TS for downstream clients.",
+            "Direct" => "Direct relay — bytes passed through unchanged.",
+            "FfmpegCleanRemux" => "Clean remux — FFmpeg re-muxes stream for clean MPEG-TS output.",
+            "FfmpegHlsToMpegTs" => "HLS→TS — upstream HLS repackaged as MPEG-TS.",
             _ => s.RelayMode,
         };
-
-        var sb = new System.Text.StringBuilder(desc);
-        if (!string.IsNullOrWhiteSpace(s.RelayPolicy))
-            sb.Append($"\nPolicy: {s.RelayPolicy}");
-        if (!string.IsNullOrWhiteSpace(s.RelayDecisionReason))
-            sb.Append($"\n{s.RelayDecisionReason}");
-        return sb.ToString();
+        var policy = s.RelayPolicy is { Length: > 0 } p ? $" Policy: {p}." : string.Empty;
+        return $"{desc}{policy} Click the details icon for decision reason.";
     }
 
     private static string IpTooltip(string? remoteIp)
@@ -469,9 +486,9 @@ else
 
     private static string HealthProfileTooltip(StreamChannelHealthProfile profile) => profile switch
     {
-        StreamChannelHealthProfile.Stable => "No recent recovery problems. Standard recovery policy is active.",
-        StreamChannelHealthProfile.Cautious => "Recent recovery events detected. M3Undle is using a more cautious recovery policy.",
-        StreamChannelHealthProfile.Unstable => "Repeated recovery failures or client aborts were detected recently.",
+        StreamChannelHealthProfile.Stable => "No recent issues. Click the details icon for evidence.",
+        StreamChannelHealthProfile.Cautious => "Recent recovery events. Click the details icon for evidence.",
+        StreamChannelHealthProfile.Unstable => "Repeated failures detected. Click the details icon for evidence.",
         _ => profile.ToString()!,
     };
 
@@ -544,13 +561,6 @@ else
             ? $"{bitsPerSec / 1_000_000.0:F1} Mbps"
             : $"{bitsPerSec / 1_000.0:F0} Kbps";
     }
-
-    private static Color BufferColor(double pct) => pct switch
-    {
-        >= 90 => Color.Error,
-        >= 70 => Color.Warning,
-        _ => Color.Success,
-    };
 
     private static string FormatBytes(long bytes) => bytes switch
     {
