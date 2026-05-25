@@ -57,7 +57,8 @@ public static class SiteSettingsApiEndpoints
             Username: request.Username,
             Password: request.Password,
             ActiveProfileId: request.ActiveProfileId,
-            VirtualTunerId: request.VirtualTunerId), cancellationToken);
+            VirtualTunerId: request.VirtualTunerId,
+            XtreamCompatibilityEnabled: request.XtreamCompatibilityEnabled), cancellationToken);
 
         if (!result.Succeeded)
         {
@@ -80,7 +81,8 @@ public static class SiteSettingsApiEndpoints
         string? Username,
         string? Password,
         string? ActiveProfileId,
-        string? VirtualTunerId);
+        string? VirtualTunerId,
+        bool XtreamCompatibilityEnabled = true);
 
     private sealed record EndpointSecurityResponse(
         bool Enabled,
@@ -341,7 +343,8 @@ public static class SiteSettingsApiEndpoints
             AdvertisedBaseUrl: request.AdvertisedBaseUrl,
             DiscoveryEnabled: request.DiscoveryEnabled,
             SsdpEnabled: request.SsdpEnabled,
-            SiliconDustDiscoveryEnabled: request.SiliconDustDiscoveryEnabled), cancellationToken);
+            SiliconDustDiscoveryEnabled: request.SiliconDustDiscoveryEnabled,
+            AllowedNetworks: request.AllowedNetworks), cancellationToken);
 
         if (!result.Succeeded)
         {
@@ -370,7 +373,8 @@ public static class SiteSettingsApiEndpoints
             SsdpEnabled: state.Saved.SsdpEnabled,
             SiliconDustDiscoveryEnabled: state.Saved.SiliconDustDiscoveryEnabled,
             RestartRequired: state.RestartRequired,
-            DisabledByEnvironment: state.DisabledByEnvironment);
+            DisabledByEnvironment: state.DisabledByEnvironment,
+            AllowedNetworks: state.Saved.AllowedNetworks);
 
     private sealed record HdhrSettingsUpdateRequest(
         bool Enabled,
@@ -379,7 +383,8 @@ public static class SiteSettingsApiEndpoints
         string? AdvertisedBaseUrl,
         bool DiscoveryEnabled,
         bool SsdpEnabled,
-        bool SiliconDustDiscoveryEnabled);
+        bool SiliconDustDiscoveryEnabled,
+        string? AllowedNetworks = null);
 
     private static async Task<Ok<EventSettingsResponse>> GetEventSettingsAsync(
         IEventService eventService,
@@ -418,5 +423,6 @@ public static class SiteSettingsApiEndpoints
         bool SsdpEnabled,
         bool SiliconDustDiscoveryEnabled,
         bool RestartRequired,
-        bool DisabledByEnvironment);
+        bool DisabledByEnvironment,
+        string? AllowedNetworks);
 }

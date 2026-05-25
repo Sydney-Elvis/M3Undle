@@ -5,6 +5,7 @@
 @using M3Undle.Web.Observability
 @using M3Undle.Web.Streaming.Configuration
 @using M3Undle.Web.Streaming.Observability
+@inject NavigationManager Nav
 @inject ISiteSettingsService SiteSettings
 @inject IEndpointSecurityService EndpointSecurity
 @inject IStreamingSettingsService StreamingSettings
@@ -35,19 +36,19 @@
                        StartIcon="@Icons.Material.Filled.Schedule"
                        Variant="@(_section == "schedule" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "schedule" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "schedule")">Schedule</MudButton>
+                       OnClick="@(() => NavigateToSection("schedule"))">Schedule</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Lock"
                        Variant="@(_section == "security" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "security" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "security")">Security</MudButton>
+                       OnClick="@(() => NavigateToSection("security"))">Security</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Stream"
                        Variant="@(_section == "streaming" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "streaming" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "streaming")">
+                       OnClick="@(() => NavigateToSection("streaming"))">
                 <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
                     <span>Streaming</span>
                     @if (_streamingRestartRequired || _genHlsRestartRequired)
@@ -63,7 +64,7 @@
                        StartIcon="@Icons.Material.Filled.Router"
                        Variant="@(_section == "hdhr" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "hdhr" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "hdhr")">
+                       OnClick="@(() => NavigateToSection("hdhr"))">
                 <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
                     <span>HDHomeRun</span>
                     @if (_hdhrRestartRequired)
@@ -79,25 +80,25 @@
                        StartIcon="@Icons.Material.Filled.Link"
                        Variant="@(_section == "endpoints" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "endpoints" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "endpoints")">Endpoint URLs</MudButton>
+                       OnClick="@(() => NavigateToSection("endpoints"))">Endpoint URLs</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Cable"
                        Variant="@(_section == "integrations" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "integrations" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "integrations")">Integrations</MudButton>
+                       OnClick="@(() => NavigateToSection("integrations"))">Integrations</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Insights"
                        Variant="@(_section == "observability" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "observability" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "observability")">Observability</MudButton>
+                       OnClick="@(() => NavigateToSection("observability"))">Observability</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Tune"
                        Variant="@(_section == "system" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "system" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => _section = "system")">System</MudButton>
+                       OnClick="@(() => NavigateToSection("system"))">System</MudButton>
         </MudStack>
     </MudPaper>
 
@@ -128,23 +129,24 @@
 
                     <MudSwitch T="bool" Label="Startup catch-up" @bind-Value="_refreshStartupCatchup"
                                Color="Color.Primary" Class="mb-1" />
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-4">
-                        If M3Undle was offline during a scheduled refresh, it runs one immediately on startup.
-                        Disable this if you manage refresh timing with an external scheduler.
-                    </MudText>
-
-                    @if (_nextRefreshUtc.HasValue)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-4">
-                            Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                    <div class="mb-4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            If M3Undle was offline during a scheduled refresh, it runs one immediately on startup.
+                            Disable this if you manage refresh timing with an external scheduler.
                         </MudText>
-                    }
-                    else if (_refreshScheduleKind == "manual")
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-4">
-                            Automatic refresh is disabled. Use the manual refresh button on the Dashboard.
-                        </MudText>
-                    }
+                        @if (_nextRefreshUtc.HasValue)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                &nbsp;Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                            </MudText>
+                        }
+                        else if (_refreshScheduleKind == "manual")
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                &nbsp;Automatic refresh is disabled. Use the manual refresh button on the Dashboard.
+                            </MudText>
+                        }
+                    </div>
 
                     @if (!string.IsNullOrWhiteSpace(_refreshError))
                     {
@@ -155,11 +157,13 @@
                         <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">@_refreshSuccess</MudAlert>
                     }
 
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               Disabled="_savingRefreshSettings"
-                               OnClick="SaveRefreshScheduleAsync">
-                        @(_savingRefreshSettings ? "Applying..." : "Apply")
-                    </MudButton>
+                    <div>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="_savingRefreshSettings"
+                                   OnClick="SaveRefreshScheduleAsync">
+                            @(_savingRefreshSettings ? "Applying..." : "Apply")
+                        </MudButton>
+                    </div>
                 }
             </MudPaper>
         }
@@ -191,12 +195,25 @@
 
                 <MudDivider Class="my-5" />
 
-                @* Endpoint Security *@
-                <MudText Typo="Typo.subtitle1" Class="mb-1">Endpoint Security</MudText>
+                @* Endpoint Credentials *@
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                    <MudText Typo="Typo.subtitle1">Endpoint Credentials</MudText>
+                    @if (!_loadingEndpointSettings)
+                    {
+                        @if (_endpointHasCredential)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Configured</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">Not configured</MudChip>
+                        }
+                    }
+                </MudStack>
                 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-                    Adds HTTP Basic authentication to all endpoints exposed to media players — M3U, XMLTV,
-                    streams, Xtream-compatible routes, and HDHomeRun. One credential covers all of them.
-                    Leave disabled only if M3Undle is not reachable outside your home network.
+                    One credential covers all media endpoints: M3U, XMLTV, streams, and Xtream-compatible
+                    players (TiviMate, IPTV Smarters). Leave enforcement disabled only if M3Undle is not
+                    reachable outside your home network.
                 </MudText>
 
                 @if (_loadingEndpointSettings)
@@ -205,9 +222,6 @@
                 }
                 else
                 {
-                    <MudSwitch T="bool" Label="Enable endpoint security" @bind-Value="_endpointEnabled"
-                               Class="mb-3" Color="Color.Primary" />
-
                     <MudGrid Spacing="2" Class="mb-3">
                         <MudItem xs="12" sm="6">
                             <MudTextField @bind-Value="_endpointUsername"
@@ -228,6 +242,28 @@
                         </MudItem>
                     </MudGrid>
 
+                    @* Xtream connection block — shown when enforcement is on, credential is set, and Xtream protocol is on *@
+                    @if (_endpointEnabled && _endpointHasCredential && _xtreamEnabled)
+                    {
+                        <MudPaper Outlined="true" Class="pa-3 mb-3" Style="max-width:420px;">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">Xtream connection details</MudText>
+                            <MudStack Spacing="1">
+                                <MudStack Row="true" Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:80px;">Server</MudText>
+                                    <MudText Typo="Typo.caption" Style="font-family:monospace; word-break:break-all;">@Nav.BaseUri.TrimEnd('/')</MudText>
+                                </MudStack>
+                                <MudStack Row="true" Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:80px;">Username</MudText>
+                                    <MudText Typo="Typo.caption" Style="font-family:monospace;">@_endpointUsername</MudText>
+                                </MudStack>
+                                <MudStack Row="true" Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:80px;">Password</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">●●●● (set)</MudText>
+                                </MudStack>
+                            </MudStack>
+                        </MudPaper>
+                    }
+
                     @if (!string.IsNullOrWhiteSpace(_activeProfileId))
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
@@ -235,12 +271,22 @@
                         </MudText>
                     }
 
+                    <MudSwitch T="bool" Label="Enable credential enforcement" @bind-Value="_endpointEnabled"
+                               Class="mb-1" Color="Color.Primary" />
+                    <div class="mb-4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            When enabled, M3U, XMLTV, stream, and Xtream endpoints require the credential above.
+                        </MudText>
+                    </div>
+
                     @* Advanced *@
-                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default" Class="mt-1"
-                               StartIcon="@(_showSecurityAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
-                               OnClick="@(() => _showSecurityAdvanced = !_showSecurityAdvanced)">
-                        Advanced options
-                    </MudButton>
+                    <div class="mb-1">
+                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                                   StartIcon="@(_showSecurityAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                   OnClick="@(() => _showSecurityAdvanced = !_showSecurityAdvanced)">
+                            Advanced options
+                        </MudButton>
+                    </div>
                     <MudCollapse Expanded="_showSecurityAdvanced">
                         <div class="mt-3 pt-3" style="border-top:1px solid var(--mud-palette-divider)">
                             <MudTextField @bind-Value="_virtualTunerId"
@@ -250,11 +296,18 @@
                                           Placeholder="hdhr-main"
                                           Style="max-width:320px;"
                                           HelperText="Identity used by HDHR tuner-reuse protocols." />
-                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-4">
                                 Identifies M3Undle to players that support HDHomeRun tuner reuse (Channels DVR,
                                 some Plex setups). When a player retunes to the same channel it reattaches to the
                                 existing stream instead of opening a new connection. Only change this if you run
                                 multiple M3Undle instances and need unique IDs.
+                            </MudText>
+
+                            <MudSwitch T="bool" Label="Enable Xtream protocol" @bind-Value="_xtreamEnabled"
+                                       Color="Color.Primary" Class="mb-1" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Disable only if you have no Xtream-compatible clients. When disabled, all Xtream
+                                routes return 404 regardless of credential state.
                             </MudText>
                         </div>
                     </MudCollapse>
@@ -274,14 +327,6 @@
                                    OnClick="SaveEndpointSecurityAsync">
                             @(_savingEndpointSettings ? "Applying..." : "Apply")
                         </MudButton>
-                        @if (_endpointHasCredential)
-                        {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Credential configured</MudChip>
-                        }
-                        else
-                        {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">No credential configured</MudChip>
-                        }
                     </MudStack>
                 }
             </MudPaper>
@@ -751,6 +796,21 @@
                                        Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
                         </MudItem>
                     </MudGrid>
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Network Access</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Restricts all HDHR access — discovery, lineup, and stream tuning — to these networks.
+                        Loopback is always allowed. Leave blank to allow all connections (only safe on a trusted LAN).
+                    </MudText>
+                    <MudTextField @bind-Value="_hdhrAllowedNetworks"
+                                  Label="Allowed Networks"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Lines="3"
+                                  Placeholder="192.168.1.0/24"
+                                  Disabled="_hdhrDisabledByEnv"
+                                  HelperText="One CIDR per line. Example: 192.168.1.0/24"
+                                  Class="mb-4"
+                                  Style="max-width:400px;" />
 
                     @* Advanced *@
                     <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
@@ -1291,6 +1351,13 @@
 
 @code {
     private string _section = "schedule";
+
+    private void NavigateToSection(string section)
+    {
+        _section = section;
+        Nav.NavigateTo($"/settings?section={section}", replace: true);
+    }
+
     private bool _showSecurityAdvanced;
     private bool _showStreamingAdvanced;
     private bool _showBrowserPlaybackAdvanced;
@@ -1303,6 +1370,7 @@
 
     private bool _endpointEnabled;
     private bool _endpointHasCredential;
+    private bool _xtreamEnabled = true;
     private string _endpointUsername = string.Empty;
     private string _endpointPassword = string.Empty;
     private string _virtualTunerId = "hdhr-main";
@@ -1362,6 +1430,7 @@
     private int? _hdhrProviderLimit;
     private bool _hdhrIsStreamLimitEnforced;
     private string _hdhrResolvedBaseUrl = string.Empty;
+    private string _hdhrAllowedNetworks = string.Empty;
     private string? _hdhrError;
     private string? _hdhrSuccess;
     private bool _hdhrDisabledByEnv;
@@ -1412,6 +1481,16 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var uri = new Uri(Nav.Uri);
+        var qs = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (qs.TryGetValue("section", out var sectionParam))
+        {
+            var requested = sectionParam.ToString().ToLowerInvariant();
+            if (requested is "schedule" or "security" or "streaming" or "hdhr"
+                         or "endpoints" or "integrations" or "observability" or "system")
+                _section = requested;
+        }
+
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
         await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadObservabilitySettingsAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync(), LoadEventSettingsAsync());
     }
@@ -1700,6 +1779,7 @@
             _endpointEnabled = settings.Enabled;
             _endpointUsername = settings.Username ?? string.Empty;
             _endpointHasCredential = settings.HasCredential;
+            _xtreamEnabled = settings.XtreamCompatibilityEnabled;
             _activeProfileId = settings.ActiveProfileId;
             _virtualTunerId = string.IsNullOrWhiteSpace(settings.VirtualTunerId) ? "hdhr-main" : settings.VirtualTunerId;
         }
@@ -1811,7 +1891,8 @@
                 Username: string.IsNullOrWhiteSpace(_endpointUsername) ? null : _endpointUsername.Trim(),
                 Password: string.IsNullOrWhiteSpace(_endpointPassword) ? null : _endpointPassword,
                 ActiveProfileId: _activeProfileId,
-                VirtualTunerId: string.IsNullOrWhiteSpace(_virtualTunerId) ? "hdhr-main" : _virtualTunerId.Trim()), CancellationToken.None);
+                VirtualTunerId: string.IsNullOrWhiteSpace(_virtualTunerId) ? "hdhr-main" : _virtualTunerId.Trim(),
+                XtreamCompatibilityEnabled: _xtreamEnabled), CancellationToken.None);
 
             if (!result.Succeeded)
             {
@@ -1822,10 +1903,11 @@
             _endpointEnabled = result.Settings.Enabled;
             _endpointUsername = result.Settings.Username ?? string.Empty;
             _endpointHasCredential = result.Settings.HasCredential;
+            _xtreamEnabled = result.Settings.XtreamCompatibilityEnabled;
             _activeProfileId = result.Settings.ActiveProfileId;
             _virtualTunerId = string.IsNullOrWhiteSpace(result.Settings.VirtualTunerId) ? "hdhr-main" : result.Settings.VirtualTunerId;
             _endpointPassword = string.Empty;
-            _endpointSuccess = "Endpoint security settings saved.";
+            _endpointSuccess = "Endpoint credentials saved.";
         }
         catch (Exception ex)
         {
@@ -1889,7 +1971,8 @@
                 AdvertisedBaseUrl: string.IsNullOrWhiteSpace(_hdhrAdvertisedBaseUrl) ? null : _hdhrAdvertisedBaseUrl.Trim(),
                 DiscoveryEnabled: _hdhrDiscoveryEnabled,
                 SsdpEnabled: _hdhrSsdpEnabled,
-                SiliconDustDiscoveryEnabled: _hdhrSiliconDustDiscoveryEnabled), CancellationToken.None);
+                SiliconDustDiscoveryEnabled: _hdhrSiliconDustDiscoveryEnabled,
+                AllowedNetworks: string.IsNullOrWhiteSpace(_hdhrAllowedNetworks) ? null : _hdhrAllowedNetworks.Trim()), CancellationToken.None);
 
             if (!result.Succeeded)
             {
@@ -1929,6 +2012,7 @@
         _hdhrProviderLimit = settings.ProviderTunerLimit;
         _hdhrIsStreamLimitEnforced = settings.IsStreamLimitEnforced;
         _hdhrResolvedBaseUrl = settings.ResolvedBaseUrl;
+        _hdhrAllowedNetworks = settings.AllowedNetworks ?? string.Empty;
     }
 
     private async Task LoadGenHlsSettingsAsync()

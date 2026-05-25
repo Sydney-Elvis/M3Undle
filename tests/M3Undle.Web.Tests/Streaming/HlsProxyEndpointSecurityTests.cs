@@ -123,13 +123,17 @@ public sealed class HlsProxyEndpointSecurityTests
         public ValueTask<bool> IsEnabledAsync(CancellationToken cancellationToken)
             => ValueTask.FromResult(false);
 
+        public ValueTask<bool> IsXtreamEnabledAsync(CancellationToken cancellationToken)
+            => ValueTask.FromResult(true);
+
         public Task<EndpointSecuritySettings> GetSettingsAsync(CancellationToken cancellationToken)
             => Task.FromResult(new EndpointSecuritySettings(
                 Enabled: false,
                 Username: null,
                 HasCredential: false,
                 ActiveProfileId: "profile-1",
-                VirtualTunerId: "hdhr-main"));
+                VirtualTunerId: "hdhr-main",
+                XtreamCompatibilityEnabled: true));
 
         public Task<EndpointBindingState?> GetBindingAsync(string credentialId, CancellationToken cancellationToken)
             => Task.FromResult<EndpointBindingState?>(new EndpointBindingState("profile-1", "hdhr-main"));

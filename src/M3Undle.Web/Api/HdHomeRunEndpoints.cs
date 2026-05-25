@@ -26,6 +26,7 @@ public static class HdHomeRunEndpoints
     {
         var client = app.MapClientSurface();
         var hdhr = client.MapGroup("hdhr");
+        hdhr.AddEndpointFilter<HdhrNetworkFilter>();
 
         hdhr.MapGet("discover.json", ServeDiscoverAsync);
         hdhr.MapGet("lineup.json", ServeLineupJsonAsync);
@@ -37,14 +38,17 @@ public static class HdHomeRunEndpoints
         hdhr.MapGet("device.xml", ServeDeviceXmlAsync);
 
         // Legacy aliases kept for HDHR client compatibility.
-        client.MapGet("discover.json", ServeDiscoverAsync);
-        client.MapGet("lineup.json", ServeLineupJsonAsync);
-        client.MapGet("lineup.xml", ServeLineupXmlAsync);
-        client.MapGet("lineup.m3u", ServeLineupM3uAsync);
-        client.MapGet("lineup_status.json", ServeLineupStatusAsync);
-        client.MapGet("lineup.post", ServeLineupPost);
-        client.MapPost("lineup.post", ServeLineupPost);
-        client.MapGet("device.xml", ServeDeviceXmlAsync);
+        var legacyHdhr = client.MapGroup(string.Empty);
+        legacyHdhr.AddEndpointFilter<HdhrNetworkFilter>();
+
+        legacyHdhr.MapGet("discover.json", ServeDiscoverAsync);
+        legacyHdhr.MapGet("lineup.json", ServeLineupJsonAsync);
+        legacyHdhr.MapGet("lineup.xml", ServeLineupXmlAsync);
+        legacyHdhr.MapGet("lineup.m3u", ServeLineupM3uAsync);
+        legacyHdhr.MapGet("lineup_status.json", ServeLineupStatusAsync);
+        legacyHdhr.MapGet("lineup.post", ServeLineupPost);
+        legacyHdhr.MapPost("lineup.post", ServeLineupPost);
+        legacyHdhr.MapGet("device.xml", ServeDeviceXmlAsync);
 
         return app;
     }

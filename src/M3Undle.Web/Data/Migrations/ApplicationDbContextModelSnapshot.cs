@@ -1730,6 +1730,16 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("hdhr_tuner_count_override");
 
+                    b.Property<string>("HdhrAllowedNetworks")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("hdhr_allowed_networks");
+
+                    b.Property<bool>("XtreamCompatibilityEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true)
+                        .HasColumnName("xtream_compatibility_enabled");
+
                     b.Property<bool>("ObservabilityMetricsEnableChannelLabels")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
@@ -1865,7 +1875,8 @@ namespace M3Undle.Web.Data.Migrations
                             StreamReconnectOutageWindowSeconds = 75,
                             StreamReconnectReadStallTimeoutSeconds = 30,
                             StreamingEnabled = true,
-                            StreamingSettingsRestartRequired = false
+                            StreamingSettingsRestartRequired = false,
+                            XtreamCompatibilityEnabled = true
                         });
                 });
 

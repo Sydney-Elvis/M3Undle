@@ -51,7 +51,8 @@ public sealed class HdHomeRunSettingsServiceTests
             AdvertisedBaseUrl: null,
             DiscoveryEnabled: true,
             SsdpEnabled: false,
-            SiliconDustDiscoveryEnabled: false));
+            SiliconDustDiscoveryEnabled: false,
+            AllowedNetworks: null));
 
         Assert.IsTrue(result.Succeeded);
         Assert.IsNull(result.Error);
@@ -78,14 +79,16 @@ public sealed class HdHomeRunSettingsServiceTests
         var tooLow = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: 0, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
+            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false,
+            AllowedNetworks: null));
 
         Assert.IsFalse(tooLow.Succeeded, "Override of 0 should be rejected.");
 
         var tooHigh = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: 33, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
+            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false,
+            AllowedNetworks: null));
 
         Assert.IsFalse(tooHigh.Succeeded, "Override of 33 should be rejected.");
     }
@@ -106,13 +109,15 @@ public sealed class HdHomeRunSettingsServiceTests
         await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: 2, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
+            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false,
+            AllowedNetworks: null));
 
         // Clear it
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: null, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false));
+            SsdpEnabled: false, SiliconDustDiscoveryEnabled: false,
+            AllowedNetworks: null));
 
         Assert.IsTrue(result.Succeeded);
         Assert.IsNull(result.Settings.TunerCountOverride, "Override should be cleared.");
@@ -136,7 +141,8 @@ public sealed class HdHomeRunSettingsServiceTests
             AdvertisedBaseUrl: null,
             DiscoveryEnabled: true,
             SsdpEnabled: true,
-            SiliconDustDiscoveryEnabled: true));
+            SiliconDustDiscoveryEnabled: true,
+            AllowedNetworks: null));
 
         Assert.IsTrue(result.Succeeded);
         Assert.AreEqual("My IPTV Box", result.Settings.FriendlyName);
@@ -161,12 +167,14 @@ public sealed class HdHomeRunSettingsServiceTests
         await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: null, FriendlyName: "Override Name",
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true,
+            AllowedNetworks: null));
 
         var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
             Enabled: true, TunerCountOverride: null, FriendlyName: null,
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true,
+            AllowedNetworks: null));
 
         Assert.IsTrue(result.Succeeded);
         Assert.IsNull(result.Settings.FriendlyName, "DB override should be cleared.");
@@ -188,7 +196,8 @@ public sealed class HdHomeRunSettingsServiceTests
             Enabled: true, TunerCountOverride: null,
             FriendlyName: new string('A', 129),
             AdvertisedBaseUrl: null, DiscoveryEnabled: true,
-            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+            SsdpEnabled: true, SiliconDustDiscoveryEnabled: true,
+            AllowedNetworks: null));
 
         Assert.IsFalse(result.Succeeded, "FriendlyName over 128 characters should be rejected.");
         Assert.IsNotNull(result.Error);
@@ -239,7 +248,8 @@ public sealed class HdHomeRunSettingsServiceTests
             var result = await service.UpdateAsync(new UpdateHdhrSettingsCommand(
                 Enabled: true, TunerCountOverride: null, FriendlyName: null,
                 AdvertisedBaseUrl: url, DiscoveryEnabled: true,
-                SsdpEnabled: true, SiliconDustDiscoveryEnabled: true));
+                SsdpEnabled: true, SiliconDustDiscoveryEnabled: true,
+                AllowedNetworks: null));
 
             Assert.IsFalse(result.Succeeded, $"Loopback URL '{url}' should be rejected.");
             Assert.IsNotNull(result.Error, $"Error message expected for '{url}'.");

@@ -10,7 +10,8 @@ public sealed record EndpointSecuritySettings(
     string? Username,
     bool HasCredential,
     string? ActiveProfileId,
-    string? VirtualTunerId);
+    string? VirtualTunerId,
+    bool XtreamCompatibilityEnabled);
 
 public sealed record EndpointBindingState(string? ActiveProfileId, string? VirtualTunerId);
 
@@ -19,7 +20,8 @@ public sealed record UpdateEndpointSecurityCommand(
     string? Username,
     string? Password,
     string? ActiveProfileId,
-    string? VirtualTunerId);
+    string? VirtualTunerId,
+    bool XtreamCompatibilityEnabled);
 
 public sealed record EndpointSecurityUpdateResult(
     bool Succeeded,
@@ -29,6 +31,7 @@ public sealed record EndpointSecurityUpdateResult(
 public interface IEndpointSecurityService
 {
     ValueTask<bool> IsEnabledAsync(CancellationToken cancellationToken);
+    ValueTask<bool> IsXtreamEnabledAsync(CancellationToken cancellationToken);
     Task<EndpointSecuritySettings> GetSettingsAsync(CancellationToken cancellationToken);
     Task<EndpointBindingState?> GetBindingAsync(string credentialId, CancellationToken cancellationToken);
     Task<EndpointSecurityUpdateResult> UpdateAsync(UpdateEndpointSecurityCommand command, CancellationToken cancellationToken);
@@ -42,6 +45,12 @@ public sealed class EndpointSecurityService(ApplicationDbContext db) : IEndpoint
     {
         var site = await EnsureSiteSettingsAsync(cancellationToken);
         return site.EndpointSecurityEnabled;
+    }
+
+    public async ValueTask<bool> IsXtreamEnabledAsync(CancellationToken cancellationToken)
+    {
+        var site = await EnsureSiteSettingsAsync(cancellationToken);
+        return site.XtreamCompatibilityEnabled;
     }
 
     public async Task<EndpointSecuritySettings> GetSettingsAsync(CancellationToken cancellationToken)
@@ -65,7 +74,8 @@ public sealed class EndpointSecurityService(ApplicationDbContext db) : IEndpoint
             Username: credential?.Username,
             HasCredential: credential is not null,
             ActiveProfileId: binding?.ActiveProfileId,
-            VirtualTunerId: binding?.VirtualTunerId);
+            VirtualTunerId: binding?.VirtualTunerId,
+            XtreamCompatibilityEnabled: site.XtreamCompatibilityEnabled);
     }
 
     public async Task<EndpointBindingState?> GetBindingAsync(string credentialId, CancellationToken cancellationToken)
@@ -207,6 +217,7 @@ public sealed class EndpointSecurityService(ApplicationDbContext db) : IEndpoint
         }
 
         site.EndpointSecurityEnabled = command.Enabled;
+        site.XtreamCompatibilityEnabled = command.XtreamCompatibilityEnabled;
         await db.SaveChangesAsync(cancellationToken);
 
         var settings = await GetSettingsAsync(cancellationToken);

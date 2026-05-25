@@ -441,16 +441,26 @@
                 <MudDivider />
                 <div>
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
-                        <MudIcon Icon="@Icons.Material.Filled.VpnKey" Size="Size.Small" Color="@(_endpointSecuritySettings?.Enabled == true && _endpointSecuritySettings.HasCredential ? Color.Primary : Color.Default)" />
-                        <MudText Typo="Typo.subtitle2">Xtream</MudText>
+                        <MudIcon Icon="@Icons.Material.Filled.VpnKey" Size="Size.Small" Color="@XtreamIconColor" />
+                        <MudLink Href="settings?section=security" Typo="Typo.subtitle2" Underline="Underline.Hover" Color="Color.Inherit">
+                            Xtream
+                            <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Style="opacity:0.5; margin-left:2px; vertical-align:middle;" />
+                        </MudLink>
                     </MudStack>
                     @if (_endpointSecuritySettings is null)
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Loading…</MudText>
                     }
-                    else if (!_endpointSecuritySettings.Enabled || !_endpointSecuritySettings.HasCredential)
+                    else if (!_endpointSecuritySettings.XtreamCompatibilityEnabled)
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Disabled</MudText>
+                    }
+                    else if (_endpointSecuritySettings.Enabled && !_endpointSecuritySettings.HasCredential)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.caption" Color="Color.Warning">No credential configured.</MudText>
+                            <MudLink Href="settings?section=security" Typo="Typo.caption">Configure →</MudLink>
+                        </MudStack>
                     }
                     else
                     {
@@ -465,6 +475,10 @@
                                     <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Username</MudText>
                                     <MudText Typo="Typo.caption">@_endpointSecuritySettings.Username</MudText>
                                 </MudStack>
+                            }
+                            @if (!_endpointSecuritySettings.Enabled)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">Unsecured — any credentials accepted</MudChip>
                             }
                         </MudStack>
                     }
@@ -624,6 +638,10 @@
     private DateTime? _nextRefreshUtc;
     private string _refreshScheduleKind = "6h";
     private bool ShowRefreshing => _isRefreshing || _status?.IsRefreshing == true;
+
+    private Color XtreamIconColor => _endpointSecuritySettings is { XtreamCompatibilityEnabled: true, Enabled: true, HasCredential: true }
+        ? Color.Primary
+        : Color.Default;
 
     private bool NeedsActiveProfile => _status?.Status == LineupStatusCodes.NoActiveProfile;
 

@@ -26,6 +26,10 @@ internal sealed class XtreamPathCredentialFilter(
         var methodForLog = http.Request.Method.ReplaceLineEndings(" ");
         var clientForLog = (http.Connection.RemoteIpAddress?.ToString() ?? "unknown").ReplaceLineEndings(" ");
 
+        var xtreamEnabled = await endpointSecurityService.IsXtreamEnabledAsync(http.RequestAborted);
+        if (!xtreamEnabled)
+            return TypedResults.NotFound();
+
         var username = (string?)http.GetRouteValue("xtreamUser") ?? string.Empty;
         var password = (string?)http.GetRouteValue("xtreamPass") ?? string.Empty;
 
