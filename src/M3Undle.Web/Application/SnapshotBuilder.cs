@@ -1563,6 +1563,12 @@ public sealed class SnapshotBuilder(
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 
+        // On the very first sync for this provider, suppress review noise: channels remain
+        // excluded from output (manual-review mode) but are not queued as pending. Review
+        // is for content that appears after the user has finished initial setup.
+        var isInitialProviderSync = allGroupIds.Count > 0
+            && !allGroupIds.Any(id => existingFilterGroupIds.Contains(id));
+
         var now = DateTime.UtcNow;
         var newFilters = allGroupIds
             .Where(id => !existingFilterGroupIds.Contains(id))
@@ -1572,9 +1578,11 @@ public sealed class SnapshotBuilder(
                 ProfileId = profileId,
                 ProviderGroupId = id,
                 Decision = LineupReviewSemantics.GroupDecisionInclude,
-                IsNew = true,
+                IsNew = !isInitialProviderSync,
                 ChannelMode = LineupReviewSemantics.GroupModeManualReview,
-                TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
+                TrackingPolicy = isInitialProviderSync
+                    ? LineupReviewSemantics.TrackingPolicyNotify
+                    : LineupReviewSemantics.TrackingPolicyReview,
                 TrackNewChannels = false,
                 CreatedUtc = now,
                 UpdatedUtc = now,

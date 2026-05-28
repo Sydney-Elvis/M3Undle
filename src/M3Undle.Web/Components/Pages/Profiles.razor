@@ -197,6 +197,12 @@ else
                                 @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review
                             </MudAlert>
                         }
+                        @if (profile.GroupsNeedingSetup > 0)
+                        {
+                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                                @profile.GroupsNeedingSetup group@(profile.GroupsNeedingSetup == 1 ? "" : "s") need channel mapping
+                            </MudAlert>
+                        }
 
                         @if (profile.LastPublishedUtc.HasValue)
                         {
@@ -280,11 +286,13 @@ else
                 {
                     profile.GroupsPendingReview = value.Groups;
                     profile.ChannelsPendingReview = value.Channels;
+                    profile.GroupsNeedingSetup = value.Setup;
                 }
                 else
                 {
                     profile.GroupsPendingReview = 0;
                     profile.ChannelsPendingReview = 0;
+                    profile.GroupsNeedingSetup = 0;
                 }
             }
 

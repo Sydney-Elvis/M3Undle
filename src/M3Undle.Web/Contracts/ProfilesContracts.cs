@@ -32,6 +32,7 @@ public sealed class ProfilePageItemDto
     public ProfileHealthStatus HealthStatus { get; set; }
     public int GroupsPendingReview { get; set; }
     public int ChannelsPendingReview { get; set; }
+    public int GroupsNeedingSetup { get; set; }
 }
 
 public sealed class ProfileSnapshotHistoryDto

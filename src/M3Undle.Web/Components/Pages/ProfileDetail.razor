@@ -190,6 +190,13 @@ else
                         <MudLink Href="@($"channels/review?profile={ProfileId}")">review now</MudLink>
                     </MudAlert>
                 }
+                @if (profile.GroupsNeedingSetup > 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                        @profile.GroupsNeedingSetup group@(profile.GroupsNeedingSetup == 1 ? "" : "s") need channel mapping —
+                        <MudLink Href="@($"channels/mapping?profile={ProfileId}")">map channels</MudLink>
+                    </MudAlert>
+                }
             </MudPaper>
         </MudItem>
 
