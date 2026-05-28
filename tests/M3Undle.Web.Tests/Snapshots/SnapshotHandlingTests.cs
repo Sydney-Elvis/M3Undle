@@ -419,6 +419,105 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_InitialProviderSync_BaselinesReviewState()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var filter = await verify.ProfileGroupFilters
+                .Include(x => x.ProviderGroup)
+                .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "News");
+
+            Assert.IsFalse(filter.IsNew);
+            Assert.AreEqual(LineupReviewSemantics.GroupModeManualReview, filter.ChannelMode);
+            Assert.AreEqual(LineupReviewSemantics.TrackingPolicyReview, filter.TrackingPolicy);
+
+            var rows = await verify.ProfileGroupChannelFilters
+                .Include(x => x.ProviderChannel)
+                .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                .ToListAsync();
+
+            Assert.HasCount(1, rows);
+            Assert.AreEqual(LineupReviewSemantics.ChannelStateExcluded, rows[0].State);
+            Assert.AreEqual(0, await verify.ProfileGroupChannelFilters
+                .CountAsync(x => x.State == LineupReviewSemantics.ChannelStatePending));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_SubsequentRefresh_QueuesOnlyNewGroupsAndChannels()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleNewGroupAndChannelM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var filters = await verify.ProfileGroupFilters
+                .Include(x => x.ProviderGroup)
+                .Where(x => x.ProfileId == "profile-1")
+                .ToListAsync();
+
+            Assert.IsFalse(filters.Single(x => x.ProviderGroup.RawName == "News").IsNew);
+            Assert.IsTrue(filters.Single(x => x.ProviderGroup.RawName == "Sports").IsNew);
+
+            var rows = await verify.ProfileGroupChannelFilters
+                .Include(x => x.ProviderChannel)
+                .ToListAsync();
+
+            Assert.HasCount(3, rows);
+            Assert.AreEqual(LineupReviewSemantics.ChannelStateExcluded,
+                rows.Single(x => x.ProviderChannel.DisplayName == "CNN US").State);
+            Assert.AreEqual(LineupReviewSemantics.ChannelStatePending,
+                rows.Single(x => x.ProviderChannel.DisplayName == "CNN International").State);
+            Assert.AreEqual(LineupReviewSemantics.ChannelStatePending,
+                rows.Single(x => x.ProviderChannel.DisplayName == "ESPN").State);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_RefreshesActiveProfileProvidersBeforeStandbyProviders()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -1044,6 +1143,15 @@ public sealed class SnapshotHandlingTests
         "#EXTM3U\n" +
         "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US HD\n" +
         "http://example.com/stream/cnn\n";
+
+    private const string SampleNewGroupAndChannelM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US\n" +
+        "http://example.com/stream/cnn\n" +
+        "#EXTINF:-1 tvg-id=\"cnn.intl\" tvg-name=\"CNN International\" group-title=\"News\",CNN International\n" +
+        "http://example.com/stream/cnn-intl\n" +
+        "#EXTINF:-1 tvg-id=\"espn.us\" tvg-name=\"ESPN\" group-title=\"Sports\",ESPN\n" +
+        "http://example.com/stream/espn\n";
 
     private const string SampleMixedM3u =
         "#EXTM3U\n" +

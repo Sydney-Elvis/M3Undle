@@ -268,6 +268,11 @@ public sealed class SnapshotBuilder(
             return (false, null, [], null, new HashSet<string>());
         }
 
+        var initialProfileProviderSyncProfileIds = await GetInitialProfileProviderSyncProfileIdsAsync(
+            provider.ProviderId,
+            activeLinks.Select(l => l.ProfileId).ToList(),
+            cancellationToken);
+
         var profileId = activeLinks[0].ProfileId;
 
         // 2. Create FetchRun pre-saved as "running" (crash leaves it as "running", not "fail")
@@ -335,7 +340,10 @@ public sealed class SnapshotBuilder(
 
             stage = "group-filters";
             foreach (var link in activeLinks)
-                await SyncGroupFiltersAsync(link.ProfileId, provider.ProviderId, cancellationToken);
+            {
+                var isInitialProfileProviderSync = initialProfileProviderSyncProfileIds.Contains(link.ProfileId);
+                await SyncGroupFiltersAsync(link.ProfileId, provider.ProviderId, !isInitialProfileProviderSync, cancellationToken);
+            }
             logger.LogInformation("Group filters synced in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
 
@@ -346,7 +354,10 @@ public sealed class SnapshotBuilder(
 
             stage = "pending-review";
             foreach (var link in activeLinks)
-                await SyncPendingChannelReviewsAsync(link.ProfileId, provider.ProviderId, now, cancellationToken);
+            {
+                var isInitialProfileProviderSync = initialProfileProviderSyncProfileIds.Contains(link.ProfileId);
+                await SyncPendingChannelReviewsAsync(link.ProfileId, provider.ProviderId, now, !isInitialProfileProviderSync, cancellationToken);
+            }
             logger.LogInformation("Pending channel review sync completed in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
 
@@ -486,6 +497,27 @@ public sealed class SnapshotBuilder(
             else
                 logger.LogInformation("Xtream API capability no longer detected for provider {ProviderId}.", provider.ProviderId);
         }
+    }
+
+    private async Task<HashSet<string>> GetInitialProfileProviderSyncProfileIdsAsync(
+        string providerId,
+        IReadOnlyCollection<string> profileIds,
+        CancellationToken cancellationToken)
+    {
+        if (profileIds.Count == 0)
+            return [];
+
+        var profileIdsWithExistingFilters = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => profileIds.Contains(x.ProfileId)
+                        && x.ProviderGroup.ProviderId == providerId)
+            .Select(x => x.ProfileId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var result = profileIds.ToHashSet(StringComparer.Ordinal);
+        result.ExceptWith(profileIdsWithExistingFilters);
+        return result;
     }
 
     private async Task UpdateXtreamExpiryAsync(Provider provider, CancellationToken cancellationToken)
@@ -1549,6 +1581,7 @@ public sealed class SnapshotBuilder(
     private async Task SyncGroupFiltersAsync(
         string profileId,
         string providerId,
+        bool markNewGroups,
         CancellationToken cancellationToken)
     {
         var allGroupIds = await db.ProviderGroups
@@ -1563,12 +1596,6 @@ public sealed class SnapshotBuilder(
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 
-        // On the very first sync for this provider, suppress review noise: channels remain
-        // excluded from output (manual-review mode) but are not queued as pending. Review
-        // is for content that appears after the user has finished initial setup.
-        var isInitialProviderSync = allGroupIds.Count > 0
-            && !allGroupIds.Any(id => existingFilterGroupIds.Contains(id));
-
         var now = DateTime.UtcNow;
         var newFilters = allGroupIds
             .Where(id => !existingFilterGroupIds.Contains(id))
@@ -1578,11 +1605,9 @@ public sealed class SnapshotBuilder(
                 ProfileId = profileId,
                 ProviderGroupId = id,
                 Decision = LineupReviewSemantics.GroupDecisionInclude,
-                IsNew = !isInitialProviderSync,
+                IsNew = markNewGroups,
                 ChannelMode = LineupReviewSemantics.GroupModeManualReview,
-                TrackingPolicy = isInitialProviderSync
-                    ? LineupReviewSemantics.TrackingPolicyNotify
-                    : LineupReviewSemantics.TrackingPolicyReview,
+                TrackingPolicy = LineupReviewSemantics.TrackingPolicyReview,
                 TrackNewChannels = false,
                 CreatedUtc = now,
                 UpdatedUtc = now,
@@ -1601,6 +1626,7 @@ public sealed class SnapshotBuilder(
         string profileId,
         string providerId,
         DateTime now,
+        bool queueNewRowsForReview,
         CancellationToken cancellationToken)
     {
         var manualReviewFilters = await db.ProfileGroupFilters
@@ -1658,6 +1684,10 @@ public sealed class SnapshotBuilder(
             .Select(x => $"{x.ProfileGroupFilterId}:{x.ProviderChannelId}")
             .ToHashSet(StringComparer.Ordinal);
 
+        var newRowState = queueNewRowsForReview
+            ? LineupReviewSemantics.ChannelStatePending
+            : LineupReviewSemantics.ChannelStateExcluded;
+
         var newRows = new List<ProfileGroupChannelFilter>();
         foreach (var channel in activeChannels)
         {
@@ -1673,7 +1703,7 @@ public sealed class SnapshotBuilder(
                 ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
                 ProfileGroupFilterId = filter.ProfileGroupFilterId,
                 ProviderChannelId = channel.ProviderChannelId,
-                State = LineupReviewSemantics.ChannelStatePending,
+                State = newRowState,
                 CreatedUtc = now,
                 UpdatedUtc = now,
             });
@@ -1685,8 +1715,9 @@ public sealed class SnapshotBuilder(
         db.ProfileGroupChannelFilters.AddRange(newRows);
         await db.SaveChangesAsync(cancellationToken);
         logger.LogInformation(
-            "Created {Count} pending channel review row(s) for profile {ProfileId}, provider {ProviderId}.",
+            "Created {Count} {State} channel review row(s) for profile {ProfileId}, provider {ProviderId}.",
             newRows.Count,
+            newRowState,
             profileId,
             providerId);
     }

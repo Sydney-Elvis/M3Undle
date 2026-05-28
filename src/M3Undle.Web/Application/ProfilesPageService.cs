@@ -226,7 +226,8 @@ internal sealed class ProfilesPageService(
             .Where(x => x.ProviderGroup.ContentType == "live"
                         && x.Decision == LineupReviewSemantics.GroupDecisionInclude
                         && x.ChannelMode == LineupReviewSemantics.GroupModeManualReview
-                        && x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyNotify
+                        && !x.IsNew
+                        && x.ChannelFilters.Any()
                         && !x.ChannelFilters.Any(cf => cf.State == LineupReviewSemantics.ChannelStateIncluded))
             .GroupBy(x => x.ProfileId)
             .Select(g => new { ProfileId = g.Key, Count = g.Count() })
@@ -355,8 +356,9 @@ internal sealed class ProfilesPageService(
                 .ToListAsync(ct)
             : [];
 
-        // Groups that need channel mapping: included live groups in manual-review mode with
-        // notify tracking (the initial-sync default) that have no explicitly included channels.
+        // Groups that need channel mapping: included live groups in manual-review mode,
+        // not flagged as new (initial-sync groups), that have been synced (have channel rows)
+        // but have no explicitly included channels yet.
         var groupsNeedingSetupByProfile = includePendingCounts
             ? await db.ProfileGroupFilters
                 .AsNoTracking()
@@ -364,7 +366,8 @@ internal sealed class ProfilesPageService(
                             && x.ProviderGroup.ContentType == "live"
                             && x.Decision == LineupReviewSemantics.GroupDecisionInclude
                             && x.ChannelMode == LineupReviewSemantics.GroupModeManualReview
-                            && x.TrackingPolicy == LineupReviewSemantics.TrackingPolicyNotify
+                            && !x.IsNew
+                            && x.ChannelFilters.Any()
                             && !x.ChannelFilters.Any(cf => cf.State == LineupReviewSemantics.ChannelStateIncluded))
                 .GroupBy(x => x.ProfileId)
                 .Select(g => new { ProfileId = g.Key, Count = g.Count() })
