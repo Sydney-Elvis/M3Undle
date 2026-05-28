@@ -190,7 +190,7 @@ else
                         <MudLink Href="@($"channels/review?profile={ProfileId}")">review now</MudLink>
                     </MudAlert>
                 }
-                @if (profile.LastPublishedUtc.HasValue && profile.LiveCount == 0 && profile.MovieCount == 0 && profile.SeriesCount == 0)
+                @if (profile.LastPublishedUtc.HasValue && profile.LiveCount == 0)
                 {
                     <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-2">
                         No channels in output — <MudLink Href="@($"channels/mapping?profile={ProfileId}")">open Channel Mapping</MudLink> to include groups
