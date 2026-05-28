@@ -197,7 +197,7 @@ internal sealed class ProfilesPageService(
         return await BuildProfileListAsync(db, profileId: null, ct, includePendingCounts);
     }
 
-    public async Task<Dictionary<string, (int Groups, int Channels, int Setup)>> GetPendingReviewCountsAsync(CancellationToken ct)
+    public async Task<Dictionary<string, (int Groups, int Channels)>> GetPendingReviewCountsAsync(CancellationToken ct)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -221,33 +221,15 @@ internal sealed class ProfilesPageService(
             .Select(g => new { ProfileId = g.Key, Count = g.Count() })
             .ToListAsync(ct);
 
-        var groupsNeedingSetupByProfile = await db.ProfileGroupFilters
-            .AsNoTracking()
-            .Where(x => x.ProviderGroup.ContentType == "live"
-                        && x.Decision == LineupReviewSemantics.GroupDecisionInclude
-                        && x.ChannelMode == LineupReviewSemantics.GroupModeManualReview
-                        && !x.IsNew
-                        && x.ChannelFilters.Any()
-                        && !x.ChannelFilters.Any(cf => cf.State == LineupReviewSemantics.ChannelStateIncluded))
-            .GroupBy(x => x.ProfileId)
-            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var result = new Dictionary<string, (int Groups, int Channels, int Setup)>(StringComparer.Ordinal);
+        var result = new Dictionary<string, (int Groups, int Channels)>(StringComparer.Ordinal);
 
         foreach (var group in groupsPendingByProfile)
-            result[group.ProfileId] = (group.Count, 0, 0);
+            result[group.ProfileId] = (group.Count, 0);
 
         foreach (var channel in channelsPendingByProfile)
         {
             result.TryGetValue(channel.ProfileId, out var existing);
-            result[channel.ProfileId] = (existing.Groups, channel.Count, existing.Setup);
-        }
-
-        foreach (var setup in groupsNeedingSetupByProfile)
-        {
-            result.TryGetValue(setup.ProfileId, out var existing);
-            result[setup.ProfileId] = (existing.Groups, existing.Channels, setup.Count);
+            result[channel.ProfileId] = (existing.Groups, channel.Count);
         }
 
         return result;
@@ -356,23 +338,6 @@ internal sealed class ProfilesPageService(
                 .ToListAsync(ct)
             : [];
 
-        // Groups that need channel mapping: included live groups in manual-review mode,
-        // not flagged as new (initial-sync groups), that have been synced (have channel rows)
-        // but have no explicitly included channels yet.
-        var groupsNeedingSetupByProfile = includePendingCounts
-            ? await db.ProfileGroupFilters
-                .AsNoTracking()
-                .Where(x => profileIds.Contains(x.ProfileId)
-                            && x.ProviderGroup.ContentType == "live"
-                            && x.Decision == LineupReviewSemantics.GroupDecisionInclude
-                            && x.ChannelMode == LineupReviewSemantics.GroupModeManualReview
-                            && !x.IsNew
-                            && x.ChannelFilters.Any()
-                            && !x.ChannelFilters.Any(cf => cf.State == LineupReviewSemantics.ChannelStateIncluded))
-                .GroupBy(x => x.ProfileId)
-                .Select(g => new { ProfileId = g.Key, Count = g.Count() })
-                .ToListAsync(ct)
-            : [];
 
         // Latest fetch run status per provider — used to scope health to each profile's own providers.
         var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
@@ -396,7 +361,6 @@ internal sealed class ProfilesPageService(
 
         var pendingByProfile = groupsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
         var pendingChannelsByProfileMap = channelsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
-        var groupsNeedingSetupMap = groupsNeedingSetupByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
 
         var providersByProfile = profileProviders
             .GroupBy(x => x.ProfileId)
@@ -450,7 +414,6 @@ internal sealed class ProfilesPageService(
                 HealthStatus = health,
                 GroupsPendingReview = pendingByProfile.GetValueOrDefault(profile.ProfileId, 0),
                 ChannelsPendingReview = pendingChannelsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),
-                GroupsNeedingSetup = groupsNeedingSetupMap.GetValueOrDefault(profile.ProfileId, 0),
             });
         }
 

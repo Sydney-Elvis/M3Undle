@@ -1,6 +1,9 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Data.Entities
+@using System.Threading.Channels
+@implements IDisposable
 @inject IEventService EventService
+@inject AppEventBus EventBus
 
 <MudDrawer Open="@Open" OpenChanged="HandleOpenChangedAsync" Anchor="Anchor.End" Variant="DrawerVariant.Persistent" Width="380px"
            Style="height: calc(100vh - 28px); overflow: hidden;">
@@ -89,11 +92,39 @@
     private List<SystemEvent> _events = [];
     private IReadOnlyList<SystemEventPanelItem> _eventItems = [];
     private bool _loading;
+    private IDisposable? _eventSubscription;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override void OnInitialized()
+    {
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+    }
 
     protected override async Task OnParametersSetAsync()
     {
         if (Open)
             await LoadAsync();
+    }
+
+    private async Task ListenForEventsAsync(ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.SystemEventPublished && Open)
+                    await InvokeAsync(LoadAsync);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
     }
 
     private async Task HandleOpenChangedAsync(bool value)

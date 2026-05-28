@@ -124,7 +124,11 @@ builder.Services.AddHealthChecks()
 builder.Services.AddM3UndleOpenApi();
 builder.Services.AddValidation();
 builder.Services.AddMemoryCache();
-builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(string.Empty, client =>
+{
+    // No HttpClient-level timeout — per-provider CancellationTokenSource controls the deadline.
+    client.Timeout = Timeout.InfiniteTimeSpan;
+});
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(MediaSurfaceCorsPolicy, policy =>

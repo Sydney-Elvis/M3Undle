@@ -197,10 +197,10 @@ else
                                 @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review
                             </MudAlert>
                         }
-                        @if (profile.GroupsNeedingSetup > 0)
+                        @if (profile.LastPublishedUtc.HasValue && profile.LiveCount == 0 && profile.MovieCount == 0 && profile.SeriesCount == 0)
                         {
                             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
-                                @profile.GroupsNeedingSetup group@(profile.GroupsNeedingSetup == 1 ? "" : "s") need channel mapping
+                                No channels in output — open <MudLink Href="channels/mapping">Channel Mapping</MudLink> to include groups
                             </MudAlert>
                         }
 
@@ -286,13 +286,11 @@ else
                 {
                     profile.GroupsPendingReview = value.Groups;
                     profile.ChannelsPendingReview = value.Channels;
-                    profile.GroupsNeedingSetup = value.Setup;
                 }
                 else
                 {
                     profile.GroupsPendingReview = 0;
                     profile.ChannelsPendingReview = 0;
-                    profile.GroupsNeedingSetup = 0;
                 }
             }
 
