@@ -164,28 +164,63 @@ else
     <!-- Summary chips -->
     @if (!_isLoading && _profileId is not null)
     {
-        var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
-        var mapped = liveFilters.Where(f =>
-            IsIncluded(f) &&
-            GetSelectedChannelCount(f) > 0)
+        var cgLinkedGroupIds = _customGroups
+            .SelectMany(cg => cg.LinkedProviderGroupIds)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var liveFilters = _allFilters
+            .Where(f => f.ProviderGroupContentType == "live" && !cgLinkedGroupIds.Contains(f.ProviderGroupId))
             .ToList();
-        var unmapped = liveFilters.Where(IsUnmappedBySelection).ToList();
-        var excluded = liveFilters.Where(IsExcluded).ToList();
-        var newCount = liveFilters.Count(f => f.IsNew);
-        var chSelected = mapped.Sum(GetSelectedChannelCount);
+
+        // Standalone: no OutputName. VirtualParent members: share an OutputName.
+        var standaloneFilters = liveFilters.Where(f => f.OutputName is null).ToList();
+        var vpGroups = liveFilters
+            .Where(f => f.OutputName is not null)
+            .GroupBy(f => f.OutputName!, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Standalone counts
+        var standaloneMapped   = standaloneFilters.Where(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0).ToList();
+        var standaloneUnmapped = standaloneFilters.Where(IsUnmappedBySelection).ToList();
+        var standaloneExcluded = standaloneFilters.Where(IsExcluded).ToList();
+        var standaloneNew      = standaloneFilters.Count(f => f.IsNew);
+        var standaloneChSelected = standaloneMapped.Sum(GetSelectedChannelCount);
+
+        // VirtualParent counts — each unique OutputName = 1 logical group
+        var vpMapped   = vpGroups.Count(g => g.Any(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0));
+        var vpUnmapped = vpGroups.Count(g => g.Any(IsIncluded) && !g.Any(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0));
+        var vpExcluded = vpGroups.Count(g => g.All(IsExcluded));
+        var vpNew      = vpGroups.Count(g => g.Any(f => f.IsNew));
+        var vpChSelected = vpGroups
+            .Where(g => g.Any(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0))
+            .Sum(g => g.Where(IsIncluded).Sum(GetSelectedChannelCount));
+
+        // Custom group counts
+        var cgMapped   = _customGroups.Count(cg => IsCgIncluded(cg) && cg.SelectedChannelCount > 0);
+        var cgUnmapped = _customGroups.Count(cg => IsCgIncluded(cg) && cg.SelectedChannelCount == 0);
+        var cgExcluded = _customGroups.Count(IsCgExcluded);
+        var cgChSelected = _customGroups
+            .Where(cg => IsCgIncluded(cg) && cg.SelectedChannelCount > 0)
+            .Sum(cg => cg.SelectedChannelCount);
+
+        var totalMapped     = standaloneMapped.Count + vpMapped + cgMapped;
+        var totalUnmapped   = standaloneUnmapped.Count + vpUnmapped + cgUnmapped;
+        var totalExcluded   = standaloneExcluded.Count + vpExcluded + cgExcluded;
+        var newCount        = standaloneNew + vpNew;
+        var totalChSelected = standaloneChSelected + vpChSelected + cgChSelected;
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
-            <ChipFilterToggle Label="@($"{mapped.Count} mapped · {chSelected:N0} ch used")"
+            <ChipFilterToggle Label="@($"{totalMapped} mapped · {totalChSelected:N0} ch used")"
                               Color="Color.Success"
                               IsActive="@_decisionFilterStates.Contains("used")"
                               TooltipText="Included groups with selected channels. Click to toggle this filter."
                               OnClick="@((_) => ToggleDecisionFilterState("used"))" />
-            <ChipFilterToggle Label="@($"{unmapped.Count} unmapped")"
+            <ChipFilterToggle Label="@($"{totalUnmapped} unmapped")"
                               Color="Color.Warning"
                               IsActive="@_decisionFilterStates.Contains("unmapped")"
                               TooltipText="Included groups with zero selected channels. Click to filter them."
                               OnClick="@((_) => ToggleDecisionFilterState("unmapped"))" />
-            <ChipFilterToggle Label="@($"{excluded.Count} excluded")"
+            <ChipFilterToggle Label="@($"{totalExcluded} excluded")"
                               Color="Color.Default"
                               IsActive="@_decisionFilterStates.Contains("exclude")"
                               TooltipText="Excluded groups. Click to toggle this filter."
@@ -1483,7 +1518,7 @@ else
             var showUnmapped = _decisionFilterStates.Contains("unmapped");
             var showExclude  = _decisionFilterStates.Contains("exclude");
             var showNew      = _decisionFilterStates.Contains("new");
-            var showAll      = _decisionFilterStates.Count == 0 || (showUsed && showUnmapped && showExclude);
+            var showAll      = showUsed && showUnmapped && showExclude;
 
             bool FilterMatchesGroup(GroupFilterDto f) =>
                 IsExcluded(f) ? showExclude :

@@ -544,6 +544,7 @@ public sealed class CustomGroupPageService(IServiceScopeFactory scopeFactory, Ap
         ChannelCount = g.Channels.Count,
         SelectedChannelCount = g.Channels.Count(c => c.State == LineupReviewSemantics.ChannelStateIncluded),
         ProviderLinkCount = g.ProviderLinks.Count,
+        LinkedProviderGroupIds = g.ProviderLinks.Select(l => l.ProviderGroupId).ToHashSet(StringComparer.Ordinal),
         CreatedUtc = g.CreatedUtc,
         UpdatedUtc = g.UpdatedUtc,
     };
