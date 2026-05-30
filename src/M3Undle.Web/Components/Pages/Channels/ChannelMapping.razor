@@ -333,6 +333,7 @@ else
                 var isEditing  = _editingFilterId == filterId;
                 var rowStyle   = isExcluded ? "opacity:0.55;" : string.Empty;
                 var displayName = filter.OutputName ?? filter.ProviderGroupRawName;
+                var showPpvHint = ShowPpvHint(filter);
 
                 <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@rowStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
@@ -409,6 +410,12 @@ else
                                                  OnClick="@(() => DismissNewAsync(filter))">new</MudChip>
                                     </MudTooltip>
                                 }
+                                @if (showPpvHint)
+                                {
+                                    <MudTooltip Text="This group may contain time-limited channels (PPV, sports events). Consider checking Group Settings → New channel handling." Arrow="true" Placement="Placement.Top">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Class="ppv-hint-chip">event?</MudChip>
+                                    </MudTooltip>
+                                }
                             </div>
                         }
 
@@ -448,6 +455,7 @@ else
                             <MudIconButton Icon="@Icons.Material.Filled.Tune"
                                            Size="Size.Small"
                                            Color="@GetSettingsButtonColor(filter.TrackingPolicy, filter.TrackingKeywords, filterId)"
+                                           Class="@(showPpvHint ? "ppv-settings-btn" : "")"
                                            OnClick="@(() => OpenSettingsDrawer(filterId, SettingsTargetKind.Standalone))" />
                         </MudTooltip>
                         }
@@ -627,6 +635,7 @@ else
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
                 var pFirstActive = parent.Members.FirstOrDefault(m => !IsExcluded(m)) ?? parent.Members.FirstOrDefault();
+                var showParentPpvHint = parent.Members.Any(ShowPpvHint);
 
                 <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
@@ -698,6 +707,12 @@ else
                                     </MudChip>
                                 </MudTooltip>
                             }
+                            @if (showParentPpvHint)
+                            {
+                                <MudTooltip Text="This group may contain time-limited channels (PPV, sports events). Consider checking Group Settings → New channel handling." Arrow="true" Placement="Placement.Top">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">event?</MudChip>
+                                </MudTooltip>
+                            }
 
                             <!-- Exclude button (bulk) -->
                             <MudTooltip Text="@(allExcluded ? "Remove exclusion" : "Exclude all member groups")" Arrow="true">
@@ -721,6 +736,7 @@ else
                                 <MudIconButton Icon="@Icons.Material.Filled.Tune"
                                                Size="Size.Small"
                                                Color="@GetSettingsButtonColor(pFirstActive?.TrackingPolicy, pFirstActive?.TrackingKeywords, $"parent:{parent.OutputName}")"
+                                               Class="@(showParentPpvHint ? "ppv-settings-btn" : "")"
                                                OnClick="@(() => OpenSettingsDrawer(parent.OutputName, SettingsTargetKind.Parent))" />
                             </MudTooltip>
 
@@ -1141,32 +1157,64 @@ else
                                Label="Mode"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@dfExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">Manual review</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">Auto-update</MudSelectItem>
+                               Disabled="@dfExcluded"
+                               HelperText="@GetModeHelperText(LineupReviewSemantics.NormalizeGroupMode(df.ChannelMode))">
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">
+                            <MudTooltip Text="You pick which channels appear in the output. Only checked channels are included." Arrow="true" Placement="Placement.Left">
+                                <span>Manual selection</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">
+                            <MudTooltip Text="All channels in this group are always included. New channels flow through automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-update</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
                     <MudSelect T="string"
                                Value="@dfPolicy"
                                ValueChanged="@(v => OnTrackingPolicyChanged(df, v))"
-                               Label="Event tracking"
+                               Label="New channel handling"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@dfExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">Review queue</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">Notify only</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">Auto-add all events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">Auto-add populated events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">Auto-add matching events</MudSelectItem>
+                               Disabled="@dfExcluded"
+                               HelperText="@GetTrackingPolicyHelperText(dfPolicy)">
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">
+                            <MudTooltip Text="New channels land in a queue for you to approve or reject before they appear in output." Arrow="true" Placement="Placement.Left">
+                                <span>Queue for review</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">
+                            <MudTooltip Text="You are notified when new channels appear. Nothing is added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Notify only</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">
+                            <MudTooltip Text="Every new channel is added to output automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add all</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">
+                            <MudTooltip Text="New channels that have EPG guide data are added automatically. Channels with no guide info are skipped." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add (guide data only)</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">
+                            <MudTooltip Text="Only new channels matching your keywords below are added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add matching</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
-                    <MudSwitch T="bool"
-                               Value="@df.TrackNewChannels"
-                               ValueChanged="@(v => OnTrackNewChannelsChanged(df, v))"
-                               Size="Size.Small"
-                               Color="Color.Primary"
-                               Disabled="@dfExcluded"
-                               Label="Track new channels" />
+                    <MudTooltip Text="When on, new regular channels added by the provider are flagged during refresh so you can review them. Does not affect existing channel selections." Arrow="true" Placement="Placement.Bottom">
+                        <MudSwitch T="bool"
+                                   Value="@df.TrackNewChannels"
+                                   ValueChanged="@(v => OnTrackNewChannelsChanged(df, v))"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Disabled="@dfExcluded"
+                                   Label="Track new channels" />
+                    </MudTooltip>
 
                     @if (dfIsAutoMatch)
                     {
@@ -1233,32 +1281,64 @@ else
                                Label="Mode"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@pAllExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">Manual review</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">Auto-update</MudSelectItem>
+                               Disabled="@pAllExcluded"
+                               HelperText="@GetModeHelperText(pMode)">
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">
+                            <MudTooltip Text="You pick which channels appear in the output. Only checked channels are included." Arrow="true" Placement="Placement.Left">
+                                <span>Manual selection</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">
+                            <MudTooltip Text="All channels in this group are always included. New channels flow through automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-update</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
                     <MudSelect T="string"
                                Value="@pPolicy"
                                ValueChanged="@(v => SetParentTrackingPolicyAsync(pParent, v))"
-                               Label="Event tracking"
+                               Label="New channel handling"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@pAllExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">Review queue</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">Notify only</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">Auto-add all events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">Auto-add populated events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">Auto-add matching events</MudSelectItem>
+                               Disabled="@pAllExcluded"
+                               HelperText="@GetTrackingPolicyHelperText(pPolicy)">
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">
+                            <MudTooltip Text="New channels land in a queue for you to approve or reject before they appear in output." Arrow="true" Placement="Placement.Left">
+                                <span>Queue for review</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">
+                            <MudTooltip Text="You are notified when new channels appear. Nothing is added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Notify only</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">
+                            <MudTooltip Text="Every new channel is added to output automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add all</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">
+                            <MudTooltip Text="New channels that have EPG guide data are added automatically. Channels with no guide info are skipped." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add (guide data only)</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">
+                            <MudTooltip Text="Only new channels matching your keywords below are added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add matching</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
-                    <MudSwitch T="bool"
-                               Value="@pFirst.TrackNewChannels"
-                               ValueChanged="@(v => SetParentTrackNewChannelsAsync(_drawerTargetId!, v))"
-                               Size="Size.Small"
-                               Color="Color.Primary"
-                               Disabled="@pAllExcluded"
-                               Label="Track new channels" />
+                    <MudTooltip Text="When on, new regular channels added by the provider are flagged during refresh so you can review them. Does not affect existing channel selections." Arrow="true" Placement="Placement.Bottom">
+                        <MudSwitch T="bool"
+                                   Value="@pFirst.TrackNewChannels"
+                                   ValueChanged="@(v => SetParentTrackNewChannelsAsync(_drawerTargetId!, v))"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Disabled="@pAllExcluded"
+                                   Label="Track new channels" />
+                    </MudTooltip>
 
                     @if (pIsAutoMatch)
                     {
@@ -1299,32 +1379,64 @@ else
                                Label="Mode"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@cgEx">
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">Manual review</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">Auto-update</MudSelectItem>
+                               Disabled="@cgEx"
+                               HelperText="@GetModeHelperText(LineupReviewSemantics.NormalizeGroupMode(cg.ChannelMode))">
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">
+                            <MudTooltip Text="You pick which channels appear in the output. Only checked channels are included." Arrow="true" Placement="Placement.Left">
+                                <span>Manual selection</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">
+                            <MudTooltip Text="All channels in this group are always included. New channels flow through automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-update</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
                     <MudSelect T="string"
                                Value="@cgPolicy"
                                ValueChanged="@(v => OnCgTrackingPolicyChangedAsync(cg, v))"
-                               Label="Event tracking"
+                               Label="New channel handling"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@cgEx">
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">Review queue</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">Notify only</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">Auto-add all events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">Auto-add populated events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">Auto-add matching events</MudSelectItem>
+                               Disabled="@cgEx"
+                               HelperText="@GetTrackingPolicyHelperText(cgPolicy)">
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">
+                            <MudTooltip Text="New channels land in a queue for you to approve or reject before they appear in output." Arrow="true" Placement="Placement.Left">
+                                <span>Queue for review</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">
+                            <MudTooltip Text="You are notified when new channels appear. Nothing is added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Notify only</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">
+                            <MudTooltip Text="Every new channel is added to output automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add all</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">
+                            <MudTooltip Text="New channels that have EPG guide data are added automatically. Channels with no guide info are skipped." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add (guide data only)</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">
+                            <MudTooltip Text="Only new channels matching your keywords below are added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add matching</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
-                    <MudSwitch T="bool"
-                               Value="@cg.TrackNewChannels"
-                               ValueChanged="@(v => OnCgTrackNewChangedAsync(cg, v))"
-                               Size="Size.Small"
-                               Color="Color.Primary"
-                               Disabled="@cgEx"
-                               Label="Track new channels" />
+                    <MudTooltip Text="When on, new regular channels added by the provider are flagged during refresh so you can review them. Does not affect existing channel selections." Arrow="true" Placement="Placement.Bottom">
+                        <MudSwitch T="bool"
+                                   Value="@cg.TrackNewChannels"
+                                   ValueChanged="@(v => OnCgTrackNewChangedAsync(cg, v))"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Disabled="@cgEx"
+                                   Label="Track new channels" />
+                    </MudTooltip>
 
                     @if (cgAutoMatch)
                     {
@@ -1496,6 +1608,44 @@ else
             StringComparison.OrdinalIgnoreCase);
 
     private static bool IsManualMode(GroupFilterDto filter) => !IsAutoMode(filter);
+
+    private static readonly Regex _ppvHintPattern = new(
+        @"\b(PPV|EVENTS?|FIGHTS?|UFC|MMA|BOXING)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static bool IsPpvLikeName(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && _ppvHintPattern.IsMatch(name);
+
+    private static bool ShowPpvHint(GroupFilterDto filter) =>
+        !IsExcluded(filter) &&
+        string.Equals(
+            LineupReviewSemantics.NormalizeTrackingPolicy(filter.TrackingPolicy),
+            LineupReviewSemantics.TrackingPolicyReview,
+            StringComparison.Ordinal) &&
+        !filter.TrackNewChannels &&
+        (IsPpvLikeName(filter.ProviderGroupRawName) || IsPpvLikeName(filter.OutputName));
+
+    private static string GetModeHelperText(string mode) => mode switch
+    {
+        LineupReviewSemantics.GroupModeAutoUpdate =>
+            "All channels in this group are included automatically. Provider changes flow through on next refresh.",
+        _ =>
+            "You choose which channels appear in the output. Changes require your action."
+    };
+
+    private static string GetTrackingPolicyHelperText(string policy) => policy switch
+    {
+        LineupReviewSemantics.TrackingPolicyNotify =>
+            "You get a notification when new channels appear, but nothing is added automatically.",
+        LineupReviewSemantics.TrackingPolicyAutoAddAll =>
+            "Every new channel is added automatically on refresh.",
+        LineupReviewSemantics.TrackingPolicyAutoAddPopulated =>
+            "Only channels that have EPG guide data are added automatically.",
+        LineupReviewSemantics.TrackingPolicyAutoAddMatching =>
+            "Only channels matching your keywords below are added automatically.",
+        _ =>
+            "New channels wait for your approval before appearing in output."
+    };
 
     private sealed record VirtualParent(string OutputName, List<GroupFilterDto> Members);
     private sealed record ParentChannelEntry(GroupFilterDto Filter, ProviderChannelSelectDto Channel);

@@ -112,6 +112,14 @@ h1:focus {
     border-color: #929292;
 }
 
+/* When hovering the event? chip, highlight the group settings button in the same row */
+.ppv-settings-btn {
+    transition: color 0.15s ease;
+}
+.mud-paper:has(.ppv-hint-chip:hover) .ppv-settings-btn {
+    color: var(--mud-palette-warning) !important;
+}
+
 .form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
     color: var(--bs-secondary-color);
     text-align: end;
