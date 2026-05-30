@@ -5,6 +5,7 @@
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject IDialogService DialogService
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>M3Undle</PageTitle>
@@ -59,7 +60,7 @@
     }
     else
     {
-        <MudTable Items="_providers" Hover="true" Dense="true">
+        <MudTable Items="_providers" Hover="true" Dense="true" RowClassFunc="@((p, _) => p.ProviderId == HighlightProvider ? "provider-row-highlight" : string.Empty)">
             <HeaderContent>
                 <MudTh>Name</MudTh>
                 <MudTh>Profile</MudTh>
@@ -127,21 +128,21 @@
                     {
                         @if (context.LatestSnapshots.Any(s => s.Status == "active"))
                         {
-                            <MudTooltip Text="Last refresh failed, but a previously published lineup is still active.">
-                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
+                            <MudTooltip Text="@FailTooltip("Last refresh failed, but a previously published lineup is still active.", context.LastRefresh.ErrorSummary)" Placement="Placement.Top">
+                                <span><MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip></span>
                             </MudTooltip>
                         }
                         else
                         {
-                            <MudTooltip Text="Last refresh failed and no lineup is currently published.">
-                                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
+                            <MudTooltip Text="@FailTooltip("Last refresh failed and no lineup is currently published.", context.LastRefresh.ErrorSummary)" Placement="Placement.Top">
+                                <span><MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip></span>
                             </MudTooltip>
                         }
                     }
                     else if (context.LatestSnapshots.Any(s => s.Status == "active"))
                     {
-                        <MudTooltip Text="@FormatSnapshotsTooltip(context.LatestSnapshots)">
-                            <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip>
+                        <MudTooltip Text="@FormatSnapshotsTooltip(context.LatestSnapshots)" Placement="Placement.Top">
+                            <span><MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip></span>
                         </MudTooltip>
                     }
                 </MudTd>
@@ -228,6 +229,9 @@
 @* Add and Edit dialogs are opened imperatively via DialogService *@
 
 @code {
+    [SupplyParameterFromQuery(Name = "provider")]
+    public string? HighlightProvider { get; set; }
+
     private readonly List<ProviderDto> _providers = [];
     private readonly List<ProfileListItemDto> _profiles = [];
 
@@ -251,6 +255,12 @@
     {
         _ = InitializeAsync();
         return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && HighlightProvider is not null)
+            await JS.InvokeVoidAsync("scrollToClass", "provider-row-highlight");
     }
 
     private async Task InitializeAsync()
@@ -468,6 +478,9 @@
             _previewLoadingProviderId = null;
         }
     }
+
+    private static string FailTooltip(string baseMessage, string? errorSummary)
+        => string.IsNullOrWhiteSpace(errorSummary) ? baseMessage : $"{baseMessage}\n\n{errorSummary}";
 
     private static string FormatRefresh(ProviderLastRefreshDto? refresh)
     {

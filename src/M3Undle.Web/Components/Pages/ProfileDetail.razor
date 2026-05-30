@@ -95,13 +95,6 @@ else
                         <MudText Typo="Typo.body1">@profile.Name</MudText>
                     </MudStack>
                     <MudStack Spacing="0">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Output Name</MudText>
-                        <MudText Typo="Typo.body1">@profile.OutputName</MudText>
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            This is the stable identifier used in published URLs (e.g. /m3u/@(profile.OutputName).m3u)
-                        </MudText>
-                    </MudStack>
-                    <MudStack Spacing="0">
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Created</MudText>
                         <MudText Typo="Typo.body2">@profile.CreatedUtc.ToString("u")</MudText>
                     </MudStack>
@@ -176,6 +169,13 @@ else
                     </MudAlert>
                 }
 
+                @if (profile.GroupsRemovedFromProvider > 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-2">
+                        @profile.GroupsRemovedFromProvider group@(profile.GroupsRemovedFromProvider == 1 ? "" : "s") removed from provider —
+                        <MudLink Href="@($"channels/mapping?profile={ProfileId}")">review in Channel Mapping</MudLink>
+                    </MudAlert>
+                }
                 @if (profile.GroupsPendingReview > 0)
                 {
                     <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-2">
@@ -220,16 +220,16 @@ else
                     <MudSimpleTable Dense="true">
                         <thead>
                             <tr>
-                                <th>Provider</th>
-                                <th>Priority</th>
-                                <th>Expires</th>
-                                <th>Status</th>
+                                <th><MudTooltip Text="Provider name" Placement="Placement.Top"><span style="cursor:help">Provider</span></MudTooltip></th>
+                                <th><MudTooltip Text="Order of precedence when multiple providers are linked — lower number wins" Placement="Placement.Top"><span style="cursor:help">Priority</span></MudTooltip></th>
+                                <th><MudTooltip Text="When the provider's playlist subscription expires" Placement="Placement.Top"><span style="cursor:help">Expires</span></MudTooltip></th>
+                                <th><MudTooltip Text="Current health based on the most recent fetch attempt" Placement="Placement.Top"><span style="cursor:help">Status</span></MudTooltip></th>
                             </tr>
                         </thead>
                         <tbody>
                             @foreach (var p in profile.Providers)
                             {
-                                <tr>
+                                <tr style="cursor:pointer" @onclick="@(() => Nav.NavigateTo($"providers?provider={p.ProviderId}"))">
                                     <td>@p.Name</td>
                                     <td>@p.Priority</td>
                                     <td>
@@ -260,9 +260,19 @@ else
                                         {
                                             <StatusChip Label="Disabled" Color="Color.Default" />
                                         }
+                                        else if (p.LastFetchStatus == "fail")
+                                        {
+                                            <MudTooltip Text="@(p.LastFetchErrorSummary ?? "Last fetch failed — check the Providers page for details")" Placement="Placement.Top">
+                                                <span><StatusChip Label="Failed" Color="Color.Error" /></span>
+                                            </MudTooltip>
+                                        }
+                                        else if (p.LastFetchStatus is null)
+                                        {
+                                            <StatusChip Label="No data" Color="Color.Default" />
+                                        }
                                         else
                                         {
-                                            <StatusChip Label="Enabled" Color="Color.Default" />
+                                            <StatusChip Label="OK" Color="Color.Success" />
                                         }
                                     </td>
                                 </tr>
@@ -347,6 +357,7 @@ else
                     <MudButton Variant="Variant.Filled"
                                Color="Color.Primary"
                                Disabled="_savingRefreshSchedule"
+                               Class="d-block mt-2"
                                OnClick="SaveProfileRefreshScheduleAsync">
                         @(_savingRefreshSchedule ? "Saving..." : "Save Refresh Schedule")
                     </MudButton>
@@ -370,35 +381,59 @@ else
                     <MudSimpleTable Dense="true" Hover="true">
                         <thead>
                             <tr>
-                                <th>Date</th>
-                                <th>Status</th>
-                                <th>Live</th>
-                                <th>Notes</th>
+                                <th><MudTooltip Text="When this snapshot was built and published (UTC)" Placement="Placement.Top"><span style="cursor:help">Date</span></MudTooltip></th>
+                                <th><MudTooltip Text="Active = currently serving; archived = superseded by a newer snapshot; failed = build error" Placement="Placement.Top"><span style="cursor:help">Status</span></MudTooltip></th>
+                                <th><MudTooltip Text="Number of live TV channels in this snapshot" Placement="Placement.Top"><span style="cursor:help">Live</span></MudTooltip></th>
+                                <th><MudTooltip Text="Number of movie (VOD) channels in this snapshot" Placement="Placement.Top"><span style="cursor:help">Movies</span></MudTooltip></th>
+                                <th><MudTooltip Text="Number of series channels in this snapshot" Placement="Placement.Top"><span style="cursor:help">Series</span></MudTooltip></th>
+                                <th><MudTooltip Text="Total channel count change vs. the previous snapshot" Placement="Placement.Top"><span style="cursor:help">Change</span></MudTooltip></th>
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach (var snap in _detail.History)
+                            @for (var i = 0; i < _detail.History.Count; i++)
                             {
+                                var snap = _detail.History[i];
+                                var prev = i + 1 < _detail.History.Count ? _detail.History[i + 1] : null;
+                                var delta = prev is not null
+                                    ? snap.ChannelCountPublished - prev.ChannelCountPublished
+                                    : (int?)null;
+                                var hasError = !string.IsNullOrWhiteSpace(snap.ErrorSummary);
                                 <tr>
                                     <td>
                                         <MudText Typo="Typo.caption">@snap.CreatedUtc.ToString("u")</MudText>
                                     </td>
                                     <td>
-                                        <StatusChip Label="@snap.Status"
-                                                    Color="@(snap.Status == "active" ? Color.Success
-                                                             : snap.Status == "failed" ? Color.Error
-                                                             : Color.Default)" />
-                                    </td>
-                                    <td>
-                                        <MudText Typo="Typo.caption">@snap.LiveChannelCount.ToString("N0")</MudText>
-                                    </td>
-                                    <td>
-                                        @if (!string.IsNullOrWhiteSpace(snap.ErrorSummary))
+                                        @if (hasError)
                                         {
                                             <MudTooltip Text="@snap.ErrorSummary">
-                                                <MudIcon Icon="@Icons.Material.Filled.ErrorOutline"
-                                                         Size="Size.Small" Color="Color.Error" />
+                                                <StatusChip Label="@snap.Status"
+                                                            Color="@(snap.Status == "active" ? Color.Warning : Color.Error)"
+                                                            Icon="@Icons.Material.Filled.Warning" />
                                             </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <StatusChip Label="@snap.Status"
+                                                        Color="@(snap.Status == "active" ? Color.Success : Color.Default)" />
+                                        }
+                                    </td>
+                                    <td><MudText Typo="Typo.caption">@snap.LiveChannelCount.ToString("N0")</MudText></td>
+                                    <td><MudText Typo="Typo.caption">@snap.VodChannelCount.ToString("N0")</MudText></td>
+                                    <td><MudText Typo="Typo.caption">@snap.SeriesChannelCount.ToString("N0")</MudText></td>
+                                    <td>
+                                        @if (delta is null)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                                        }
+                                        else if (delta == 0)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">0</MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="@(delta > 0 ? Color.Success : Color.Error)">
+                                                @(delta > 0 ? "+" : "")@delta.Value.ToString("N0")
+                                            </MudText>
                                         }
                                     </td>
                                 </tr>

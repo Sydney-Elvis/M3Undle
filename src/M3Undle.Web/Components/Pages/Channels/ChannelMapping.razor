@@ -203,6 +203,11 @@ else
             .Where(cg => IsCgIncluded(cg) && cg.SelectedChannelCount > 0)
             .Sum(cg => cg.SelectedChannelCount);
 
+        // Removed = included groups no longer present in the provider feed
+        var standaloneRemoved = standaloneFilters.Count(f => IsIncluded(f) && !f.ProviderGroupActive);
+        var vpRemoved = vpGroups.Count(g => g.Any(f => IsIncluded(f) && !f.ProviderGroupActive));
+        var removedCount = standaloneRemoved + vpRemoved;
+
         var totalMapped     = standaloneMapped.Count + vpMapped + cgMapped;
         var totalUnmapped   = standaloneUnmapped.Count + vpUnmapped + cgUnmapped;
         var totalExcluded   = standaloneExcluded.Count + vpExcluded + cgExcluded;
@@ -231,7 +236,7 @@ else
                 <ChipFilterToggle Label="@($"{newCount} new")"
                                   Color="Color.Info"
                                   IsActive="@_decisionFilterStates.Contains("new")"
-                                  TooltipText="Groups marked as new since last sync. Click to toggle this filter."
+                                  TooltipText="Groups added since last sync. Click to toggle this filter."
                                   OnClick="@((_) => ToggleDecisionFilterState("new"))" />
                 <MudTooltip Text="Dismiss all new flags" Arrow="true">
                     <MudIconButton Icon="@Icons.Material.Filled.DoneAll"
@@ -240,6 +245,15 @@ else
                                    OnClick="DismissAllNewAsync"
                                    Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
                 </MudTooltip>
+            }
+            @if (removedCount > 0)
+            {
+                @if (newCount == 0) { <MudDivider Vertical="true" FlexItem="true" /> }
+                <ChipFilterToggle Label="@($"{removedCount} removed")"
+                                  Color="Color.Error"
+                                  IsActive="@_decisionFilterStates.Contains("removed")"
+                                  TooltipText="Included groups no longer present in the provider feed. Click to toggle this filter."
+                                  OnClick="@((_) => ToggleDecisionFilterState("removed"))" />
             }
         </MudStack>
     }
@@ -1152,7 +1166,7 @@ else
                                Size="Size.Small"
                                Color="Color.Primary"
                                Disabled="@dfExcluded"
-                               Label="Notify on new pending channels" />
+                               Label="Track new channels" />
 
                     @if (dfIsAutoMatch)
                     {
@@ -1244,7 +1258,7 @@ else
                                Size="Size.Small"
                                Color="Color.Primary"
                                Disabled="@pAllExcluded"
-                               Label="Notify on new pending channels" />
+                               Label="Track new channels" />
 
                     @if (pIsAutoMatch)
                     {
@@ -1310,7 +1324,7 @@ else
                                Size="Size.Small"
                                Color="Color.Primary"
                                Disabled="@cgEx"
-                               Label="Notify on new pending channels" />
+                               Label="Track new channels" />
 
                     @if (cgAutoMatch)
                     {
@@ -1518,6 +1532,7 @@ else
             var showUnmapped = _decisionFilterStates.Contains("unmapped");
             var showExclude  = _decisionFilterStates.Contains("exclude");
             var showNew      = _decisionFilterStates.Contains("new");
+            var showRemoved  = _decisionFilterStates.Contains("removed");
             var showAll      = showUsed && showUnmapped && showExclude;
 
             bool FilterMatchesGroup(GroupFilterDto f) =>
@@ -1525,7 +1540,8 @@ else
                 showAll ||
                 (showUsed     && IsIncluded(f) && GetSelectedChannelCount(f) > 0) ||
                 (showUnmapped && IsUnmappedBySelection(f)) ||
-                MatchesNew(f, showNew);
+                MatchesNew(f, showNew) ||
+                (showRemoved  && IsIncluded(f) && !f.ProviderGroupActive);
 
             bool CgMatchesFilter(CustomGroupDto cg) =>
                 IsCgExcluded(cg) ? showExclude :
@@ -1553,12 +1569,14 @@ else
                                             && ((showUsed && IsIncluded(f) && GetSelectedChannelCount(f) > 0)
                                                 || (showUnmapped && IsUnmappedBySelection(f))
                                                 || (showExclude && IsExcluded(f))
-                                                || MatchesNew(f, showNew)),
+                                                || MatchesNew(f, showNew)
+                                                || (showRemoved && IsIncluded(f) && !f.ProviderGroupActive)),
                         VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
                                                                 && ((showUsed && IsIncluded(m) && GetSelectedChannelCount(m) > 0)
                                                                     || (showUnmapped && IsUnmappedBySelection(m))
                                                                     || (showExclude && IsExcluded(m))
-                                                                    || MatchesNew(m, showNew))),
+                                                                    || MatchesNew(m, showNew)
+                                                                    || (showRemoved && IsIncluded(m) && !m.ProviderGroupActive))),
                         _ => false,
                     };
                 };

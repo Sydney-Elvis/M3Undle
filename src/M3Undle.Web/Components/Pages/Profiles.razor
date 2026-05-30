@@ -89,9 +89,20 @@ else
                         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
                             <MudStack Spacing="0">
                                 <MudText Typo="Typo.h6">@profile.Name</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    Output: <strong>@profile.OutputName</strong>
-                                </MudText>
+                                @if (profile.IsActive && profile.HealthStatus != ProfileHealthStatus.NoOutput)
+                                {
+                                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Class="mt-1">
+                                        <StatusChip Label="M3U" Color="Color.Default" />
+                                        @if (_xtreamEnabled)
+                                        {
+                                            <StatusChip Label="Xtream" Color="Color.Default" />
+                                        }
+                                        @if (_hdhrEnabled)
+                                        {
+                                            <StatusChip Label="HDHomeRun" Color="Color.Default" />
+                                        }
+                                    </MudStack>
+                                }
                             </MudStack>
                                                         <StatusChip Label="@(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
                                                                                                     : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
@@ -185,16 +196,25 @@ else
                             }
                         </MudStack>
 
+                        @if (profile.GroupsRemovedFromProvider > 0)
+                        {
+                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                                @profile.GroupsRemovedFromProvider group@(profile.GroupsRemovedFromProvider == 1 ? "" : "s") removed from provider —
+                                <MudLink Href="@($"channels/mapping?profile={profile.ProfileId}")" @onclick:stopPropagation="true">review in Channel Mapping</MudLink>
+                            </MudAlert>
+                        }
                         @if (profile.GroupsPendingReview > 0)
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                                @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review
+                                @profile.GroupsPendingReview new group@(profile.GroupsPendingReview == 1 ? "" : "s") to review —
+                                <MudLink Href="@($"channels/mapping?profile={profile.ProfileId}")" @onclick:stopPropagation="true">review now</MudLink>
                             </MudAlert>
                         }
                         @if (profile.ChannelsPendingReview > 0)
                         {
                             <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                                @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review
+                                @profile.ChannelsPendingReview pending channel@(profile.ChannelsPendingReview == 1 ? "" : "s") to review —
+                                <MudLink Href="@($"channels/review?profile={profile.ProfileId}")" @onclick:stopPropagation="true">review now</MudLink>
                             </MudAlert>
                         }
                         @if (profile.LastPublishedUtc.HasValue && profile.LiveCount == 0)
@@ -225,6 +245,8 @@ else
     private List<ProfilePageItemDto> _profiles = [];
     private bool _isLoading = true;
     private string? _loadError;
+    private bool _xtreamEnabled = true;
+    private bool _hdhrEnabled = true;
 
     private string? _activatingProfileId;
 
@@ -259,7 +281,11 @@ else
 
         try
         {
-            _profiles = await Task.Run(() => ProfilesService.GetProfilesAsync(CancellationToken.None, includePendingCounts));
+            var profilesTask = Task.Run(() => ProfilesService.GetProfilesAsync(CancellationToken.None, includePendingCounts));
+            var flagsTask = Task.Run(() => ProfilesService.GetEndpointFlagsAsync(CancellationToken.None));
+            await Task.WhenAll(profilesTask, flagsTask);
+            _profiles = profilesTask.Result;
+            (_xtreamEnabled, _hdhrEnabled) = flagsTask.Result;
         }
         catch (Exception ex)
         {
@@ -286,11 +312,13 @@ else
                 {
                     profile.GroupsPendingReview = value.Groups;
                     profile.ChannelsPendingReview = value.Channels;
+                    profile.GroupsRemovedFromProvider = value.Removed;
                 }
                 else
                 {
                     profile.GroupsPendingReview = 0;
                     profile.ChannelsPendingReview = 0;
+                    profile.GroupsRemovedFromProvider = 0;
                 }
             }
 

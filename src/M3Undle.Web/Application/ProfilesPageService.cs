@@ -190,6 +190,18 @@ internal sealed class ProfilesPageService(
         refreshTrigger.TriggerRefresh();
     }
 
+    public async Task<(bool XtreamEnabled, bool HdhrEnabled)> GetEndpointFlagsAsync(CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var settings = await db.SiteSettings
+            .AsNoTracking()
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(ct)
+            ?? new Data.Entities.SiteSettings { Id = 1 };
+        return (settings.XtreamCompatibilityEnabled, settings.HdhrEnabled);
+    }
+
     public async Task<List<ProfilePageItemDto>> GetProfilesAsync(CancellationToken ct, bool includePendingCounts = true)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -197,7 +209,7 @@ internal sealed class ProfilesPageService(
         return await BuildProfileListAsync(db, profileId: null, ct, includePendingCounts);
     }
 
-    public async Task<Dictionary<string, (int Groups, int Channels)>> GetPendingReviewCountsAsync(CancellationToken ct)
+    public async Task<Dictionary<string, (int Groups, int Channels, int Removed)>> GetPendingReviewCountsAsync(CancellationToken ct)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -221,15 +233,30 @@ internal sealed class ProfilesPageService(
             .Select(g => new { ProfileId = g.Key, Count = g.Count() })
             .ToListAsync(ct);
 
-        var result = new Dictionary<string, (int Groups, int Channels)>(StringComparer.Ordinal);
+        var groupsRemovedByProfile = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProviderGroup.ContentType == "live"
+                        && x.Decision != LineupReviewSemantics.GroupDecisionExclude
+                        && !x.ProviderGroup.Active)
+            .GroupBy(x => x.ProfileId)
+            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var result = new Dictionary<string, (int Groups, int Channels, int Removed)>(StringComparer.Ordinal);
 
         foreach (var group in groupsPendingByProfile)
-            result[group.ProfileId] = (group.Count, 0);
+            result[group.ProfileId] = (group.Count, 0, 0);
 
         foreach (var channel in channelsPendingByProfile)
         {
             result.TryGetValue(channel.ProfileId, out var existing);
-            result[channel.ProfileId] = (existing.Groups, channel.Count);
+            result[channel.ProfileId] = (existing.Groups, channel.Count, existing.Removed);
+        }
+
+        foreach (var removed in groupsRemovedByProfile)
+        {
+            result.TryGetValue(removed.ProfileId, out var existing);
+            result[removed.ProfileId] = (existing.Groups, existing.Channels, removed.Count);
         }
 
         return result;
@@ -338,21 +365,37 @@ internal sealed class ProfilesPageService(
                 .ToListAsync(ct)
             : [];
 
+        var groupsRemovedByProfile = includePendingCounts
+            ? await db.ProfileGroupFilters
+                .AsNoTracking()
+                .Where(x => profileIds.Contains(x.ProfileId)
+                            && x.ProviderGroup.ContentType == "live"
+                            && x.Decision != LineupReviewSemantics.GroupDecisionExclude
+                            && !x.ProviderGroup.Active)
+                .GroupBy(x => x.ProfileId)
+                .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+                .ToListAsync(ct)
+            : [];
+
 
         // Latest fetch run status per provider — used to scope health to each profile's own providers.
         var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
         var latestRunsByProvider = new Dictionary<string, string>(StringComparer.Ordinal);
+        var latestRunErrorsByProvider = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (relevantProviderIds.Count > 0)
         {
             var recentRuns = await db.FetchRuns
                 .AsNoTracking()
                 .Where(f => relevantProviderIds.Contains(f.ProviderId))
-                .Select(f => new { f.ProviderId, f.StartedUtc, f.Status })
+                .Select(f => new { f.ProviderId, f.StartedUtc, f.Status, f.ErrorSummary })
                 .OrderByDescending(f => f.StartedUtc)
                 .ToListAsync(ct);
 
             foreach (var run in recentRuns)
+            {
                 latestRunsByProvider.TryAdd(run.ProviderId, run.Status);
+                latestRunErrorsByProvider.TryAdd(run.ProviderId, run.ErrorSummary);
+            }
         }
 
         var profileProviderMap = profileProviders
@@ -361,6 +404,7 @@ internal sealed class ProfilesPageService(
 
         var pendingByProfile = groupsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
         var pendingChannelsByProfileMap = channelsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
+        var removedGroupsByProfileMap = groupsRemovedByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
 
         var providersByProfile = profileProviders
             .GroupBy(x => x.ProfileId)
@@ -373,6 +417,8 @@ internal sealed class ProfilesPageService(
                     Priority = pp.Priority,
                     Enabled = pp.Enabled,
                     PlaylistExpiresUtc = pp.PlaylistExpiresUtc,
+                    LastFetchStatus = latestRunsByProvider.GetValueOrDefault(pp.ProviderId),
+                    LastFetchErrorSummary = latestRunErrorsByProvider.GetValueOrDefault(pp.ProviderId),
                 }).ToList());
 
         var latestSnapshotByProfile = activeSnapshots
@@ -414,6 +460,7 @@ internal sealed class ProfilesPageService(
                 HealthStatus = health,
                 GroupsPendingReview = pendingByProfile.GetValueOrDefault(profile.ProfileId, 0),
                 ChannelsPendingReview = pendingChannelsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),
+                GroupsRemovedFromProvider = removedGroupsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),
             });
         }
 

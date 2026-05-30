@@ -1,3 +1,8 @@
+window.scrollToClass = (className) => {
+    const el = document.querySelector('.' + className);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
 window.scrollToBottom = (id) => {
     const el = document.getElementById(id);
     if (el) el.scrollTop = el.scrollHeight;

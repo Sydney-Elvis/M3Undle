@@ -447,14 +447,14 @@ public sealed class SnapshotHandlingTests
             Assert.IsFalse(filter.IsNew);
             Assert.AreEqual(LineupReviewSemantics.GroupModeManualReview, filter.ChannelMode);
             Assert.AreEqual(LineupReviewSemantics.TrackingPolicyReview, filter.TrackingPolicy);
+            Assert.IsFalse(filter.TrackNewChannels, "TrackNewChannels should default to false so no channel rows are created until user opts in.");
 
+            // With TrackNewChannels = false (default), no channel rows should be created.
             var rows = await verify.ProfileGroupChannelFilters
-                .Include(x => x.ProviderChannel)
                 .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
                 .ToListAsync();
 
-            Assert.HasCount(1, rows);
-            Assert.AreEqual(LineupReviewSemantics.ChannelStateExcluded, rows[0].State);
+            Assert.HasCount(0, rows);
             Assert.AreEqual(0, await verify.ProfileGroupChannelFilters
                 .CountAsync(x => x.State == LineupReviewSemantics.ChannelStatePending));
         }
@@ -499,17 +499,9 @@ public sealed class SnapshotHandlingTests
             Assert.IsFalse(filters.Single(x => x.ProviderGroup.RawName == "News").IsNew);
             Assert.IsTrue(filters.Single(x => x.ProviderGroup.RawName == "Sports").IsNew);
 
-            var rows = await verify.ProfileGroupChannelFilters
-                .Include(x => x.ProviderChannel)
-                .ToListAsync();
-
-            Assert.HasCount(3, rows);
-            Assert.AreEqual(LineupReviewSemantics.ChannelStateExcluded,
-                rows.Single(x => x.ProviderChannel.DisplayName == "CNN US").State);
-            Assert.AreEqual(LineupReviewSemantics.ChannelStatePending,
-                rows.Single(x => x.ProviderChannel.DisplayName == "CNN International").State);
-            Assert.AreEqual(LineupReviewSemantics.ChannelStatePending,
-                rows.Single(x => x.ProviderChannel.DisplayName == "ESPN").State);
+            // With TrackNewChannels = false (default on all groups), no channel rows are queued.
+            var rows = await verify.ProfileGroupChannelFilters.ToListAsync();
+            Assert.HasCount(0, rows);
         }
         finally
         {
@@ -762,13 +754,25 @@ public sealed class SnapshotHandlingTests
                 seriesFilter.Decision = "exclude";
                 seriesFilter.UpdatedUtc = DateTime.UtcNow;
 
-                var newsChannels = await edit.ProfileGroupChannelFilters
-                    .Where(x => x.ProfileGroupFilterId == newsFilter.ProfileGroupFilterId)
+                // Since TrackNewChannels = false by default, no channel rows were auto-created.
+                // Directly insert included rows for the live news channels.
+                var nowEdit = DateTime.UtcNow;
+                var newsChannelIds = await edit.ProviderChannels
+                    .AsNoTracking()
+                    .Where(x => x.ProviderGroupId == newsFilter.ProviderGroupId && x.Active && x.ContentType == "live")
+                    .Select(x => x.ProviderChannelId)
                     .ToListAsync();
-                foreach (var cf in newsChannels)
+                foreach (var channelId in newsChannelIds)
                 {
-                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
-                    cf.UpdatedUtc = DateTime.UtcNow;
+                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                    {
+                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                        ProfileGroupFilterId = newsFilter.ProfileGroupFilterId,
+                        ProviderChannelId = channelId,
+                        State = LineupReviewSemantics.ChannelStateIncluded,
+                        CreatedUtc = nowEdit,
+                        UpdatedUtc = nowEdit,
+                    });
                 }
 
                 await edit.SaveChangesAsync();
@@ -857,13 +861,25 @@ public sealed class SnapshotHandlingTests
                 filter.IsNew = false;
                 filter.UpdatedUtc = DateTime.UtcNow;
 
-                var foxChannels = await edit.ProfileGroupChannelFilters
-                    .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                // Since TrackNewChannels = false by default, no channel rows were auto-created.
+                // Directly insert included rows for the live fox channels.
+                var nowEdit = DateTime.UtcNow;
+                var foxChannelIds = await edit.ProviderChannels
+                    .AsNoTracking()
+                    .Where(x => x.ProviderGroupId == filter.ProviderGroupId && x.Active && x.ContentType == "live")
+                    .Select(x => x.ProviderChannelId)
                     .ToListAsync();
-                foreach (var cf in foxChannels)
+                foreach (var channelId in foxChannelIds)
                 {
-                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
-                    cf.UpdatedUtc = DateTime.UtcNow;
+                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                    {
+                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                        ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                        ProviderChannelId = channelId,
+                        State = LineupReviewSemantics.ChannelStateIncluded,
+                        CreatedUtc = nowEdit,
+                        UpdatedUtc = nowEdit,
+                    });
                 }
 
                 await edit.SaveChangesAsync();
@@ -916,19 +932,31 @@ public sealed class SnapshotHandlingTests
                     .Where(x => x.ProfileId == "profile-1"
                              && (x.ProviderGroup.RawName == "USA FOX" || x.ProviderGroup.RawName == "USA ABC"))
                     .ToListAsync();
+                // Since TrackNewChannels = false by default, no channel rows were auto-created.
+                // Directly insert included rows for each group's live channels.
+                var nowEdit = DateTime.UtcNow;
                 foreach (var filter in filters)
                 {
                     filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
                     filter.IsNew = false;
-                    filter.UpdatedUtc = DateTime.UtcNow;
+                    filter.UpdatedUtc = nowEdit;
 
-                    var existingChannelFilters = await edit.ProfileGroupChannelFilters
-                        .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                    var channelIds = await edit.ProviderChannels
+                        .AsNoTracking()
+                        .Where(x => x.ProviderGroupId == filter.ProviderGroupId && x.Active && x.ContentType == "live")
+                        .Select(x => x.ProviderChannelId)
                         .ToListAsync();
-                    foreach (var cf in existingChannelFilters)
+                    foreach (var channelId in channelIds)
                     {
-                        cf.State = LineupReviewSemantics.ChannelStateIncluded;
-                        cf.UpdatedUtc = DateTime.UtcNow;
+                        edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                        {
+                            ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                            ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                            ProviderChannelId = channelId,
+                            State = LineupReviewSemantics.ChannelStateIncluded,
+                            CreatedUtc = nowEdit,
+                            UpdatedUtc = nowEdit,
+                        });
                     }
                 }
 

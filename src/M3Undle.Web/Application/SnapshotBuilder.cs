@@ -1641,7 +1641,8 @@ public sealed class SnapshotBuilder(
             .Where(f =>
                 LineupReviewSemantics.IsGroupIncluded(f.Decision)
                 && LineupReviewSemantics.NormalizeGroupMode(f.ChannelMode) == LineupReviewSemantics.GroupModeManualReview
-                && LineupReviewSemantics.ShouldQueuePending(f.TrackingPolicy))
+                && LineupReviewSemantics.ShouldQueuePending(f.TrackingPolicy)
+                && f.TrackNewChannels)
             .ToList();
 
         if (candidateFilters.Count == 0)

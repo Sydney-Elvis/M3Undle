@@ -103,6 +103,11 @@ h1:focus {
         content: "An error has occurred."
     }
 
+.provider-row-highlight {
+    background-color: rgba(31, 182, 166, 0.12) !important;
+    outline: 1px solid rgba(31, 182, 166, 0.4);
+}
+
 .darker-border-checkbox.form-check-input {
     border-color: #929292;
 }
