@@ -15,51 +15,44 @@ internal static class SystemEventPanelGrouping
         DateTime nowUtc,
         Func<DateTime, DateTime, string> relativeTime)
     {
-        List<SystemEventPanelItem> items = [];
-        PendingGroup? pending = null;
+        var groups = new Dictionary<GroupKey, PendingGroup>();
+        var order = new List<GroupKey>();
 
         foreach (var evt in events)
         {
-            var relative = relativeTime(evt.OccurredAt, nowUtc);
             var key = new GroupKey(
                 evt.EventType,
                 evt.Severity,
                 evt.Title,
                 evt.Detail,
                 evt.ProviderId,
-                evt.IntegrationId,
-                relative);
+                evt.IntegrationId);
 
-            if (pending is not null && pending.Key == key)
+            if (groups.TryGetValue(key, out var existing))
             {
-                pending.EventIds.Add(evt.SystemEventId);
-                pending.TotalOccurrences += Math.Max(1, evt.OccurrenceCount);
-                continue;
+                existing.EventIds.Add(evt.SystemEventId);
+                existing.TotalOccurrences += Math.Max(1, evt.OccurrenceCount);
             }
-
-            FlushPending();
-            pending = new PendingGroup(
-                key,
-                evt,
-                [evt.SystemEventId],
-                Math.Max(1, evt.OccurrenceCount),
-                relative);
+            else
+            {
+                var group = new PendingGroup(
+                    key,
+                    evt,
+                    [evt.SystemEventId],
+                    Math.Max(1, evt.OccurrenceCount),
+                    relativeTime(evt.OccurredAt, nowUtc));
+                groups[key] = group;
+                order.Add(key);
+            }
         }
 
-        FlushPending();
-        return items;
-
-        void FlushPending()
-        {
-            if (pending is null)
-                return;
-
-            items.Add(new SystemEventPanelItem(
-                pending.Event,
-                pending.EventIds,
-                pending.TotalOccurrences,
-                pending.RelativeTime));
-        }
+        return order
+            .Select(k =>
+            {
+                var g = groups[k];
+                return new SystemEventPanelItem(g.Event, g.EventIds, g.TotalOccurrences, g.RelativeTime);
+            })
+            .ToList();
     }
 
     public static string RelativeTime(DateTime utc, DateTime nowUtc)
@@ -91,6 +84,5 @@ internal static class SystemEventPanelGrouping
         string Title,
         string? Detail,
         string? ProviderId,
-        string? IntegrationId,
-        string RelativeTime);
+        string? IntegrationId);
 }

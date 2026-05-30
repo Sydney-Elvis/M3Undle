@@ -59,8 +59,12 @@ else
 {
     <MudPaper Class="pa-3 mb-3" Elevation="1">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
-            <MudChip T="string" Size="Size.Small" Color="Color.Info">@_queue.PendingTotal pending</MudChip>
-            <MudChip T="string" Size="Size.Small" Color="Color.Warning">@_queue.PendingNotified notify-enabled</MudChip>
+            <MudTooltip Text="Total channels awaiting an include or exclude decision" Arrow="true" Placement="Placement.Top">
+                <MudChip T="string" Size="Size.Small" Color="Color.Info">@_queue.PendingTotal pending</MudChip>
+            </MudTooltip>
+            <MudTooltip Text="Channels from groups where new-channel notifications are turned on" Arrow="true" Placement="Placement.Top">
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning">@_queue.PendingNotified notify-enabled</MudChip>
+            </MudTooltip>
             <MudDivider Vertical="true" FlexItem="true" />
             <MudTextField T="string"
                           Value="_search"
@@ -86,18 +90,22 @@ else
                     <MudSelectItem Value="@group.ProviderGroupId">@group.ProviderGroupRawName</MudSelectItem>
                 }
             </MudSelect>
-            <MudSwitch T="bool"
-                       Value="_notifyOnly"
-                       ValueChanged="OnNotifyOnlyChangedAsync"
-                       Label="Notify only"
-                       Size="Size.Small"
-                       Color="Color.Primary" />
-            <MudSwitch T="bool"
-                       Value="_eventCardView"
-                       ValueChanged="OnEventCardViewChangedAsync"
-                       Label="Event card view"
-                       Size="Size.Small"
-                       Color="Color.Secondary" />
+            <MudTooltip Text="Show only channels from groups that have notifications enabled" Arrow="true" Placement="Placement.Top">
+                <MudSwitch T="bool"
+                           Value="_notifyOnly"
+                           ValueChanged="OnNotifyOnlyChangedAsync"
+                           Label="Notify only"
+                           Size="Size.Small"
+                           Color="Color.Primary" />
+            </MudTooltip>
+            <MudTooltip Text="Group pending channels by event — useful for PPV and sports feeds with multiple quality tiers" Arrow="true" Placement="Placement.Top">
+                <MudSwitch T="bool"
+                           Value="_eventCardView"
+                           ValueChanged="OnEventCardViewChangedAsync"
+                           Label="Event card view"
+                           Size="Size.Small"
+                           Color="Color.Secondary" />
+            </MudTooltip>
         </MudStack>
 
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap" Class="mt-2">
@@ -175,14 +183,18 @@ else
                         </MudStack>
                     </MudStack>
                     <MudStack Row="true" Spacing="1">
-                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="_busy"
-                                   OnClick="@(() => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = card.Channels.Select(c => c.ProviderChannelId).ToList(), State = LineupReviewSemantics.ChannelStateIncluded }))">
-                            Include all
-                        </MudButton>
-                        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small" Disabled="_busy"
-                                   OnClick="@(() => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = card.Channels.Select(c => c.ProviderChannelId).ToList(), State = LineupReviewSemantics.ChannelStateExcluded }))">
-                            Exclude all
-                        </MudButton>
+                        <MudTooltip Text="Include all feeds for this event in the lineup" Arrow="true" Placement="Placement.Top">
+                            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="_busy"
+                                       OnClick="@(() => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = card.Channels.Select(c => c.ProviderChannelId).ToList(), State = LineupReviewSemantics.ChannelStateIncluded }))">
+                                Include all
+                            </MudButton>
+                        </MudTooltip>
+                        <MudTooltip Text="Exclude all feeds for this event from the lineup" Arrow="true" Placement="Placement.Top">
+                            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small" Disabled="_busy"
+                                       OnClick="@(() => SetStateAsync(new BulkReviewQueueStateRequest { ProviderChannelIds = card.Channels.Select(c => c.ProviderChannelId).ToList(), State = LineupReviewSemantics.ChannelStateExcluded }))">
+                                Exclude all
+                            </MudButton>
+                        </MudTooltip>
                     </MudStack>
                 </MudStack>
                 <MudTable Items="card.Channels" Dense="true" Hover="true" Elevation="0">
@@ -202,10 +214,14 @@ else
                         <MudTd>@context.LastSeenUtc.ToString("u")</MudTd>
                         <MudTd>
                             <MudStack Row="true" Spacing="1">
-                                <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" Disabled="_busy"
-                                               OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateIncluded))" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small" Color="Color.Error" Disabled="_busy"
-                                               OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateExcluded))" />
+                                <MudTooltip Text="Include this feed in the lineup" Arrow="true" Placement="Placement.Left">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Check" Size="Size.Small" Color="Color.Success" Disabled="_busy"
+                                                   OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateIncluded))" />
+                                </MudTooltip>
+                                <MudTooltip Text="Exclude this feed from the lineup" Arrow="true" Placement="Placement.Left">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small" Color="Color.Error" Disabled="_busy"
+                                                   OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateExcluded))" />
+                                </MudTooltip>
                             </MudStack>
                         </MudTd>
                     </RowTemplate>
@@ -217,12 +233,12 @@ else
     {
         <MudTable Items="_queue.Items" Dense="true" Hover="true" Bordered="true" RowsPerPage="50">
             <HeaderContent>
-                <MudTh><MudCheckBox T="bool" Value="@AllRowsSelected" ValueChanged="SetAllRowsSelected" Size="Size.Small" /></MudTh>
+                <MudTh><MudTooltip Text="Select all visible channels for bulk include/exclude" Arrow="true" Placement="Placement.Top"><MudCheckBox T="bool" Value="@AllRowsSelected" ValueChanged="SetAllRowsSelected" Size="Size.Small" /></MudTooltip></MudTh>
                 <MudTh>Channel</MudTh>
                 <MudTh>Group</MudTh>
-                <MudTh>Last Seen</MudTh>
-                <MudTh>Notify</MudTh>
-                <MudTh>Actions</MudTh>
+                <MudTh><MudTooltip Text="When the channel was last seen in the provider feed" Arrow="true" Placement="Placement.Top"><span>Last Seen</span></MudTooltip></MudTh>
+                <MudTh><MudTooltip Text="Whether this channel's group has new-channel notifications enabled — notify means it was surfaced here; mute means it arrived silently" Arrow="true" Placement="Placement.Top"><span>Notify</span></MudTooltip></MudTh>
+                <MudTh><MudTooltip Text="Include adds the channel to your lineup; Exclude hides it from future review and the lineup" Arrow="true" Placement="Placement.Top"><span>Actions</span></MudTooltip></MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd>
@@ -239,28 +255,36 @@ else
                     }
                     @if (context.IsEvent)
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Class="mt-1">event</MudChip>
+                        <MudTooltip Text="Time-limited event channel (PPV or sports) — switch to Event card view to see all feeds grouped together" Arrow="true" Placement="Placement.Right">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary" Class="mt-1">event</MudChip>
+                        </MudTooltip>
                     }
                 </MudTd>
                 <MudTd>@context.ProviderGroupRawName</MudTd>
                 <MudTd>@context.LastSeenUtc.ToString("u")</MudTd>
                 <MudTd>
-                    <MudChip T="string" Size="Size.Small" Color="@(context.NotifyOnPending ? Color.Warning : Color.Default)">
-                        @(context.NotifyOnPending ? "notify" : "mute")
-                    </MudChip>
+                    <MudTooltip Text="@(context.NotifyOnPending ? "This channel's group has notifications enabled — it was surfaced to the review queue" : "This channel's group has notifications muted")" Arrow="true" Placement="Placement.Left">
+                        <MudChip T="string" Size="Size.Small" Color="@(context.NotifyOnPending ? Color.Warning : Color.Default)">
+                            @(context.NotifyOnPending ? "notify" : "mute")
+                        </MudChip>
+                    </MudTooltip>
                 </MudTd>
                 <MudTd>
                     <MudStack Row="true" Spacing="1">
-                        <MudIconButton Icon="@Icons.Material.Filled.Check"
-                                       Size="Size.Small"
-                                       Color="Color.Success"
-                                       Disabled="_busy"
-                                       OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateIncluded))" />
-                        <MudIconButton Icon="@Icons.Material.Filled.Block"
-                                       Size="Size.Small"
-                                       Color="Color.Error"
-                                       Disabled="_busy"
-                                       OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateExcluded))" />
+                        <MudTooltip Text="Include this channel in the lineup" Arrow="true" Placement="Placement.Left">
+                            <MudIconButton Icon="@Icons.Material.Filled.Check"
+                                           Size="Size.Small"
+                                           Color="Color.Success"
+                                           Disabled="_busy"
+                                           OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateIncluded))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Exclude this channel from the lineup" Arrow="true" Placement="Placement.Left">
+                            <MudIconButton Icon="@Icons.Material.Filled.Block"
+                                           Size="Size.Small"
+                                           Color="Color.Error"
+                                           Disabled="_busy"
+                                           OnClick="@(() => SetSingleStateAsync(context.ProviderChannelId, LineupReviewSemantics.ChannelStateExcluded))" />
+                        </MudTooltip>
                     </MudStack>
                 </MudTd>
             </RowTemplate>

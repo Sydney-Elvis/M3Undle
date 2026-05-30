@@ -93,14 +93,18 @@ else
                 <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
                     <MudText Typo="Typo.h6">Guide Sources</MudText>
                     <MudStack Row="true" Spacing="1">
-                        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
-                                       OnClick="LoadSourcesAsync" Disabled="_isLoading" />
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                   StartIcon="@Icons.Material.Filled.Add"
-                                   Disabled="@(_selectedProvider is null)"
-                                   OnClick="OpenAddSourceDialogAsync">
-                            Add Source
-                        </MudButton>
+                        <MudTooltip Text="Reload the list of EPG sources" Arrow="true" Placement="Placement.Top">
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
+                                           OnClick="LoadSourcesAsync" Disabled="_isLoading" />
+                        </MudTooltip>
+                        <MudTooltip Text="Add a new guide data source for this provider" Arrow="true" Placement="Placement.Top">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.Add"
+                                       Disabled="@(_selectedProvider is null)"
+                                       OnClick="OpenAddSourceDialogAsync">
+                                Add Source
+                            </MudButton>
+                        </MudTooltip>
                     </MudStack>
                 </MudStack>
 
@@ -120,11 +124,11 @@ else
                     <MudTable Items="_sources" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
                         <HeaderContent>
                             <MudTh>Name</MudTh>
-                            <MudTh>Kind</MudTh>
+                            <MudTh><MudTooltip Text="How the guide data is fetched — URL (remote XMLTV), File (local XMLTV), or Provider (built-in feed)" Arrow="true" Placement="Placement.Top"><span>Kind</span></MudTooltip></MudTh>
                             <MudTh>URL / Path</MudTh>
-                            <MudTh>Priority</MudTh>
-                            <MudTh>Status</MudTh>
-                            <MudTh>Actions</MudTh>
+                            <MudTh><MudTooltip Text="Lower number = higher priority. When a channel matches multiple sources, the lowest-priority-number source wins." Arrow="true" Placement="Placement.Top"><span>Priority</span></MudTooltip></MudTh>
+                            <MudTh><MudTooltip Text="Result of the last fetch attempt for this source" Arrow="true" Placement="Placement.Top"><span>Status</span></MudTooltip></MudTh>
+                            <MudTh><MudTooltip Text="Edit settings, run a test fetch, auto-map channels, or delete this source" Arrow="true" Placement="Placement.Top"><span>Actions</span></MudTooltip></MudTh>
                         </HeaderContent>
                         <RowTemplate>
                             <MudTd>
@@ -132,7 +136,9 @@ else
                                     <span>@context.Name</span>
                                     @if (!context.Enabled)
                                     {
-                                        <StatusChip Label="Disabled" Size="Size.Small" Color="Color.Default" />
+                                        <MudTooltip Text="This source is disabled — it will not be fetched or used for guide data" Arrow="true" Placement="Placement.Right">
+                                            <StatusChip Label="Disabled" Size="Size.Small" Color="Color.Default" />
+                                        </MudTooltip>
                                     }
                                 </MudStack>
                             </MudTd>
@@ -170,28 +176,34 @@ else
                                 }
                                 else
                                 {
-                                    <StatusChip Label="Never fetched"
-                                                Size="Size.Small"
-                                                Color="Color.Default"
-                                                Variant="Variant.Outlined" />
+                                    <MudTooltip Text="This source has never been successfully fetched — run a test or wait for the next scheduled refresh" Arrow="true" Placement="Placement.Left">
+                                        <StatusChip Label="Never fetched"
+                                                    Size="Size.Small"
+                                                    Color="Color.Default"
+                                                    Variant="Variant.Outlined" />
+                                    </MudTooltip>
                                 }
                             </MudTd>
                             <MudTd>
                                 <MudStack Row="true" Spacing="1">
-                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary"
-                                                   Size="Size.Small" OnClick="() => OpenEditSourceDialogAsync(context)" />
-                                    <MudTooltip Text="Test: fetch and parse this source now">
+                                    <MudTooltip Text="Edit this source's settings" Arrow="true" Placement="Placement.Top">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary"
+                                                       Size="Size.Small" OnClick="() => OpenEditSourceDialogAsync(context)" />
+                                    </MudTooltip>
+                                    <MudTooltip Text="Test: fetch and parse this source now" Arrow="true" Placement="Placement.Top">
                                         <MudIconButton Icon="@Icons.Material.Filled.PlayArrow" Color="Color.Secondary"
                                                        Size="Size.Small" Disabled="@IsTestRunning(context.EpgSourceId)"
                                                        OnClick="() => TestSourceAsync(context)" />
                                     </MudTooltip>
-                                    <MudTooltip Text="Auto-map channels from this source">
+                                    <MudTooltip Text="Auto-map unmatched channels using this source" Arrow="true" Placement="Placement.Top">
                                         <MudIconButton Icon="@Icons.Material.Filled.AutoFixHigh" Color="Color.Info"
                                                        Size="Size.Small"
                                                        OnClick="() => AutoMapSourceAsync(context)" />
                                     </MudTooltip>
-                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
-                                                   Size="Size.Small" OnClick="() => DeleteSourceAsync(context)" />
+                                    <MudTooltip Text="Delete this source and all its fetch history and channel mappings" Arrow="true" Placement="Placement.Top">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                                                       Size="Size.Small" OnClick="() => DeleteSourceAsync(context)" />
+                                    </MudTooltip>
                                 </MudStack>
                             </MudTd>
                         </RowTemplate>
@@ -258,8 +270,10 @@ else
                                 <MudSelectItem T="ProfileListItemDto?" Value="@p">@p.Name</MudSelectItem>
                             }
                         </MudSelect>
-                        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
-                                       OnClick="LoadMappingsAsync" Disabled="@(_selectedProfile is null || _isMappingsLoading)" />
+                        <MudTooltip Text="Reload channel mappings for this profile" Arrow="true" Placement="Placement.Top">
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
+                                           OnClick="LoadMappingsAsync" Disabled="@(_selectedProfile is null || _isMappingsLoading)" />
+                        </MudTooltip>
                     </MudStack>
                 </MudStack>
 
@@ -324,11 +338,11 @@ else
                         <MudTable Items="filteredMappings" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
                             <HeaderContent>
                                 <MudTh>Channel</MudTh>
-                                <MudTh>tvg-id</MudTh>
+                                <MudTh><MudTooltip Text="The tvg-id attribute from the provider M3U — used for automatic ID-based EPG matching" Arrow="true" Placement="Placement.Top"><span>tvg-id</span></MudTooltip></MudTh>
                                 <MudTh>EPG Source</MudTh>
                                 <MudTh>EPG Channel</MudTh>
-                                <MudTh>Mode</MudTh>
-                                <MudTh>Actions</MudTh>
+                                <MudTh><MudTooltip Text="How the EPG match was established: Manual (you chose it), Auto by ID/Name/Fuzzy (automatic), or Unmapped (no match found)" Arrow="true" Placement="Placement.Top"><span>Mode</span></MudTooltip></MudTh>
+                                <MudTh><MudTooltip Text="Override the mapping manually, or remove the current mapping" Arrow="true" Placement="Placement.Top"><span>Actions</span></MudTooltip></MudTh>
                             </HeaderContent>
                             <RowTemplate>
                                 <MudTd>@context.ProviderChannelDisplayName</MudTd>
@@ -340,21 +354,23 @@ else
                                     <MudText Typo="Typo.caption">@(string.IsNullOrEmpty(context.XmltvChannelId) ? "—" : context.XmltvChannelId)</MudText>
                                 </MudTd>
                                 <MudTd>
-                                    <StatusChip Label="@MappingModeLabel(context.MappingMode)"
-                                                Size="Size.Small"
-                                                Color="@MappingModeColor(context.MappingMode)"
-                                                Variant="Variant.Outlined" />
+                                    <MudTooltip Text="@MappingModeTooltip(context.MappingMode)" Arrow="true" Placement="Placement.Left">
+                                        <StatusChip Label="@MappingModeLabel(context.MappingMode)"
+                                                    Size="Size.Small"
+                                                    Color="@MappingModeColor(context.MappingMode)"
+                                                    Variant="Variant.Outlined" />
+                                    </MudTooltip>
                                 </MudTd>
                                 <MudTd>
                                     <MudStack Row="true" Spacing="1">
-                                        <MudTooltip Text="Override mapping manually">
+                                        <MudTooltip Text="Override mapping manually" Arrow="true" Placement="Placement.Left">
                                             <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary"
                                                            Size="Size.Small"
                                                            OnClick="() => OpenManualMappingDialogAsync(context)" />
                                         </MudTooltip>
                                         @if (!string.IsNullOrEmpty(context.EpgChannelMappingId))
                                         {
-                                            <MudTooltip Text="Remove this mapping">
+                                            <MudTooltip Text="Remove this EPG mapping — the channel will show as Unmapped" Arrow="true" Placement="Placement.Left">
                                                 <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Color="Color.Error"
                                                                Size="Size.Small"
                                                                OnClick="() => DeleteMappingAsync(context)" />
@@ -741,6 +757,16 @@ else
         "auto_name" => "Auto (Name)",
         "auto_fuzzy" => "Auto (Fuzzy)",
         "none" => "Unmapped",
+        _ => mode,
+    };
+
+    private static string MappingModeTooltip(string mode) => mode switch
+    {
+        "manual" => "You manually selected this EPG channel mapping",
+        "auto_id" => "Matched automatically by tvg-id",
+        "auto_name" => "Matched automatically by channel name",
+        "auto_fuzzy" => "Matched automatically by fuzzy name search — verify this is correct",
+        "none" => "No EPG channel matched — use Edit to set one manually",
         _ => mode,
     };
 
