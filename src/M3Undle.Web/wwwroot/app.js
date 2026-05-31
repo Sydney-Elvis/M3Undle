@@ -1,3 +1,8 @@
+window.scrollToId = (id) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
 window.scrollToClass = (className) => {
     const el = document.querySelector('.' + className);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -38,6 +43,48 @@ window.m3undleCopyText = async (text) => {
     } catch {
         return false;
     }
+};
+
+// Mapped channels panel: attaches drag-to-resize on the left edge handle.
+// Returns a handle with a dispose() method to remove document listeners.
+window.initMappingPanelResize = (handleId, panelId, contentId, minWidth, maxWidth) => {
+    const handle = document.getElementById(handleId);
+    if (!handle) return { dispose: () => {} };
+
+    let dragging = false;
+
+    const onMouseDown = (e) => {
+        dragging = true;
+        e.preventDefault();
+    };
+
+    const onMouseMove = (e) => {
+        if (!dragging) return;
+        const width = Math.max(minWidth, Math.min(maxWidth, window.innerWidth - e.clientX));
+        const panel = document.getElementById(panelId);
+        const content = document.getElementById(contentId);
+        if (panel) panel.style.width = width + 'px';
+        if (content) content.style.marginRight = width + 'px';
+    };
+
+    const onMouseUp = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        const width = Math.max(minWidth, Math.min(maxWidth, window.innerWidth - e.clientX));
+        try { localStorage.setItem('m3undle:mapping-panel-width', width.toString()); } catch {}
+    };
+
+    handle.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    return {
+        dispose: () => {
+            handle.removeEventListener('mousedown', onMouseDown);
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        }
+    };
 };
 
 // Attaches a scroll listener to the log container.

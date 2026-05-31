@@ -416,6 +416,48 @@ public sealed class ChannelMappingPageService(
         };
     }
 
+    public async Task<List<MappedChannelPanelItem>> GetMappedChannelsPanelAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var snapshotCreatedUtc = await db.Snapshots
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
+            .OrderByDescending(x => x.CreatedUtc)
+            .Select(x => (DateTime?)x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var rows = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionInclude
+                        && x.State == LineupReviewSemantics.ChannelStateIncluded
+                        && x.ChannelNumber != null)
+            .Select(x => new
+            {
+                x.ChannelNumber,
+                DisplayName = x.DisplayNameOverride ?? x.ProviderChannel.DisplayName,
+                x.UpdatedUtc,
+                FilterId = x.ProfileGroupFilterId,
+                OutputName = x.ProfileGroupFilter.OutputName,
+            })
+            .OrderBy(x => x.ChannelNumber)
+            .ToListAsync(cancellationToken);
+
+        var cutoff = snapshotCreatedUtc;
+        return rows.Select(r => new MappedChannelPanelItem
+        {
+            ChannelNumber = r.ChannelNumber,
+            DisplayName = r.DisplayName,
+            IsLive = cutoff.HasValue && r.UpdatedUtc <= cutoff.Value,
+            FilterId = r.FilterId,
+            OutputName = r.OutputName,
+        }).ToList();
+    }
+
     private static string? NormalizeRequestedDecision(string decision)
     {
         if (string.IsNullOrWhiteSpace(decision))

@@ -10,9 +10,11 @@
 @inject IRefreshTrigger RefreshTrigger
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
-@implements IDisposable
+@implements IAsyncDisposable
 
 <PageTitle>M3Undle — Channel Mapping</PageTitle>
+
+<div id="channel-mapping-content" style="@ContentMarginStyle">
 
 <MudPaper Class="pa-4 mb-4" Elevation="1">
     <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
@@ -325,11 +327,12 @@
                 var isExpanded = _expandedGroups.Contains(filterId);
                 var chLoading  = _loadingChannels.Contains(filterId);
                 var isEditing  = _editingFilterId == filterId;
-                var rowStyle   = isExcluded ? "opacity:0.55;" : string.Empty;
+                var isMapped   = !isExcluded && (isAutoMode || GetSelectedChannelCount(filter) > 0);
+                var rowStyle   = isExcluded ? "opacity:0.55;" : (isMapped ? "box-shadow:inset 3px 0 0 var(--mud-palette-primary);" : string.Empty);
                 var displayName = filter.OutputName ?? filter.ProviderGroupRawName;
                 var showPpvHint = ShowPpvHint(filter);
 
-                <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@rowStyle">
+                <MudPaper id="@($"group-{filterId}")" Elevation="1" Class="mb-1 pa-2" Style="@rowStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
                         <!-- Group name: display or edit mode -->
@@ -474,7 +477,8 @@
                         {
                             var globalActive = _globalChannelSearchResults.Count > 0;
                             var filterText   = globalActive ? string.Empty : _groupChannelFilter.GetValueOrDefault(filterId, string.Empty);
-                            var filtered     = GetFilteredGroupChannels(filterId, channels, globalActive, filterText);
+                            var showSelectedOnly = _groupShowSelectedOnly.Contains(filterId);
+                            var filtered     = GetFilteredGroupChannels(filterId, channels, globalActive, filterText, showSelectedOnly);
                             var selections   = _channelSelections.GetValueOrDefault(filterId) ?? [];
 
                             @if (!globalActive)
@@ -528,6 +532,15 @@
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
                                         @GetSelectedChannelCount(filter) of @channels.Count selected
                                     </MudText>
+                                    @if (GetSelectedChannelCount(filter) > 0)
+                                    {
+                                        <MudTooltip Text="@(showSelectedOnly ? "Show all channels" : "Show selected channels only")" Arrow="true">
+                                            <MudIconButton Icon="@(showSelectedOnly ? Icons.Material.Filled.CheckBox : Icons.Material.Outlined.CheckBox)"
+                                                           Size="Size.Small"
+                                                           Color="@(showSelectedOnly ? Color.Primary : Color.Default)"
+                                                           OnClick="@(() => { if (showSelectedOnly) _groupShowSelectedOnly.Remove(filterId); else _groupShowSelectedOnly.Add(filterId); StateHasChanged(); })" />
+                                        </MudTooltip>
+                                    }
                                 }
                                 else if (!isExcluded && isAutoMode)
                                 {
@@ -625,13 +638,16 @@
                     ? parent.Members.Sum(GetSelectedChannelCount)
                     : -1;
                 var pendingCount = parent.Members.Count(m => m.IsNew);
-                var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
+                var parentStyle  = string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
                 var pFirstActive = parent.Members.FirstOrDefault(m => !IsExcluded(m)) ?? parent.Members.FirstOrDefault();
                 var showParentPpvHint = parent.Members.Any(ShowPpvHint);
+                var parentIsMapped = anyActive && parent.Members.Sum(m => m.SelectedChannelCount) > 0;
+                var parentDomId = "parent-" + SanitizeDomId(parent.OutputName);
+                parentStyle = allExcluded ? "opacity:0.55;" : (parentIsMapped ? "box-shadow:inset 3px 0 0 var(--mud-palette-primary);" : string.Empty);
 
-                <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
+                <MudPaper id="@parentDomId" Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
                         @if (_editingParentOutputName == parent.OutputName)
@@ -1118,6 +1134,53 @@
     }
 }
 
+</div>@* close #channel-mapping-content *@
+
+@* ── Mapped channels panel ── *@
+<div id="mapped-panel" style="@PanelStyle">
+    @if (!_panelOpen)
+    {
+        <div class="panel-collapsed-strip" @onclick="TogglePanelAsync" title="Show mapped channels">
+            <MudIcon Icon="@Icons.Material.Filled.ChevronLeft" Style="color:var(--mud-palette-text-secondary);" />
+        </div>
+    }
+    else
+    {
+        <div id="mapped-panel-handle" class="panel-resize-handle"></div>
+        <div class="panel-body-wrapper">
+            <div class="panel-header">
+                <MudText Typo="Typo.caption" Style="font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
+                    Mapped (@_panelItems.Count)
+                </MudText>
+                <MudTooltip Text="Collapse panel" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
+                                   Size="Size.Small"
+                                   OnClick="TogglePanelAsync" />
+                </MudTooltip>
+            </div>
+            <div class="panel-channel-list">
+                @if (_panelItems.Count == 0)
+                {
+                    <div class="panel-empty">No numbered channels mapped yet.</div>
+                }
+                else
+                {
+                    @foreach (var item in _panelItems)
+                    {
+                        <MudTooltip Text="@(item.IsLive ? "Live — in current output" : "Pending rebuild")" Arrow="true" Placement="Placement.Left">
+                            <div class="panel-channel-row panel-channel-link" @onclick="@(() => NavigateToGroupAsync(item))">
+                                <span class="ch-dot @(item.IsLive ? "ch-dot-live" : "ch-dot-pending")"></span>
+                                <span class="ch-num">@item.ChannelNumber</span>
+                                <span class="ch-name">@item.DisplayName</span>
+                            </div>
+                        </MudTooltip>
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>
+
 @* ── Settings drawer ── *@
 @if (_settingsDrawerOpen && _drawerTargetId is not null)
 {
@@ -1479,6 +1542,7 @@
     private Dictionary<string, string> _groupChannelFilter = [];
     private Dictionary<string, string> _parentChannelFilter = [];
     private HashSet<string> _parentShowSelectedOnly = [];
+    private HashSet<string> _groupShowSelectedOnly = [];
     private Dictionary<string, HashSet<string>> _hiddenParentMembers = [];
     private Dictionary<string, int> _parentStartNum = [];
     private HashSet<string> _dirtyChannelSelectionFilterIds = [];
@@ -1528,6 +1592,23 @@
     private string _cgEditName = string.Empty;
     private string? _editingParentOutputName;
     private string _editParentNameText = string.Empty;
+
+    // -------------------------------------------------------------------------
+    // Mapped channels panel state
+    // -------------------------------------------------------------------------
+    private bool _panelOpen = true;
+    private int _panelWidth = 280;
+    private List<MappedChannelPanelItem> _panelItems = [];
+    private IJSObjectReference? _panelResizeHandle;
+    private bool _panelResizeInitializing;
+
+    private string PanelStyle => _panelOpen
+        ? $"position:fixed; top:var(--mud-appbar-height,64px); right:0; height:calc(100vh - var(--mud-appbar-height,64px)); width:{_panelWidth}px; z-index:101; display:flex; flex-direction:row;"
+        : "position:fixed; top:var(--mud-appbar-height,64px); right:0; height:calc(100vh - var(--mud-appbar-height,64px)); width:28px; z-index:101;";
+
+    private string ContentMarginStyle => _panelOpen
+        ? $"margin-right:{_panelWidth}px; transition:margin-right 0.2s ease;"
+        : "margin-right:28px; transition:margin-right 0.2s ease;";
 
     // -------------------------------------------------------------------------
     // Settings drawer state
@@ -1854,24 +1935,45 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _jsReady) return;
-        _jsReady = true;
-
-        try
+        if (firstRender && !_jsReady)
         {
-            var startKey = _profileId is not null ? $"m3undle:default-start-num:{_profileId}" : "m3undle:default-start-num";
-            var startStr = await JS.InvokeAsync<string?>("localStorage.getItem", startKey);
-            if (int.TryParse(startStr, out var n) && n > 0)
-                _defaultStartNum = n;
-            _startNumProfileId = _profileId;
+            _jsReady = true;
 
-            var presetsJson = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:channel-filter-presets");
-            if (!string.IsNullOrWhiteSpace(presetsJson))
-                _savedChannelFilters = System.Text.Json.JsonSerializer.Deserialize<List<string>>(presetsJson) ?? [];
+            try
+            {
+                var startKey = _profileId is not null ? $"m3undle:default-start-num:{_profileId}" : "m3undle:default-start-num";
+                var startStr = await JS.InvokeAsync<string?>("localStorage.getItem", startKey);
+                if (int.TryParse(startStr, out var n) && n > 0)
+                    _defaultStartNum = n;
+                _startNumProfileId = _profileId;
+
+                var presetsJson = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:channel-filter-presets");
+                if (!string.IsNullOrWhiteSpace(presetsJson))
+                    _savedChannelFilters = System.Text.Json.JsonSerializer.Deserialize<List<string>>(presetsJson) ?? [];
+
+                var panelOpenStr = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:mapping-panel-open");
+                var panelWidthStr = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:mapping-panel-width");
+                _panelOpen = panelOpenStr != "false";
+                if (int.TryParse(panelWidthStr, out var pw) && pw >= 180 && pw <= 500)
+                    _panelWidth = pw;
+            }
+            catch { }
+
+            StateHasChanged();
+            return;
         }
-        catch { }
 
-        StateHasChanged();
+        if (_panelOpen && _panelResizeHandle is null && _jsReady && !_panelResizeInitializing)
+        {
+            _panelResizeInitializing = true;
+            try
+            {
+                _panelResizeHandle = await JS.InvokeAsync<IJSObjectReference>(
+                    "initMappingPanelResize", "mapped-panel-handle", "mapped-panel", "channel-mapping-content", 180, 500);
+            }
+            catch { }
+            finally { _panelResizeInitializing = false; }
+        }
     }
 
     private async Task SaveDefaultStartNumAsync()
@@ -1999,7 +2101,7 @@
         catch (OperationCanceledException) { }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
         _cts.Dispose();
@@ -2008,6 +2110,11 @@
         _channelSaveDebounceCts?.Dispose();
         _globalSearchDebounceCts?.Cancel();
         _globalSearchDebounceCts?.Dispose();
+        if (_panelResizeHandle is not null)
+        {
+            try { await _panelResizeHandle.InvokeVoidAsync("dispose"); } catch { }
+            try { await _panelResizeHandle.DisposeAsync(); } catch { }
+        }
     }
 
     private Task LoadAsync() => LoadCoreAsync(showSpinner: true);
@@ -2062,6 +2169,7 @@
 
             _sessionChangedFilterIds.Clear();
             RebuildDisplayOrder();
+            await LoadPanelAsync();
         }
         catch (OperationCanceledException)
         {
@@ -2077,6 +2185,86 @@
             if (showSpinner)
                 _isLoading = false;
             StateHasChanged();
+        }
+    }
+
+    private async Task LoadPanelAsync()
+    {
+        if (_profileId is null) return;
+        try { _panelItems = await ChannelMappingPageService.GetMappedChannelsPanelAsync(_profileId, _cts.Token); }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
+    private async Task TogglePanelAsync()
+    {
+        _panelOpen = !_panelOpen;
+        try { await JS.InvokeVoidAsync("localStorage.setItem", "m3undle:mapping-panel-open", _panelOpen ? "true" : "false"); }
+        catch { }
+
+        if (!_panelOpen && _panelResizeHandle is not null)
+        {
+            try { await _panelResizeHandle.InvokeVoidAsync("dispose"); } catch { }
+            try { await _panelResizeHandle.DisposeAsync(); } catch { }
+            _panelResizeHandle = null;
+        }
+    }
+
+    private static string SanitizeDomId(string name) =>
+        string.Concat(name.Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-'));
+
+    private async Task NavigateToGroupAsync(MappedChannelPanelItem item)
+    {
+        if (item.OutputName is not null)
+        {
+            // Virtual parent — force all members visible, expand, show selected only
+            var members = _allFilters
+                .Where(f => string.Equals(f.OutputName, item.OutputName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            foreach (var m in members)
+                _sessionChangedFilterIds.Add(m.ProfileGroupFilterId);
+
+            _parentShowSelectedOnly.Add(item.OutputName);
+
+            if (!_expandedParents.Contains(item.OutputName))
+            {
+                _expandedParents.Add(item.OutputName);
+                StateHasChanged();
+                var toLoad = members
+                    .Where(m => !_channelCache.ContainsKey(m.ProfileGroupFilterId))
+                    .Select(m => LoadChannelsAsync(m.ProfileGroupFilterId))
+                    .ToList();
+                await Task.WhenAll(toLoad);
+            }
+            else
+            {
+                StateHasChanged();
+            }
+
+            await Task.Delay(50);
+            try { await JS.InvokeVoidAsync("scrollToId", "parent-" + SanitizeDomId(item.OutputName)); } catch { }
+        }
+        else
+        {
+            // Standalone group — force visible, expand, show selected only
+            _sessionChangedFilterIds.Add(item.FilterId);
+            _groupShowSelectedOnly.Add(item.FilterId);
+
+            if (!_expandedGroups.Contains(item.FilterId))
+            {
+                _expandedGroups.Add(item.FilterId);
+                if (!_channelCache.ContainsKey(item.FilterId))
+                    await LoadChannelsAsync(item.FilterId);
+                else
+                    StateHasChanged();
+            }
+            else
+            {
+                StateHasChanged();
+            }
+
+            await Task.Delay(50);
+            try { await JS.InvokeVoidAsync("scrollToId", "group-" + item.FilterId); } catch { }
         }
     }
 
@@ -2753,19 +2941,33 @@
         string filterId,
         List<ProviderChannelSelectDto> channels,
         bool globalActive,
-        string filterText)
+        string filterText,
+        bool showSelectedOnly = false)
     {
+        List<ProviderChannelSelectDto> result;
+
         if (globalActive)
         {
             if (!_globalChannelSearchHitIds.TryGetValue(filterId, out var hitIds))
                 return [];
-            return channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
+            result = channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
+        }
+        else if (string.IsNullOrWhiteSpace(filterText))
+        {
+            result = channels;
+        }
+        else
+        {
+            result = channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
-        if (string.IsNullOrWhiteSpace(filterText))
-            return channels;
+        if (showSelectedOnly)
+        {
+            var sel = _channelSelections.GetValueOrDefault(filterId) ?? [];
+            result = result.Where(c => sel.GetValueOrDefault(c.ProviderChannelId)).ToList();
+        }
 
-        return channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
+        return result;
     }
 
     // -------------------------------------------------------------------------
@@ -3152,6 +3354,9 @@
 
         if (_dirtyChannelSelectionFilterIds.Count > 0)
             await DebounceDirtyChannelSelectionSaveAsync();
+
+        await LoadPanelAsync();
+        StateHasChanged();
     }
 
     private async Task SaveChannelSelectionsNowAsync(string filterId)
