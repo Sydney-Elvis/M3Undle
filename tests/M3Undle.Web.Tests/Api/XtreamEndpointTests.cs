@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using M3Undle.Web.Api;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
@@ -62,6 +63,42 @@ public sealed class XtreamEndpointTests
         StringAssert.Contains(body, "Alpha");
     }
 
+    [TestMethod]
+    public void BuildGeneratedXtreamHlsManifestRedirectUrl_UsesXtreamPathCredentials()
+    {
+        var context = CreateXtreamRouteContext(
+            scheme: "http",
+            host: "toontown-tv-srv1:8080",
+            pathBase: "/iptv",
+            username: "john@example.com",
+            password: "doe pass");
+
+        var url = XtreamEndpoints.BuildGeneratedXtreamHlsManifestRedirectUrl(context, "session 1");
+
+        Assert.AreEqual(
+            "/iptv/hls/generated/john%40example.com/doe%20pass/session%201/index.m3u8",
+            url);
+        Assert.IsFalse(url.Contains("username=", StringComparison.Ordinal));
+        Assert.IsFalse(url.Contains("password=", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void BuildGeneratedXtreamHlsAssetBaseUrl_UsesXtreamPathCredentials()
+    {
+        var context = CreateXtreamRouteContext(
+            scheme: "http",
+            host: "toontown-tv-srv1:8080",
+            pathBase: string.Empty,
+            username: "john@example.com",
+            password: "doe pass");
+
+        var url = XtreamEndpoints.BuildGeneratedXtreamHlsAssetBaseUrl(context, "session 1");
+
+        Assert.AreEqual(
+            "http://toontown-tv-srv1:8080/hls/generated/john%40example.com/doe%20pass/session%201",
+            url);
+    }
+
     private sealed class XtreamApiFactory : WebApplicationFactory<Program>, IAsyncDisposable
     {
         private readonly string _tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-xtream-endpoints-{Guid.NewGuid():N}");
@@ -101,6 +138,22 @@ public sealed class XtreamEndpointTests
             await base.DisposeAsync();
             await WebApplicationFactoryTestCleanup.DeleteDirectoryWhenUnlockedAsync(_tempDataDir);
         }
+    }
+
+    private static DefaultHttpContext CreateXtreamRouteContext(
+        string scheme,
+        string host,
+        string pathBase,
+        string username,
+        string password)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Scheme = scheme;
+        context.Request.Host = HostString.FromUriComponent(host);
+        context.Request.PathBase = pathBase;
+        context.Request.RouteValues["xtreamUser"] = username;
+        context.Request.RouteValues["xtreamPass"] = password;
+        return context;
     }
 
     private sealed class StubAccessResolver : IAccessResolver

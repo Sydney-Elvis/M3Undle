@@ -594,12 +594,9 @@ public static class XtreamEndpoints
                 return;
             }
 
-            var pathBase = context.Request.PathBase.HasValue
-                ? context.Request.PathBase.Value!.TrimEnd('/')
-                : string.Empty;
-            var generatedManifestUrl =
-                $"{pathBase}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}/index.m3u8";
-            generatedManifestUrl = generatedManifestUrl.ApplyClientAccessQuery(context);
+            var generatedManifestUrl = BuildGeneratedXtreamHlsManifestRedirectUrl(
+                context,
+                generatedSession.SessionId);
             context.Response.Redirect(generatedManifestUrl, permanent: false);
             return;
         }
@@ -783,10 +780,8 @@ public static class XtreamEndpoints
                 return;
             }
 
-            var xtreamUser = Uri.EscapeDataString(context.Request.RouteValues["xtreamUser"]?.ToString() ?? string.Empty);
-            var xtreamPass = Uri.EscapeDataString(context.Request.RouteValues["xtreamPass"]?.ToString() ?? string.Empty);
             var manifestUrl = new Uri($"{GetBaseUrl(context)}{context.Request.Path}");
-            var generatedAssetBase = $"{GetBaseUrl(context)}/hls/generated/{xtreamUser}/{xtreamPass}/{Uri.EscapeDataString(sessionId)}";
+            var generatedAssetBase = BuildGeneratedXtreamHlsAssetBaseUrl(context, sessionId);
 
             var rewritten = hlsManifestRewriter.Rewrite(
                 manifest,
@@ -808,6 +803,49 @@ public static class XtreamEndpoints
         context.Response.ContentType = contentType;
         context.Response.Headers.CacheControl = "no-cache";
         await context.Response.SendFileAsync(filePath, cancellationToken);
+    }
+
+    internal static string BuildGeneratedXtreamHlsManifestRedirectUrl(HttpContext context, string sessionId)
+    {
+        var pathBase = context.Request.PathBase.HasValue
+            ? context.Request.PathBase.Value!.TrimEnd('/')
+            : string.Empty;
+        var escapedSessionId = Uri.EscapeDataString(sessionId);
+
+        if (TryGetEscapedXtreamPathCredentials(context, out var xtreamUser, out var xtreamPass))
+            return $"{pathBase}/hls/generated/{xtreamUser}/{xtreamPass}/{escapedSessionId}/index.m3u8";
+
+        var fallback = $"{pathBase}/hls/generated/{escapedSessionId}/index.m3u8";
+        return fallback.ApplyClientAccessQuery(context);
+    }
+
+    internal static string BuildGeneratedXtreamHlsAssetBaseUrl(HttpContext context, string sessionId)
+    {
+        var escapedSessionId = Uri.EscapeDataString(sessionId);
+        if (TryGetEscapedXtreamPathCredentials(context, out var xtreamUser, out var xtreamPass))
+            return $"{GetBaseUrl(context)}/hls/generated/{xtreamUser}/{xtreamPass}/{escapedSessionId}";
+
+        return $"{GetBaseUrl(context)}/hls/generated/{escapedSessionId}";
+    }
+
+    private static bool TryGetEscapedXtreamPathCredentials(
+        HttpContext context,
+        out string xtreamUser,
+        out string xtreamPass)
+    {
+        var rawUser = context.Request.RouteValues["xtreamUser"]?.ToString();
+        var rawPass = context.Request.RouteValues["xtreamPass"]?.ToString();
+
+        if (string.IsNullOrWhiteSpace(rawUser) || string.IsNullOrEmpty(rawPass))
+        {
+            xtreamUser = string.Empty;
+            xtreamPass = string.Empty;
+            return false;
+        }
+
+        xtreamUser = Uri.EscapeDataString(rawUser);
+        xtreamPass = Uri.EscapeDataString(rawPass);
+        return true;
     }
 
     private static async Task ServeDirectRelayAsync(

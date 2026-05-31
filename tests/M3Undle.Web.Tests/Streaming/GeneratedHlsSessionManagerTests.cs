@@ -31,6 +31,34 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task StartAsync_WhenWorkDirectoryCannotBePrepared_DisablesGeneratedHls()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+            var workDirectoryPath = Path.Combine(root, "hls-work");
+            File.WriteAllText(workDirectoryPath, "not a directory");
+
+            await using var manager = CreateManager(
+                root,
+                ffmpeg.ExePath,
+                startupTimeoutSeconds: 1,
+                workDirectory: workDirectoryPath);
+
+            await manager.StartAsync(CancellationToken.None);
+
+            Assert.IsFalse(manager.FfmpegAvailable);
+            Assert.IsFalse(manager.IsEffectivelyEnabled);
+            StringAssert.Contains(manager.FfmpegUnavailableReason!, "not writable");
+        }
+        finally
+        {
+            TryDelete(root);
+        }
+    }
+
+    [TestMethod]
     public async Task CreateSessionAsync_WithFakeFfmpeg_ReturnsHandleAndServesManifestAsset()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
@@ -504,12 +532,13 @@ public sealed class GeneratedHlsSessionManagerTests
         string root,
         string ffmpegPath,
         int startupTimeoutSeconds,
-        StreamingRegistry? registry = null)
+        StreamingRegistry? registry = null,
+        string? workDirectory = null)
     {
         var options = Options.Create(new GeneratedHlsOptions
         {
             Enabled = true,
-            Directory = Path.Combine(root, "generated-hls"),
+            Directory = workDirectory ?? Path.Combine(root, "generated-hls"),
             FfmpegPath = ffmpegPath,
             SegmentDurationSeconds = 1,
             PlaylistSize = 2,
