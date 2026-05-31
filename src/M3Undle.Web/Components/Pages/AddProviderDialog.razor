@@ -5,107 +5,147 @@
 
 <MudDialog Style="min-width:680px">
     <DialogContent>
-        <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded="false" ApplyEffectsToContainer="true">
+        @if (_step == DialogStep.Form)
+        {
+            <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded="false" ApplyEffectsToContainer="true">
 
-            <MudTabPanel Text="From URL" Icon="@Icons.Material.Filled.Link">
-                <UrlProviderForm @ref="_urlFormRef" Mode="UrlProviderMode.Url" Prefill="_urlPrefill"
-                                 Profiles="_localProfiles" ExistingProviders="Providers"
-                                 EncryptionAvailable="_encryptionAvailable"
-                                 OnSaved="HandleSaved" OnSwitchToXtream="HandleSwitchToXtream" />
-            </MudTabPanel>
+                <MudTabPanel Text="From URL" Icon="@Icons.Material.Filled.Link">
+                    <UrlProviderForm @ref="_urlFormRef" Mode="UrlProviderMode.Url" Prefill="_urlPrefill"
+                                     Profiles="_localProfiles" ExistingProviders="Providers"
+                                     EncryptionAvailable="_encryptionAvailable"
+                                     OnSaved="HandleSaved" OnSwitchToXtream="HandleSwitchToXtream" />
+                </MudTabPanel>
 
-            <MudTabPanel Text="From File" Icon="@Icons.Material.Filled.FolderOpen">
-                <UrlProviderForm @ref="_fileFormRef" Mode="UrlProviderMode.File"
-                                 Profiles="_localProfiles" ExistingProviders="Providers"
-                                 EncryptionAvailable="_encryptionAvailable"
-                                 OnSaved="HandleSaved" />
-            </MudTabPanel>
+                <MudTabPanel Text="From File" Icon="@Icons.Material.Filled.FolderOpen">
+                    <UrlProviderForm @ref="_fileFormRef" Mode="UrlProviderMode.File"
+                                     Profiles="_localProfiles" ExistingProviders="Providers"
+                                     EncryptionAvailable="_encryptionAvailable"
+                                     OnSaved="HandleSaved" />
+                </MudTabPanel>
 
-            <MudTabPanel Text="Xtream Codes" Icon="@Icons.Material.Filled.Tv">
-                <XtreamProviderForm @ref="_xtreamFormRef" Prefill="_xtreamPrefill"
-                                    Profiles="_localProfiles" ExistingProviders="Providers"
-                                    EncryptionAvailable="_encryptionAvailable"
-                                    OnSaved="HandleSaved" />
-            </MudTabPanel>
+                <MudTabPanel Text="Xtream Codes" Icon="@Icons.Material.Filled.Tv">
+                    <XtreamProviderForm @ref="_xtreamFormRef" Prefill="_xtreamPrefill"
+                                        Profiles="_localProfiles" ExistingProviders="Providers"
+                                        EncryptionAvailable="_encryptionAvailable"
+                                        OnSaved="HandleSaved" />
+                </MudTabPanel>
 
-            @if (_showImportTab)
-            {
-                <MudTabPanel Text="Import" Icon="@Icons.Material.Filled.FileDownload">
-                    <div class="pt-3">
-                        @if (_configProviders.Count == 0)
-                        {
-                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
-                        }
-                        else
-                        {
-                            var selProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
-                            var selImported = !string.IsNullOrEmpty(_importSelectedName) && IsAlreadyImported(_importSelectedName);
-                            var selMissing = selProvider?.MissingEnvVars.Count > 0;
+                @if (_showImportTab)
+                {
+                    <MudTabPanel Text="Import" Icon="@Icons.Material.Filled.FileDownload">
+                        <div class="pt-3">
+                            @if (_configProviders.Count == 0)
+                            {
+                                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
+                            }
+                            else
+                            {
+                                var selProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
+                                var selImported = !string.IsNullOrEmpty(_importSelectedName) && IsAlreadyImported(_importSelectedName);
+                                var selMissing = selProvider?.MissingEnvVars.Count > 0;
 
-                            <MudStack Spacing="3">
-                                <MudSelect T="string" Label="Provider" @bind-Value="_importSelectedName"
-                                           HelperText="Providers discovered in M3UNDLE_CONFIG_DIR/config.yaml">
-                                    <MudSelectItem T="string" Value="@string.Empty">— select a provider —</MudSelectItem>
-                                    @foreach (var cp in _configProviders)
+                                <MudStack Spacing="3">
+                                    <MudSelect T="string" Label="Provider" @bind-Value="_importSelectedName"
+                                               HelperText="Providers discovered in M3UNDLE_CONFIG_DIR/config.yaml">
+                                        <MudSelectItem T="string" Value="@string.Empty">— select a provider —</MudSelectItem>
+                                        @foreach (var cp in _configProviders)
+                                        {
+                                            <MudSelectItem T="string" Value="@cp.Name">
+                                                @cp.Name
+                                                @if (IsAlreadyImported(cp.Name)) { <text> (already imported)</text> }
+                                                else if (cp.MissingEnvVars.Count > 0) { <text> (missing env vars)</text> }
+                                            </MudSelectItem>
+                                        }
+                                    </MudSelect>
+
+                                    @if (selProvider is not null)
                                     {
-                                        <MudSelectItem T="string" Value="@cp.Name">
-                                            @cp.Name
-                                            @if (IsAlreadyImported(cp.Name)) { <text> (already imported)</text> }
-                                            else if (cp.MissingEnvVars.Count > 0) { <text> (missing env vars)</text> }
-                                        </MudSelectItem>
-                                    }
-                                </MudSelect>
-
-                                @if (selProvider is not null)
-                                {
-                                    <MudTextField Label="Playlist URL" Value="@selProvider.PlaylistUrl"
-                                                  ReadOnly="true" Variant="Variant.Text"
-                                                  Style="font-family:monospace; font-size:0.8rem;" />
-
-                                    @if (!string.IsNullOrWhiteSpace(selProvider.XmltvUrl))
-                                    {
-                                        <MudTextField Label="XMLTV URL" Value="@selProvider.XmltvUrl"
+                                        <MudTextField Label="Playlist URL" Value="@selProvider.PlaylistUrl"
                                                       ReadOnly="true" Variant="Variant.Text"
                                                       Style="font-family:monospace; font-size:0.8rem;" />
-                                    }
 
-                                    @if (selMissing)
-                                    {
-                                        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
-                                            Missing environment variables: @string.Join(", ", selProvider.MissingEnvVars)
-                                        </MudAlert>
-                                    }
-                                    else if (selImported)
-                                    {
-                                        <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
-                                            This provider has already been imported.
-                                        </MudAlert>
-                                    }
-                                    else
-                                    {
-                                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                                   OnClick="() => UseImportedProviderUrl(selProvider)">
-                                            Use this URL →
-                                        </MudButton>
-                                    }
-                                }
-                            </MudStack>
-                        }
-                    </div>
-                </MudTabPanel>
-            }
+                                        @if (!string.IsNullOrWhiteSpace(selProvider.XmltvUrl))
+                                        {
+                                            <MudTextField Label="XMLTV URL" Value="@selProvider.XmltvUrl"
+                                                          ReadOnly="true" Variant="Variant.Text"
+                                                          Style="font-family:monospace; font-size:0.8rem;" />
+                                        }
 
-        </MudTabs>
+                                        @if (selMissing)
+                                        {
+                                            <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
+                                                Missing environment variables: @string.Join(", ", selProvider.MissingEnvVars)
+                                            </MudAlert>
+                                        }
+                                        else if (selImported)
+                                        {
+                                            <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
+                                                This provider has already been imported.
+                                            </MudAlert>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                                       OnClick="() => UseImportedProviderUrl(selProvider)">
+                                                Use this URL →
+                                            </MudButton>
+                                        }
+                                    }
+                                </MudStack>
+                            }
+                        </div>
+                    </MudTabPanel>
+                }
+
+            </MudTabs>
+        }
+        else
+        {
+            <div class="pa-4">
+                <MudStack Spacing="3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                        <MudText Typo="Typo.h6">@_savedProvider!.Name added</MudText>
+                    </MudStack>
+
+                    <MudText Typo="Typo.body2">
+                        Does your subscription limit simultaneous streams? Setting this prevents M3Undle from
+                        accepting new stream requests once the limit is reached, protecting active viewers from
+                        being cut off.
+                    </MudText>
+
+                    <ProviderConcurrentStreams @bind-LimitConcurrentStreams="_finalizeLimit"
+                                               @bind-ConcurrentStreamLimit="_finalizeLimitCount" />
+
+                    @if (!string.IsNullOrWhiteSpace(_finalizeError))
+                    {
+                        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">@_finalizeError</MudAlert>
+                    }
+                </MudStack>
+            </div>
+        }
     </DialogContent>
     <DialogActions>
-        <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
-        <MudSpacer />
-        @if (_activeTab != ImportTabIndex)
+        @if (_step == DialogStep.Form)
         {
+            <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
+            <MudSpacer />
+            @if (_activeTab != ImportTabIndex)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_isSaving"
+                           OnClick="SubmitActiveTabAsync">
+                    @(_isSaving ? "Adding..." : "Add Provider")
+                </MudButton>
+            }
+        }
+        else
+        {
+            <MudSpacer />
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
                        Disabled="_isSaving"
-                       OnClick="SubmitActiveTabAsync">
-                @(_isSaving ? "Adding..." : "Add Provider")
+                       OnClick="FinalizeDoneAsync">
+                @(_isSaving ? "Saving..." : "Done")
             </MudButton>
         }
     </DialogActions>
@@ -116,6 +156,9 @@
     [Parameter] public List<ProfileListItemDto> Profiles { get; set; } = [];
     [Parameter] public List<ProviderDto> Providers { get; set; } = [];
     [Parameter] public EventCallback OnSaved { get; set; }
+
+    private enum DialogStep { Form, Finalize }
+    private DialogStep _step = DialogStep.Form;
 
     private int _activeTab;
     private int ImportTabIndex => _showImportTab ? 3 : -1;
@@ -136,6 +179,11 @@
     private string _importSelectedName = string.Empty;
     private readonly List<ConfigYamlProviderDto> _configProviders = [];
     private readonly List<ProviderDto> _importedProviders = [];
+
+    private ProviderDto? _savedProvider;
+    private bool _finalizeLimit;
+    private int _finalizeLimitCount = 1;
+    private string? _finalizeError;
 
     protected override async Task OnInitializedAsync()
     {
@@ -189,8 +237,57 @@
         if (!string.IsNullOrEmpty(linkedProfileId))
             await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
 
-        await OnSaved.InvokeAsync();
-        MudDialog.Close(DialogResult.Ok(true));
+        _savedProvider = provider;
+        _step = DialogStep.Finalize;
+        StateHasChanged();
+    }
+
+    private async Task FinalizeDoneAsync()
+    {
+        _isSaving = true;
+        _finalizeError = null;
+        StateHasChanged();
+        try
+        {
+            if (_finalizeLimit && _savedProvider is not null)
+            {
+                var error = await ProviderPageService.UpdateProviderAsync(_savedProvider.ProviderId, new UpdateProviderRequest
+                {
+                    Name = _savedProvider.Name,
+                    PlaylistUrl = _savedProvider.PlaylistUrl,
+                    XmltvUrl = _savedProvider.XmltvUrl,
+                    HeadersJson = _savedProvider.HeadersJson,
+                    UserAgent = _savedProvider.UserAgent,
+                    Enabled = _savedProvider.Enabled,
+                    IncludeVod = _savedProvider.IncludeVod,
+                    IncludeSeries = _savedProvider.IncludeSeries,
+                    ForceMpegTs = _savedProvider.ForceMpegTs,
+                    CleanRelayMode = _savedProvider.CleanRelayMode,
+                    TimeoutSeconds = _savedProvider.TimeoutSeconds,
+                    MaxConcurrentStreams = _finalizeLimitCount,
+                    AssociateToProfileIds = _savedProvider.AssociatedProfileIds.Count > 0
+                        ? _savedProvider.AssociatedProfileIds
+                        : null,
+                    XtreamBaseUrl = _savedProvider.XtreamBaseUrl,
+                    XtreamUsername = _savedProvider.XtreamUsername,
+                    XtreamIncludeXmltv = _savedProvider.XtreamIncludeXmltv,
+                }, CancellationToken.None);
+
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    _finalizeError = error;
+                    return;
+                }
+            }
+
+            await OnSaved.InvokeAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
     }
 
     private bool IsAlreadyImported(string name) => _importedProviders.Any(p => p.Name == name);
