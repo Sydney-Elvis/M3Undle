@@ -81,13 +81,7 @@
     </MudAlert>
 }
 
-@if (_profileId is null && !_isLoading)
-{
-    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-        No active profile found. Go to <MudLink Href="profiles">Profiles</MudLink> to set one active.
-    </MudAlert>
-}
-else
+@if (_profileId is not null || _isLoading)
 {
     <!-- Search toolbar -->
     <MudPaper Elevation="2" Class="mb-2 pa-2" Style="position:sticky; top:var(--mud-appbar-height, 64px); z-index:100; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:4px;">

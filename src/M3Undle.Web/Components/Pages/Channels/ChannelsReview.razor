@@ -49,13 +49,7 @@
     <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
 }
 
-@if (_profileId is null)
-{
-    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-        No profile available. Configure profiles and providers first.
-    </MudAlert>
-}
-else
+@if (_profileId is not null)
 {
     <MudPaper Class="pa-3 mb-3" Elevation="1">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">

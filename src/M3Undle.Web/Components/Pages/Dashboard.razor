@@ -28,46 +28,10 @@
     <MudAlert Severity="@TodoAlertSeverity" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.Warning">
         <MudStack Spacing="2">
             <div>
-                <MudText Typo="Typo.h6">@TodoAlertTitle</MudText>
-                <MudText Typo="Typo.body2">
-                    M3Undle needs the items below resolved before the output URLs can serve the expected lineup.
-                </MudText>
+                <MudText Typo="Typo.h6">Needs Attention</MudText>
             </div>
 
             <MudStack Spacing="1">
-                @if (NeedsActiveProfile)
-                {
-                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
-                        <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
-                        <MudText Typo="Typo.body2">
-                            <strong>No active profile.</strong>
-                            <MudLink Href="providers">Add a provider</MudLink>, or open <MudLink Href="profiles">Profiles</MudLink> and set an existing profile active.
-                        </MudText>
-                    </MudStack>
-                }
-
-                @if (NeedsActiveProvider)
-                {
-                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
-                        <MudIcon Icon="@Icons.Material.Filled.CloudQueue" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
-                        <MudText Typo="Typo.body2">
-                            <strong>The active profile has no enabled provider.</strong>
-                            Open <MudLink Href="providers">Providers</MudLink> and add or enable a source for this profile.
-                        </MudText>
-                    </MudStack>
-                }
-
-                @if (NeedsPublishedOutput)
-                {
-                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
-                        <MudIcon Icon="@Icons.Material.Filled.LiveTv" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
-                        <MudText Typo="Typo.body2">
-                            <strong>No channels are published.</strong>
-                            Open <MudLink Href="channels/mapping">Channel Mapping</MudLink>, include the groups or channels you want, then run a refresh.
-                        </MudText>
-                    </MudStack>
-                }
-
                 @foreach (var ep in _dashboardStats?.ExpiringProviders ?? [])
                 {
                     var daysLeft = (ep.ExpiresUtc - DateTime.UtcNow).TotalDays;
@@ -446,6 +410,12 @@
                             Xtream
                             <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Style="opacity:0.5; margin-left:2px; vertical-align:middle;" />
                         </MudLink>
+                        @if (_endpointSecuritySettings?.XtreamCompatibilityEnabled == true && !_endpointSecuritySettings.Enabled)
+                        {
+                            <MudTooltip Text="Authentication is disabled — any credentials are accepted" Arrow="true" Placement="Placement.Top">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Unsecured</MudChip>
+                            </MudTooltip>
+                        }
                     </MudStack>
                     @if (_endpointSecuritySettings is null)
                     {
@@ -475,10 +445,6 @@
                                     <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Username</MudText>
                                     <MudText Typo="Typo.caption">@_endpointSecuritySettings.Username</MudText>
                                 </MudStack>
-                            }
-                            @if (!_endpointSecuritySettings.Enabled)
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">Unsecured — any credentials accepted</MudChip>
                             }
                         </MudStack>
                     }
@@ -643,26 +609,13 @@
         ? Color.Primary
         : Color.Default;
 
-    private bool NeedsActiveProfile => _status?.Status == LineupStatusCodes.NoActiveProfile;
-
-    private bool NeedsActiveProvider => !NeedsActiveProfile &&
-        _status?.Lineup?.ActiveProfile is not null &&
-        _status.Lineup.ActiveProvider is null;
-
-    private bool NeedsPublishedOutput => !NeedsActiveProfile &&
-        !NeedsActiveProvider &&
-        (_status?.Status == LineupStatusCodes.NoActiveSnapshot ||
-         (_dashboardStats is not null && _dashboardStats.PublishedLiveCount == 0));
-
     private bool HasDashboardActionItems => _dashboardStats is not null &&
         (_dashboardStats.ExpiringProviders.Count > 0 ||
          _dashboardStats.GroupsPendingReview > 0 ||
          _dashboardStats.ChannelsPendingReview > 0 ||
          _dashboardStats.RefreshFailed);
 
-    private bool HasTodoItems => NeedsActiveProfile || NeedsActiveProvider || NeedsPublishedOutput || HasDashboardActionItems;
-
-    private string TodoAlertTitle => NeedsActiveProfile || NeedsActiveProvider || NeedsPublishedOutput ? "Setup Required" : "Needs Attention";
+    private bool HasTodoItems => HasDashboardActionItems;
 
     private Severity TodoAlertSeverity => _dashboardStats?.ExpiringProviders.Any(x => x.ExpiresUtc <= DateTime.UtcNow) == true
         ? Severity.Error

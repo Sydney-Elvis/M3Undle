@@ -87,6 +87,28 @@
 
     <MudMainContent>
         <MudContainer MaxWidth="MaxWidth.False" Class="pa-6">
+            @if (CurrentSetupStep != SetupStep.None)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-4" Icon="@SetupBannerIcon">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.subtitle2">Setup Required</MudText>
+                        <MudText Typo="Typo.body2">
+                            @if (CurrentSetupStep == SetupStep.NeedsProvider)
+                            {
+                                <text>No active profile — add a provider on the <MudLink Href="providers">Providers</MudLink> page to get started.</text>
+                            }
+                            else if (CurrentSetupStep == SetupStep.NeedsEnabledProvider)
+                            {
+                                <text>The active profile has no enabled provider — open <MudLink Href="providers">Providers</MudLink> and add or enable one.</text>
+                            }
+                            else
+                            {
+                                <text>No channels are published — open <MudLink Href="channels/mapping">Channel Mapping</MudLink>, include the groups you want, then build the lineup.</text>
+                            }
+                        </MudText>
+                    </MudStack>
+                </MudAlert>
+            }
             @Body
         </MudContainer>
     </MudMainContent>
@@ -159,6 +181,7 @@
     private int _clientCount;
     private int? _providerMaxStreams;
     private string _lineupStatusCode = string.Empty;
+    private bool _activeProfileHasProvider;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
 
@@ -230,6 +253,29 @@
         LineupStatusCodes.Refreshing or LineupStatusCodes.Switching => Color.Info,
         LineupStatusCodes.Degraded or LineupStatusCodes.NoActiveProfile or LineupStatusCodes.NoActiveSnapshot => Color.Warning,
         _ => Color.Default
+    };
+
+    private enum SetupStep { None, NeedsProvider, NeedsEnabledProvider, NeedsChannels }
+
+    private SetupStep CurrentSetupStep
+    {
+        get
+        {
+            if (_lineupStatusCode == LineupStatusCodes.NoActiveProfile)
+                return SetupStep.NeedsProvider;
+            if (_lineupStatusCode == LineupStatusCodes.NoActiveSnapshot && !_activeProfileHasProvider)
+                return SetupStep.NeedsEnabledProvider;
+            if (_lineupStatusCode == LineupStatusCodes.NoActiveSnapshot)
+                return SetupStep.NeedsChannels;
+            return SetupStep.None;
+        }
+    }
+
+    private string SetupBannerIcon => CurrentSetupStep switch
+    {
+        SetupStep.NeedsProvider => Icons.Material.Filled.AccountCircle,
+        SetupStep.NeedsEnabledProvider => Icons.Material.Filled.CloudQueue,
+        _ => Icons.Material.Filled.LiveTv,
     };
 
     private static readonly MudTheme _theme = new()
@@ -411,6 +457,7 @@
             var status = await Task.Run(() => LineupStatusService.GetStatusAsync(ct), ct);
             _lineupStatusCode = status.Status;
             _providerMaxStreams = status.Lineup?.ActiveProvider?.MaxConcurrentStreams;
+            _activeProfileHasProvider = status.Lineup?.ActiveProvider is not null;
             _lineupStatusDelayed = false;
             await InvokeAsync(StateHasChanged);
         }
