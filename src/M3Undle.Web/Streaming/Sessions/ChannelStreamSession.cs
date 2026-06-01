@@ -1224,6 +1224,23 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         var policy = ResolveRecoveryPolicy();
         var heldDuration = GetRecoveryHoldDuration();
+        var internalSubscriberCount = InternalSubscriberCount;
+        if (internalSubscriberCount > 0)
+        {
+            _logger.LogInformation(
+                "Controlled downstream retune suppressed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} InternalSubscriberCount={InternalSubscriberCount} ExternalSubscriberCount={ExternalSubscriberCount}",
+                _sessionId,
+                _source.DisplayName,
+                _source.ProviderId,
+                _source.ProviderChannelId,
+                policy.Profile,
+                policy.DownstreamRetuneReason,
+                heldDuration.TotalMilliseconds,
+                internalSubscriberCount,
+                ExternalSubscriberCount);
+            return;
+        }
+
         _logger.LogInformation(
             "Controlled downstream retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneRequired=true DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
             _sessionId,
