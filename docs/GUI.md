@@ -29,6 +29,7 @@ Configuration includes:
 - Timeout settings
 - Enabled/disabled toggle
 - Optional per-provider max concurrent stream limit
+- Relay policy — controls how M3Undle handles the stream from this provider: **Auto** (applies clean relay for channels classified as Unstable), **On** (always clean relay regardless of health), or **Off** (direct relay only)
 
 The UI shows:
 
@@ -155,6 +156,8 @@ When the simultaneous-stream cap is full, zero-viewer streams waiting in their d
 
 MPEG-TS CDN-gap handling is automatic. M3Undle can send null-packet keepalives for external non-HDHomeRun players during short upstream gaps, while HDHomeRun-only sessions are left as plain upstream MPEG-TS for DVR compatibility. The advanced content-stall timeout for that behavior is configured through appsettings/environment variables rather than the UI.
 
+M3Undle tracks per-channel stream health across sessions. Each channel is classified as **Stable**, **Cautious**, or **Unstable** based on observed disconnect and recovery events, and that classification persists in the database. The stream monitor shows the startup health and relay policy decision for each active session so you can see which channels are being handled with additional relay protection.
+
 For HDHomeRun-style access, tuner ownership is tracked by the configured `Virtual Tuner ID`, not by remote IP. Re-tuning from the same virtual tuner replaces the prior playback session instead of consuming another tuner slot.
 
 **Browser Playback**
@@ -271,6 +274,27 @@ The **Manage Numbers** button in the page header switches the page into Number M
 - Changed rows are marked with an indicator
 - **Apply All** saves all pending number changes to the database
 - Changes take effect after a Build Output; exit the mode with **Exit Number Manager**
+
+---
+
+### 9. HDHomeRun
+
+The HDHomeRun page shows the M3Undle device identity and endpoint URLs for clients that use HDHomeRun-compatible device discovery.
+
+It displays:
+
+- Device name, device ID, and firmware version (as presented to HDHomeRun clients)
+- Discovery endpoint URL (`http://<host>:5004/discover.json`)
+- Tuning endpoint URL (`http://<host>:5004/lineup.json`)
+- Configured tuner count
+
+Use this page to confirm your HDHomeRun setup and copy the tuner URL for manual client configuration. Auto-discovery depends on Docker networking and multicast; manual setup using the URL shown here is generally more reliable.
+
+---
+
+### 10. About
+
+The About page shows product information: application version, build date, and links to the project home and license.
 
 ---
 

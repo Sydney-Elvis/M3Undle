@@ -22,7 +22,7 @@ docker compose up -d
 ```yaml
 services:
   m3undle:
-    image: ghcr.io/sydney-elvis/m3undle:alpha
+    image: ghcr.io/sydney-elvis/m3undle:beta
     container_name: m3undle
     user: "${PUID}:${PGID}"
     ports:
@@ -92,7 +92,7 @@ docker run -d \
   -v ./config:/config \
   -v ./data:/data \
   --restart unless-stopped \
-  ghcr.io/sydney-elvis/m3undle:alpha
+  ghcr.io/sydney-elvis/m3undle:beta
 ```
 
 ---
@@ -463,7 +463,7 @@ For auto-discovery to work identically to a real HDHomeRun (including from other
 ```yaml
 services:
   m3undle:
-    image: ghcr.io/sydney-elvis/m3undle:alpha
+    image: ghcr.io/sydney-elvis/m3undle:beta
     container_name: m3undle
     network_mode: host
     environment:
@@ -538,12 +538,11 @@ Database migrations run automatically on startup.
 
 | Tag | Tracks | Notes |
 |---|---|---|
-| `v1.0.0-alpha.1` | Exact version — immutable | Pin to this if you want full control over updates |
-| `alpha` | Latest alpha release | Moves forward as new alpha builds are published |
-| `beta` | Latest beta release | Available from v1.0.0-beta.1 |
+| `v1.0.0-beta.1` | Exact version — immutable | Pin to this if you want full control over updates |
+| `beta` | Latest beta release | Moves forward as new beta builds are published |
 | `latest` | Latest **stable** release | Not published until v1.0.0 — do not use during pre-release |
 
-**Current phase:** alpha — use the `alpha` tag or pin to a specific version like `v1.0.0-alpha.1`.
+**Current phase:** beta — use the `beta` tag or pin to a specific version like `v1.0.0-beta.1`.
 
 `latest` does not exist yet. Pulling it will return "image not found".
 

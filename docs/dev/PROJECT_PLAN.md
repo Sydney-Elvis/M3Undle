@@ -23,9 +23,10 @@ Primary published endpoints:
 - Alpha 2: complete
 - Alpha 3: complete
 - Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; DVR client validation (Plex/Emby/Jellyfin) moved to Beta
-- Alpha 5: in progress — most items complete; active profile switching and lineup status in final polish
-- Alpha 6: planned — per-provider gateway/VPN support
-- Beta: hardening and release prep
+- Alpha 5: complete — active profile switching, lineup status, channel review queue, dynamic groups, downstream integrations, HLS browser playback
+- Alpha 6: complete — per-provider gateway/VPN routing, Xtream auto-detection, system event badge, observability endpoints, provider expiry
+- Alpha 7: complete — adaptive stream recovery, channel health tracking (Stable/Cautious/Unstable), relay policy (auto/on/off), stream monitor improvements, HDHR page, About page, interface polish
+- Beta: in progress — DVR client validation, documentation, hardening
 
 ## Release Milestones
 
@@ -194,21 +195,47 @@ Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 ### Alpha 6 — Per-Provider Gateway Support, Xtream Auto-Detection & System Events
 Goal: Per-provider gateway/VPN routing with Block and Fallback modes. Xtream Codes auto-detection at provider add time with explicit user mode selection. System event infrastructure with nav bar badge for diagnostic visibility. Gateway documentation and companion gateway project remain insiders features.
 
-Status: Planned.
+Status: Complete.
 
-- [ ] Per-provider gateway/VPN routing (Block and Fallback modes)
-- [ ] Xtream Codes auto-detection at provider add time
-- [ ] System event badge (nav bar, in-memory, diagnostic)
+- [x] Per-provider gateway/VPN routing (Block and Fallback modes)
+- [x] Xtream Codes auto-detection at provider add time
+- [x] System event badge (nav bar, in-memory, diagnostic)
+- [x] Prometheus-compatible metrics (LocalOnly, Token, Public modes)
+- [x] Liveness/readiness/health probes
+- [x] Authenticated diagnostics APIs
+- [x] Provider account and playlist expiration visibility
+- [x] Per-provider refresh scheduling
 
 See implementation plans:
 - [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/AUTOMATION_LAB_INTEGRATION_PLAN.md) — automation lab integration (provider seed, readiness endpoints, streaming test scenarios)
 - [XTREM_PROVIDER_DETECTION.md](../../.ai_docs/XTREM_PROVIDER_DETECTION.md) — Xtream auto-detection
 - [EVENT_BADGE_SYSTEM.md](../../.ai_docs/EVENT_BADGE_SYSTEM.md) — system event badge
 
+### Alpha 7 — Adaptive Stream Recovery & Interface Polish
+Goal: Make live stream handling robust for noisy/unstable providers. Polish interfaces and navigation before beta.
+
+Status: Complete.
+
+- [x] Adaptive stream recovery — detect stalls, recover from safe MPEG-TS boundaries, force hard controlled retune when needed
+- [x] Channel health tracking — per-channel Stable/Cautious/Unstable classification persisted to DB
+- [x] Relay policy — explicit per-provider Auto/On/Off setting replacing hidden clean-remux toggle
+- [x] Stream health events — durable clean-watch evidence and health promotion/demotion logic
+- [x] Stream monitor improvements — transfer rates, relay decision reason, startup health visible
+- [x] HDHR discovery page — dedicated HDHomeRun page showing device info and endpoint URLs
+- [x] About page — product info, version, build details
+- [x] Dashboard reorganization — endpoints, stream limiting, and active-profile visibility improvements
+- [x] Channel mapping UX — new channels not tracked by default; clearer group/chip display
+- [x] Navigation improvements — guided setup flow, highlighted active page
+- [x] Database performance — slow-DB mitigations, UI shows DB response status
+- [x] Controlled-retune fix — retune suppressed when internal HLS relay subscriber is attached
+- [x] IPTVnator compatibility fixes
+
+---
+
 ### Beta — Hardening & Release Prep
 Goal: No major feature additions. Stabilize, validate, and document.
 
-Status: Planned.
+Status: In progress.
 
 - [ ] Security review
 - [ ] Performance validation for large providers

@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/Sydney-Elvis/M3Undle?include_prereleases&style=flat-square)](https://github.com/Sydney-Elvis/M3Undle/releases/latest)
 [![License](https://img.shields.io/github/license/Sydney-Elvis/M3Undle?style=flat-square)](LICENSE)
 
-[**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](https://github.com/Sydney-Elvis/M3Undle/releases) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+[**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](CHANGELOG.md) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
 
 </div>
 
@@ -26,19 +26,19 @@ Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and othe
 ![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/images/readme-dashboard.png)
 
 > [!IMPORTANT]
-> **Alpha Status**
+> **Beta Status**
 >
-> M3Undle has completed Alpha 6. The core workflow is implemented, streaming has been hardened with shared-stream support and relay fallback for unstable providers, and observability endpoints are in place. Alpha 7 is focused on interface polish before moving into beta.
+> M3Undle has completed all alpha milestones and is entering beta. The core workflow is fully implemented: streaming is hardened with shared-stream support, adaptive stream health tracking, and relay policy for unstable providers. Observability, Xtream detection, HDHomeRun integration, and interface polish are all in place.
 >
-> It is stable enough for real LAN testing and personal use, but it is still alpha software. Expect rough edges and possible provider or client-specific issues before beta.
+> Beta focuses on broader DVR client validation, documentation, and final hardening before a stable release. It is suitable for real LAN use, but expect provider- and client-specific edge cases to surface during testing.
 
 ## Run it
 
 M3Undle is published to GitHub Container Registry.
 
-Pull the current alpha image:
+Pull the current beta image:
 
-    docker pull ghcr.io/sydney-elvis/m3undle:alpha
+    docker pull ghcr.io/sydney-elvis/m3undle:beta
 
 Create a working directory:
 
@@ -50,7 +50,7 @@ Create `compose.yaml`:
 
     services:
       m3undle:
-        image: ghcr.io/sydney-elvis/m3undle:alpha
+        image: ghcr.io/sydney-elvis/m3undle:beta
         container_name: m3undle
         ports:
           - "5004:5004"
@@ -82,7 +82,7 @@ Port `8080` serves the web UI, M3U, XMLTV, Xtream, and general compatibility end
 
 The `config` folder is bind-mounted so configuration files stay easy to inspect and back up. Runtime state, logs, snapshots, and browser playback working files use the Docker-managed `m3undle_data` volume.
 
-Use `alpha` for the latest alpha build. Specific release tags are listed on the [M3Undle container registry page](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle).
+Use `beta` for the latest beta build. Specific release tags are listed on the [M3Undle container registry page](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle).
 
 `latest` is not used during alpha or beta. It will be introduced no earlier than the release candidate track.
 
@@ -127,7 +127,7 @@ Publish the same managed lineup through M3U, XMLTV, HDHomeRun-compatible, and Xt
 
 ### Streaming
 
-Proxy live streams through M3Undle, hide provider credentials from clients, share live streams across multiple downstream clients, and monitor active stream sessions.
+Proxy live streams through M3Undle, hide provider credentials from clients, share live streams across multiple downstream clients, and monitor active stream sessions. M3Undle tracks per-channel stream health (Stable, Cautious, Unstable) and uses configurable relay policy to handle noisy provider channels without disrupting connected clients.
 
 ![Stream Monitor showing two active sessions with buffer usage and three connected clients sharing streams](docs/images/readme-streams.png)
 
@@ -239,13 +239,13 @@ When reporting an issue, include the M3Undle version tag, Docker compose file wi
 
 ## Roadmap
 
-Alpha 6 is released. Current work is Alpha 7 interface polish before moving into beta.
+All alpha milestones are complete. M3Undle is now in beta.
 
-Planned release path:
+Release path:
 
 1. Alpha 6 — released.
-2. Alpha 7 — interface polish and UX improvements.
-3. Beta — broader testing, documentation cleanup, and client compatibility work.
+2. Alpha 7 — released. Adaptive stream recovery, relay policy, stream health tracking, interface polish, and HDHomeRun improvements.
+3. **Beta — current.** Broader DVR client validation, documentation, and final hardening.
 4. Release candidate — final validation and packaging.
 5. v1.0.0 — stable release.
 
