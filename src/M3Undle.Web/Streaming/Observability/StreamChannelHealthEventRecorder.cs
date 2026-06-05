@@ -147,7 +147,7 @@ public sealed class StreamChannelHealthEventRecorder(
             UpstreamFailureKind = diagnosticEvent.UpstreamFailureKind?.ToString(),
             ReconnectAttempt = diagnosticEvent.ReconnectAttempt,
             RecoveryDurationMs = diagnosticEvent.RecoveryDurationMs,
-            SafeStartWaitMs = diagnosticEvent.OutputHeldMs,
+            SafeStartWaitMs = null,
             OutputHeldMs = diagnosticEvent.OutputHeldMs,
             SafeStartKind = diagnosticEvent.SafeStartKind,
             ClientDisconnectReason = diagnosticEvent.DisconnectReason?.ToString(),

@@ -246,13 +246,10 @@
         _subscription?.Dispose();
         if (_scrollCleanup is not null)
         {
-            try
-            {
-                await _scrollCleanup.InvokeVoidAsync("dispose");
-                await _scrollCleanup.DisposeAsync();
-            }
+            try { await _scrollCleanup.InvokeVoidAsync("dispose"); }
             catch (JSDisconnectedException) { }
             catch (JSException) { }
+            finally { await _scrollCleanup.DisposeAsync(); }
         }
         _dotNetRef?.Dispose();
     }

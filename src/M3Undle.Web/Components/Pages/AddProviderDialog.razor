@@ -2,6 +2,7 @@
 @using M3Undle.Web.Components.ProviderForms
 @inject M3Undle.Web.Application.ProviderPageService ProviderPageService
 @inject M3Undle.Web.Application.ProfilesPageService ProfilesPageService
+@inject ILogger<AddProviderDialog> Logger
 
 <MudDialog Style="min-width:680px">
     <DialogContent>
@@ -184,6 +185,7 @@
     private bool _finalizeLimit;
     private int _finalizeLimitCount = 1;
     private string? _finalizeError;
+    private bool _finalizeSeeded;
 
     protected override async Task OnInitializedAsync()
     {
@@ -198,7 +200,10 @@
             _importedProviders.AddRange(pageData.Providers);
             _showImportTab = _configProviders.Count > 0;
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load config.yaml providers for Import tab.");
+        }
     }
 
     private void Cancel() => MudDialog.Cancel();
@@ -238,6 +243,14 @@
             await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
 
         _savedProvider = provider;
+
+        if (!_finalizeSeeded)
+        {
+            _finalizeLimit = provider.MaxConcurrentStreams.HasValue;
+            _finalizeLimitCount = provider.MaxConcurrentStreams ?? 1;
+            _finalizeSeeded = true;
+        }
+
         _step = DialogStep.Finalize;
         StateHasChanged();
     }
