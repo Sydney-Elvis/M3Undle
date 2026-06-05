@@ -45,7 +45,7 @@ Legend: `[ ]` not started | `[x]` passed | `[!]` failed / investigate
 - [x] Make `ChannelSessionManager.RemoveIfClosedAsync()` atomic
 - [x] Add a transaction around `ProfilesPageService.DeleteProfileAsync()`
 - [x] Block disabled profiles from being activated in `ProfilesPageService.SetProfileActiveAsync()`
-- [x] Harden `20260404000000_Alpha6_ActiveProfile` migration table rebuild behavior
+- [x] Harden active-profile schema handling
 
 ## Post-Review Medium Coverage (2026-04-10)
 

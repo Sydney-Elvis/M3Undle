@@ -15,7 +15,7 @@ namespace M3Undle.Web.Data.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.7");
 
             modelBuilder.Entity("M3Undle.Web.Data.ApplicationUser", b =>
                 {
@@ -1692,6 +1692,10 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("hdhr_advertised_base_url");
 
+                    b.Property<string>("HdhrAllowedNetworks")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("hdhr_allowed_networks");
+
                     b.Property<bool>("HdhrDiscoveryEnabled")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
@@ -1729,16 +1733,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Property<int?>("HdhrTunerCountOverride")
                         .HasColumnType("INTEGER")
                         .HasColumnName("hdhr_tuner_count_override");
-
-                    b.Property<string>("HdhrAllowedNetworks")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("hdhr_allowed_networks");
-
-                    b.Property<bool>("XtreamCompatibilityEnabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true)
-                        .HasColumnName("xtream_compatibility_enabled");
 
                     b.Property<bool>("ObservabilityMetricsEnableChannelLabels")
                         .ValueGeneratedOnAdd()
@@ -1841,6 +1835,12 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasDefaultValue(false)
                         .HasColumnName("streaming_settings_restart_required");
+
+                    b.Property<bool>("XtreamCompatibilityEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true)
+                        .HasColumnName("xtream_compatibility_enabled");
 
                     b.HasKey("Id");
 
@@ -1953,6 +1953,118 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("snapshots", (string)null);
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.StreamChannelHealthEvent", b =>
+                {
+                    b.Property<string>("StreamChannelHealthEventId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<long?>("BytesSuppressed")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("bytes_suppressed");
+
+                    b.Property<double?>("CleanWatchDurationMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("clean_watch_duration_ms");
+
+                    b.Property<bool>("ClientAbortAfterRecovery")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("client_abort_after_recovery");
+
+                    b.Property<double?>("ClientAbortAfterRecoveryDelayMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("client_abort_after_recovery_delay_ms");
+
+                    b.Property<string>("ClientDisconnectReason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("client_disconnect_reason");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("display_name");
+
+                    b.Property<string>("EventKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("event_kind");
+
+                    b.Property<DateTime>("EventUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("event_utc");
+
+                    b.Property<bool>("ForcedRetune")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("forced_retune");
+
+                    b.Property<double?>("OutputHeldMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("output_held_ms");
+
+                    b.Property<string>("ProviderChannelId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_channel_id");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_id");
+
+                    b.Property<int?>("ReconnectAttempt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("reconnect_attempt");
+
+                    b.Property<double?>("RecoveryDurationMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("recovery_duration_ms");
+
+                    b.Property<string>("RelayMode")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("relay_mode");
+
+                    b.Property<string>("RouteClassification")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("route_classification");
+
+                    b.Property<string>("SafeStartKind")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_start_kind");
+
+                    b.Property<double?>("SafeStartWaitMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("safe_start_wait_ms");
+
+                    b.Property<string>("SessionId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("session_id");
+
+                    b.Property<double?>("StallDurationMs")
+                        .HasColumnType("REAL")
+                        .HasColumnName("stall_duration_ms");
+
+                    b.Property<bool>("TsSyncLoss")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("ts_sync_loss");
+
+                    b.Property<string>("UpstreamFailureKind")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("upstream_failure_kind");
+
+                    b.HasKey("StreamChannelHealthEventId");
+
+                    b.HasIndex("SessionId")
+                        .HasDatabaseName("ix_stream_channel_health_events_session_id");
+
+                    b.HasIndex("EventKind", "EventUtc")
+                        .HasDatabaseName("ix_stream_channel_health_events_event_kind_event_utc");
+
+                    b.HasIndex("ProviderId", "ProviderChannelId", "EventUtc")
+                        .HasDatabaseName("ix_stream_channel_health_events_provider_channel_event_utc");
+
+                    b.ToTable("stream_channel_health_events", (string)null);
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.StreamKey", b =>
                 {
                     b.Property<string>("Value")
@@ -2052,118 +2164,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasFilter("\"provider_id\" IS NOT NULL");
 
                     b.ToTable("system_events", (string)null);
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.StreamChannelHealthEvent", b =>
-                {
-                    b.Property<string>("StreamChannelHealthEventId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("id");
-
-                    b.Property<long?>("BytesSuppressed")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("bytes_suppressed");
-
-                    b.Property<bool>("ClientAbortAfterRecovery")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("client_abort_after_recovery");
-
-                    b.Property<double?>("ClientAbortAfterRecoveryDelayMs")
-                        .HasColumnType("REAL")
-                        .HasColumnName("client_abort_after_recovery_delay_ms");
-
-                    b.Property<double?>("CleanWatchDurationMs")
-                        .HasColumnType("REAL")
-                        .HasColumnName("clean_watch_duration_ms");
-
-                    b.Property<string>("ClientDisconnectReason")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("client_disconnect_reason");
-
-                    b.Property<string>("DisplayName")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("display_name");
-
-                    b.Property<string>("EventKind")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("event_kind");
-
-                    b.Property<DateTime>("EventUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("event_utc");
-
-                    b.Property<bool>("ForcedRetune")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("forced_retune");
-
-                    b.Property<double?>("OutputHeldMs")
-                        .HasColumnType("REAL")
-                        .HasColumnName("output_held_ms");
-
-                    b.Property<string>("ProviderChannelId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_channel_id");
-
-                    b.Property<string>("ProviderId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_id");
-
-                    b.Property<string>("RelayMode")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("relay_mode");
-
-                    b.Property<int?>("ReconnectAttempt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("reconnect_attempt");
-
-                    b.Property<double?>("RecoveryDurationMs")
-                        .HasColumnType("REAL")
-                        .HasColumnName("recovery_duration_ms");
-
-                    b.Property<string>("RouteClassification")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("route_classification");
-
-                    b.Property<string>("SafeStartKind")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("safe_start_kind");
-
-                    b.Property<double?>("SafeStartWaitMs")
-                        .HasColumnType("REAL")
-                        .HasColumnName("safe_start_wait_ms");
-
-                    b.Property<string>("SessionId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("session_id");
-
-                    b.Property<double?>("StallDurationMs")
-                        .HasColumnType("REAL")
-                        .HasColumnName("stall_duration_ms");
-
-                    b.Property<bool>("TsSyncLoss")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("ts_sync_loss");
-
-                    b.Property<string>("UpstreamFailureKind")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("upstream_failure_kind");
-
-                    b.HasKey("StreamChannelHealthEventId");
-
-                    b.HasIndex("EventKind", "EventUtc")
-                        .HasDatabaseName("ix_stream_channel_health_events_event_kind_event_utc");
-
-                    b.HasIndex("ProviderId", "ProviderChannelId", "EventUtc")
-                        .HasDatabaseName("ix_stream_channel_health_events_provider_channel_event_utc");
-
-                    b.HasIndex("SessionId")
-                        .HasDatabaseName("ix_stream_channel_health_events_session_id");
-
-                    b.ToTable("stream_channel_health_events", (string)null);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>

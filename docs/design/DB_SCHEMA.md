@@ -31,7 +31,7 @@
 - created_utc (TEXT)
 - updated_utc (TEXT)
 
-Note: `providers.is_active` was removed in migration `Alpha6_ActiveProfile`. Active state now lives on `profiles.is_active`.
+Note: active state lives on `profiles.is_active`.
 
 Indexes:
 - idx_providers_enabled(enabled)
