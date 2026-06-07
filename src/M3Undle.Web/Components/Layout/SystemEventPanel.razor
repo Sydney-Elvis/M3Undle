@@ -1,22 +1,30 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Data.Entities
+@using System.Threading.Channels
+@implements IDisposable
 @inject IEventService EventService
+@inject AppEventBus EventBus
 
-<MudDrawer @bind-Open="Open" Anchor="Anchor.End" Variant="DrawerVariant.Temporary" Width="420px">
-    <MudDrawerHeader Style="padding: 12px 16px;">
+<MudDrawer Open="@Open" OpenChanged="HandleOpenChangedAsync" Anchor="Anchor.End" Variant="DrawerVariant.Persistent" Width="380px"
+           Style="height: calc(100vh - 28px); overflow: hidden;">
+    <MudDrawerHeader Style="padding: 12px 8px 12px 16px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%;">
             <MudText Typo="Typo.h6">System Events</MudText>
-            @if (_events.Count > 0)
-            {
-                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                           OnClick="ClearAllAsync">Clear all</MudButton>
-            }
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                @if (_events.Count > 0)
+                {
+                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                               OnClick="ClearAllAsync">Clear all</MudButton>
+                }
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               Color="Color.Default" OnClick="CloseAsync" />
+            </MudStack>
         </MudStack>
     </MudDrawerHeader>
 
     <MudDivider />
 
-    <div style="overflow-y: auto; flex: 1;">
+    <div style="overflow-y: auto; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;">
         @if (_loading)
         {
             <div class="pa-4">
@@ -25,33 +33,42 @@
         }
         else if (_events.Count == 0)
         {
-            <div class="pa-6" style="text-align: center;">
-                <MudText Typo="Typo.body2" Color="Color.Secondary">No recent events</MudText>
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:flex-start; flex: 1 1 auto; min-height: 0; padding:32px; opacity:0.45;">
+                <MudIcon Icon="@Icons.Material.Outlined.NotificationsNone" Style="font-size:64px;" />
+                <MudText Typo="Typo.body1" Style="margin-top:12px;">No system events</MudText>
             </div>
         }
         else
         {
-            @foreach (var evt in _events)
+            @foreach (var item in _eventItems)
             {
+                var evt = item.Event;
                 <div style="border-bottom: 1px solid var(--mud-palette-divider); padding: 12px 16px;">
                     <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
                         <MudIcon Icon="@SeverityIcon(evt.Severity)" Color="@SeverityColor(evt.Severity)"
                                  Size="Size.Small" Style="margin-top:2px; flex-shrink:0;" />
                         <div style="flex:1; min-width:0;">
                             <MudStack Row="true" AlignItems="AlignItems.Start" Justify="Justify.SpaceBetween">
-                                <MudText Typo="Typo.body2" Style="font-weight:600;">@evt.Title</MudText>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="min-width:0;">
+                                    <MudText Typo="Typo.body2" Style="font-weight:600;">@evt.Title</MudText>
+                                    @if (item.TotalOccurrences > 1)
+                                    {
+                                        <MudTooltip Text="@($"Occurred {item.TotalOccurrences} times")" Placement="Placement.Top">
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="@SeverityColor(evt.Severity)"
+                                                     Style="height:22px; flex-shrink:0;">
+                                                @($"{item.TotalOccurrences} times")
+                                            </MudChip>
+                                        </MudTooltip>
+                                    }
+                                </MudStack>
                                 <MudTooltip Text="Dismiss" Placement="Placement.Left">
                                     <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
                                                    Color="Color.Default" Style="margin:-4px -4px 0 4px; flex-shrink:0;"
-                                                   OnClick="() => DismissAsync(evt.SystemEventId)" />
+                                                   OnClick="() => DismissAsync(item.EventIds)" />
                                 </MudTooltip>
                             </MudStack>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @RelativeTime(evt.OccurredAt)
-                                @if (evt.OccurrenceCount > 1)
-                                {
-                                    <span> · @evt.OccurrenceCount occurrences</span>
-                                }
+                                @item.RelativeTime
                             </MudText>
                             @if (!string.IsNullOrWhiteSpace(evt.Detail))
                             {
@@ -73,7 +90,16 @@
     [Parameter] public EventCallback OnCountChanged { get; set; }
 
     private List<SystemEvent> _events = [];
+    private IReadOnlyList<SystemEventPanelItem> _eventItems = [];
     private bool _loading;
+    private IDisposable? _eventSubscription;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override void OnInitialized()
+    {
+        var reader = EventBus.Subscribe(out _eventSubscription);
+        _ = ListenForEventsAsync(reader, _cts.Token);
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -81,19 +107,52 @@
             await LoadAsync();
     }
 
+    private async Task ListenForEventsAsync(ChannelReader<AppEvent> reader, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var evt in reader.ReadAllAsync(ct))
+            {
+                if (evt.Kind == AppEventKind.SystemEventPublished && Open)
+                    await InvokeAsync(LoadAsync);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _eventSubscription?.Dispose();
+    }
+
+    private async Task HandleOpenChangedAsync(bool value)
+    {
+        await OpenChanged.InvokeAsync(value);
+    }
+
+    private Task CloseAsync() => OpenChanged.InvokeAsync(false);
+
     private async Task LoadAsync()
     {
         _loading = true;
         StateHasChanged();
         _events = [.. await EventService.GetAllAsync()];
+        RebuildEventItems();
         _loading = false;
         StateHasChanged();
     }
 
-    private async Task DismissAsync(string id)
+    private async Task DismissAsync(IReadOnlyList<string> ids)
     {
-        await EventService.DismissAsync(id);
-        _events.RemoveAll(e => e.SystemEventId == id);
+        foreach (var id in ids)
+        {
+            await EventService.DismissAsync(id);
+        }
+
+        _events.RemoveAll(e => ids.Contains(e.SystemEventId));
+        RebuildEventItems();
         await OnCountChanged.InvokeAsync();
         StateHasChanged();
     }
@@ -102,18 +161,17 @@
     {
         await EventService.DismissAllAsync();
         _events.Clear();
+        _eventItems = [];
         await OnCountChanged.InvokeAsync();
+        await CloseAsync();
         StateHasChanged();
     }
 
-    private static string RelativeTime(DateTime utc)
-    {
-        var diff = DateTime.UtcNow - utc;
-        if (diff.TotalSeconds < 60) return "just now";
-        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
-        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
-        return $"{(int)diff.TotalDays}d ago";
-    }
+    private void RebuildEventItems()
+        => _eventItems = SystemEventPanelGrouping.Group(
+            _events,
+            DateTime.UtcNow,
+            SystemEventPanelGrouping.RelativeTime);
 
     private static string SeverityIcon(string severity) => severity switch
     {

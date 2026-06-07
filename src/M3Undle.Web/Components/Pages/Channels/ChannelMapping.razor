@@ -10,9 +10,11 @@
 @inject IRefreshTrigger RefreshTrigger
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
-@implements IDisposable
+@implements IAsyncDisposable
 
 <PageTitle>M3Undle — Channel Mapping</PageTitle>
+
+<div id="channel-mapping-content" style="@ContentMarginStyle">
 
 <MudPaper Class="pa-4 mb-4" Elevation="1">
     <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
@@ -47,7 +49,9 @@
                              DebounceInterval="600"
                              Immediate="true"
                              OnDebounceIntervalElapsed="SaveDefaultStartNumAsync" />
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+            <MudTooltip Text="Reload channel mapping data" Arrow="true">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAsync" Disabled="_isLoading" />
+            </MudTooltip>
             <MudButton StartIcon="@Icons.Material.Filled.LiveTv"
                        Variant="Variant.Outlined"
                        Color="Color.Default"
@@ -79,13 +83,7 @@
     </MudAlert>
 }
 
-@if (_profileId is null && !_isLoading)
-{
-    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
-        No active profile found. Go to <MudLink Href="profiles">Profiles</MudLink> to set one active.
-    </MudAlert>
-}
-else
+@if (_profileId is not null || _isLoading)
 {
     <!-- Search toolbar -->
     <MudPaper Elevation="2" Class="mb-2 pa-2" Style="position:sticky; top:var(--mud-appbar-height, 64px); z-index:100; background:var(--mud-palette-surface); border:1px solid var(--mud-palette-divider); border-radius:4px;">
@@ -162,34 +160,80 @@ else
     <!-- Summary chips -->
     @if (!_isLoading && _profileId is not null)
     {
-        var liveFilters = _allFilters.Where(f => f.ProviderGroupContentType == "live").ToList();
-        var mapped = liveFilters.Where(f =>
-            IsIncluded(f) &&
-            GetSelectedChannelCount(f) > 0)
+        var cgLinkedGroupIds = _customGroups
+            .SelectMany(cg => cg.LinkedProviderGroupIds)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var liveFilters = _allFilters
+            .Where(f => f.ProviderGroupContentType == "live" && !cgLinkedGroupIds.Contains(f.ProviderGroupId))
             .ToList();
-        var unmapped = liveFilters.Where(IsUnmappedBySelection).ToList();
-        var excluded = liveFilters.Where(IsExcluded).ToList();
-        var newCount = liveFilters.Count(f => f.IsNew);
-        var chSelected = mapped.Sum(GetSelectedChannelCount);
+
+        // Standalone: no OutputName. VirtualParent members: share an OutputName.
+        var standaloneFilters = liveFilters.Where(f => f.OutputName is null).ToList();
+        var vpGroups = liveFilters
+            .Where(f => f.OutputName is not null)
+            .GroupBy(f => f.OutputName!, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Standalone counts
+        var standaloneMapped   = standaloneFilters.Where(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0).ToList();
+        var standaloneUnmapped = standaloneFilters.Where(IsUnmappedBySelection).ToList();
+        var standaloneExcluded = standaloneFilters.Where(IsExcluded).ToList();
+        var standaloneNew      = standaloneFilters.Count(f => f.IsNew);
+        var standaloneChSelected = standaloneMapped.Sum(GetSelectedChannelCount);
+
+        // VirtualParent counts — each unique OutputName = 1 logical group
+        var vpMapped   = vpGroups.Count(g => g.Any(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0));
+        var vpUnmapped = vpGroups.Count(g => g.Any(IsIncluded) && !g.Any(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0));
+        var vpExcluded = vpGroups.Count(g => g.All(IsExcluded));
+        var vpNew      = vpGroups.Count(g => g.Any(f => f.IsNew));
+        var vpChSelected = vpGroups
+            .Where(g => g.Any(f => IsIncluded(f) && GetSelectedChannelCount(f) > 0))
+            .Sum(g => g.Where(IsIncluded).Sum(GetSelectedChannelCount));
+
+        // Custom group counts
+        var cgMapped   = _customGroups.Count(cg => IsCgIncluded(cg) && cg.SelectedChannelCount > 0);
+        var cgUnmapped = _customGroups.Count(cg => IsCgIncluded(cg) && cg.SelectedChannelCount == 0);
+        var cgExcluded = _customGroups.Count(IsCgExcluded);
+        var cgChSelected = _customGroups
+            .Where(cg => IsCgIncluded(cg) && cg.SelectedChannelCount > 0)
+            .Sum(cg => cg.SelectedChannelCount);
+
+        // Removed = included groups no longer present in the provider feed
+        var standaloneRemoved = standaloneFilters.Count(f => IsIncluded(f) && !f.ProviderGroupActive);
+        var vpRemoved = vpGroups.Count(g => g.Any(f => IsIncluded(f) && !f.ProviderGroupActive));
+        var removedCount = standaloneRemoved + vpRemoved;
+
+        var totalMapped     = standaloneMapped.Count + vpMapped + cgMapped;
+        var totalUnmapped   = standaloneUnmapped.Count + vpUnmapped + cgUnmapped;
+        var totalExcluded   = standaloneExcluded.Count + vpExcluded + cgExcluded;
+        var newCount        = standaloneNew + vpNew;
+        var totalChSelected = standaloneChSelected + vpChSelected + cgChSelected;
 
         <MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center">
-            <MudChip T="string" Size="Size.Small" Color="Color.Success"
-                     Variant="@(_decisionFilterStates.Contains("used") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("used"))">@mapped.Count mapped · @chSelected.ToString("N0") ch used</MudChip>
-            <MudTooltip Text="Included groups with zero selected channels. Click to filter them." Arrow="true">
-                <MudChip T="string" Size="Size.Small" Color="Color.Warning"
-                         Variant="@(_decisionFilterStates.Contains("unmapped") ? Variant.Filled : Variant.Outlined)"
-                         OnClick="@((chip) => ToggleDecisionFilterState("unmapped"))">@unmapped.Count unmapped</MudChip>
-            </MudTooltip>
-            <MudChip T="string" Size="Size.Small" Color="Color.Default"
-                     Variant="@(_decisionFilterStates.Contains("exclude") ? Variant.Filled : Variant.Outlined)"
-                     OnClick="@((chip) => ToggleDecisionFilterState("exclude"))">@excluded.Count excluded</MudChip>
+            <ChipFilterToggle Label="@($"{totalMapped} mapped · {totalChSelected:N0} ch used")"
+                              Color="Color.Success"
+                              IsActive="@_decisionFilterStates.Contains("used")"
+                              TooltipText="Included groups with selected channels. Click to toggle this filter."
+                              OnClick="@((_) => ToggleDecisionFilterState("used"))" />
+            <ChipFilterToggle Label="@($"{totalUnmapped} unmapped")"
+                              Color="Color.Warning"
+                              IsActive="@_decisionFilterStates.Contains("unmapped")"
+                              TooltipText="Included groups with zero selected channels. Click to filter them."
+                              OnClick="@((_) => ToggleDecisionFilterState("unmapped"))" />
+            <ChipFilterToggle Label="@($"{totalExcluded} excluded")"
+                              Color="Color.Default"
+                              IsActive="@_decisionFilterStates.Contains("exclude")"
+                              TooltipText="Excluded groups. Click to toggle this filter."
+                              OnClick="@((_) => ToggleDecisionFilterState("exclude"))" />
             @if (newCount > 0)
             {
                 <MudDivider Vertical="true" FlexItem="true" />
-                <MudChip T="string" Size="Size.Small" Color="Color.Info"
-                         Variant="@(_decisionFilterStates.Contains("new") ? Variant.Filled : Variant.Outlined)"
-                         OnClick="@((chip) => ToggleDecisionFilterState("new"))">@newCount new</MudChip>
+                <ChipFilterToggle Label="@($"{newCount} new")"
+                                  Color="Color.Info"
+                                  IsActive="@_decisionFilterStates.Contains("new")"
+                                  TooltipText="Groups added since last sync. Click to toggle this filter."
+                                  OnClick="@((_) => ToggleDecisionFilterState("new"))" />
                 <MudTooltip Text="Dismiss all new flags" Arrow="true">
                     <MudIconButton Icon="@Icons.Material.Filled.DoneAll"
                                    Size="Size.Small"
@@ -197,6 +241,15 @@ else
                                    OnClick="DismissAllNewAsync"
                                    Disabled="@(_isBulkBusy || _busyFilters.Count > 0)" />
                 </MudTooltip>
+            }
+            @if (removedCount > 0)
+            {
+                @if (newCount == 0) { <MudDivider Vertical="true" FlexItem="true" /> }
+                <ChipFilterToggle Label="@($"{removedCount} removed")"
+                                  Color="Color.Error"
+                                  IsActive="@_decisionFilterStates.Contains("removed")"
+                                  TooltipText="Included groups no longer present in the provider feed. Click to toggle this filter."
+                                  OnClick="@((_) => ToggleDecisionFilterState("removed"))" />
             }
         </MudStack>
     }
@@ -274,10 +327,12 @@ else
                 var isExpanded = _expandedGroups.Contains(filterId);
                 var chLoading  = _loadingChannels.Contains(filterId);
                 var isEditing  = _editingFilterId == filterId;
-                var rowStyle   = isExcluded ? "opacity:0.55;" : string.Empty;
+                var isMapped   = !isExcluded && (isAutoMode || GetSelectedChannelCount(filter) > 0);
+                var rowStyle   = isExcluded ? "opacity:0.55;" : (isMapped ? "box-shadow:inset 3px 0 0 var(--mud-palette-primary);" : string.Empty);
                 var displayName = filter.OutputName ?? filter.ProviderGroupRawName;
+                var showPpvHint = ShowPpvHint(filter);
 
-                <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@rowStyle">
+                <MudPaper id="@($"group-{filterId}")" Elevation="1" Class="mb-1 pa-2" Style="@rowStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
                         <!-- Group name: display or edit mode -->
@@ -352,6 +407,12 @@ else
                                                  OnClick="@(() => DismissNewAsync(filter))">new</MudChip>
                                     </MudTooltip>
                                 }
+                                @if (showPpvHint)
+                                {
+                                    <MudTooltip Text="This group may contain time-limited channels (PPV, sports events). Consider checking Group Settings → New channel handling." Arrow="true" Placement="Placement.Top">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Class="ppv-hint-chip">event?</MudChip>
+                                    </MudTooltip>
+                                }
                             </div>
                         }
 
@@ -391,6 +452,7 @@ else
                             <MudIconButton Icon="@Icons.Material.Filled.Tune"
                                            Size="Size.Small"
                                            Color="@GetSettingsButtonColor(filter.TrackingPolicy, filter.TrackingKeywords, filterId)"
+                                           Class="@(showPpvHint ? "ppv-settings-btn" : "")"
                                            OnClick="@(() => OpenSettingsDrawer(filterId, SettingsTargetKind.Standalone))" />
                         </MudTooltip>
                         }
@@ -415,7 +477,8 @@ else
                         {
                             var globalActive = _globalChannelSearchResults.Count > 0;
                             var filterText   = globalActive ? string.Empty : _groupChannelFilter.GetValueOrDefault(filterId, string.Empty);
-                            var filtered     = GetFilteredGroupChannels(filterId, channels, globalActive, filterText);
+                            var showSelectedOnly = _groupShowSelectedOnly.Contains(filterId);
+                            var filtered     = GetFilteredGroupChannels(filterId, channels, globalActive, filterText, showSelectedOnly);
                             var selections   = _channelSelections.GetValueOrDefault(filterId) ?? [];
 
                             @if (!globalActive)
@@ -469,6 +532,15 @@ else
                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
                                         @GetSelectedChannelCount(filter) of @channels.Count selected
                                     </MudText>
+                                    @if (GetSelectedChannelCount(filter) > 0)
+                                    {
+                                        <MudTooltip Text="@(showSelectedOnly ? "Show all channels" : "Show selected channels only")" Arrow="true">
+                                            <MudIconButton Icon="@(showSelectedOnly ? Icons.Material.Filled.CheckBox : Icons.Material.Outlined.CheckBox)"
+                                                           Size="Size.Small"
+                                                           Color="@(showSelectedOnly ? Color.Primary : Color.Default)"
+                                                           OnClick="@(() => { if (showSelectedOnly) _groupShowSelectedOnly.Remove(filterId); else _groupShowSelectedOnly.Add(filterId); StateHasChanged(); })" />
+                                        </MudTooltip>
+                                    }
                                 }
                                 else if (!isExcluded && isAutoMode)
                                 {
@@ -566,12 +638,16 @@ else
                     ? parent.Members.Sum(GetSelectedChannelCount)
                     : -1;
                 var pendingCount = parent.Members.Count(m => m.IsNew);
-                var parentStyle  = allExcluded ? "opacity:0.55;" : string.Empty;
+                var parentStyle  = string.Empty;
                 var providerNames = string.Join(", ", parent.Members.Select(m => m.ProviderName).Distinct());
                 var isBusy = parent.Members.Any(m => _busyFilters.Contains(m.ProfileGroupFilterId));
                 var pFirstActive = parent.Members.FirstOrDefault(m => !IsExcluded(m)) ?? parent.Members.FirstOrDefault();
+                var showParentPpvHint = parent.Members.Any(ShowPpvHint);
+                var parentIsMapped = anyActive && parent.Members.Sum(m => m.SelectedChannelCount) > 0;
+                var parentDomId = "parent-" + SanitizeDomId(parent.OutputName);
+                parentStyle = allExcluded ? "opacity:0.55;" : (parentIsMapped ? "box-shadow:inset 3px 0 0 var(--mud-palette-primary);" : string.Empty);
 
-                <MudPaper Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
+                <MudPaper id="@parentDomId" Elevation="1" Class="mb-1 pa-2" Style="@parentStyle">
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
 
                         @if (_editingParentOutputName == parent.OutputName)
@@ -641,6 +717,12 @@ else
                                     </MudChip>
                                 </MudTooltip>
                             }
+                            @if (showParentPpvHint)
+                            {
+                                <MudTooltip Text="This group may contain time-limited channels (PPV, sports events). Consider checking Group Settings → New channel handling." Arrow="true" Placement="Placement.Top">
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">event?</MudChip>
+                                </MudTooltip>
+                            }
 
                             <!-- Exclude button (bulk) -->
                             <MudTooltip Text="@(allExcluded ? "Remove exclusion" : "Exclude all member groups")" Arrow="true">
@@ -664,6 +746,7 @@ else
                                 <MudIconButton Icon="@Icons.Material.Filled.Tune"
                                                Size="Size.Small"
                                                Color="@GetSettingsButtonColor(pFirstActive?.TrackingPolicy, pFirstActive?.TrackingKeywords, $"parent:{parent.OutputName}")"
+                                               Class="@(showParentPpvHint ? "ppv-settings-btn" : "")"
                                                OnClick="@(() => OpenSettingsDrawer(parent.OutputName, SettingsTargetKind.Parent))" />
                             </MudTooltip>
 
@@ -1051,6 +1134,53 @@ else
     }
 }
 
+</div>@* close #channel-mapping-content *@
+
+@* ── Mapped channels panel ── *@
+<div id="mapped-panel" style="@PanelStyle">
+    @if (!_panelOpen)
+    {
+        <div class="panel-collapsed-strip" @onclick="TogglePanelAsync" title="Show mapped channels">
+            <MudIcon Icon="@Icons.Material.Filled.ChevronLeft" Style="color:var(--mud-palette-text-secondary);" />
+        </div>
+    }
+    else
+    {
+        <div id="mapped-panel-handle" class="panel-resize-handle"></div>
+        <div class="panel-body-wrapper">
+            <div class="panel-header">
+                <MudText Typo="Typo.caption" Style="font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
+                    Mapped (@_panelItems.Count)
+                </MudText>
+                <MudTooltip Text="Collapse panel" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
+                                   Size="Size.Small"
+                                   OnClick="TogglePanelAsync" />
+                </MudTooltip>
+            </div>
+            <div class="panel-channel-list">
+                @if (_panelItems.Count == 0)
+                {
+                    <div class="panel-empty">No numbered channels mapped yet.</div>
+                }
+                else
+                {
+                    @foreach (var item in _panelItems)
+                    {
+                        <MudTooltip Text="@(item.IsLive ? "Live — in current output" : "Pending rebuild")" Arrow="true" Placement="Placement.Left">
+                            <div class="panel-channel-row panel-channel-link" @onclick="@(() => NavigateToGroupAsync(item))">
+                                <span class="ch-dot @(item.IsLive ? "ch-dot-live" : "ch-dot-pending")"></span>
+                                <span class="ch-num">@item.ChannelNumber</span>
+                                <span class="ch-name">@item.DisplayName</span>
+                            </div>
+                        </MudTooltip>
+                    }
+                }
+            </div>
+        </div>
+    }
+</div>
+
 @* ── Settings drawer ── *@
 @if (_settingsDrawerOpen && _drawerTargetId is not null)
 {
@@ -1060,7 +1190,9 @@ else
         <MudStack Spacing="3">
             <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
                 <MudText Typo="Typo.h6">Group Settings</MudText>
-                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseSettingsDrawer" Size="Size.Small" />
+                <MudTooltip Text="Close group settings" Arrow="true">
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseSettingsDrawer" Size="Size.Small" />
+                </MudTooltip>
             </MudStack>
             <MudDivider />
 
@@ -1082,32 +1214,64 @@ else
                                Label="Mode"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@dfExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">Manual review</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">Auto-update</MudSelectItem>
+                               Disabled="@dfExcluded"
+                               HelperText="@GetModeHelperText(LineupReviewSemantics.NormalizeGroupMode(df.ChannelMode))">
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">
+                            <MudTooltip Text="You pick which channels appear in the output. Only checked channels are included." Arrow="true" Placement="Placement.Left">
+                                <span>Manual selection</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">
+                            <MudTooltip Text="All channels in this group are always included. New channels flow through automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-update</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
                     <MudSelect T="string"
                                Value="@dfPolicy"
                                ValueChanged="@(v => OnTrackingPolicyChanged(df, v))"
-                               Label="Event tracking"
+                               Label="New channel handling"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@dfExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">Review queue</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">Notify only</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">Auto-add all events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">Auto-add populated events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">Auto-add matching events</MudSelectItem>
+                               Disabled="@dfExcluded"
+                               HelperText="@GetTrackingPolicyHelperText(dfPolicy)">
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">
+                            <MudTooltip Text="New channels land in a queue for you to approve or reject before they appear in output." Arrow="true" Placement="Placement.Left">
+                                <span>Queue for review</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">
+                            <MudTooltip Text="You are notified when new channels appear. Nothing is added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Notify only</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">
+                            <MudTooltip Text="Every new channel is added to output automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add all</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">
+                            <MudTooltip Text="New channels that have EPG guide data are added automatically. Channels with no guide info are skipped." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add (guide data only)</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">
+                            <MudTooltip Text="Only new channels matching your keywords below are added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add matching</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
-                    <MudSwitch T="bool"
-                               Value="@df.TrackNewChannels"
-                               ValueChanged="@(v => OnTrackNewChannelsChanged(df, v))"
-                               Size="Size.Small"
-                               Color="Color.Primary"
-                               Disabled="@dfExcluded"
-                               Label="Notify on new pending channels" />
+                    <MudTooltip Text="When on, new regular channels added by the provider are flagged during refresh so you can review them. Does not affect existing channel selections." Arrow="true" Placement="Placement.Bottom">
+                        <MudSwitch T="bool"
+                                   Value="@df.TrackNewChannels"
+                                   ValueChanged="@(v => OnTrackNewChannelsChanged(df, v))"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Disabled="@dfExcluded"
+                                   Label="Track new channels" />
+                    </MudTooltip>
 
                     @if (dfIsAutoMatch)
                     {
@@ -1174,32 +1338,64 @@ else
                                Label="Mode"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@pAllExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">Manual review</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">Auto-update</MudSelectItem>
+                               Disabled="@pAllExcluded"
+                               HelperText="@GetModeHelperText(pMode)">
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">
+                            <MudTooltip Text="You pick which channels appear in the output. Only checked channels are included." Arrow="true" Placement="Placement.Left">
+                                <span>Manual selection</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">
+                            <MudTooltip Text="All channels in this group are always included. New channels flow through automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-update</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
                     <MudSelect T="string"
                                Value="@pPolicy"
                                ValueChanged="@(v => SetParentTrackingPolicyAsync(pParent, v))"
-                               Label="Event tracking"
+                               Label="New channel handling"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@pAllExcluded">
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">Review queue</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">Notify only</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">Auto-add all events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">Auto-add populated events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">Auto-add matching events</MudSelectItem>
+                               Disabled="@pAllExcluded"
+                               HelperText="@GetTrackingPolicyHelperText(pPolicy)">
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">
+                            <MudTooltip Text="New channels land in a queue for you to approve or reject before they appear in output." Arrow="true" Placement="Placement.Left">
+                                <span>Queue for review</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">
+                            <MudTooltip Text="You are notified when new channels appear. Nothing is added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Notify only</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">
+                            <MudTooltip Text="Every new channel is added to output automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add all</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">
+                            <MudTooltip Text="New channels that have EPG guide data are added automatically. Channels with no guide info are skipped." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add (guide data only)</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">
+                            <MudTooltip Text="Only new channels matching your keywords below are added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add matching</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
-                    <MudSwitch T="bool"
-                               Value="@pFirst.TrackNewChannels"
-                               ValueChanged="@(v => SetParentTrackNewChannelsAsync(_drawerTargetId!, v))"
-                               Size="Size.Small"
-                               Color="Color.Primary"
-                               Disabled="@pAllExcluded"
-                               Label="Notify on new pending channels" />
+                    <MudTooltip Text="When on, new regular channels added by the provider are flagged during refresh so you can review them. Does not affect existing channel selections." Arrow="true" Placement="Placement.Bottom">
+                        <MudSwitch T="bool"
+                                   Value="@pFirst.TrackNewChannels"
+                                   ValueChanged="@(v => SetParentTrackNewChannelsAsync(_drawerTargetId!, v))"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Disabled="@pAllExcluded"
+                                   Label="Track new channels" />
+                    </MudTooltip>
 
                     @if (pIsAutoMatch)
                     {
@@ -1240,32 +1436,64 @@ else
                                Label="Mode"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@cgEx">
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">Manual review</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">Auto-update</MudSelectItem>
+                               Disabled="@cgEx"
+                               HelperText="@GetModeHelperText(LineupReviewSemantics.NormalizeGroupMode(cg.ChannelMode))">
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeManualReview">
+                            <MudTooltip Text="You pick which channels appear in the output. Only checked channels are included." Arrow="true" Placement="Placement.Left">
+                                <span>Manual selection</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.GroupModeAutoUpdate">
+                            <MudTooltip Text="All channels in this group are always included. New channels flow through automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-update</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
                     <MudSelect T="string"
                                Value="@cgPolicy"
                                ValueChanged="@(v => OnCgTrackingPolicyChangedAsync(cg, v))"
-                               Label="Event tracking"
+                               Label="New channel handling"
                                Variant="Variant.Outlined"
                                Dense="true"
-                               Disabled="@cgEx">
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">Review queue</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">Notify only</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">Auto-add all events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">Auto-add populated events</MudSelectItem>
-                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">Auto-add matching events</MudSelectItem>
+                               Disabled="@cgEx"
+                               HelperText="@GetTrackingPolicyHelperText(cgPolicy)">
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyReview">
+                            <MudTooltip Text="New channels land in a queue for you to approve or reject before they appear in output." Arrow="true" Placement="Placement.Left">
+                                <span>Queue for review</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyNotify">
+                            <MudTooltip Text="You are notified when new channels appear. Nothing is added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Notify only</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddAll">
+                            <MudTooltip Text="Every new channel is added to output automatically on refresh." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add all</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddPopulated">
+                            <MudTooltip Text="New channels that have EPG guide data are added automatically. Channels with no guide info are skipped." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add (guide data only)</span>
+                            </MudTooltip>
+                        </MudSelectItem>
+                        <MudSelectItem Value="@LineupReviewSemantics.TrackingPolicyAutoAddMatching">
+                            <MudTooltip Text="Only new channels matching your keywords below are added automatically." Arrow="true" Placement="Placement.Left">
+                                <span>Auto-add matching</span>
+                            </MudTooltip>
+                        </MudSelectItem>
                     </MudSelect>
 
-                    <MudSwitch T="bool"
-                               Value="@cg.TrackNewChannels"
-                               ValueChanged="@(v => OnCgTrackNewChangedAsync(cg, v))"
-                               Size="Size.Small"
-                               Color="Color.Primary"
-                               Disabled="@cgEx"
-                               Label="Notify on new pending channels" />
+                    <MudTooltip Text="When on, new regular channels added by the provider are flagged during refresh so you can review them. Does not affect existing channel selections." Arrow="true" Placement="Placement.Bottom">
+                        <MudSwitch T="bool"
+                                   Value="@cg.TrackNewChannels"
+                                   ValueChanged="@(v => OnCgTrackNewChangedAsync(cg, v))"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Disabled="@cgEx"
+                                   Label="Track new channels" />
+                    </MudTooltip>
 
                     @if (cgAutoMatch)
                     {
@@ -1298,7 +1526,7 @@ else
     private string? _profileId;
     private List<ProfileStubDto> _allProfiles = [];
     private List<GroupFilterDto> _allFilters = [];
-    private bool _isLoading;
+    private bool _isLoading = true;
     private bool _isRefreshing;
     private string? _error;
 
@@ -1314,6 +1542,7 @@ else
     private Dictionary<string, string> _groupChannelFilter = [];
     private Dictionary<string, string> _parentChannelFilter = [];
     private HashSet<string> _parentShowSelectedOnly = [];
+    private HashSet<string> _groupShowSelectedOnly = [];
     private Dictionary<string, HashSet<string>> _hiddenParentMembers = [];
     private Dictionary<string, int> _parentStartNum = [];
     private HashSet<string> _dirtyChannelSelectionFilterIds = [];
@@ -1363,6 +1592,23 @@ else
     private string _cgEditName = string.Empty;
     private string? _editingParentOutputName;
     private string _editParentNameText = string.Empty;
+
+    // -------------------------------------------------------------------------
+    // Mapped channels panel state
+    // -------------------------------------------------------------------------
+    private bool _panelOpen = true;
+    private int _panelWidth = 280;
+    private List<MappedChannelPanelItem> _panelItems = [];
+    private IJSObjectReference? _panelResizeHandle;
+    private bool _panelResizeInitializing;
+
+    private string PanelStyle => _panelOpen
+        ? $"position:fixed; top:var(--mud-appbar-height,64px); right:0; height:calc(100vh - var(--mud-appbar-height,64px)); width:{_panelWidth}px; z-index:101; display:flex; flex-direction:row;"
+        : "position:fixed; top:var(--mud-appbar-height,64px); right:0; height:calc(100vh - var(--mud-appbar-height,64px)); width:28px; z-index:101;";
+
+    private string ContentMarginStyle => _panelOpen
+        ? $"margin-right:{_panelWidth}px; transition:margin-right 0.2s ease;"
+        : "margin-right:28px; transition:margin-right 0.2s ease;";
 
     // -------------------------------------------------------------------------
     // Settings drawer state
@@ -1438,6 +1684,44 @@ else
 
     private static bool IsManualMode(GroupFilterDto filter) => !IsAutoMode(filter);
 
+    private static readonly Regex _ppvHintPattern = new(
+        @"\b(PPV|EVENTS?|FIGHTS?|UFC|MMA|BOXING)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static bool IsPpvLikeName(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && _ppvHintPattern.IsMatch(name);
+
+    private static bool ShowPpvHint(GroupFilterDto filter) =>
+        !IsExcluded(filter) &&
+        string.Equals(
+            LineupReviewSemantics.NormalizeTrackingPolicy(filter.TrackingPolicy),
+            LineupReviewSemantics.TrackingPolicyReview,
+            StringComparison.Ordinal) &&
+        !filter.TrackNewChannels &&
+        (IsPpvLikeName(filter.ProviderGroupRawName) || IsPpvLikeName(filter.OutputName));
+
+    private static string GetModeHelperText(string mode) => mode switch
+    {
+        LineupReviewSemantics.GroupModeAutoUpdate =>
+            "All channels in this group are included automatically. Provider changes flow through on next refresh.",
+        _ =>
+            "You choose which channels appear in the output. Changes require your action."
+    };
+
+    private static string GetTrackingPolicyHelperText(string policy) => policy switch
+    {
+        LineupReviewSemantics.TrackingPolicyNotify =>
+            "You get a notification when new channels appear, but nothing is added automatically.",
+        LineupReviewSemantics.TrackingPolicyAutoAddAll =>
+            "Every new channel is added automatically on refresh.",
+        LineupReviewSemantics.TrackingPolicyAutoAddPopulated =>
+            "Only channels that have EPG guide data are added automatically.",
+        LineupReviewSemantics.TrackingPolicyAutoAddMatching =>
+            "Only channels matching your keywords below are added automatically.",
+        _ =>
+            "New channels wait for your approval before appearing in output."
+    };
+
     private sealed record VirtualParent(string OutputName, List<GroupFilterDto> Members);
     private sealed record ParentChannelEntry(GroupFilterDto Filter, ProviderChannelSelectDto Channel);
 
@@ -1473,14 +1757,16 @@ else
             var showUnmapped = _decisionFilterStates.Contains("unmapped");
             var showExclude  = _decisionFilterStates.Contains("exclude");
             var showNew      = _decisionFilterStates.Contains("new");
-            var showAll      = _decisionFilterStates.Count == 0 || (showUsed && showUnmapped && showExclude);
+            var showRemoved  = _decisionFilterStates.Contains("removed");
+            var showAll      = showUsed && showUnmapped && showExclude;
 
             bool FilterMatchesGroup(GroupFilterDto f) =>
                 IsExcluded(f) ? showExclude :
                 showAll ||
                 (showUsed     && IsIncluded(f) && GetSelectedChannelCount(f) > 0) ||
                 (showUnmapped && IsUnmappedBySelection(f)) ||
-                MatchesNew(f, showNew);
+                MatchesNew(f, showNew) ||
+                (showRemoved  && IsIncluded(f) && !f.ProviderGroupActive);
 
             bool CgMatchesFilter(CustomGroupDto cg) =>
                 IsCgExcluded(cg) ? showExclude :
@@ -1508,12 +1794,14 @@ else
                                             && ((showUsed && IsIncluded(f) && GetSelectedChannelCount(f) > 0)
                                                 || (showUnmapped && IsUnmappedBySelection(f))
                                                 || (showExclude && IsExcluded(f))
-                                                || MatchesNew(f, showNew)),
+                                                || MatchesNew(f, showNew)
+                                                || (showRemoved && IsIncluded(f) && !f.ProviderGroupActive)),
                         VirtualParent p  => p.Members.Any(m => _sessionChangedFilterIds.Contains(m.ProfileGroupFilterId)
                                                                 && ((showUsed && IsIncluded(m) && GetSelectedChannelCount(m) > 0)
                                                                     || (showUnmapped && IsUnmappedBySelection(m))
                                                                     || (showExclude && IsExcluded(m))
-                                                                    || MatchesNew(m, showNew))),
+                                                                    || MatchesNew(m, showNew)
+                                                                    || (showRemoved && IsIncluded(m) && !m.ProviderGroupActive))),
                         _ => false,
                     };
                 };
@@ -1622,7 +1910,13 @@ else
         return true;
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
+    {
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
+
+    private async Task InitializeAsync()
     {
         _allProfiles = await ProfilesService.GetProfileStubsAsync(_cts.Token);
         if (!string.IsNullOrEmpty(InitialProfile) && _allProfiles.Any(p => p.ProfileId == InitialProfile))
@@ -1641,24 +1935,45 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _jsReady) return;
-        _jsReady = true;
-
-        try
+        if (firstRender && !_jsReady)
         {
-            var startKey = _profileId is not null ? $"m3undle:default-start-num:{_profileId}" : "m3undle:default-start-num";
-            var startStr = await JS.InvokeAsync<string?>("localStorage.getItem", startKey);
-            if (int.TryParse(startStr, out var n) && n > 0)
-                _defaultStartNum = n;
-            _startNumProfileId = _profileId;
+            _jsReady = true;
 
-            var presetsJson = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:channel-filter-presets");
-            if (!string.IsNullOrWhiteSpace(presetsJson))
-                _savedChannelFilters = System.Text.Json.JsonSerializer.Deserialize<List<string>>(presetsJson) ?? [];
+            try
+            {
+                var startKey = _profileId is not null ? $"m3undle:default-start-num:{_profileId}" : "m3undle:default-start-num";
+                var startStr = await JS.InvokeAsync<string?>("localStorage.getItem", startKey);
+                if (int.TryParse(startStr, out var n) && n > 0)
+                    _defaultStartNum = n;
+                _startNumProfileId = _profileId;
+
+                var presetsJson = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:channel-filter-presets");
+                if (!string.IsNullOrWhiteSpace(presetsJson))
+                    _savedChannelFilters = System.Text.Json.JsonSerializer.Deserialize<List<string>>(presetsJson) ?? [];
+
+                var panelOpenStr = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:mapping-panel-open");
+                var panelWidthStr = await JS.InvokeAsync<string?>("localStorage.getItem", "m3undle:mapping-panel-width");
+                _panelOpen = panelOpenStr != "false";
+                if (int.TryParse(panelWidthStr, out var pw) && pw >= 180 && pw <= 500)
+                    _panelWidth = pw;
+            }
+            catch { }
+
+            StateHasChanged();
+            return;
         }
-        catch { }
 
-        StateHasChanged();
+        if (_panelOpen && _panelResizeHandle is null && _jsReady && !_panelResizeInitializing)
+        {
+            _panelResizeInitializing = true;
+            try
+            {
+                _panelResizeHandle = await JS.InvokeAsync<IJSObjectReference>(
+                    "initMappingPanelResize", "mapped-panel-handle", "mapped-panel", "channel-mapping-content", 180, 500);
+            }
+            catch { }
+            finally { _panelResizeInitializing = false; }
+        }
     }
 
     private async Task SaveDefaultStartNumAsync()
@@ -1786,7 +2101,7 @@ else
         catch (OperationCanceledException) { }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         _cts.Cancel();
         _cts.Dispose();
@@ -1795,6 +2110,11 @@ else
         _channelSaveDebounceCts?.Dispose();
         _globalSearchDebounceCts?.Cancel();
         _globalSearchDebounceCts?.Dispose();
+        if (_panelResizeHandle is not null)
+        {
+            try { await _panelResizeHandle.InvokeVoidAsync("dispose"); } catch { }
+            try { await _panelResizeHandle.DisposeAsync(); } catch { }
+        }
     }
 
     private Task LoadAsync() => LoadCoreAsync(showSpinner: true);
@@ -1849,6 +2169,7 @@ else
 
             _sessionChangedFilterIds.Clear();
             RebuildDisplayOrder();
+            await LoadPanelAsync();
         }
         catch (OperationCanceledException)
         {
@@ -1864,6 +2185,86 @@ else
             if (showSpinner)
                 _isLoading = false;
             StateHasChanged();
+        }
+    }
+
+    private async Task LoadPanelAsync()
+    {
+        if (_profileId is null) return;
+        try { _panelItems = await ChannelMappingPageService.GetMappedChannelsPanelAsync(_profileId, _cts.Token); }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
+    private async Task TogglePanelAsync()
+    {
+        _panelOpen = !_panelOpen;
+        try { await JS.InvokeVoidAsync("localStorage.setItem", "m3undle:mapping-panel-open", _panelOpen ? "true" : "false"); }
+        catch { }
+
+        if (!_panelOpen && _panelResizeHandle is not null)
+        {
+            try { await _panelResizeHandle.InvokeVoidAsync("dispose"); } catch { }
+            try { await _panelResizeHandle.DisposeAsync(); } catch { }
+            _panelResizeHandle = null;
+        }
+    }
+
+    private static string SanitizeDomId(string name) =>
+        string.Concat(name.Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-'));
+
+    private async Task NavigateToGroupAsync(MappedChannelPanelItem item)
+    {
+        if (item.OutputName is not null)
+        {
+            // Virtual parent — force all members visible, expand, show selected only
+            var members = _allFilters
+                .Where(f => string.Equals(f.OutputName, item.OutputName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            foreach (var m in members)
+                _sessionChangedFilterIds.Add(m.ProfileGroupFilterId);
+
+            _parentShowSelectedOnly.Add(item.OutputName);
+
+            if (!_expandedParents.Contains(item.OutputName))
+            {
+                _expandedParents.Add(item.OutputName);
+                StateHasChanged();
+                var toLoad = members
+                    .Where(m => !_channelCache.ContainsKey(m.ProfileGroupFilterId))
+                    .Select(m => LoadChannelsAsync(m.ProfileGroupFilterId))
+                    .ToList();
+                await Task.WhenAll(toLoad);
+            }
+            else
+            {
+                StateHasChanged();
+            }
+
+            await Task.Delay(50);
+            try { await JS.InvokeVoidAsync("scrollToId", "parent-" + SanitizeDomId(item.OutputName)); } catch { }
+        }
+        else
+        {
+            // Standalone group — force visible, expand, show selected only
+            _sessionChangedFilterIds.Add(item.FilterId);
+            _groupShowSelectedOnly.Add(item.FilterId);
+
+            if (!_expandedGroups.Contains(item.FilterId))
+            {
+                _expandedGroups.Add(item.FilterId);
+                if (!_channelCache.ContainsKey(item.FilterId))
+                    await LoadChannelsAsync(item.FilterId);
+                else
+                    StateHasChanged();
+            }
+            else
+            {
+                StateHasChanged();
+            }
+
+            await Task.Delay(50);
+            try { await JS.InvokeVoidAsync("scrollToId", "group-" + item.FilterId); } catch { }
         }
     }
 
@@ -2540,19 +2941,33 @@ else
         string filterId,
         List<ProviderChannelSelectDto> channels,
         bool globalActive,
-        string filterText)
+        string filterText,
+        bool showSelectedOnly = false)
     {
+        List<ProviderChannelSelectDto> result;
+
         if (globalActive)
         {
             if (!_globalChannelSearchHitIds.TryGetValue(filterId, out var hitIds))
                 return [];
-            return channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
+            result = channels.Where(c => hitIds.Contains(c.ProviderChannelId)).ToList();
+        }
+        else if (string.IsNullOrWhiteSpace(filterText))
+        {
+            result = channels;
+        }
+        else
+        {
+            result = channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
-        if (string.IsNullOrWhiteSpace(filterText))
-            return channels;
+        if (showSelectedOnly)
+        {
+            var sel = _channelSelections.GetValueOrDefault(filterId) ?? [];
+            result = result.Where(c => sel.GetValueOrDefault(c.ProviderChannelId)).ToList();
+        }
 
-        return channels.Where(c => c.DisplayName.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
+        return result;
     }
 
     // -------------------------------------------------------------------------
@@ -2939,6 +3354,9 @@ else
 
         if (_dirtyChannelSelectionFilterIds.Count > 0)
             await DebounceDirtyChannelSelectionSaveAsync();
+
+        await LoadPanelAsync();
+        StateHasChanged();
     }
 
     private async Task SaveChannelSelectionsNowAsync(string filterId)

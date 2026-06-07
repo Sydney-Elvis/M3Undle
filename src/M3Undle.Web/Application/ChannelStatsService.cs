@@ -13,66 +13,54 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
 
         var activeProfile = await db.Profiles
             .AsNoTracking()
-            .Include(x => x.ProfileProviders)
-                .ThenInclude(pp => pp.Provider)
-            .FirstOrDefaultAsync(x => x.IsActive, ct);
+            .Where(x => x.IsActive)
+            .Select(x => new { x.ProfileId })
+            .FirstOrDefaultAsync(ct);
 
         if (activeProfile is null)
             return new ChannelMappingStatsDto();
 
         var profileId = activeProfile.ProfileId;
-        var provider = activeProfile.ProfileProviders
-            .Where(pp => pp.Enabled)
+        var provider = await db.ProfileProviders
+            .AsNoTracking()
+            .Where(pp => pp.ProfileId == profileId && pp.Enabled && pp.Provider.Enabled)
             .OrderBy(pp => pp.Priority)
-            .Select(pp => pp.Provider)
-            .FirstOrDefault(p => p.Enabled);
+            .Select(pp => new
+            {
+                pp.ProviderId,
+                pp.Provider.IncludeVod,
+                pp.Provider.IncludeSeries,
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var groupsIncluded = await db.ProfileGroupFilters
+        var groupAggregates = await db.ProfileGroupFilters
             .AsNoTracking()
-            .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId
-                             && x.ProviderGroup.ContentType == "live"
-                             && x.Decision != LineupReviewSemantics.GroupDecisionExclude, ct);
+            .Where(x => x.ProfileId == profileId && x.ProviderGroup.ContentType == "live")
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Included = g.Count(x => x.Decision != LineupReviewSemantics.GroupDecisionExclude),
+                Hold = g.Count(x => x.IsNew),
+                New = g.Count(x => x.IsNew && x.TrackNewChannels),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var groupsHold = await db.ProfileGroupFilters
+        var pendingAggregates = await db.ProfileGroupChannelFilters
             .AsNoTracking()
-            .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId
-                             && x.ProviderGroup.ContentType == "live"
-                             && x.IsNew, ct);
-
-        var groupsNew = await db.ProfileGroupFilters
-            .AsNoTracking()
-            .Include(x => x.ProviderGroup)
-            .CountAsync(x => x.ProfileId == profileId
-                             && x.ProviderGroup.ContentType == "live"
-                             && x.IsNew
-                             && x.TrackNewChannels, ct);
-
-        var pendingChannelsTotal = await db.ProfileGroupChannelFilters
-            .AsNoTracking()
-            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
-            .Include(x => x.ProviderChannel)
-            .CountAsync(x => x.ProfileGroupFilter.ProfileId == profileId
-                             && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
-                             && x.State == LineupReviewSemantics.ChannelStatePending
-                             && x.ProviderChannel.Active
-                             && x.ProviderChannel.ContentType == "live"
-                             && !x.ProviderChannel.IsPlaceholder
-                             && x.ProfileGroupFilter.ProviderGroup.ContentType == "live", ct);
-
-        var pendingChannelsNotified = await db.ProfileGroupChannelFilters
-            .AsNoTracking()
-            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
-            .Include(x => x.ProviderChannel)
-            .CountAsync(x => x.ProfileGroupFilter.ProfileId == profileId
-                             && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
-                             && x.State == LineupReviewSemantics.ChannelStatePending
-                             && x.ProviderChannel.Active
-                             && x.ProviderChannel.ContentType == "live"
-                             && !x.ProviderChannel.IsPlaceholder
-                             && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
-                             && x.ProfileGroupFilter.TrackNewChannels, ct);
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                        && x.State == LineupReviewSemantics.ChannelStatePending
+                        && x.ProviderChannel.Active
+                        && x.ProviderChannel.ContentType == "live"
+                        && !x.ProviderChannel.IsPlaceholder
+                        && x.ProfileGroupFilter.ProviderGroup.ContentType == "live")
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Notified = g.Count(x => x.ProfileGroupFilter.TrackNewChannels),
+            })
+            .FirstOrDefaultAsync(ct);
 
         var activeSnapshot = await db.Snapshots
             .AsNoTracking()
@@ -94,14 +82,23 @@ internal sealed class ChannelStatsService(IServiceScopeFactory scopeFactory)
 
             channelsInProvider = lastFetchRun?.ChannelCountSeen;
 
-            vodGroups = await db.ProviderGroups
+            var groupTypeCounts = await db.ProviderGroups
                 .AsNoTracking()
-                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "vod", ct);
+                .Where(x => x.ProviderId == provider.ProviderId && x.Active
+                            && (x.ContentType == "vod" || x.ContentType == "series"))
+                .GroupBy(x => x.ContentType)
+                .Select(g => new { ContentType = g.Key, Count = g.Count() })
+                .ToListAsync(ct);
 
-            seriesGroups = await db.ProviderGroups
-                .AsNoTracking()
-                .CountAsync(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "series", ct);
+            vodGroups = groupTypeCounts.FirstOrDefault(x => x.ContentType == "vod")?.Count ?? 0;
+            seriesGroups = groupTypeCounts.FirstOrDefault(x => x.ContentType == "series")?.Count ?? 0;
         }
+
+        var groupsIncluded = groupAggregates?.Included ?? 0;
+        var groupsHold = groupAggregates?.Hold ?? 0;
+        var groupsNew = groupAggregates?.New ?? 0;
+        var pendingChannelsTotal = pendingAggregates?.Total ?? 0;
+        var pendingChannelsNotified = pendingAggregates?.Notified ?? 0;
 
         return new ChannelMappingStatsDto
         {

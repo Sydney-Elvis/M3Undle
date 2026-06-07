@@ -21,22 +21,52 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             .OrderByDescending(s => s.CreatedUtc)
             .ToListAsync(ct);
 
-        var latestFetchRun = await db.FetchRuns
+        var profileProviders = await db.ProfileProviders
             .AsNoTracking()
-            .OrderByDescending(f => f.StartedUtc)
-            .FirstOrDefaultAsync(ct);
+            .Select(pp => new { pp.ProfileId, pp.ProviderId, pp.Enabled })
+            .ToListAsync(ct);
+
+        var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
+
+        // Latest fetch run status per provider, keyed by ProviderId.
+        // Uses a NOT EXISTS correlated subquery so only the latest row per provider is fetched
+        // rather than loading the entire fetch_runs history and deduplicating in memory.
+        var latestRunsByProvider = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (relevantProviderIds.Count > 0)
+        {
+            var latestRuns = await db.FetchRuns
+                .AsNoTracking()
+                .Where(f => relevantProviderIds.Contains(f.ProviderId)
+                    && !db.FetchRuns.Any(f2 => f2.ProviderId == f.ProviderId && f2.StartedUtc > f.StartedUtc))
+                .Select(f => new { f.ProviderId, f.Status })
+                .ToListAsync(ct);
+
+            foreach (var run in latestRuns)
+                latestRunsByProvider.TryAdd(run.ProviderId, run.Status);
+        }
+
+        var profileProviderMap = profileProviders
+            .GroupBy(pp => pp.ProfileId)
+            .ToDictionary(g => g.Key, g => g.Select(pp => pp.ProviderId).ToList());
+
+        var providerDetailsById = relevantProviderIds.Count > 0
+            ? await db.Providers
+                .AsNoTracking()
+                .Where(p => relevantProviderIds.Contains(p.ProviderId))
+                .Select(p => new { p.ProviderId, p.Name, p.MaxConcurrentStreams, p.PlaylistExpiresUtc, p.Enabled })
+                .ToListAsync(ct)
+            : [];
+
+        var providerDetailMap = providerDetailsById.ToDictionary(p => p.ProviderId);
 
         var groupsPendingReview = await db.ProfileGroupFilters
             .AsNoTracking()
-            .Include(x => x.ProviderGroup)
             .CountAsync(x => x.ProviderGroup.ContentType == "live"
                              && x.IsNew
                              && x.TrackNewChannels, ct);
 
         var channelsPendingReview = await db.ProfileGroupChannelFilters
             .AsNoTracking()
-            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
-            .Include(x => x.ProviderChannel)
             .CountAsync(x => x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
                              && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
                              && x.ProviderChannel.ContentType == "live"
@@ -46,11 +76,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                              && x.ProfileGroupFilter.TrackNewChannels, ct);
 
         // Counts shown next to the Output URLs reflect only the active profile's snapshot.
-        var activeProfileId = await db.Profiles
-            .AsNoTracking()
-            .Where(x => x.IsActive)
-            .Select(x => (string?)x.ProfileId)
-            .FirstOrDefaultAsync(ct);
+        var activeProfileId = profiles.FirstOrDefault(x => x.IsActive)?.ProfileId;
 
         DateTime? activeProfileProviderExpiresUtc = null;
         if (activeProfileId is not null)
@@ -96,8 +122,26 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 }
             }
 
-            if (snapshot is not null && latestFetchRun?.Status == "fail")
+            var profileProviderIds = profileProviderMap.GetValueOrDefault(profile.ProfileId, []);
+            var profileHasFailed = profileProviderIds.Any(pid =>
+                latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
+
+            if (snapshot is not null && profileHasFailed)
                 health = ProfileHealthStatus.Degraded;
+
+            var enabledProfileProviderIds = profileProviders
+                .Where(pp => pp.ProfileId == profile.ProfileId && pp.Enabled)
+                .Select(pp => pp.ProviderId)
+                .ToList();
+
+            var profileProviderSummaries = enabledProfileProviderIds
+                .Where(pid => providerDetailMap.ContainsKey(pid) && providerDetailMap[pid].Enabled)
+                .Select(pid =>
+                {
+                    var p = providerDetailMap[pid];
+                    return new DashboardProviderSummary(p.ProviderId, p.Name, p.MaxConcurrentStreams, p.PlaylistExpiresUtc);
+                })
+                .ToList();
 
             summaries.Add(new DashboardProfileSummary
             {
@@ -106,13 +150,21 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 OutputName = profile.OutputName,
                 IsEnabled = profile.Enabled,
                 IsActive = profile.IsActive,
+                IsPublished = snapshot is not null,
                 LastPublishedUtc = snapshot?.CreatedUtc,
                 LiveCount = snapshot?.LiveChannelCount ?? 0,
+                MovieCount = snapshot?.VodChannelCount ?? 0,
+                SeriesCount = snapshot?.SeriesChannelCount ?? 0,
                 HealthStatus = health,
+                Providers = profileProviderSummaries,
             });
         }
 
-        var refreshFailed = latestFetchRun is not null && latestFetchRun.Status == "fail";
+        var activeProviderIds = activeProfileId is not null
+            ? profileProviderMap.GetValueOrDefault(activeProfileId, [])
+            : [];
+        var refreshFailed = activeProviderIds.Any(pid =>
+            latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
 
         var now = DateTime.UtcNow;
         var expiryThreshold = now.AddDays(30);

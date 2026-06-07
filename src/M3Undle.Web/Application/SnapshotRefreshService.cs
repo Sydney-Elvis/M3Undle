@@ -36,6 +36,7 @@ public sealed class SnapshotRefreshService(
     // Current run CTS — cancelled by CancelRefresh(); null when no run is active
     private volatile CancellationTokenSource? _currentRunCts;
     private volatile bool _cancelledByUser;
+    private DateTime? _refreshStartedAt;
 
     // Schedule loop wait CTS — cancelled when the user updates the refresh schedule
     private volatile CancellationTokenSource? _scheduleWaitCts;
@@ -45,6 +46,8 @@ public sealed class SnapshotRefreshService(
     // -------------------------------------------------------------------------
 
     public bool IsRefreshing => _executionGate.CurrentCount == 0;
+
+    public DateTime? RefreshStartedAt => _refreshStartedAt;
 
     public bool TriggerRefresh()
     {
@@ -373,6 +376,7 @@ public sealed class SnapshotRefreshService(
         catch (Exception ex) when (ex is not OperationCanceledException) { logger.LogWarning(ex, "Event cleanup failed."); }
 
         logger.LogInformation("Snapshot refresh started.");
+        _refreshStartedAt = timeProvider.GetUtcNow().UtcDateTime;
         eventBus.Publish(AppEventKind.RefreshStarted);
         bool succeeded = false;
         string? errorSummary = null;
@@ -385,7 +389,10 @@ public sealed class SnapshotRefreshService(
             var (s, e, channelsByProvider, cc, profileIds) = await builder.RunAsync(runCts.Token);
             (succeeded, errorSummary, changeClass, affectedProfileIds) = (s, e, cc, profileIds);
             if (channelsByProvider.Count > 0)
+            {
                 _cachedChannels = channelsByProvider;
+                await PurgeStaleProviderDataAsync(channelsByProvider.Keys, stoppingToken);
+            }
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
             if (cc == ChangeClasses.Breaking)
             {
@@ -414,10 +421,94 @@ public sealed class SnapshotRefreshService(
         }
         finally
         {
+            _refreshStartedAt = null;
             _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
                 affectedProfileIds.Count > 0 ? affectedProfileIds : null);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Data retention — keep last 2 fetch generations per provider
+    // -------------------------------------------------------------------------
+
+    private async Task PurgeStaleProviderDataAsync(IEnumerable<string> fetchedProviderIds, CancellationToken ct)
+    {
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var totalChannels = 0;
+            var totalRuns = 0;
+
+            foreach (var providerId in fetchedProviderIds)
+            {
+                var (channels, runs) = await PurgeProviderGenerationsAsync(db, providerId, ct);
+                totalChannels += channels;
+                totalRuns += runs;
+            }
+
+            if (totalChannels > 0 || totalRuns > 0)
+                logger.LogInformation(
+                    "Data retention: purged {ChannelCount} stale channel(s) and {RunCount} old fetch run(s).",
+                    totalChannels, totalRuns);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Provider data retention purge failed — will retry on next refresh.");
+        }
+    }
+
+    private static async Task<(int Channels, int Runs)> PurgeProviderGenerationsAsync(
+        ApplicationDbContext db, string providerId, CancellationToken ct)
+    {
+        // Identify the 2 most recent fetch runs — these are the "live" generations to keep.
+        var recentRunIds = await db.FetchRuns
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId)
+            .OrderByDescending(x => x.StartedUtc)
+            .Take(2)
+            .Select(x => x.FetchRunId)
+            .ToListAsync(ct);
+
+        // Fewer than 2 runs means there is no older generation to purge.
+        if (recentRunIds.Count < 2)
+            return (0, 0);
+
+        // Use a subquery instead of loading IDs into memory — avoids SQLite's 999-parameter
+        // limit when a provider has a large channel list with multiple old fetch runs.
+        var staleChannelQuery = db.ProviderChannels
+            .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.LastFetchRunId))
+            .Select(x => x.ProviderChannelId);
+
+        var staleCount = await staleChannelQuery.CountAsync(ct);
+        if (staleCount > 0)
+        {
+            // Delete child rows explicitly — SQLite FK cascade requires PRAGMA foreign_keys = ON
+            // which is not enabled; follow the same explicit-delete pattern as DeleteProfileAsync.
+            await db.ProfileGroupChannelFilters
+                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
+                .ExecuteDeleteAsync(ct);
+
+            await db.ChannelSources
+                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
+                .ExecuteDeleteAsync(ct);
+
+            await db.ProfileCustomGroupChannels
+                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
+                .ExecuteDeleteAsync(ct);
+
+            await db.ProviderChannels
+                .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.LastFetchRunId))
+                .ExecuteDeleteAsync(ct);
+        }
+
+        // FetchRun → ProviderChannel FK is Restrict, so delete runs only after channels are gone.
+        var deletedRuns = await db.FetchRuns
+            .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.FetchRunId))
+            .ExecuteDeleteAsync(ct);
+
+        return (staleCount, deletedRuns);
     }
 
     private async Task RunBuildOnlyAsync(CancellationToken stoppingToken)
@@ -429,6 +520,7 @@ public sealed class SnapshotRefreshService(
         runCts.CancelAfter(TimeSpan.FromMinutes(timeoutMinutes));
 
         logger.LogInformation("Snapshot build-only started.");
+        _refreshStartedAt = timeProvider.GetUtcNow().UtcDateTime;
         eventBus.Publish(AppEventKind.RefreshStarted);
         bool succeeded = false;
         string? errorSummary = null;
@@ -458,6 +550,7 @@ public sealed class SnapshotRefreshService(
         }
         finally
         {
+            _refreshStartedAt = null;
             _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
                 affectedProfileIds.Count > 0 ? affectedProfileIds : null);

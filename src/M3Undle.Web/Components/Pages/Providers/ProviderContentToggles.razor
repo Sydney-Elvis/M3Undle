@@ -1,0 +1,14 @@
+<MudDivider Class="my-1" />
+<MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
+<MudSwitch Value="IncludeVod" ValueChanged="IncludeVodChanged"
+           Color="Color.Primary" Label="Include VOD / Movies" Disabled="Disabled" />
+<MudSwitch Value="IncludeSeries" ValueChanged="IncludeSeriesChanged"
+           Color="Color.Primary" Label="Include Series" Disabled="Disabled" />
+
+@code {
+    [Parameter] public bool IncludeVod { get; set; }
+    [Parameter] public EventCallback<bool> IncludeVodChanged { get; set; }
+    [Parameter] public bool IncludeSeries { get; set; }
+    [Parameter] public EventCallback<bool> IncludeSeriesChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+}

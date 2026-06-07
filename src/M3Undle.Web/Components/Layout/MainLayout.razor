@@ -7,8 +7,8 @@
 @inject M3Undle.Web.Application.IEventService EventService
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
-@inject M3Undle.Web.Application.IHdHomeRunSettingsService HdhrSettingsService
-@inject M3Undle.Web.Application.HdHomeRunTunerManager HdhrTunerManager
+@inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
+@inject M3Undle.Web.Application.LineupStatusService LineupStatusService
 @using System.Reflection
 @using System.Threading.Channels
 @using Microsoft.AspNetCore.Components.Authorization
@@ -16,6 +16,8 @@
 @using M3Undle.Web.Contracts
 @inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject M3Undle.Web.Application.ISiteSettingsService SiteSettings
+@inject M3Undle.Core.AppBuildInfo BuildInfo
+@inject ILogger<MainLayout> Logger
 
 <MudThemeProvider @ref="_themeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 <MudPopoverProvider />
@@ -23,50 +25,90 @@
 <MudSnackbarProvider />
 
 <MudLayout>
-    <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.Start" Variant="DrawerVariant.Temporary">
+    <MudAppBar Elevation="0">
+        <MudTooltip Text="Toggle navigation" Placement="Placement.Bottom">
+            <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
+        </MudTooltip>
+        <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;">
+            <img src="favicon-32x32.png" alt="" aria-hidden="true" style="width:28px;height:28px;margin-left:8px;" />
+            <MudText Typo="Typo.h6" Class="ms-2">M3Undle</MudText>
+        </a>
+        <MudSpacer />
+        @if (_isRefreshing)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
+                <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
+            </MudStack>
+        }
+        <MudTooltip Text="@(_eventSummary.Count == 0 ? "No system events" : $"{_eventSummary.Count} system event{(_eventSummary.Count == 1 ? "" : "s")}")"
+                    Placement="Placement.Bottom">
+            <MudBadge Content="@((object)_eventSummary.Count)"
+                      Color="@EventBadgeColor" Overlap="true" Bordered="true"
+                      Visible="@(_eventSummary.Count > 0)">
+                <MudIconButton Icon="@Icons.Material.Filled.Notifications"
+                               Color="Color.Inherit"
+                               Disabled="@(!_canViewEvents)"
+                               OnClick="OpenEventPanel" />
+            </MudBadge>
+        </MudTooltip>
+        <MudTooltip Text="Settings" Placement="Placement.Bottom">
+            <MudIconButton Icon="@Icons.Material.Filled.Settings"
+                           Color="Color.Inherit"
+                           Href="settings"
+                           aria-label="Settings" />
+        </MudTooltip>
+        <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
+            <MudIconButton Icon="@ThemeModeIcon" Color="Color.Inherit" OnClick="CycleThemeMode" />
+        </MudTooltip>
+        <LoginDisplay />
+    </MudAppBar>
+
+    <MudDrawer @bind-Open="_drawerOpen" Anchor="Anchor.Start" Variant="DrawerVariant.Mini" Breakpoint="Breakpoint.None" Style="@DrawerViewportStyle">
         <MudDrawerHeader Style="white-space: nowrap; padding: 0;">
-            <a href="/" @onclick="CloseDrawer" style="display:flex;align-items:center;text-decoration:none;color:inherit;padding:16px;width:100%;">
-                <img src="logo-32.png" alt="" aria-hidden="true" style="width:36px;height:36px;border-radius:6px;margin-right:10px;flex-shrink:0;" />
-                <MudText Typo="Typo.h6">M3Undle</MudText>
-            </a>
+            @if (_drawerOpen)
+            {
+                <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;padding:16px;width:100%;">
+                    <img src="logo-32.png" alt="" aria-hidden="true" style="width:36px;height:36px;border-radius:6px;margin-right:10px;flex-shrink:0;" />
+                    <MudText Typo="Typo.h6">M3Undle</MudText>
+                </a>
+            }
+            else
+            {
+                <a href="/" style="display:flex;align-items:center;justify-content:center;text-decoration:none;color:inherit;width:100%;height:64px;">
+                    <img src="logo-32.png" alt="" aria-hidden="true" style="width:32px;height:32px;border-radius:6px;" />
+                </a>
+            }
         </MudDrawerHeader>
         <NavMenu OnNavigate="CloseDrawer" />
     </MudDrawer>
 
+    <SystemEventPanel Open="@_eventPanelOpen" OpenChanged="OnEventPanelChanged" OnCountChanged="RefreshEventCountAsync" />
+
     <MudMainContent>
-        <MudAppBar Elevation="0">
-            <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
-            <a href="/" style="display:flex;align-items:center;text-decoration:none;color:inherit;">
-                <img src="favicon-32x32.png" alt="" aria-hidden="true" style="width:28px;height:28px;margin-left:8px;" />
-                <MudText Typo="Typo.h6" Class="ms-2">M3Undle</MudText>
-            </a>
-            <MudSpacer />
-            @if (_isRefreshing)
-            {
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="me-3">
-                    <MudProgressCircular Indeterminate="true" Color="Color.Primary" Style="width:18px;height:18px;" />
-                    <MudText Typo="Typo.caption" Color="Color.Primary">Updating lineup…</MudText>
-                </MudStack>
-            }
-            <MudTooltip Text="@(_eventSummary.Count == 0 ? "No system events" : $"{_eventSummary.Count} system event{(_eventSummary.Count == 1 ? "" : "s")}")"
-                        Placement="Placement.Bottom">
-                <MudBadge Content="@(_eventSummary.Count > 0 ? (object)_eventSummary.Count : null)"
-                          Color="@EventBadgeColor" Overlap="true" Bordered="true">
-                    <MudIconButton Icon="@Icons.Material.Filled.Notifications"
-                                   Color="Color.Inherit"
-                                   Disabled="@(!_canViewEvents)"
-                                   OnClick="OpenEventPanel" />
-                </MudBadge>
-            </MudTooltip>
-            <MudTooltip Text="@ThemeModeTitle" Placement="Placement.Bottom">
-                <MudIconButton Icon="@ThemeModeIcon" Color="Color.Inherit" OnClick="CycleThemeMode" />
-            </MudTooltip>
-            <LoginDisplay />
-        </MudAppBar>
-
-        <SystemEventPanel @bind-Open="_eventPanelOpen" OnCountChanged="RefreshEventCountAsync" />
-
         <MudContainer MaxWidth="MaxWidth.False" Class="pa-6">
+            @if (CurrentSetupStep != SetupStep.None)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-4" Icon="@SetupBannerIcon">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.subtitle2">Setup Required</MudText>
+                        <MudText Typo="Typo.body2">
+                            @if (CurrentSetupStep == SetupStep.NeedsProvider)
+                            {
+                                <text>No active profile — add a provider on the <MudLink Href="providers">Providers</MudLink> page to get started.</text>
+                            }
+                            else if (CurrentSetupStep == SetupStep.NeedsEnabledProvider)
+                            {
+                                <text>The active profile has no enabled provider — open <MudLink Href="providers">Providers</MudLink> and add or enable one.</text>
+                            }
+                            else
+                            {
+                                <text>No channels are published — open <MudLink Href="channels/mapping">Channel Mapping</MudLink>, include the groups you want, then build the lineup.</text>
+                            }
+                        </MudText>
+                    </MudStack>
+                </MudAlert>
+            }
             @Body
         </MudContainer>
     </MudMainContent>
@@ -74,15 +116,10 @@
     <MudAppBar Bottom="true" Elevation="1" Dense="true"
                Style="height:28px; min-height:28px; font-size:0.70rem; padding:0 12px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-            <MudText Typo="Typo.caption" Style="font-size:0.70rem; opacity:0.8;">v@(_version)</MudText>
-            @if (_hdhrStatus is not null)
-            {
-                <MudTooltip Text="@HdhrTooltipText" Placement="Placement.Top">
-                    <MudLink Href="settings" Color="@HdhrStatusColor" Style="font-size:0.70rem;">
-                        @HdhrStatusLabel
-                    </MudLink>
-                </MudTooltip>
-            }
+            <MudLink OnClick="OpenAboutDialogAsync" Color="Color.Inherit" Underline="Underline.None"
+                     Style="font-size:0.70rem; opacity:0.8; cursor:pointer;">v@(BuildInfo.Version)</MudLink>
+            <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">@StreamsLabel</MudLink>
+            <MudLink Href="streams" Color="Color.Inherit" Style="font-size:0.70rem;">Clients @_clientCount</MudLink>
         </MudStack>
         <MudSpacer />
         @if (_channelStats is not null)
@@ -108,11 +145,27 @@
                 }
             </MudStack>
         }
+        @if (HasStatusDelays)
+        {
+            <MudTooltip Text="@StatusDelaySummary" Placement="Placement.Top">
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined" Style="font-size:0.70rem; margin-left:8px;">
+                    Status delayed
+                </MudChip>
+            </MudTooltip>
+        }
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
+            <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
+            <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
+        </MudStack>
     </MudAppBar>
 </MudLayout>
 
 @code {
+    private const int FooterHeightPx = 28;
+    private static readonly TimeSpan UiQueryTimeout = TimeSpan.FromSeconds(3);
+
     private bool _drawerOpen;
+    private bool _drawerWasOpen;
     private bool _isDarkMode;
     private ChannelMappingStatsDto? _channelStats;
     private bool _systemIsDark;
@@ -120,8 +173,15 @@
     private bool _eventPanelOpen;
     private SystemEventSummary _eventSummary = new(0, null);
     private bool _canViewEvents = true;
+    private bool _eventSummaryDelayed;
+    private bool _channelStatsDelayed;
+    private bool _lineupStatusDelayed;
 
-    private HdhrFooterStatus? _hdhrStatus;
+    private int _streamCount;
+    private int _clientCount;
+    private int? _providerMaxStreams;
+    private string _lineupStatusCode = string.Empty;
+    private bool _activeProfileHasProvider;
     private IDisposable? _eventSubscription;
     private readonly CancellationTokenSource _cts = new();
 
@@ -129,13 +189,10 @@
     private Task<AuthenticationState>? AuthStateTask { get; set; }
     private MudThemeProvider _themeProvider = default!;
 
-    private static readonly string _version =
-        typeof(MainLayout).Assembly
-            .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "unknown";
-
     private enum ThemeMode { Auto, Light, Dark }
     private ThemeMode _mode = ThemeMode.Auto;
+
+    private string DrawerViewportStyle => $"height: calc(100dvh - {FooterHeightPx}px); bottom: {FooterHeightPx}px;";
 
     private string ThemeModeIcon => _mode switch
     {
@@ -151,36 +208,75 @@
         _ => "Auto (system) — click for light"
     };
 
-    private string HdhrStatusLabel => _hdhrStatus switch
+    private string StreamsLabel => _providerMaxStreams.HasValue
+        ? $"Streams {_streamCount}/{_providerMaxStreams} max"
+        : $"Streams {_streamCount}";
+
+    private string HealthLabel => _lineupStatusCode switch
     {
-        null => string.Empty,
-        { DisabledByEnvironment: true } => "HDHR off (env)",
-        { Enabled: false } => "HDHR off",
-        _ => $"HDHR {_hdhrStatus.ActiveLeaseCount}/{_hdhrStatus.EffectiveTunerCount}"
+        LineupStatusCodes.Ok => "Healthy",
+        LineupStatusCodes.Refreshing => "Refreshing",
+        LineupStatusCodes.Switching => "Switching",
+        LineupStatusCodes.Degraded => "Degraded",
+        LineupStatusCodes.NoActiveProfile => "Setup Required",
+        LineupStatusCodes.NoActiveSnapshot => "Setup Required",
+        _ => "Unknown"
     };
 
-    private Color HdhrStatusColor => _hdhrStatus switch
+    private bool HasStatusDelays => _eventSummaryDelayed || _channelStatsDelayed || _lineupStatusDelayed;
+
+    private string StatusDelaySummary
     {
-        null => Color.Inherit,
-        { DisabledByEnvironment: true } => Color.Warning,
-        { Enabled: false } => Color.Default,
-        { ActiveLeaseCount: > 0 } => Color.Success,
-        _ => Color.Info
+        get
+        {
+            var delayed = new List<string>(3);
+            if (_eventSummaryDelayed) delayed.Add("system events");
+            if (_channelStatsDelayed) delayed.Add("channel stats");
+            if (_lineupStatusDelayed) delayed.Add("lineup status");
+            return delayed.Count == 0
+                ? "All status data is up to date."
+                : $"Delayed status data: {string.Join(", ", delayed)}.";
+        }
+    }
+
+    private string HealthIcon => _lineupStatusCode switch
+    {
+        LineupStatusCodes.Ok => Icons.Material.Filled.CheckCircle,
+        LineupStatusCodes.Refreshing or LineupStatusCodes.Switching => Icons.Material.Filled.Sync,
+        LineupStatusCodes.Degraded or LineupStatusCodes.NoActiveProfile or LineupStatusCodes.NoActiveSnapshot => Icons.Material.Filled.Warning,
+        _ => Icons.Material.Filled.Help
     };
 
-    private string HdhrTooltipText => _hdhrStatus is null
-        ? "HDHomeRun status unavailable."
-        : string.Join(" | ",
-        [
-            _hdhrStatus.DisabledByEnvironment ? "Disabled by M3UNDLE_HDHR_ENABLED" : _hdhrStatus.Enabled ? "Enabled" : "Disabled in Settings",
-            $"Tuners {_hdhrStatus.ActiveLeaseCount}/{_hdhrStatus.EffectiveTunerCount}",
-            _hdhrStatus.DiscoveryEnabled ? "Discovery on" : "Discovery off",
-            _hdhrStatus.SsdpEnabled ? "SSDP on" : "SSDP off",
-            _hdhrStatus.SiliconDustDiscoveryEnabled ? "SiliconDust on" : "SiliconDust off",
-            $"Base {_hdhrStatus.ResolvedBaseUrl}",
-            _hdhrStatus.RestartRequired ? "Restart required" : "Settings applied",
-            "Open Settings"
-        ]);
+    private Color HealthColor => _lineupStatusCode switch
+    {
+        LineupStatusCodes.Ok => Color.Success,
+        LineupStatusCodes.Refreshing or LineupStatusCodes.Switching => Color.Info,
+        LineupStatusCodes.Degraded or LineupStatusCodes.NoActiveProfile or LineupStatusCodes.NoActiveSnapshot => Color.Warning,
+        _ => Color.Default
+    };
+
+    private enum SetupStep { None, NeedsProvider, NeedsEnabledProvider, NeedsChannels }
+
+    private SetupStep CurrentSetupStep
+    {
+        get
+        {
+            if (_lineupStatusCode == LineupStatusCodes.NoActiveProfile)
+                return SetupStep.NeedsProvider;
+            if (_lineupStatusCode == LineupStatusCodes.NoActiveSnapshot && !_activeProfileHasProvider)
+                return SetupStep.NeedsEnabledProvider;
+            if (_lineupStatusCode == LineupStatusCodes.NoActiveSnapshot)
+                return SetupStep.NeedsChannels;
+            return SetupStep.None;
+        }
+    }
+
+    private string SetupBannerIcon => CurrentSetupStep switch
+    {
+        SetupStep.NeedsProvider => Icons.Material.Filled.AccountCircle,
+        SetupStep.NeedsEnabledProvider => Icons.Material.Filled.CloudQueue,
+        _ => Icons.Material.Filled.LiveTv,
+    };
 
     private static readonly MudTheme _theme = new()
     {
@@ -212,7 +308,8 @@
         },
         LayoutProperties = new LayoutProperties
         {
-            DrawerWidthLeft = "260px",
+            DrawerWidthLeft = "220px",
+            DrawerMiniWidthLeft = "56px",
         },
         PaletteDark = new PaletteDark
         {
@@ -243,23 +340,33 @@
         }
     };
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
 
-        var canAccess = await CanAccessApiAsync();
-        if (canAccess)
+    private async Task InitializeAsync()
+    {
+        try
         {
-            _ = LoadChannelStatsAsync();
-            _ = LoadHdhrStatusAsync();
-            _ = PollHdhrStatusAsync(_cts.Token);
-        }
+            var canAccess = await CanAccessApiAsync();
+            if (canAccess)
+            {
+                _ = LoadChannelStatsAsync();
+                _ = LoadLineupStatusAsync();
+                _ = PollStreamAndStatusAsync(_cts.Token);
+            }
 
-        var authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
-        _canViewEvents = !authEnabled || canAccess;
-        await RefreshEventCountAsync();
+            var authEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
+            _canViewEvents = !authEnabled || canAccess;
+            await RefreshEventCountAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task<bool> CanAccessApiAsync()
@@ -276,14 +383,39 @@
 
     private void OpenEventPanel()
     {
-        _eventPanelOpen = true;
+        if (!_eventPanelOpen)
+        {
+            _drawerWasOpen = _drawerOpen;
+            _drawerOpen = false;
+        }
+        _eventPanelOpen = !_eventPanelOpen;
+    }
+
+    private void OnEventPanelChanged(bool value)
+    {
+        _eventPanelOpen = value;
+        if (!value)
+        {
+            _drawerOpen = _drawerWasOpen;
+            _drawerWasOpen = false;
+        }
     }
 
     private async Task RefreshEventCountAsync()
     {
         try
         {
-            _eventSummary = await EventService.GetSummaryAsync(_cts.Token);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
+            _eventSummary = await Task.Run(() => EventService.GetSummaryAsync(ct));
+            _eventSummaryDelayed = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _eventSummaryDelayed = true;
+            Logger.LogWarning("Timed out loading event summary for layout status.");
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
@@ -293,29 +425,61 @@
     {
         try
         {
-            _channelStats = await StatsService.GetStatsAsync(_cts.Token);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
+            _channelStats = await Task.Run(() => StatsService.GetStatsAsync(ct));
+            _channelStatsDelayed = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _channelStatsDelayed = true;
+            Logger.LogWarning("Timed out loading channel stats for layout status.");
             await InvokeAsync(StateHasChanged);
         }
         catch (OperationCanceledException) { }
     }
 
-    private async Task LoadHdhrStatusAsync()
+    private void RefreshStreamCounts()
+    {
+        _streamCount = StreamingRegistry.GetActiveSessions().Count;
+        _clientCount = StreamingRegistry.GetActiveClients().Count;
+    }
+
+    private async Task LoadLineupStatusAsync()
     {
         try
         {
-            var state = await HdhrSettingsService.GetSettingsAsync(_cts.Token);
-            var activeLeaseCount = HdhrTunerManager.GetActiveLeases().Count;
-            _hdhrStatus = new HdhrFooterStatus(
-                state.Applied.Enabled,
-                state.DisabledByEnvironment,
-                state.Applied.EffectiveTunerCount,
-                activeLeaseCount,
-                state.Applied.DiscoveryEnabled,
-                state.Applied.SsdpEnabled,
-                state.Applied.SiliconDustDiscoveryEnabled,
-                state.Applied.ResolvedBaseUrl,
-                state.RestartRequired);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
+            var status = await Task.Run(() => LineupStatusService.GetStatusAsync(ct), ct);
+            _lineupStatusCode = status.Status;
+            _providerMaxStreams = status.Lineup?.ActiveProvider?.MaxConcurrentStreams;
+            _activeProfileHasProvider = status.Lineup?.ActiveProvider is not null;
+            _lineupStatusDelayed = false;
             await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _lineupStatusDelayed = true;
+            Logger.LogWarning("Timed out loading lineup status for layout status.");
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task PollStreamAndStatusAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                RefreshStreamCounts();
+                await InvokeAsync(StateHasChanged);
+            }
         }
         catch (OperationCanceledException) { }
     }
@@ -347,13 +511,13 @@
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.GroupFiltersChanged)
                 {
                     await LoadChannelStatsAsync();
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.RefreshCompleted)
                 {
                     _isRefreshing = false;
                     await LoadChannelStatsAsync();
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                     await InvokeAsync(StateHasChanged);
 
                     if (!evt.Succeeded && evt.ErrorSummary is not null)
@@ -366,28 +530,17 @@
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderActivated)
                 {
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)
                 {
-                    await LoadHdhrStatusAsync();
+                    await LoadLineupStatusAsync();
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.SystemEventPublished)
                 {
                     await RefreshEventCountAsync();
                 }
             }
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    private async Task PollHdhrStatusAsync(CancellationToken ct)
-    {
-        try
-        {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
-            while (await timer.WaitForNextTickAsync(ct))
-                await LoadHdhrStatusAsync();
         }
         catch (OperationCanceledException) { }
     }
@@ -435,6 +588,15 @@
         };
     }
 
+    private Task OpenAboutDialogAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        return DialogService.ShowAsync<AboutDialog>("About M3Undle", new DialogParameters<AboutDialog>
+        {
+            { x => x.BuildInfo, BuildInfo }
+        }, options);
+    }
+
     private void ToggleDrawer() => _drawerOpen = !_drawerOpen;
 
     private Task CloseDrawer()
@@ -443,14 +605,4 @@
         return Task.CompletedTask;
     }
 
-    private sealed record HdhrFooterStatus(
-        bool Enabled,
-        bool DisabledByEnvironment,
-        int EffectiveTunerCount,
-        int ActiveLeaseCount,
-        bool DiscoveryEnabled,
-        bool SsdpEnabled,
-        bool SiliconDustDiscoveryEnabled,
-        string ResolvedBaseUrl,
-        bool RestartRequired);
 }

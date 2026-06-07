@@ -419,6 +419,153 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_InitialProviderSync_BaselinesReviewState()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var filter = await verify.ProfileGroupFilters
+                .Include(x => x.ProviderGroup)
+                .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "News");
+
+            Assert.IsFalse(filter.IsNew);
+            Assert.AreEqual(LineupReviewSemantics.GroupModeManualReview, filter.ChannelMode);
+            Assert.AreEqual(LineupReviewSemantics.TrackingPolicyReview, filter.TrackingPolicy);
+            Assert.IsFalse(filter.TrackNewChannels, "TrackNewChannels should default to false so no channel rows are created until user opts in.");
+
+            // With TrackNewChannels = false (default), no channel rows should be created.
+            var rows = await verify.ProfileGroupChannelFilters
+                .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                .ToListAsync();
+
+            Assert.HasCount(0, rows);
+            Assert.AreEqual(0, await verify.ProfileGroupChannelFilters
+                .CountAsync(x => x.State == LineupReviewSemantics.ChannelStatePending));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_SubsequentRefresh_QueuesOnlyNewGroupsAndChannels()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleNewGroupAndChannelM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var filters = await verify.ProfileGroupFilters
+                .Include(x => x.ProviderGroup)
+                .Where(x => x.ProfileId == "profile-1")
+                .ToListAsync();
+
+            Assert.IsFalse(filters.Single(x => x.ProviderGroup.RawName == "News").IsNew);
+            Assert.IsTrue(filters.Single(x => x.ProviderGroup.RawName == "Sports").IsNew);
+
+            // With TrackNewChannels = false (default on all groups), no channel rows are queued.
+            var rows = await verify.ProfileGroupChannelFilters.ToListAsync();
+            Assert.HasCount(0, rows);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_RefreshesActiveProfileProvidersBeforeStandbyProviders()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            var activeProfile = NewProfile("profile-active");
+            activeProfile.IsActive = true;
+
+            var standbyProvider = NewProvider("provider-standby");
+            standbyProvider.Name = "aaa-standby";
+            standbyProvider.PlaylistUrl = "http://standby.example/playlist.m3u";
+            standbyProvider.XmltvUrl = "http://standby.example/xmltv.xml";
+
+            var activeProvider = NewProvider("provider-active");
+            activeProvider.Name = "zzz-active";
+            activeProvider.PlaylistUrl = "http://active.example/playlist.m3u";
+            activeProvider.XmltvUrl = "http://active.example/xmltv.xml";
+
+            var unlinkedProvider = NewProvider("provider-unlinked");
+            unlinkedProvider.Name = "aaa-unlinked";
+            unlinkedProvider.PlaylistUrl = "http://unlinked.example/playlist.m3u";
+            unlinkedProvider.XmltvUrl = "http://unlinked.example/xmltv.xml";
+
+            setup.Profiles.AddRange(
+                activeProfile,
+                NewProfile("profile-standby"));
+            setup.Providers.AddRange(
+                standbyProvider,
+                activeProvider,
+                unlinkedProvider);
+            setup.ProfileProviders.AddRange(
+                NewProfileProvider("provider-standby", "profile-standby"),
+                NewProfileProvider("provider-active", "profile-active"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            var handler = new TrackingHttpMessageHandler();
+            await using var db = fixture.CreateDbContext();
+            var builder = CreateBuilder(db, HttpStatusCode.OK, SampleM3u, tempDir, handler: handler);
+            await builder.RunAsync(CancellationToken.None);
+
+            CollectionAssert.AreEqual(
+                new[] { "active.example", "standby.example" },
+                handler.PlaylistRequestHosts);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_ProviderBackOnline_PublishesOnlyOnceForCurrentFailure()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -607,13 +754,25 @@ public sealed class SnapshotHandlingTests
                 seriesFilter.Decision = "exclude";
                 seriesFilter.UpdatedUtc = DateTime.UtcNow;
 
-                var newsChannels = await edit.ProfileGroupChannelFilters
-                    .Where(x => x.ProfileGroupFilterId == newsFilter.ProfileGroupFilterId)
+                // Since TrackNewChannels = false by default, no channel rows were auto-created.
+                // Directly insert included rows for the live news channels.
+                var nowEdit = DateTime.UtcNow;
+                var newsChannelIds = await edit.ProviderChannels
+                    .AsNoTracking()
+                    .Where(x => x.ProviderGroupId == newsFilter.ProviderGroupId && x.Active && x.ContentType == "live")
+                    .Select(x => x.ProviderChannelId)
                     .ToListAsync();
-                foreach (var cf in newsChannels)
+                foreach (var channelId in newsChannelIds)
                 {
-                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
-                    cf.UpdatedUtc = DateTime.UtcNow;
+                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                    {
+                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                        ProfileGroupFilterId = newsFilter.ProfileGroupFilterId,
+                        ProviderChannelId = channelId,
+                        State = LineupReviewSemantics.ChannelStateIncluded,
+                        CreatedUtc = nowEdit,
+                        UpdatedUtc = nowEdit,
+                    });
                 }
 
                 await edit.SaveChangesAsync();
@@ -702,13 +861,25 @@ public sealed class SnapshotHandlingTests
                 filter.IsNew = false;
                 filter.UpdatedUtc = DateTime.UtcNow;
 
-                var foxChannels = await edit.ProfileGroupChannelFilters
-                    .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                // Since TrackNewChannels = false by default, no channel rows were auto-created.
+                // Directly insert included rows for the live fox channels.
+                var nowEdit = DateTime.UtcNow;
+                var foxChannelIds = await edit.ProviderChannels
+                    .AsNoTracking()
+                    .Where(x => x.ProviderGroupId == filter.ProviderGroupId && x.Active && x.ContentType == "live")
+                    .Select(x => x.ProviderChannelId)
                     .ToListAsync();
-                foreach (var cf in foxChannels)
+                foreach (var channelId in foxChannelIds)
                 {
-                    cf.State = LineupReviewSemantics.ChannelStateIncluded;
-                    cf.UpdatedUtc = DateTime.UtcNow;
+                    edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                    {
+                        ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                        ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                        ProviderChannelId = channelId,
+                        State = LineupReviewSemantics.ChannelStateIncluded,
+                        CreatedUtc = nowEdit,
+                        UpdatedUtc = nowEdit,
+                    });
                 }
 
                 await edit.SaveChangesAsync();
@@ -761,19 +932,31 @@ public sealed class SnapshotHandlingTests
                     .Where(x => x.ProfileId == "profile-1"
                              && (x.ProviderGroup.RawName == "USA FOX" || x.ProviderGroup.RawName == "USA ABC"))
                     .ToListAsync();
+                // Since TrackNewChannels = false by default, no channel rows were auto-created.
+                // Directly insert included rows for each group's live channels.
+                var nowEdit = DateTime.UtcNow;
                 foreach (var filter in filters)
                 {
                     filter.Decision = LineupReviewSemantics.GroupDecisionInclude;
                     filter.IsNew = false;
-                    filter.UpdatedUtc = DateTime.UtcNow;
+                    filter.UpdatedUtc = nowEdit;
 
-                    var existingChannelFilters = await edit.ProfileGroupChannelFilters
-                        .Where(x => x.ProfileGroupFilterId == filter.ProfileGroupFilterId)
+                    var channelIds = await edit.ProviderChannels
+                        .AsNoTracking()
+                        .Where(x => x.ProviderGroupId == filter.ProviderGroupId && x.Active && x.ContentType == "live")
+                        .Select(x => x.ProviderChannelId)
                         .ToListAsync();
-                    foreach (var cf in existingChannelFilters)
+                    foreach (var channelId in channelIds)
                     {
-                        cf.State = LineupReviewSemantics.ChannelStateIncluded;
-                        cf.UpdatedUtc = DateTime.UtcNow;
+                        edit.ProfileGroupChannelFilters.Add(new ProfileGroupChannelFilter
+                        {
+                            ProfileGroupChannelFilterId = Guid.NewGuid().ToString(),
+                            ProfileGroupFilterId = filter.ProfileGroupFilterId,
+                            ProviderChannelId = channelId,
+                            State = LineupReviewSemantics.ChannelStateIncluded,
+                            CreatedUtc = nowEdit,
+                            UpdatedUtc = nowEdit,
+                        });
                     }
                 }
 
@@ -989,6 +1172,15 @@ public sealed class SnapshotHandlingTests
         "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US HD\n" +
         "http://example.com/stream/cnn\n";
 
+    private const string SampleNewGroupAndChannelM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 tvg-id=\"cnn.us\" tvg-name=\"CNN\" group-title=\"News\",CNN US\n" +
+        "http://example.com/stream/cnn\n" +
+        "#EXTINF:-1 tvg-id=\"cnn.intl\" tvg-name=\"CNN International\" group-title=\"News\",CNN International\n" +
+        "http://example.com/stream/cnn-intl\n" +
+        "#EXTINF:-1 tvg-id=\"espn.us\" tvg-name=\"ESPN\" group-title=\"Sports\",ESPN\n" +
+        "http://example.com/stream/espn\n";
+
     private const string SampleMixedM3u =
         "#EXTM3U\n" +
         "#EXTINF:-1 group-title=\"News\",Live News\n" +
@@ -1024,10 +1216,11 @@ public sealed class SnapshotHandlingTests
         HttpStatusCode statusCode,
         string content,
         string tempDir,
-        IEventService? eventService = null)
+        IEventService? eventService = null,
+        HttpMessageHandler? handler = null)
     {
-        var handler = new FakeHttpMessageHandler(statusCode, content);
-        var factory = new FakeHttpClientFactory(handler);
+        var effectiveHandler = handler ?? new FakeHttpMessageHandler(statusCode, content);
+        var factory = new FakeHttpClientFactory(effectiveHandler);
         var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
         var fetcher = new ProviderFetcher(
             factory,
@@ -1220,6 +1413,30 @@ public sealed class SnapshotHandlingTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(content),
+            });
+        }
+    }
+
+    private sealed class TrackingHttpMessageHandler : HttpMessageHandler
+    {
+        public List<string> PlaylistRequestHosts { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (request.RequestUri?.AbsolutePath.EndsWith("/playlist.m3u", StringComparison.OrdinalIgnoreCase) == true)
+                PlaylistRequestHosts.Add(request.RequestUri.Host);
+
+            var content = request.RequestUri?.AbsolutePath.EndsWith("/xmltv.xml", StringComparison.OrdinalIgnoreCase) == true
+                ? "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv></tv>"
+                : request.RequestUri?.AbsolutePath.EndsWith("/playlist.m3u", StringComparison.OrdinalIgnoreCase) == true
+                    ? SampleM3u
+                    : "{}";
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(content),
             });

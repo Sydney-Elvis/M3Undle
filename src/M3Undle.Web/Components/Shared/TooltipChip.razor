@@ -1,0 +1,49 @@
+@using Microsoft.AspNetCore.Components.Web
+
+<MudTooltip Text="@TooltipText" Placement="@Placement" Arrow="@Arrow" Disabled="@string.IsNullOrWhiteSpace(TooltipText)">
+    <MudChip T="string"
+             Size="@Size"
+             Color="@Color"
+             Variant="@Variant"
+             Icon="@Icon"
+             Style="@ComputedStyle"
+             Class="@Class"
+             OnClick="OnClick">
+        @Label
+    </MudChip>
+</MudTooltip>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter] public string? TooltipText { get; set; }
+    [Parameter] public Color Color { get; set; } = Color.Default;
+    [Parameter] public Variant Variant { get; set; } = Variant.Outlined;
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public string? Class { get; set; }
+    [Parameter] public Placement Placement { get; set; } = Placement.Top;
+    [Parameter] public bool Arrow { get; set; } = true;
+    [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
+
+    private string ComputedStyle
+    {
+        get
+        {
+            var baseStyle = Style?.Trim() ?? string.Empty;
+            if (!OnClick.HasDelegate)
+            {
+                return baseStyle;
+            }
+
+            if (string.IsNullOrEmpty(baseStyle))
+            {
+                return "cursor:pointer;";
+            }
+
+            return baseStyle.EndsWith(';')
+                ? $"{baseStyle}cursor:pointer;"
+                : $"{baseStyle}; cursor:pointer;";
+        }
+    }
+}

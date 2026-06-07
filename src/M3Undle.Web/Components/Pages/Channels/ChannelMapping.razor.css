@@ -1,0 +1,111 @@
+.panel-resize-handle {
+    width: 6px;
+    cursor: col-resize;
+    background: var(--mud-palette-divider);
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+
+.panel-resize-handle:hover {
+    background: var(--mud-palette-primary);
+}
+
+.panel-collapsed-strip {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: var(--mud-palette-surface);
+    border-left: 2px solid var(--mud-palette-divider);
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.panel-collapsed-strip:hover {
+    background: var(--mud-palette-action-hover);
+    border-left-color: var(--mud-palette-primary);
+}
+
+.panel-body-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--mud-palette-surface);
+    border-left: 1px solid var(--mud-palette-divider);
+    min-width: 0;
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 4px 6px 12px;
+    border-bottom: 1px solid var(--mud-palette-divider);
+    flex-shrink: 0;
+}
+
+.panel-channel-list {
+    overflow-y: auto;
+    flex: 1;
+    padding: 4px 0;
+}
+
+.panel-empty {
+    padding: 16px 12px;
+    font-size: 0.75rem;
+    color: var(--mud-palette-text-secondary);
+}
+
+.panel-channel-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    cursor: default;
+    min-width: 0;
+}
+
+.panel-channel-row:hover {
+    background: var(--mud-palette-action-hover);
+}
+
+.panel-channel-link {
+    cursor: pointer;
+}
+
+.ch-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.ch-dot-live {
+    background-color: var(--mud-palette-success);
+}
+
+.ch-dot-pending {
+    border: 2px solid var(--mud-palette-warning);
+    background: transparent;
+}
+
+.ch-num {
+    font-family: monospace;
+    font-size: 0.7rem;
+    color: var(--mud-palette-text-secondary);
+    flex-shrink: 0;
+    width: 34px;
+    text-align: right;
+}
+
+.ch-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}

@@ -1,4 +1,5 @@
 @using M3Undle.Web.Contracts.Providers
+@using M3Undle.Web.Components.ProviderForms
 @inject M3Undle.Web.Application.ProviderPageService ProviderPageService
 
 <MudDialog Style="min-width:620px">
@@ -54,6 +55,48 @@
                                   HelperText="e.g. http://yourserver.com:8080" />
                     <MudTextField Label="Username" @bind-Value="_model.XtreamUsername"
                                   Required="true" RequiredError="Username is required." />
+
+                    @if (!string.IsNullOrWhiteSpace(_passwordError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true">@_passwordError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_passwordSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">@_passwordSuccess</MudAlert>
+                    }
+                    @if (!_editingPassword)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                            <MudTextField T="string" Value="@("••••••••")" Label="Password"
+                                          ReadOnly="true" Style="flex:1" />
+                            <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                       Disabled="!_encryptionAvailable"
+                                       OnClick="StartPasswordEdit">Change</MudButton>
+                        </MudStack>
+                        @if (!_encryptionAvailable)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-n2">
+                                M3UNDLE_ENCRYPTION_KEY must be configured to change the password.
+                            </MudText>
+                        }
+                    }
+                    else
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudTextField @bind-Value="_newPassword" Label="New Password"
+                                          InputType="InputType.Password" Style="flex:1"
+                                          Disabled="_isChangingPassword" />
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       Disabled="@(_isChangingPassword || string.IsNullOrWhiteSpace(_newPassword))"
+                                       OnClick="ChangePasswordAsync">
+                                @(_isChangingPassword ? "Saving..." : "Save")
+                            </MudButton>
+                            <MudButton Variant="Variant.Text" Size="Size.Small"
+                                       Disabled="_isChangingPassword"
+                                       OnClick="CancelPasswordEdit">Cancel</MudButton>
+                        </MudStack>
+                    }
+
                     <MudSwitch @bind-Value="_model.XtreamIncludeXmltv" Color="Color.Primary"
                                Label="Include XMLTV guide from same server" />
                 }
@@ -69,30 +112,27 @@
                         </MudTooltip>
                     </MudStack>
                     <MudTextField Label="XMLTV URL (optional)" @bind-Value="_model.XmltvUrl" />
-                    <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent" />
-                    <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="2"
-                                  HelperText='e.g. {"X-Custom-Header":"value"}' />
                 }
 
-                <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800" />
-                <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_model.MaxConcurrentStreams" Min="1" Max="100"
-                                 HelperText="Leave blank to use the global setting" />
-
-                <MudSelect T="string" Label="Associated Profile" @bind-Value="_model.ProfileId"
-                           ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(None)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
+                <MudSelect T="string" Label="Associated Profile"
+                           Value="_model.ProfileId" ValueChanged="HandleProfileChanged"
+                           ToStringFunc="@(id => string.IsNullOrEmpty(id) || id == NewProfileSentinel
+                               ? "(None)"
+                               : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
                     <MudSelectItem T="string" Value="@string.Empty">(None)</MudSelectItem>
                     @foreach (var profile in AvailableProfiles)
                     {
                         <MudSelectItem T="string" Value="@profile.ProfileId">@profile.Name</MudSelectItem>
                     }
+                    <MudSelectItem T="string" Value="@NewProfileSentinel">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudIcon Icon="@Icons.Material.Filled.Add" Size="Size.Small" />
+                            <MudText>New Profile...</MudText>
+                        </MudStack>
+                    </MudSelectItem>
                 </MudSelect>
 
-                @if (!_showCreateProfile)
-                {
-                    <MudButton Variant="Variant.Text" Size="Size.Small" StartIcon="@Icons.Material.Filled.Add"
-                               OnClick="ShowCreateProfile" Style="align-self:flex-start">New Profile</MudButton>
-                }
-                else
+                @if (_showCreateProfile)
                 {
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
                         <MudTextField Label="New Profile Name" @bind-Value="_newProfileName" Style="flex:1"
@@ -104,68 +144,37 @@
                     </MudStack>
                 }
 
-                <MudDivider Class="my-1" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
-                <MudSwitch @bind-Value="_model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
-                <MudSwitch @bind-Value="_model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
-                <MudDivider Class="my-1" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
-                <MudSwitch @bind-Value="_model.ForceMpegTs" Color="Color.Warning"
-                           Label="Force MPEG-TS (override HLS)"
-                           For="@(() => _model.ForceMpegTs)" />
-                @if (_model.ForceMpegTs)
-                {
-                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                        Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
-                    </MudAlert>
-                }
-                <MudSwitch @bind-Value="_model.CleanRelayRemux" Color="Color.Warning"
-                           Label="Clean relay remux"
-                           For="@(() => _model.CleanRelayRemux)" />
-                @if (_model.CleanRelayRemux)
-                {
-                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                        Uses FFmpeg to remux live streams and repair timestamps. Adds CPU usage and some startup latency.
-                    </MudAlert>
-                }
+                <ProviderContentToggles @bind-IncludeVod="_model.IncludeVod"
+                                        @bind-IncludeSeries="_model.IncludeSeries" />
+
+                <ProviderConcurrentStreams @bind-LimitConcurrentStreams="_model.LimitConcurrentStreams"
+                                           @bind-ConcurrentStreamLimit="_model.ConcurrentStreamLimit" />
+
                 <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled" />
+
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default" Class="mt-1"
+                           StartIcon="@(_showAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                           OnClick="@(() => _showAdvanced = !_showAdvanced)">
+                    Advanced options
+                </MudButton>
+                <MudCollapse Expanded="_showAdvanced">
+                    <MudStack Spacing="2" Class="mt-1">
+                        @if (!Provider.IsXtreamProvider)
+                        {
+                            <MudTextField Label="User Agent (optional)" @bind-Value="_model.UserAgent"
+                                          HelperText="Custom User-Agent sent when fetching the playlist and streams. Leave blank to use the M3Undle default." />
+                            <MudTextField Label="Headers JSON (optional)" @bind-Value="_model.HeadersJson" Lines="2"
+                                          HelperText='Extra HTTP headers included with every request to this provider, e.g. {"X-Custom-Header":"value"}' />
+                        }
+                        <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds" Min="1" Max="1800"
+                                         HelperText="How long to wait for the provider to respond before giving up. 120 s is suitable for most providers." />
+                        <ProviderStreamFormat @bind-ForceMpegTs="_model.ForceMpegTs"
+                                              @bind-CleanRelayMode="_model.CleanRelayMode"
+                                              IsXtream="Provider.IsXtreamProvider" />
+                    </MudStack>
+                </MudCollapse>
             </MudStack>
         </MudForm>
-
-        @if (Provider.IsXtreamProvider)
-        {
-            <MudDivider Class="my-4" />
-            <MudText Typo="Typo.subtitle2" Class="mb-2">Change Password</MudText>
-
-            @if (!_encryptionAvailable)
-            {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-2">
-                    <MudText Typo="Typo.body2">
-                        <strong>M3UNDLE_ENCRYPTION_KEY is not set.</strong> Password changes require encryption to be configured.
-                    </MudText>
-                </MudAlert>
-            }
-            else
-            {
-                @if (!string.IsNullOrWhiteSpace(_passwordError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-2">@_passwordError</MudAlert>
-                }
-                @if (!string.IsNullOrWhiteSpace(_passwordSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Class="mb-2">@_passwordSuccess</MudAlert>
-                }
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-                    <MudTextField @bind-Value="_newPassword" Label="New Password" InputType="InputType.Password"
-                                  Style="flex:1" Disabled="_isChangingPassword" />
-                    <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                               Disabled="@(_isChangingPassword || string.IsNullOrWhiteSpace(_newPassword))"
-                               OnClick="ChangePasswordAsync">
-                        @(_isChangingPassword ? "Updating..." : "Update")
-                    </MudButton>
-                </MudStack>
-            }
-        }
     </DialogContent>
     <DialogActions>
         <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
@@ -183,10 +192,14 @@
     [Parameter] public List<ProviderDto> Providers { get; set; } = [];
     [Parameter] public EventCallback OnSaved { get; set; }
 
+    private const string NewProfileSentinel = "__new_profile__";
+
     private MudForm? _form;
     private bool _isSaving;
     private bool _isChangingPassword;
+    private bool _editingPassword;
     private bool _isUpgrading;
+    private bool _showAdvanced;
     private string? _error;
     private string? _passwordError;
     private string? _passwordSuccess;
@@ -220,11 +233,12 @@
                 XtreamIncludeXmltv = Provider.XtreamIncludeXmltv,
                 Enabled = Provider.Enabled,
                 TimeoutSeconds = Provider.TimeoutSeconds,
-                MaxConcurrentStreams = Provider.MaxConcurrentStreams,
+                LimitConcurrentStreams = Provider.MaxConcurrentStreams.HasValue,
+                ConcurrentStreamLimit = Provider.MaxConcurrentStreams ?? 1,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
-                CleanRelayRemux = string.Equals(Provider.CleanRelayMode, "remux", StringComparison.OrdinalIgnoreCase),
+                CleanRelayMode = NormalizeCleanRelayMode(Provider.CleanRelayMode),
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             }
             : new EditModel
@@ -236,20 +250,18 @@
                 HeadersJson = Provider.HeadersJson,
                 Enabled = Provider.Enabled,
                 TimeoutSeconds = Provider.TimeoutSeconds,
-                MaxConcurrentStreams = Provider.MaxConcurrentStreams,
+                LimitConcurrentStreams = Provider.MaxConcurrentStreams.HasValue,
+                ConcurrentStreamLimit = Provider.MaxConcurrentStreams ?? 1,
                 IncludeVod = Provider.IncludeVod,
                 IncludeSeries = Provider.IncludeSeries,
                 ForceMpegTs = Provider.ForceMpegTs,
-                CleanRelayRemux = string.Equals(Provider.CleanRelayMode, "remux", StringComparison.OrdinalIgnoreCase),
+                CleanRelayMode = NormalizeCleanRelayMode(Provider.CleanRelayMode),
                 ProfileId = Provider.AssociatedProfileIds.FirstOrDefault() ?? string.Empty,
             };
 
         if (Provider.IsXtreamProvider || Provider.XtreamDetectedCapable)
         {
-            try
-            {
-                _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync();
-            }
+            try { _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync(); }
             catch { _encryptionAvailable = false; }
         }
     }
@@ -280,10 +292,18 @@
 
     private void Cancel() => MudDialog.Cancel();
 
-    private void ShowCreateProfile()
+    private void HandleProfileChanged(string value)
     {
-        _newProfileName = string.Empty;
-        _showCreateProfile = true;
+        if (value == NewProfileSentinel)
+        {
+            _newProfileName = string.Empty;
+            _showCreateProfile = true;
+        }
+        else
+        {
+            _model.ProfileId = value;
+            _showCreateProfile = false;
+        }
     }
 
     private void CancelCreateProfile()
@@ -310,6 +330,38 @@
         finally { _isCreatingProfile = false; }
     }
 
+    private void StartPasswordEdit()
+    {
+        _newPassword = string.Empty;
+        _passwordError = null;
+        _passwordSuccess = null;
+        _editingPassword = true;
+    }
+
+    private void CancelPasswordEdit()
+    {
+        _newPassword = string.Empty;
+        _passwordError = null;
+        _editingPassword = false;
+    }
+
+    private async Task ChangePasswordAsync()
+    {
+        _passwordError = null;
+        _passwordSuccess = null;
+        _isChangingPassword = true;
+        try
+        {
+            var error = await ProviderPageService.UpdateXtreamPasswordAsync(Provider.ProviderId, _newPassword, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(error)) { _passwordError = error; return; }
+            _passwordSuccess = "Password updated.";
+            _newPassword = string.Empty;
+            _editingPassword = false;
+        }
+        catch (Exception ex) { _passwordError = $"Failed to update password: {ex.Message}"; }
+        finally { _isChangingPassword = false; }
+    }
+
     private async Task SaveAsync()
     {
         _error = null;
@@ -331,11 +383,11 @@
                     XtreamIncludeXmltv = _model.XtreamIncludeXmltv,
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
-                    MaxConcurrentStreams = _model.MaxConcurrentStreams,
+                    MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
-                    CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
+                    CleanRelayMode = _model.CleanRelayMode,
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -350,11 +402,11 @@
                     HeadersJson = NullIfEmpty(_model.HeadersJson),
                     Enabled = _model.Enabled,
                     TimeoutSeconds = _model.TimeoutSeconds,
-                    MaxConcurrentStreams = _model.MaxConcurrentStreams,
+                    MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
                     IncludeVod = _model.IncludeVod,
                     IncludeSeries = _model.IncludeSeries,
                     ForceMpegTs = _model.ForceMpegTs,
-                    CleanRelayMode = _model.CleanRelayRemux ? "remux" : "off",
+                    CleanRelayMode = _model.CleanRelayMode,
                     AssociateToProfileIds = profileIds,
                 };
             }
@@ -369,44 +421,36 @@
         finally { _isSaving = false; }
     }
 
-    private async Task ChangePasswordAsync()
-    {
-        _passwordError = null;
-        _passwordSuccess = null;
-        _isChangingPassword = true;
-        try
-        {
-            var error = await ProviderPageService.UpdateXtreamPasswordAsync(Provider.ProviderId, _newPassword, CancellationToken.None);
-            if (!string.IsNullOrWhiteSpace(error)) { _passwordError = error; return; }
-            _passwordSuccess = "Password updated successfully.";
-            _newPassword = string.Empty;
-        }
-        catch (Exception ex) { _passwordError = $"Failed to update password: {ex.Message}"; }
-        finally { _isChangingPassword = false; }
-    }
-
     private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 
     private sealed class EditModel
     {
         public string Name { get; set; } = string.Empty;
-        // URL/File fields
         public string? PlaylistUrl { get; set; }
         public string? XmltvUrl { get; set; }
         public string? UserAgent { get; set; }
         public string? HeadersJson { get; set; }
-        // Xtream fields
         public string XtreamBaseUrl { get; set; } = string.Empty;
         public string XtreamUsername { get; set; } = string.Empty;
         public bool XtreamIncludeXmltv { get; set; }
-        // Common
         public bool Enabled { get; set; } = true;
         public int TimeoutSeconds { get; set; } = 120;
-        public int? MaxConcurrentStreams { get; set; }
+        public bool LimitConcurrentStreams { get; set; }
+        public int ConcurrentStreamLimit { get; set; } = 1;
         public bool IncludeVod { get; set; }
         public bool IncludeSeries { get; set; }
         public bool ForceMpegTs { get; set; }
-        public bool CleanRelayRemux { get; set; }
+        public string CleanRelayMode { get; set; } = "auto";
         public string ProfileId { get; set; } = string.Empty;
+    }
+
+    private static string NormalizeCleanRelayMode(string? value)
+    {
+        if (string.Equals(value, "on", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "remux", StringComparison.OrdinalIgnoreCase))
+            return "on";
+        if (string.Equals(value, "off", StringComparison.OrdinalIgnoreCase))
+            return "off";
+        return "auto";
     }
 }

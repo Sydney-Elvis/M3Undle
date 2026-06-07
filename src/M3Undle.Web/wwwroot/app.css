@@ -1,5 +1,31 @@
 html, body {
     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    overflow-x: hidden;
+}
+
+/* MudBlazor sets overflow-y:auto on .mud-drawer but omits overflow-x.
+   Without this, nav item text wider than the drawer leaks sideways. */
+.mud-drawer {
+    overflow-x: hidden;
+}
+
+.mud-navmenu .mud-nav-link.active:not(.mud-nav-link-disabled),
+.mud-navmenu .mud-nav-link.mud-nav-link-active:not(.mud-nav-link-disabled) {
+    border-left: 3px solid #1FB6A6 !important;
+    background: linear-gradient(90deg, rgba(31, 182, 166, 0.30) 0%, rgba(31, 182, 166, 0.16) 60%, rgba(31, 182, 166, 0.08) 100%) !important;
+    box-shadow: inset 0 0 0 1px rgba(31, 182, 166, 0.25);
+    color: #E9FFFC !important;
+}
+
+.mud-navmenu .mud-nav-link:not(.active):not(.mud-nav-link-active) {
+    border-left: 3px solid transparent !important;
+}
+
+.mud-navmenu .mud-nav-link.active .mud-nav-link-icon,
+.mud-navmenu .mud-nav-link.mud-nav-link-active .mud-nav-link-icon {
+    background-color: rgba(31, 182, 166, 0.24);
+    border-radius: 999px;
+    padding: 4px;
 }
 
 html[data-prehydrate-theme="dark"] {
@@ -77,8 +103,21 @@ h1:focus {
         content: "An error has occurred."
     }
 
+.provider-row-highlight {
+    background-color: rgba(31, 182, 166, 0.12) !important;
+    outline: 1px solid rgba(31, 182, 166, 0.4);
+}
+
 .darker-border-checkbox.form-check-input {
     border-color: #929292;
+}
+
+/* When hovering the event? chip, highlight the group settings button in the same row */
+.ppv-settings-btn {
+    transition: color 0.15s ease;
+}
+.mud-paper:has(.ppv-hint-chip:hover) .ppv-settings-btn {
+    color: var(--mud-palette-warning) !important;
 }
 
 .form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {

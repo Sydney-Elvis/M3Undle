@@ -16,4 +16,9 @@ public sealed record StreamProviderSnapshot(
     int? LastUpstreamStatusCode = null,
     double? LastCooldownSeconds = null,
     string RelayMode = "Direct",
-    string? LastRelayFallbackReason = null);
+    string? LastRelayFallbackReason = null,
+    string? RelayPolicy = null,
+    string? RelayDecisionReason = null,
+    string? LastSafeStartKind = null,
+    double? LastRecoveryOutputHeldMs = null,
+    DateTimeOffset? LastRecoveryStartedUtc = null);

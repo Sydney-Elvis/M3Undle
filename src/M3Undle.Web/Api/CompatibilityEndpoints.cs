@@ -97,6 +97,9 @@ public static class CompatibilityEndpoints
             debug.MapGet("/streams/strikes", ServeDebugStrikesAsync);
             debug.MapGet("/streams/rca", ServeDebugStreamRcaAsync);
             debug.MapGet("/snapshots/idle", ServeDebugSnapshotIdleAsync);
+            debug.MapPost("/stream-health/events/seed", ServeDebugStreamHealthSeedAsync);
+            debug.MapDelete("/stream-health/events/{providerId}/{providerChannelId}", ServeDebugStreamHealthDeleteAsync);
+            debug.MapGet("/stream-health/{providerId}/{providerChannelId}", ServeDebugStreamHealthAsync);
         }
 
         return app;
@@ -1158,12 +1161,14 @@ public static class CompatibilityEndpoints
                 reasons.Add("no active snapshot for active profile");
         }
 
-        if (refreshTrigger.IsRefreshing)
+        if (refreshTrigger.IsRefreshing && reasons.Count > 0)
             reasons.Add("refresh in progress");
+
+        var reason = string.Join("; ", reasons);
 
         return reasons.Count == 0
             ? Results.Ok(new { ready = true })
-            : Results.Json(new { ready = false, reasons }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            : Results.Json(new { ready = false, reason, reasons }, statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     private static IResult ServeDebugStrikesAsync(UpstreamFailureStrikeStore strikeStore)
@@ -1215,6 +1220,102 @@ public static class CompatibilityEndpoints
             startedUtc = latestRun?.StartedUtc,
             completedUtc = latestRun?.FinishedUtc,
         }, JsonOptions);
+    }
+
+    private static async Task<IResult> ServeDebugStreamHealthSeedAsync(
+        StreamHealthSeedRequest request,
+        ApplicationDbContext db,
+        IStreamChannelHealthProfileService healthProfileService,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.ProviderId)
+            || string.IsNullOrWhiteSpace(request.ProviderChannelId)
+            || string.IsNullOrWhiteSpace(request.DisplayName)
+            || request.Events is null
+            || request.Events.Count == 0)
+        {
+            return Results.BadRequest(new
+            {
+                error = "providerId, providerChannelId, displayName, and at least one event are required.",
+            });
+        }
+
+        var rows = new List<StreamChannelHealthEvent>(request.Events.Count);
+        foreach (var seededEvent in request.Events)
+        {
+            if (!Enum.TryParse<StreamDiagnosticEventKind>(seededEvent.EventKind, ignoreCase: true, out var eventKind))
+            {
+                return Results.BadRequest(new
+                {
+                    error = $"Unknown stream health event kind '{seededEvent.EventKind}'.",
+                });
+            }
+
+            rows.Add(new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = request.ProviderId,
+                ProviderChannelId = request.ProviderChannelId,
+                DisplayName = request.DisplayName,
+                EventKind = eventKind.ToString(),
+                EventUtc = (seededEvent.EventUtc ?? DateTimeOffset.UtcNow).UtcDateTime,
+                SessionId = seededEvent.SessionId,
+                RelayMode = seededEvent.RelayMode,
+                RouteClassification = "debug_seed",
+                UpstreamFailureKind = seededEvent.UpstreamFailureKind,
+                ReconnectAttempt = seededEvent.ReconnectAttempt,
+                SafeStartKind = seededEvent.SafeStartKind,
+                ClientAbortAfterRecovery = seededEvent.ClientAbortAfterRecovery
+                    || eventKind == StreamDiagnosticEventKind.ClientAbortAfterRecovery,
+                ForcedRetune = seededEvent.ForcedRetune
+                    || eventKind is StreamDiagnosticEventKind.RecoveryForcedRetune
+                        or StreamDiagnosticEventKind.ControlledDownstreamRetune,
+                TsSyncLoss = seededEvent.TsSyncLoss
+                    || eventKind == StreamDiagnosticEventKind.MpegTsSyncLost,
+                CleanWatchDurationMs = seededEvent.CleanWatchDurationSeconds is { } cleanWatchSeconds
+                    ? Math.Max(0, cleanWatchSeconds) * 1000
+                    : null,
+            });
+        }
+
+        db.StreamChannelHealthEvents.AddRange(rows);
+        await db.SaveChangesAsync(cancellationToken);
+        healthProfileService.Invalidate(request.ProviderId, request.ProviderChannelId);
+        return Results.Ok(new
+        {
+            seeded = rows.Count,
+            request.ProviderId,
+            request.ProviderChannelId,
+        });
+    }
+
+    private static async Task<IResult> ServeDebugStreamHealthDeleteAsync(
+        string providerId,
+        string providerChannelId,
+        ApplicationDbContext db,
+        IStreamChannelHealthProfileService healthProfileService,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await db.StreamChannelHealthEvents
+            .Where(e => e.ProviderId == providerId && e.ProviderChannelId == providerChannelId)
+            .ExecuteDeleteAsync(cancellationToken);
+        healthProfileService.Invalidate(providerId, providerChannelId);
+        return Results.Ok(new { cleared = true, deleted, providerId, providerChannelId });
+    }
+
+    private static async Task<IResult> ServeDebugStreamHealthAsync(
+        string providerId,
+        string providerChannelId,
+        IStreamChannelHealthProfileService healthProfileService,
+        IOptions<ReconnectOptions> reconnectOptions,
+        CancellationToken cancellationToken)
+    {
+        var evidence = await healthProfileService.GetEvidenceAsync(
+            providerId,
+            providerChannelId,
+            reconnectOptions.Value,
+            cancellationToken);
+        return Results.Json(evidence, JsonOptions);
     }
 
     private static async Task ServeInternalRelayAsync(
@@ -1472,4 +1573,23 @@ public static class CompatibilityEndpoints
         IReadOnlyList<StreamProviderSnapshot> ActiveProviderStreams,
         IReadOnlyList<StreamCooldownDiagnostic> ActiveCooldowns,
         IReadOnlyList<StreamDiagnosticEvent> RecentEvents);
+
+    private sealed record StreamHealthSeedRequest(
+        string ProviderId,
+        string ProviderChannelId,
+        string DisplayName,
+        IReadOnlyList<StreamHealthSeedEvent> Events);
+
+    private sealed record StreamHealthSeedEvent(
+        string EventKind,
+        DateTimeOffset? EventUtc = null,
+        string? SessionId = null,
+        string? RelayMode = null,
+        string? UpstreamFailureKind = null,
+        int? ReconnectAttempt = null,
+        string? SafeStartKind = null,
+        bool ClientAbortAfterRecovery = false,
+        bool ForcedRetune = false,
+        bool TsSyncLoss = false,
+        double? CleanWatchDurationSeconds = null);
 }

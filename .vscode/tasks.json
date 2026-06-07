@@ -111,7 +111,7 @@
 						"permissions": "rw"
 					}
 				],
-					"customOptions": "--user root --label m3undle.run_mode=existing -p 5004:5004 -p 8080:8080 -p 1900:1900/udp -p 65001:65001/udp"
+					"customOptions": "--user root --label m3undle.run_mode=existing -p 5004:5004 -p 8080:8080 -p 1900:1900/udp"
 			},
 			"netCore": {
 				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",
@@ -157,7 +157,7 @@
 						"permissions": "rw"
 					}
 				],
-					"customOptions": "--user root --label m3undle.run_mode=force -p 5004:5004 -p 8080:8080 -p 1900:1900/udp -p 65001:65001/udp"
+					"customOptions": "--user root --label m3undle.run_mode=force -p 5004:5004 -p 8080:8080 -p 1900:1900/udp"
 			},
 			"netCore": {
 				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj",

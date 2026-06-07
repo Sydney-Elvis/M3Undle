@@ -1,0 +1,265 @@
+@attribute [StreamRendering]
+@page "/hdhr"
+@using M3Undle.Web.Application
+@inject NavigationManager Nav
+@inject HdHomeRunDeviceService HdHomeRunDeviceService
+@inject IHdHomeRunSettingsService HdHomeRunSettings
+@inject EndpointUrlService EndpointUrlService
+@implements IDisposable
+
+<PageTitle>HDHomeRun — M3Undle</PageTitle>
+
+<MudText Typo="Typo.h5" Class="mb-1">HDHomeRun</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    Virtual HDHomeRun device identity and endpoint URLs. Manage settings on the
+    <MudLink Href="settings">Settings → HDHomeRun</MudLink> page.
+</MudText>
+
+@if (_isLoading)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (!_isEnabled)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        HDHomeRun emulation is disabled. Enable it on the
+        <MudLink Href="settings">Settings → HDHomeRun</MudLink> page.
+    </MudAlert>
+}
+else
+{
+    <MudStack Spacing="4">
+
+        @* ── Device Identity ─────────────────────────────────────────── *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3">Device Identity</MudText>
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Friendly name</MudText>
+                    <MudText Typo="Typo.body2">@_descriptor?.FriendlyName</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Device ID</MudText>
+                    <MudText Typo="Typo.body2" Style="font-family:monospace;">@_descriptor?.DeviceId</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Model</MudText>
+                    <MudText Typo="Typo.body2">@_descriptor?.ModelNumber</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">HDHR tuners</MudText>
+                    <MudText Typo="Typo.body2">@_descriptor?.TunerCount</MudText>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Base URL</MudText>
+                    <MudText Typo="Typo.body2" Style="word-break:break-all;">@(_settingsState?.Applied.ResolvedBaseUrl ?? Nav.BaseUri.TrimEnd('/'))</MudText>
+                </MudItem>
+                @if (!string.IsNullOrWhiteSpace(_settingsState?.Saved.AdvertisedBaseUrl))
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Advertised URL (configured)</MudText>
+                        <MudText Typo="Typo.body2" Style="word-break:break-all;">@_settingsState.Saved.AdvertisedBaseUrl</MudText>
+                    </MudItem>
+                }
+            </MudGrid>
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mt-3">
+                Some clients (Jellyfin, Plex) may display this device as
+                <strong>HDHomeRun @_descriptor?.DeviceId</strong> instead of the friendly name.
+                If you see an unexpected device in your client, compare its Device ID to the one shown here.
+            </MudAlert>
+        </MudPaper>
+
+        @* ── Discovery Status ────────────────────────────────────────── *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3">Discovery Status</MudText>
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">HDHR</MudText>
+                    <StatusChip Label="@(_isEnabled ? "Enabled" : "Disabled")"
+                                Size="Size.Small"
+                                Color="@(_isEnabled ? Color.Success : Color.Default)"
+                                Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">SSDP discovery</MudText>
+                    <StatusChip Label="@(_runtimeSnapshot?.SsdpEnabled == true ? "Enabled" : "Disabled")"
+                                Size="Size.Small"
+                                Color="@(_runtimeSnapshot?.SsdpEnabled == true ? Color.Success : Color.Default)"
+                                Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">SiliconDust discovery</MudText>
+                    <StatusChip Label="@(_runtimeSnapshot?.SiliconDustDiscoveryEnabled == true ? "Enabled" : "Disabled")"
+                                Size="Size.Small"
+                                Color="@(_runtimeSnapshot?.SiliconDustDiscoveryEnabled == true ? Color.Success : Color.Default)"
+                                Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+
+            @if (DiscoveryWarnings.Count > 0)
+            {
+                <MudStack Spacing="1" Class="mt-3">
+                    @foreach (var w in DiscoveryWarnings)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">@w</MudAlert>
+                    }
+                </MudStack>
+            }
+        </MudPaper>
+
+        @* ── HDHR URLs ───────────────────────────────────────────────── *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3">HDHR Endpoints</MudText>
+            <MudStack Spacing="3">
+                <div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Discover JSON</MudText>
+                    <EndpointCopyRow DefaultUrl="@HdhrUrl("discover.json")" ExtraVariants="@GetHdhrUrlVariants("discover.json")" />
+                </div>
+                <div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Device XML</MudText>
+                    <EndpointCopyRow DefaultUrl="@HdhrUrl("device.xml")" ExtraVariants="@GetHdhrUrlVariants("device.xml")" />
+                </div>
+                <div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Lineup JSON</MudText>
+                    <EndpointCopyRow DefaultUrl="@HdhrUrl("lineup.json")" ExtraVariants="@GetHdhrUrlVariants("lineup.json")" />
+                </div>
+                <div>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Lineup Status</MudText>
+                    <EndpointCopyRow DefaultUrl="@HdhrUrl("lineup_status.json")" ExtraVariants="@GetHdhrUrlVariants("lineup_status.json")" />
+                </div>
+            </MudStack>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-3">
+                Use the Discover JSON URL in clients that support manual HDHomeRun device entry.
+                Some clients auto-discover via SSDP or SiliconDust broadcast — no URL needed in that case.
+            </MudText>
+        </MudPaper>
+
+        @* ── Client Setup Notes ──────────────────────────────────────── *@
+        <MudPaper Class="pa-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3">Client Setup Notes</MudText>
+            <MudStack Spacing="2">
+                <div>
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Jellyfin</MudText>
+                    <MudText Typo="Typo.body2">
+                        Add M3Undle as a Live TV source by selecting <strong>HDHomeRun</strong> tuner type.
+                        If auto-discovery does not find the device, use the manual Discover JSON URL above.
+                        Jellyfin may display the device as
+                        <strong>HDHomeRun @_descriptor?.DeviceId</strong>.
+                    </MudText>
+                </div>
+                <MudDivider />
+                <div>
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">NextPVR</MudText>
+                    <MudText Typo="Typo.body2">
+                        NextPVR may show individual tuners as
+                        <strong>HDHomeRun @(_descriptor?.DeviceId)-0</strong>,
+                        <strong>HDHomeRun @(_descriptor?.DeviceId)-1</strong>, etc.
+                        The number at the end is the tuner index — this is normal behavior.
+                    </MudText>
+                </div>
+                <MudDivider />
+                <div>
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Identifying the Device</MudText>
+                    <MudText Typo="Typo.body2">
+                        If your client shows a device by Device ID rather than friendly name,
+                        compare the ID shown in the client to the <strong>Device ID</strong> field above.
+                        You can change the friendly name on the
+                        <MudLink Href="settings">Settings → HDHomeRun</MudLink> page.
+                    </MudText>
+                </div>
+            </MudStack>
+        </MudPaper>
+
+    </MudStack>
+}
+
+@code {
+    private bool _isLoading = true;
+    private bool _isEnabled;
+    private HdHomeRunDeviceDescriptor? _descriptor;
+    private HdHomeRunRuntimeSnapshot? _runtimeSnapshot;
+    private HdhrSettingsState? _settingsState;
+    private readonly CancellationTokenSource _cts = new();
+
+    private string HdhrBaseUrl => _runtimeSnapshot?.ResolvedBaseUrl.TrimEnd('/')
+        ?? Nav.BaseUri.TrimEnd('/');
+
+    private string HdhrUrl(string path) => $"{HdhrBaseUrl}/hdhr/{path}";
+
+    private IReadOnlyList<EndpointUrlVariant> GetHdhrUrlVariants(string endpoint)
+    {
+        var variants = new List<EndpointUrlVariant>();
+
+        var dockerBase = EndpointUrlService.GetDockerBaseUrl();
+        if (dockerBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy Docker URL", $"{dockerBase}/hdhr/{endpoint}"));
+
+        var externalBase = EndpointUrlService.GetExternalBaseUrl();
+        if (externalBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy External URL", $"{externalBase}/hdhr/{endpoint}"));
+
+        return variants;
+    }
+
+    private IReadOnlyList<string> DiscoveryWarnings
+    {
+        get
+        {
+            var warnings = new List<string>();
+
+            if (_runtimeSnapshot is not null)
+            {
+                if (!_runtimeSnapshot.DiscoveryEnabled)
+                    warnings.Add("Network discovery (SSDP and SiliconDust) is disabled. Clients must add the device manually using the Discover JSON URL.");
+
+                var resolvedBase = _runtimeSnapshot.ResolvedBaseUrl;
+                if (string.IsNullOrWhiteSpace(resolvedBase)
+                    || resolvedBase.Contains("localhost", StringComparison.OrdinalIgnoreCase)
+                    || resolvedBase.Contains("127.0.0.1"))
+                {
+                    warnings.Add("No non-loopback base URL is configured. Remote clients may not be able to reach stream URLs embedded in lineup responses. Set an Advertised Base URL in Settings → HDHomeRun.");
+                }
+            }
+
+            return warnings;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isEnabled = HdHomeRunDeviceService.IsEnabled;
+
+        if (!RendererInfo.IsInteractive)
+            return;
+
+        _ = LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            var ct = _cts.Token;
+            _settingsState = await Task.Run(() => HdHomeRunSettings.GetSettingsAsync(ct), ct);
+
+            if (_isEnabled)
+            {
+                _descriptor = await Task.Run(() => HdHomeRunDeviceService.GetDeviceDescriptorAsync(ct), ct);
+                _runtimeSnapshot = HdHomeRunDeviceService.GetRuntimeSnapshot();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            _isLoading = false;
+            try { await InvokeAsync(StateHasChanged); } catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+}

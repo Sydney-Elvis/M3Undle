@@ -141,6 +141,22 @@ public sealed class StreamingOptionsValidatorTests
         Assert.IsFalse(result.Succeeded);
     }
 
+    [TestMethod]
+    public void ReconnectOptions_RecoveryOutputHoldLimitZero_Fails()
+    {
+        var options = new ReconnectOptions { RecoveryOutputHoldLimit = TimeSpan.Zero };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void ReconnectOptions_RecoverySafeStartSearchLimitBelowPacketSize_Fails()
+    {
+        var options = new ReconnectOptions { RecoverySafeStartSearchLimitBytes = 187 };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
     // ── GeneratedHlsOptionsValidator ──────────────────────────────────────────
 
     [TestMethod]

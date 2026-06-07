@@ -155,14 +155,65 @@ public sealed class EventServiceTests
         Assert.AreEqual(Color.Error, SystemEventBadgePresentation.ColorFor(new SystemEventSummary(1, SystemEventSeverity.Error)));
     }
 
+    [TestMethod]
+    public void SystemEventPanelGrouping_CollapsesSameTypeAcrossAllTimeBuckets()
+    {
+        var now = new DateTime(2026, 05, 10, 12, 0, 0, DateTimeKind.Utc);
+        var events = new[]
+        {
+            NewEvent("latest",  SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddMinutes(-12)),
+            NewEvent("17h-a",   SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddHours(-17)),
+            NewEvent("17h-b",   SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddHours(-17).AddMinutes(-20)),
+            NewEvent("21h-a",   SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddHours(-21)),
+            NewEvent("21h-b",   SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddHours(-21).AddMinutes(-5)),
+            NewEvent("21h-c",   SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddHours(-21).AddMinutes(-10)),
+            NewEvent("21h-d",   SystemEventTypes.AppRestarted, SystemEventSeverity.Info, now.AddHours(-21).AddMinutes(-30)),
+        };
+
+        var grouped = SystemEventPanelGrouping.Group(events, now, SystemEventPanelGrouping.RelativeTime);
+
+        Assert.HasCount(1, grouped);
+        Assert.AreEqual("12m ago", grouped[0].RelativeTime);   // representative = newest (first in list)
+        Assert.AreEqual(7, grouped[0].TotalOccurrences);
+        Assert.AreEqual(7, grouped[0].EventIds.Count);
+    }
+
+    [TestMethod]
+    public void SystemEventPanelGrouping_MergesSameTypeAcrossGapsKeepsDifferentTypeSeparate()
+    {
+        var now = new DateTime(2026, 05, 10, 12, 0, 0, DateTimeKind.Utc);
+        var events = new[]
+        {
+            NewEvent("restart-a", SystemEventTypes.AppRestarted, SystemEventSeverity.Info,    now.AddHours(-1)),
+            NewEvent("login",     SystemEventTypes.LoginFailed,  SystemEventSeverity.Warning, now.AddHours(-1)),
+            NewEvent("restart-b", SystemEventTypes.AppRestarted, SystemEventSeverity.Info,    now.AddHours(-1)),
+        };
+
+        var grouped = SystemEventPanelGrouping.Group(events, now, SystemEventPanelGrouping.RelativeTime);
+
+        Assert.HasCount(2, grouped);
+        var restartGroup = grouped.First(g => g.Event.EventType == SystemEventTypes.AppRestarted);
+        var loginGroup   = grouped.First(g => g.Event.EventType == SystemEventTypes.LoginFailed);
+        Assert.AreEqual(2, restartGroup.TotalOccurrences);
+        Assert.AreEqual(1, loginGroup.TotalOccurrences);
+        CollectionAssert.AreEquivalent(new[] { "restart-a", "restart-b" }, restartGroup.EventIds.ToArray());
+    }
+
     private static SystemEvent NewEvent(string id, string eventType, SystemEventSeverity severity, DateTime occurredAt) => new()
     {
         SystemEventId = id,
         EventType = eventType,
         Severity = severity.ToString(),
-        Title = id,
+        Title = TitleFor(eventType),
         OccurredAt = occurredAt,
         OccurrenceCount = 1,
+    };
+
+    private static string TitleFor(string eventType) => eventType switch
+    {
+        SystemEventTypes.AppRestarted => "Application started (v1.0.0-alpha.7)",
+        SystemEventTypes.LoginFailed => "Login failed",
+        _ => eventType,
     };
 
     private static async Task AssertThrowsAsync<TException>(Func<Task> action)

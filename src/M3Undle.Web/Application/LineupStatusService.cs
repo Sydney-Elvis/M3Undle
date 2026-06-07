@@ -36,7 +36,6 @@ internal sealed class LineupStatusService(
         var activeProfile = await db.Profiles
             .AsNoTracking()
             .Where(x => x.IsActive && x.Enabled)
-            .OrderByDescending(x => x.UpdatedUtc)
             .Select(x => new ActiveProfileInfo(x.ProfileId, x.Name, x.UpdatedUtc))
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -45,20 +44,12 @@ internal sealed class LineupStatusService(
         Provider? activeProvider = null;
         if (activeProfileId is not null)
         {
-            var profileProvider = await db.ProfileProviders
+            activeProvider = await db.ProfileProviders
                 .AsNoTracking()
-                .Where(x => x.ProfileId == activeProfileId && x.Enabled)
+                .Where(x => x.ProfileId == activeProfileId && x.Enabled && x.Provider.Enabled)
                 .OrderBy(x => x.Priority)
+                .Select(x => x.Provider)
                 .FirstOrDefaultAsync(cancellationToken);
-
-            if (profileProvider is not null)
-            {
-                activeProvider = await db.Providers
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(
-                        x => x.ProviderId == profileProvider.ProviderId && x.Enabled,
-                        cancellationToken);
-            }
         }
 
         var activeSnapshot = activeProfileId is null
@@ -91,7 +82,7 @@ internal sealed class LineupStatusService(
 
         var activeProviderInfo = activeProvider is null
             ? null
-            : new ActiveProviderInfo(activeProvider.ProviderId, activeProvider.Name);
+            : new ActiveProviderInfo(activeProvider.ProviderId, activeProvider.Name, activeProvider.MaxConcurrentStreams);
 
         var switchState = ComputeSwitchState(activeProfile, activeProviderInfo, activeSnapshot, lastRefresh, isRefreshing);
         var lineupStatus = ComputeLineupStatus(activeProfile, activeSnapshot, lastRefresh, isRefreshing);
@@ -128,7 +119,7 @@ internal sealed class LineupStatusService(
         if (isRefreshing)
             return LineupStatusCodes.Refreshing;
 
-        if (activeSnapshot is null)
+        if (activeSnapshot is null || activeSnapshot.LiveChannelCount <= 0)
             return LineupStatusCodes.NoActiveSnapshot;
 
         if (lastRefresh?.Status == "fail")
@@ -186,7 +177,7 @@ internal sealed record LineupStatusInfo(
 
 internal sealed record ActiveProfileInfo(string ProfileId, string Name, DateTime UpdatedUtc);
 
-internal sealed record ActiveProviderInfo(string ProviderId, string Name);
+internal sealed record ActiveProviderInfo(string ProviderId, string Name, int? MaxConcurrentStreams);
 
 internal sealed record ActiveSnapshotInfo(
     string SnapshotId,

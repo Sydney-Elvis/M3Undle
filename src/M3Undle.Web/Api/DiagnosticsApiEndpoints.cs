@@ -2,8 +2,10 @@ using M3Undle.Web.Application;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
+using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.Observability;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Api;
 
@@ -17,10 +19,32 @@ public static class DiagnosticsApiEndpoints
 
         group.MapGet("/providers", GetProvidersAsync).WithSummary("Get provider diagnostics");
         group.MapGet("/streams", GetStreams).WithSummary("Get stream diagnostics");
+        group.MapGet("/streams/{sessionId}/health-evidence", GetStreamHealthEvidenceAsync)
+            .WithSummary("Get stream channel health evidence for a session");
         group.MapGet("/lineup", GetLineupAsync).WithSummary("Get lineup diagnostics");
         group.MapGet("/epg", GetEpgAsync).WithSummary("Get EPG diagnostics");
 
         return app;
+    }
+
+    private static async Task<IResult> GetStreamHealthEvidenceAsync(
+        string sessionId,
+        StreamingRegistry registry,
+        IStreamChannelHealthProfileService healthProfileService,
+        IOptions<ReconnectOptions> reconnectOptions,
+        CancellationToken cancellationToken)
+    {
+        var session = registry.TryGetSession(sessionId);
+        if (session is null)
+            return TypedResults.NotFound();
+
+        var evidence = await healthProfileService.GetEvidenceAsync(
+            session.ProviderId,
+            session.ProviderChannelId,
+            reconnectOptions.Value,
+            cancellationToken);
+
+        return Results.Json(evidence);
     }
 
     private static async Task<IResult> GetProvidersAsync(

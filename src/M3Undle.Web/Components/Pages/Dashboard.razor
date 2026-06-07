@@ -4,14 +4,15 @@
 @using M3Undle.Web.Application
 @using M3Undle.Web.Contracts
 @inject NavigationManager Nav
-@inject IJSRuntime JS
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
-@inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @inject DashboardStatsService DashboardStats
 @inject LineupStatusService StatusService
 @inject IRefreshScheduleService RefreshScheduleService
+@inject HdHomeRunDeviceService HdHomeRunDeviceService
+@inject EndpointUrlService EndpointUrlService
+@inject IServiceScopeFactory ScopeFactory
 @inject PersistentComponentState ApplicationState
 @implements IDisposable
 
@@ -22,365 +23,565 @@
     <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_loadError</MudAlert>
 }
 
+@if (HasTodoItems)
+{
+    <MudAlert Severity="@TodoAlertSeverity" Variant="Variant.Outlined" Class="mb-4" Icon="@Icons.Material.Filled.Warning">
+        <MudStack Spacing="2">
+            <div>
+                <MudText Typo="Typo.h6">Needs Attention</MudText>
+            </div>
+
+            <MudStack Spacing="1">
+                @foreach (var ep in _dashboardStats?.ExpiringProviders ?? [])
+                {
+                    var daysLeft = (ep.ExpiresUtc - DateTime.UtcNow).TotalDays;
+                    var expirationText = daysLeft < 0
+                        ? $"expired on {ep.ExpiresUtc:yyyy-MM-dd}"
+                        : daysLeft < 1
+                            ? $"expires today ({ep.ExpiresUtc:yyyy-MM-dd})"
+                            : $"expires in {(int)daysLeft + 1}d on {ep.ExpiresUtc:yyyy-MM-dd}";
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.EventBusy" Size="Size.Small" Color="@(daysLeft <= 0 ? Color.Error : Color.Warning)" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>Provider subscription @expirationText.</strong>
+                            Renew provider "@ep.ProviderName" to avoid stream outages, then update it on <MudLink Href="providers">Providers</MudLink>.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (_dashboardStats?.GroupsPendingReview > 0)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.Rule" Size="Size.Small" Color="Color.Info" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>@_dashboardStats.GroupsPendingReview new group@(_dashboardStats.GroupsPendingReview == 1 ? "" : "s") need review.</strong>
+                            Open <MudLink Href="channels/mapping">Channel Mapping</MudLink> to include or exclude them.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (_dashboardStats?.ChannelsPendingReview > 0)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.PlaylistAddCheck" Size="Size.Small" Color="Color.Info" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>@_dashboardStats.ChannelsPendingReview new channel@(_dashboardStats.ChannelsPendingReview == 1 ? "" : "s") need review.</strong>
+                            Open <MudLink Href="channels/review">Channel Review</MudLink> to approve or dismiss them.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @if (_dashboardStats?.RefreshFailed == true)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>Last refresh failed.</strong>
+                            M3Undle is serving the last known-good version. Fix the provider or source issue, then run another refresh.
+                        </MudText>
+                    </MudStack>
+                }
+            </MudStack>
+        </MudStack>
+    </MudAlert>
+}
+
 <MudGrid Spacing="3">
-    <!-- System Status -->
+    <!-- Selected Profile -->
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
-            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
-                <MudText Typo="Typo.h6">System Status</MudText>
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                    @if (_streamSessions > 0)
-                    {
-                        <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.FiberManualRecord"
-                                 Size="Size.Small" OnClick="@(() => Nav.NavigateTo("streams"))">
-                            @_streamSessions session@(_streamSessions == 1 ? "" : "s"), @_streamClients client@(_streamClients == 1 ? "" : "s")
-                        </MudChip>
-                    }
-                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="LoadAllAsync" Disabled="_isLoading" />
-                </MudStack>
-            </MudStack>
+            <MudText Typo="Typo.h6" Class="mb-3">Selected Profile</MudText>
 
             @if (_isLoading)
             {
                 <MudProgressCircular Indeterminate="true" />
             }
-            else if (_status is null)
-            {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">Status unavailable.</MudAlert>
-            }
             else
             {
                 <MudStack Spacing="3">
+                    @{
+                        var selectedProfile = SelectedProfileSummary;
+                        var visibleProfiles = VisibleProfiles;
+                    }
+
+                    @* Profile chips + toggle *@
                     <div>
-                        <MudChip T="string"
-                                 Color="@LineupStatusChipColor(_status.Status)"
-                                 Icon="@LineupStatusChipIcon(_status.Status)">
-                            @LineupStatusLabel(_status.Status)
-                        </MudChip>
+                        <MudChipSet T="string"
+                                    SelectionMode="SelectionMode.SingleSelection"
+                                    @bind-SelectedValue="_selectedProfileId"
+                                    CheckMark="true"
+                                    Class="mb-1">
+                            @foreach (var profile in visibleProfiles)
+                            {
+                                var chipColor = profile.HealthStatus == ProfileHealthStatus.Degraded
+                                    ? Color.Warning
+                                    : profile.IsPublished
+                                        ? Color.Success
+                                        : Color.Default;
+                                <MudTooltip Text="@(profile.IsActive ? "Main profile — used by default M3U/XMLTV endpoints" : null)"
+                                            Placement="Placement.Top"
+                                            Disabled="@(!profile.IsActive)">
+                                    <MudChip T="string"
+                                             Value="@profile.ProfileId"
+                                             Color="@chipColor"
+                                             Variant="@(profile.IsActive ? Variant.Filled : Variant.Outlined)"
+                                             Style="cursor:pointer;">
+                                        @if (profile.IsActive)
+                                        {
+                                            <MudText Typo="Typo.caption" Style="font-weight:700; margin-right:4px; opacity:0.85;">MAIN</MudText>
+                                        }
+                                        @profile.DisplayName
+                                    </MudChip>
+                                </MudTooltip>
+                            }
+                        </MudChipSet>
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudSwitch T="bool"
+                                       Value="_showAllProfiles"
+                                       ValueChanged="@OnShowAllProfilesChanged"
+                                       Size="Size.Small"
+                                       Color="Color.Primary"
+                                       Label="Show all profiles"
+                                       Style="font-size:0.75rem;" />
+                        </MudStack>
                     </div>
 
                     <MudDivider />
 
-                    @{ var lineup = _status.Lineup; }
-
-                    @if (lineup?.ActiveProfile is not null)
+                    @if (selectedProfile is null)
                     {
-                        <MudStack Spacing="0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Active Profile</MudText>
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                <MudText Typo="Typo.body1">@lineup.ActiveProfile.Name</MudText>
-                                @if (SwitchStateLabel(lineup.SwitchState) is { } switchLabel)
-                                {
-                                    <MudChip T="string" Size="Size.Small"
-                                             Color="@SwitchStateChipColor(lineup.SwitchState)"
-                                             Variant="Variant.Outlined">
-                                        @switchLabel
-                                    </MudChip>
-                                }
-                            </MudStack>
-                        </MudStack>
-
-                        <MudStack Spacing="0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Provider Expiration</MudText>
-                            @if (_dashboardStats?.ActiveProfileProviderExpiresUtc is { } expiresUtc)
-                            {
-                                <MudChip T="string"
-                                         Size="Size.Small"
-                                         Color="@ProviderExpirationChipColor(expiresUtc)"
-                                         Variant="Variant.Outlined"
-                                         Style="align-self: flex-start;">
-                                    @ProviderExpirationLabel(expiresUtc)
-                                </MudChip>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.body2" Color="Color.Secondary">Not detected</MudText>
-                            }
-                        </MudStack>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">No profile selected</MudText>
                     }
                     else
                     {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            No active profile — <MudLink Href="providers">add a provider</MudLink> or go to <MudLink Href="profiles">Profiles</MudLink> to set one active.
-                        </MudAlert>
-                    }
-
-                    <MudStack Spacing="1">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Last Refresh</MudText>
-                        @if (ShowRefreshing)
-                        {
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
-                                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                                <MudText Typo="Typo.body2">Refreshing… @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
-                                <MudButton Size="Size.Small"
-                                           Variant="Variant.Outlined"
-                                           Color="Color.Error"
-                                           StartIcon="@Icons.Material.Filled.Cancel"
-                                           OnClick="CancelRefreshAsync"
-                                           Disabled="_isCancelling">
-                                    @(_isCancelling ? "Cancelling…" : "Cancel")
-                                </MudButton>
-                            </MudStack>
-                            @if (LastRunDurationText is not null && _status?.Lineup?.LastRefresh is { } lastRun)
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    Last run: ~@LastRunDurationText
-                                    @(lastRun.ChannelCountSeen.HasValue ? $", {lastRun.ChannelCountSeen.Value:N0} channels" : "")
-                                    — please wait.
-                                </MudText>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Large providers may take several minutes.</MudText>
-                            }
-                        }
-                        else if (lineup?.LastRefresh is not null)
-                        {
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                <MudChip T="string" Size="Size.Small"
-                                         Color="@(lineup.LastRefresh.Status == "ok" ? Color.Success : lineup.LastRefresh.Status == "running" ? Color.Info : Color.Error)">
-                                    @lineup.LastRefresh.Status
-                                </MudChip>
-                                @if (lineup.LastRefresh.FinishedUtc.HasValue)
-                                {
-                                    <MudText Typo="Typo.body2">@lineup.LastRefresh.FinishedUtc.Value.ToString("u")</MudText>
-                                }
-                            </MudStack>
-                            @if (lineup.LastRefresh.ChannelCountSeen.HasValue)
-                            {
-                                <MudText Typo="Typo.caption">@lineup.LastRefresh.ChannelCountSeen.Value.ToString("N0") channels seen</MudText>
-                            }
-                            @if (!string.IsNullOrWhiteSpace(lineup.LastRefresh.ErrorSummary))
-                            {
-                                <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-1">
-                                    @lineup.LastRefresh.ErrorSummary
-                                    @if (lineup.ActiveSnapshot is not null)
-                                    {
-                                        <text> Serving last known-good version.</text>
-                                    }
-                                </MudAlert>
-                            }
-                        }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">No refresh yet</MudText>
-                        }
-                    </MudStack>
-
-                    @if (_nextRefreshUtc.HasValue || _refreshScheduleKind == "manual")
-                    {
+                        @* 1. Status *@
                         <MudStack Spacing="0">
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Next Refresh</MudText>
-                            @if (_nextRefreshUtc.HasValue && !ShowRefreshing)
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Status</MudText>
+                            @if (selectedProfile.IsActive)
                             {
-                                <MudText Typo="Typo.body2">@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</MudText>
-                            }
-                            else if (_refreshScheduleKind == "manual")
-                            {
-                                <MudText Typo="Typo.body2" Color="Color.Secondary">Manual only</MudText>
+                                @* Use live lineup status for the main (active) profile *@
+                                @if (ShowRefreshing)
+                                {
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                                        <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                                        <MudText Typo="Typo.body2">Refreshing… @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
+                                        <MudButton Size="Size.Small"
+                                                   Variant="Variant.Outlined"
+                                                   Color="Color.Error"
+                                                   StartIcon="@Icons.Material.Filled.Cancel"
+                                                   OnClick="CancelRefreshAsync"
+                                                   Disabled="_isCancelling">
+                                            @(_isCancelling ? "Cancelling…" : "Cancel")
+                                        </MudButton>
+                                    </MudStack>
+                                    @if (LastRunDurationText is not null && _status?.Lineup?.LastRefresh is { } lastRun)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            Last run: ~@LastRunDurationText
+                                            @(lastRun.ChannelCountSeen.HasValue ? $", {lastRun.ChannelCountSeen.Value:N0} channels" : "")
+                                            — please wait.
+                                        </MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Large providers may take several minutes.</MudText>
+                                    }
+                                }
+                                else
+                                {
+                                    <TooltipChip Label="@ProfileStatusLabel(_status?.Status, selectedProfile)"
+                                                 TooltipText="@ProfileStatusTooltip(_status?.Status, selectedProfile)"
+                                                 Color="@ProfileStatusChipColor(selectedProfile)"
+                                                 Variant="Variant.Outlined"
+                                                 Style="align-self:flex-start;" />
+                                }
                             }
                             else
                             {
-                                <MudText Typo="Typo.body2" Color="Color.Secondary">Calculating…</MudText>
+                                <TooltipChip Label="@ProfileStatusLabel(null, selectedProfile)"
+                                             TooltipText="@ProfileStatusTooltip(null, selectedProfile)"
+                                             Color="@ProfileStatusChipColor(selectedProfile)"
+                                             Variant="Variant.Outlined"
+                                             Style="align-self:flex-start;" />
                             }
                         </MudStack>
-                    }
 
-                    <MudStack Spacing="0">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Published Version</MudText>
-                        @if (_dashboardStats is not null && _dashboardStats.PublishedLiveCount > 0)
+                        @* 2. Published content chips *@
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Published Content</MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                                <TooltipChip Label="@($"Live {selectedProfile.LiveCount}")"
+                                             TooltipText="View channel list for this profile"
+                                             Color="@(selectedProfile.LiveCount > 0 ? Color.Success : Color.Warning)"
+                                             Icon="@Icons.Material.Filled.LiveTv"
+                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                                <TooltipChip Label="@($"Movies {selectedProfile.MovieCount}")"
+                                             TooltipText="View channel list for this profile"
+                                             Color="@(selectedProfile.MovieCount > 0 ? Color.Info : Color.Default)"
+                                             Icon="@Icons.Material.Filled.Movie"
+                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                                <TooltipChip Label="@($"Series {selectedProfile.SeriesCount}")"
+                                             TooltipText="View channel list for this profile"
+                                             Color="@(selectedProfile.SeriesCount > 0 ? Color.Info : Color.Default)"
+                                             Icon="@Icons.Material.Filled.Tv"
+                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                            </MudStack>
+                        </MudStack>
+
+                        @* 3. Activity *@
+                        @* TODO: Per-profile stream/client counts not yet available from StreamingRegistry. Showing global link only. *@
+
+                        @* 4. Provider backing *@
+                        @if (selectedProfile.Providers.Count > 0)
                         {
-                            <MudText Typo="Typo.body2">
-                                @_dashboardStats.PublishedLiveCount.ToString("N0") live channels published
-                            </MudText>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                @_dashboardStats.PublishedMovieCount.ToString("N0") movies, @_dashboardStats.PublishedSeriesCount.ToString("N0") series
-                            </MudText>
-                            @if (_dashboardStats.LastPublishedUtc.HasValue)
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(selectedProfile.Providers.Count == 1 ? "Provider" : "Providers")
+                                </MudText>
+                                @foreach (var prov in selectedProfile.Providers)
+                                {
+                                    var provExpiry = prov.ExpiresUtc;
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                                        <MudText Typo="Typo.body2">@prov.ProviderName</MudText>
+                                        @if (prov.MaxConcurrentStreams.HasValue)
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">— @prov.MaxConcurrentStreams max streams</MudText>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">— stream max unknown</MudText>
+                                        }
+                                        @if (provExpiry.HasValue)
+                                        {
+                                            <MudChip T="string" Size="Size.Small"
+                                                     Color="@ProviderExpirationChipColor(provExpiry.Value)"
+                                                     Variant="Variant.Outlined">
+                                                @ProviderExpirationLabel(provExpiry.Value)
+                                            </MudChip>
+                                        }
+                                    </MudStack>
+                                }
+                            </MudStack>
+                        }
+
+                        @* 5. Refresh / Publish freshness (active profile only has full detail) *@
+                        @if (selectedProfile.IsActive)
+                        {
+                            @* Last Refresh *@
+                            @if (!ShowRefreshing)
                             {
-                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
-                                    <MudText Typo="Typo.caption">@_dashboardStats.LastPublishedUtc.Value.ToString("u")</MudText>
-                                    @if (_dashboardStats.LastChangeClass is not null)
+                                <MudStack Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Last Refresh</MudText>
+                                    @if (_status?.Lineup?.LastRefresh is { } lr)
                                     {
-                                        <MudChip T="string" Size="Size.Small"
-                                                 Color="@ChangeClassChipColor(_dashboardStats.LastChangeClass)"
-                                                 Variant="Variant.Outlined">
-                                            @ChangeClasses.ToUserLabel(_dashboardStats.LastChangeClass)
-                                        </MudChip>
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                            <MudChip T="string" Size="Size.Small"
+                                                     Color="@(lr.Status == "ok" ? Color.Success : lr.Status == "running" ? Color.Info : Color.Error)">
+                                                @lr.Status
+                                            </MudChip>
+                                            @if (lr.FinishedUtc.HasValue)
+                                            {
+                                                <MudText Typo="Typo.body2">@lr.FinishedUtc.Value.ToString("u")</MudText>
+                                            }
+                                        </MudStack>
+                                        @if (lr.ChannelCountSeen.HasValue)
+                                        {
+                                            <MudText Typo="Typo.caption">@lr.ChannelCountSeen.Value.ToString("N0") channels seen</MudText>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(lr.ErrorSummary))
+                                        {
+                                            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-1">
+                                                @lr.ErrorSummary
+                                                @if (_status.Lineup?.ActiveSnapshot is not null)
+                                                {
+                                                    <text> Serving last known-good version.</text>
+                                                }
+                                            </MudAlert>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">No refresh yet</MudText>
                                     }
                                 </MudStack>
                             }
+
+                            @* Next Refresh *@
+                            @if (_nextRefreshUtc.HasValue || _refreshScheduleKind == "manual")
+                            {
+                                <MudStack Spacing="0">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Next Refresh</MudText>
+                                    @if (_nextRefreshUtc.HasValue && !ShowRefreshing)
+                                    {
+                                        <MudText Typo="Typo.body2">@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</MudText>
+                                    }
+                                    else if (_refreshScheduleKind == "manual")
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">Manual only</MudText>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.body2" Color="Color.Secondary">Calculating…</MudText>
+                                    }
+                                </MudStack>
+                            }
+
+                            @* Published version *@
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Published</MudText>
+                                @if (selectedProfile.LastPublishedUtc.HasValue)
+                                {
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mt-1">
+                                        <MudText Typo="Typo.caption">@selectedProfile.LastPublishedUtc.Value.ToString("u")</MudText>
+                                        @if (_dashboardStats?.LastChangeClass is not null)
+                                        {
+                                            <MudChip T="string" Size="Size.Small"
+                                                     Color="@ChangeClassChipColor(_dashboardStats.LastChangeClass)"
+                                                     Variant="Variant.Outlined">
+                                                @ChangeClasses.ToUserLabel(_dashboardStats.LastChangeClass)
+                                            </MudChip>
+                                        }
+                                    </MudStack>
+                                    @if (ShowRefreshing)
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Info">Updating lineup…</MudText>
+                                    }
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">None</MudText>
+                                }
+                            </MudStack>
                         }
-                        else if (lineup?.ActiveSnapshot is not null)
+                        else if (selectedProfile.LastPublishedUtc.HasValue)
                         {
-                            <MudText Typo="Typo.body2">
-                                @lineup.ActiveSnapshot.ChannelCountPublished.ToString("N0") entries published
-                            </MudText>
-                            <MudText Typo="Typo.caption">@lineup.ActiveSnapshot.CreatedUtc.ToString("u")</MudText>
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Published</MudText>
+                                <MudText Typo="Typo.caption">@selectedProfile.LastPublishedUtc.Value.ToString("u")</MudText>
+                            </MudStack>
                         }
-                        else
-                        {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">None</MudText>
-                        }
-                        @if (ShowRefreshing)
-                        {
-                            <MudText Typo="Typo.caption" Color="Color.Info">Updating lineup…</MudText>
-                        }
-                    </MudStack>
+                    }
                 </MudStack>
             }
         </MudPaper>
     </MudItem>
 
-    <!-- Output URLs -->
+    <!-- Endpoints -->
     <MudItem xs="12" md="6">
         <MudPaper Class="pa-4" Elevation="1" Style="height: 100%;">
-            <MudText Typo="Typo.h6" Class="mb-3">Output URLs</MudText>
-
-            <!-- Published Output counts -->
-            <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3" Spacing="2">
-                <MudChip T="string" Color="@(_dashboardStats?.PublishedLiveCount > 0 ? Color.Success : Color.Warning)"
-                         Icon="@Icons.Material.Filled.LiveTv"
-                         OnClick="@(() => Nav.NavigateTo("channels"))">
-                    Live: @(_dashboardStats?.PublishedLiveCount ?? 0)
-                </MudChip>
-                <MudChip T="string" Color="@(_dashboardStats?.PublishedMovieCount > 0 ? Color.Info : Color.Default)"
-                         Icon="@Icons.Material.Filled.Movie">
-                    Movies: @(_dashboardStats?.PublishedMovieCount ?? 0)
-                </MudChip>
-                <MudChip T="string" Color="@(_dashboardStats?.PublishedSeriesCount > 0 ? Color.Info : Color.Default)"
-                         Icon="@Icons.Material.Filled.Tv">
-                    Series: @(_dashboardStats?.PublishedSeriesCount ?? 0)
-                </MudChip>
-            </MudStack>
-
-            @if (_dashboardStats is null || _dashboardStats.PublishedLiveCount == 0)
-            {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                    No channels published yet — configure <MudLink Href="channels/mapping">Channel Mapping</MudLink> to start serving content.
-                </MudAlert>
+            @{
+                var selProfile = SelectedProfileSummary;
+                var isMainSelected = selProfile?.IsActive == true;
             }
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+                <MudText Typo="Typo.h6">Endpoints</MudText>
+                @if (selProfile is not null)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">
+                        @if (isMainSelected)
+                        {
+                            <text>Main: @selProfile.DisplayName</text>
+                        }
+                        else
+                        {
+                            <text>@selProfile.DisplayName</text>
+                        }
+                    </MudChip>
+                }
+            </MudStack>
 
             <MudStack Spacing="4">
                 <div>
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">M3U Playlist</MudText>
-                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
-                        <MudTextField Value="@_m3uUrl" ReadOnly="true" Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" FullWidth="true" />
-                        <MudTooltip Text="Copy">
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                           Size="Size.Small" OnClick="() => CopyAsync(_m3uUrl)" />
-                        </MudTooltip>
-                    </MudStack>
+                    <EndpointCopyRow DefaultUrl="@SelectedM3uUrl" ExtraVariants="@GetUrlVariants(SelectedM3uUrl)" />
                 </div>
 
                 <div>
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">XMLTV Guide</MudText>
-                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center">
-                        <MudTextField Value="@_xmltvUrl" ReadOnly="true" Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" FullWidth="true" />
-                        <MudTooltip Text="Copy">
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                           Size="Size.Small" OnClick="() => CopyAsync(_xmltvUrl)" />
-                        </MudTooltip>
+                    <EndpointCopyRow DefaultUrl="@SelectedXmltvUrl" ExtraVariants="@GetUrlVariants(SelectedXmltvUrl)" />
+                </div>
+
+                @* Xtream section *@
+                <MudDivider />
+                <div>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.VpnKey" Size="Size.Small" Color="@XtreamIconColor" />
+                        <MudLink Href="settings?section=security" Typo="Typo.subtitle2" Underline="Underline.Hover" Color="Color.Inherit">
+                            Xtream
+                            <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Style="opacity:0.5; margin-left:2px; vertical-align:middle;" />
+                        </MudLink>
+                        @if (_endpointSecuritySettings?.XtreamCompatibilityEnabled == true && !_endpointSecuritySettings.Enabled)
+                        {
+                            <MudTooltip Text="Authentication is disabled — any credentials are accepted" Arrow="true" Placement="Placement.Top">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">Unsecured</MudChip>
+                            </MudTooltip>
+                        }
                     </MudStack>
+                    @if (_endpointSecuritySettings is null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Loading…</MudText>
+                    }
+                    else if (!_endpointSecuritySettings.XtreamCompatibilityEnabled)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Disabled</MudText>
+                    }
+                    else if (_endpointSecuritySettings.Enabled && !_endpointSecuritySettings.HasCredential)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                            <MudText Typo="Typo.caption" Color="Color.Warning">No credential configured.</MudText>
+                            <MudLink Href="settings?section=security" Typo="Typo.caption">Configure →</MudLink>
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudStack Spacing="1">
+                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Server</MudText>
+                                <MudText Typo="Typo.caption">@Nav.BaseUri.TrimEnd('/')</MudText>
+                            </MudStack>
+                            @if (_endpointSecuritySettings.Username is not null)
+                            {
+                                <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Username</MudText>
+                                    <MudText Typo="Typo.caption">@_endpointSecuritySettings.Username</MudText>
+                                </MudStack>
+                            }
+                        </MudStack>
+                    }
+                </div>
+
+                @* HDHomeRun section *@
+                <MudDivider />
+                <div>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+                        <MudIcon Icon="@Icons.Material.Filled.Router" Size="Size.Small" Color="@(_hdhrEnabled ? Color.Primary : Color.Default)" />
+                        <MudLink Href="hdhr" Typo="Typo.subtitle2" Underline="Underline.Hover" Color="Color.Inherit">
+                            HDHomeRun
+                            <MudIcon Icon="@Icons.Material.Filled.OpenInNew" Size="Size.Small" Style="opacity:0.5; margin-left:2px; vertical-align:middle;" />
+                        </MudLink>
+                    </MudStack>
+                    @if (!_hdhrEnabled)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Disabled</MudText>
+                    }
+                    else if (_hdhrDescriptor is not null)
+                    {
+                        <MudStack Spacing="1">
+                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Friendly name</MudText>
+                                <MudText Typo="Typo.caption">@_hdhrDescriptor.FriendlyName</MudText>
+                            </MudStack>
+                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Device ID</MudText>
+                                <MudText Typo="Typo.caption">@_hdhrDescriptor.DeviceId</MudText>
+                            </MudStack>
+                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Discovery</MudText>
+                                <MudText Typo="Typo.caption">@(_hdhrRuntimeSnapshot?.DiscoveryEnabled == true ? "Enabled" : "Disabled")</MudText>
+                            </MudStack>
+                        </MudStack>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Loading HDHR info…</MudText>
+                    }
                 </div>
             </MudStack>
         </MudPaper>
     </MudItem>
 
-    <!-- Published Profiles -->
-    @if (_dashboardStats?.ProfileSummaries.Count > 0)
-    {
-        <MudItem xs="12">
-            <MudPaper Class="pa-4" Elevation="1">
-                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
-                    <MudText Typo="Typo.h6">Profiles</MudText>
-                    <MudButton Variant="Variant.Text" EndIcon="@Icons.Material.Filled.ArrowForward" Href="profiles">
-                        All Profiles
-                    </MudButton>
-                </MudStack>
-
-                @if (_dashboardStats.ProfileSummaries.Count <= ProfileTileDisplayBudget)
-                {
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3" Wrap="Wrap.Wrap">
-                        @foreach (var profile in _dashboardStats.ProfileSummaries)
-                        {
-                            var chipColor = profile.IsActive
-                                ? (profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning : Color.Success)
-                                : (profile.HealthStatus == ProfileHealthStatus.NoOutput ? Color.Default : Color.Info);
-                            var chipVariant = profile.IsActive ? Variant.Filled : Variant.Outlined;
-                            var chipIcon = profile.IsActive
-                                ? (profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning : Icons.Material.Filled.CheckCircle)
-                                : (profile.HealthStatus == ProfileHealthStatus.NoOutput ? Icons.Material.Filled.RadioButtonUnchecked : Icons.Material.Filled.Inventory2);
-                            <MudTooltip Text="@(profile.IsActive ? "Serving at output URLs" : profile.HealthStatus == ProfileHealthStatus.NoOutput ? "No published output" : "Published — standby")" Arrow="true" Placement="Placement.Top">
-                                <MudChip T="string"
-                                         Color="@chipColor"
-                                         Variant="@chipVariant"
-                                         Icon="@chipIcon"
-                                         OnClick="@(() => Nav.NavigateTo($"profiles/{profile.ProfileId}"))">
-                                    @profile.DisplayName — @if (profile.IsActive) { <text>@profile.LiveCount live</text> } else if (profile.HealthStatus != ProfileHealthStatus.NoOutput) { <text>@profile.LiveCount ch</text> } else { <text>no output</text> }
-                                </MudChip>
-                            </MudTooltip>
-                        }
-                    </MudStack>
-                }
-                else
-                {
-                    <MudButton Variant="Variant.Text" Href="profiles">
-                        @_dashboardStats.ProfileSummaries.Count profiles published
-                    </MudButton>
-                }
-            </MudPaper>
-        </MudItem>
-    }
-
-    <!-- Action Items -->
-    @if (HasActionItems)
-    {
-        <MudItem xs="12">
-            <MudPaper Class="pa-4" Elevation="1">
-                <MudText Typo="Typo.h6" Class="mb-3">Action Items</MudText>
-                <MudStack Spacing="2">
-                    @foreach (var ep in _dashboardStats!.ExpiringProviders)
-                    {
-                        var daysLeft = (ep.ExpiresUtc - DateTime.UtcNow).TotalDays;
-                        var expSeverity = daysLeft <= 7 ? Severity.Error : Severity.Warning;
-                        var expLabel = daysLeft < 0
-                            ? $"Provider \"{ep.ProviderName}\" subscription expired on {ep.ExpiresUtc:yyyy-MM-dd} — streams may be down."
-                            : daysLeft < 1
-                            ? $"Provider \"{ep.ProviderName}\" subscription expires today ({ep.ExpiresUtc:yyyy-MM-dd}) — renew now."
-                            : $"Provider \"{ep.ProviderName}\" subscription expires in {(int)daysLeft + 1}d on {ep.ExpiresUtc:yyyy-MM-dd}.";
-                        <MudAlert Severity="@expSeverity" Variant="Variant.Outlined" Dense="true">@expLabel</MudAlert>
-                    }
-                    @if (_dashboardStats!.GroupsPendingReview > 0)
-                    {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            @_dashboardStats.GroupsPendingReview new group@(_dashboardStats.GroupsPendingReview == 1 ? "" : "s") to review —
-                            <MudLink Href="channels/mapping">review now</MudLink>
-                        </MudAlert>
-                    }
-                    @if (_dashboardStats!.ChannelsPendingReview > 0)
-                    {
-                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                            @_dashboardStats.ChannelsPendingReview new channel@(_dashboardStats.ChannelsPendingReview == 1 ? "" : "s") to review —
-                            <MudLink Href="channels/review">review now</MudLink>
-                        </MudAlert>
-                    }
-                    @if (_dashboardStats!.RefreshFailed)
-                    {
-                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
-                            Last refresh failed — serving last known-good version.
-                        </MudAlert>
-                    }
-                </MudStack>
-            </MudPaper>
-        </MudItem>
-    }
 </MudGrid>
 
 @code {
-    private const int ProfileTileDisplayBudget = 4;
+    private string? _selectedProfileId;
+    private bool _showAllProfiles;
+
+    private IReadOnlyList<DashboardProfileSummary> VisibleProfiles
+    {
+        get
+        {
+            var all = _dashboardStats?.ProfileSummaries ?? [];
+            if (_showAllProfiles)
+                return all;
+            return all.Where(p => p.IsActive).ToList();
+        }
+    }
+
+    private DashboardProfileSummary? SelectedProfileSummary
+    {
+        get
+        {
+            var all = _dashboardStats?.ProfileSummaries ?? [];
+            if (all.Count == 0) return null;
+
+            if (_selectedProfileId is not null)
+            {
+                var byId = all.FirstOrDefault(p => p.ProfileId == _selectedProfileId);
+                if (byId is not null) return byId;
+            }
+
+            // Default to main (active) profile
+            return all.FirstOrDefault(p => p.IsActive) ?? all[0];
+        }
+    }
+
+    private string SelectedM3uUrl
+    {
+        get
+        {
+            var profile = SelectedProfileSummary;
+            var baseUri = Nav.BaseUri.TrimEnd('/');
+            if (profile is null || profile.IsActive)
+                return $"{baseUri}/m3u/m3undle.m3u";
+            return $"{baseUri}/m3u/m3undle.m3u?profile={Uri.EscapeDataString(profile.DisplayName)}";
+        }
+    }
+
+    private string SelectedXmltvUrl
+    {
+        get
+        {
+            var profile = SelectedProfileSummary;
+            var baseUri = Nav.BaseUri.TrimEnd('/');
+            if (profile is null || profile.IsActive)
+                return $"{baseUri}/xmltv/m3undle.xml";
+            return $"{baseUri}/xmltv/m3undle.xml?profile={Uri.EscapeDataString(profile.DisplayName)}";
+        }
+    }
+
+    private IReadOnlyList<EndpointUrlVariant> GetUrlVariants(string fullUrl)
+    {
+        if (!Uri.TryCreate(fullUrl, UriKind.Absolute, out var parsed))
+            return [];
+
+        var path = parsed.PathAndQuery;
+        var variants = new List<EndpointUrlVariant>();
+
+        var dockerBase = EndpointUrlService.GetDockerBaseUrl();
+        if (dockerBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy Docker URL", $"{dockerBase}{path}"));
+
+        var externalBase = EndpointUrlService.GetExternalBaseUrl();
+        if (externalBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy External URL", $"{externalBase}{path}"));
+
+        return variants;
+    }
+
+    private void OnShowAllProfilesChanged(bool value)
+    {
+        _showAllProfiles = value;
+
+        // If toggling off and the selected profile is no longer visible, snap back to active
+        if (!value)
+        {
+            var visible = VisibleProfiles;
+            if (_selectedProfileId is not null && !visible.Any(p => p.ProfileId == _selectedProfileId))
+                _selectedProfileId = visible.FirstOrDefault(p => p.IsActive)?.ProfileId ?? visible.FirstOrDefault()?.ProfileId;
+        }
+
+        StateHasChanged();
+    }
 
     private LineupStatusResponse? _status;
     private DashboardStatsDto? _dashboardStats;
@@ -388,67 +589,95 @@
     private bool _isRefreshing;
     private string? _loadError;
 
-    private string _m3uUrl = string.Empty;
-    private string _xmltvUrl = string.Empty;
+    private bool _hdhrEnabled;
+    private HdHomeRunDeviceDescriptor? _hdhrDescriptor;
+    private HdHomeRunRuntimeSnapshot? _hdhrRuntimeSnapshot;
+    private EndpointSecuritySettings? _endpointSecuritySettings;
 
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
     private DateTime? _refreshStartedAt;
     private PeriodicTimer? _elapsedTimer;
-    private PeriodicTimer? _streamTimer;
     private PersistingComponentStateSubscription? _persistSubscription;
     private bool _isCancelling;
-    private int _streamSessions;
-    private int _streamClients;
 
     private DateTime? _nextRefreshUtc;
     private string _refreshScheduleKind = "6h";
     private bool ShowRefreshing => _isRefreshing || _status?.IsRefreshing == true;
 
-    private bool HasActionItems => _dashboardStats is not null &&
+    private Color XtreamIconColor => _endpointSecuritySettings is { XtreamCompatibilityEnabled: true, Enabled: true, HasCredential: true }
+        ? Color.Primary
+        : Color.Default;
+
+    private bool HasDashboardActionItems => _dashboardStats is not null &&
         (_dashboardStats.ExpiringProviders.Count > 0 ||
          _dashboardStats.GroupsPendingReview > 0 ||
          _dashboardStats.ChannelsPendingReview > 0 ||
          _dashboardStats.RefreshFailed);
 
+    private bool HasTodoItems => HasDashboardActionItems;
+
+    private Severity TodoAlertSeverity => _dashboardStats?.ExpiringProviders.Any(x => x.ExpiresUtc <= DateTime.UtcNow) == true
+        ? Severity.Error
+        : Severity.Warning;
+
     protected override async Task OnInitializedAsync()
     {
-        var baseUri = Nav.BaseUri.TrimEnd('/');
-        _m3uUrl = $"{baseUri}/m3u/m3undle.m3u";
-        _xmltvUrl = $"{baseUri}/xmltv/m3undle.xml";
+        _hdhrEnabled = HdHomeRunDeviceService.IsEnabled;
 
         _isRefreshing = RefreshTrigger.IsRefreshing;
         if (_isRefreshing)
-        {
-            _refreshStartedAt = DateTime.UtcNow;
-        }
+            _refreshStartedAt = RefreshTrigger.RefreshStartedAt ?? DateTime.UtcNow;
+
+        if (!RendererInfo.IsInteractive)
+            return;
 
         var restoredFromPrerender = TryRestorePersistedState();
-        if (!restoredFromPrerender)
-        {
-            await LoadAllAsync();
-        }
-
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
 
-        if (!RendererInfo.IsInteractive) return;
-
         if (_isRefreshing)
-        {
             StartElapsedTimer();
-        }
 
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
 
-        RefreshStreamCounts();
-        _streamTimer = new PeriodicTimer(TimeSpan.FromSeconds(3));
-        _ = RunStreamTimerAsync(_streamTimer);
-
-        if (restoredFromPrerender)
-        {
+        if (!restoredFromPrerender)
+            _ = LoadAllAsync();
+        else
             _ = LoadRefreshScheduleAsync();
+
+        _ = LoadHdhrInfoAsync();
+        _ = LoadEndpointSecurityAsync();
+    }
+
+    private async Task LoadHdhrInfoAsync()
+    {
+        if (!_hdhrEnabled) return;
+        try
+        {
+            var ct = _cts.Token;
+            _hdhrDescriptor = await Task.Run(() => HdHomeRunDeviceService.GetDeviceDescriptorAsync(ct), ct);
+            _hdhrRuntimeSnapshot = HdHomeRunDeviceService.GetRuntimeSnapshot();
+            await InvokeAsync(StateHasChanged);
         }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch { }
+    }
+
+    private async Task LoadEndpointSecurityAsync()
+    {
+        try
+        {
+            var ct = _cts.Token;
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            var svc = scope.ServiceProvider.GetRequiredService<IEndpointSecurityService>();
+            _endpointSecuritySettings = await svc.GetSettingsAsync(ct);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch { }
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -500,13 +729,15 @@
     {
         try
         {
-            var settings = await RefreshScheduleService.GetActiveProfileSettingsAsync(_cts.Token);
+            var ct = _cts.Token;
+            var settings = await Task.Run(() => RefreshScheduleService.GetActiveProfileSettingsAsync(ct), ct);
             _refreshScheduleKind = settings?.Settings.ScheduleKind ?? "manual";
             _nextRefreshUtc = settings?.ProfileId is null
                 ? null
-                : await RefreshScheduleService.GetNextScheduledRefreshUtcAsync(settings.ProfileId, _cts.Token);
+                : await Task.Run(() => RefreshScheduleService.GetNextScheduledRefreshUtcAsync(settings.ProfileId, ct), ct);
         }
         catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
         catch { }
     }
 
@@ -517,14 +748,13 @@
 
         try
         {
-            _status = await StatusService.GetStatusAsync(_cts.Token);
+            var ct = _cts.Token;
+            _status = await Task.Run(() => StatusService.GetStatusAsync(ct), ct);
 
-            // Keep the page-level refresh spinner/timer in sync with server state
-            // when the page loads mid-refresh or event delivery is delayed.
             if (_status.IsRefreshing && !_isRefreshing)
             {
                 _isRefreshing = true;
-                _refreshStartedAt ??= DateTime.UtcNow;
+                _refreshStartedAt ??= RefreshTrigger.RefreshStartedAt ?? DateTime.UtcNow;
                 StartElapsedTimer();
             }
             else if (!_status.IsRefreshing && _isRefreshing)
@@ -535,10 +765,8 @@
                 StopElapsedTimer();
             }
         }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
+        catch (OperationCanceledException) { return; }
+        catch (ObjectDisposedException) { return; }
         catch (Exception ex)
         {
             _loadError = $"Failed to load status: {ex.Message}";
@@ -546,7 +774,7 @@
         finally
         {
             _isLoading = false;
-            StateHasChanged();
+            try { await InvokeAsync(StateHasChanged); } catch { }
         }
     }
 
@@ -554,11 +782,20 @@
     {
         try
         {
-            _dashboardStats = await DashboardStats.GetStatsAsync(_cts.Token);
+            var ct = _cts.Token;
+            _dashboardStats = await Task.Run(() => DashboardStats.GetStatsAsync(ct), ct);
+
+            // Initialize chip selection to the active profile on first load
+            if (_selectedProfileId is null && _dashboardStats.ProfileSummaries.Count > 0)
+            {
+                _selectedProfileId = _dashboardStats.ProfileSummaries.FirstOrDefault(p => p.IsActive)?.ProfileId
+                    ?? _dashboardStats.ProfileSummaries[0].ProfileId;
+            }
         }
         catch (OperationCanceledException) { return; }
+        catch (ObjectDisposedException) { return; }
 
-        StateHasChanged();
+        try { await InvokeAsync(StateHasChanged); } catch { }
     }
 
     public void Dispose()
@@ -568,23 +805,6 @@
         _cts.Dispose();
         _eventSubscription?.Dispose();
         _elapsedTimer?.Dispose();
-        _streamTimer?.Dispose();
-    }
-
-    private void RefreshStreamCounts()
-    {
-        _streamSessions = StreamingRegistry.GetActiveSessions().Count;
-        _streamClients = StreamingRegistry.GetActiveClients().Count;
-    }
-
-    private async Task RunStreamTimerAsync(PeriodicTimer timer)
-    {
-        try
-        {
-            while (await timer.WaitForNextTickAsync(_cts.Token))
-                await InvokeAsync(() => { RefreshStreamCounts(); StateHasChanged(); });
-        }
-        catch (OperationCanceledException) { }
     }
 
     private void StartElapsedTimer()
@@ -632,6 +852,53 @@
         return $"{(int)ts.TotalHours}h {ts.Minutes}m";
     }
 
+    private string ProfileStatusLabel(string? lineupStatus, DashboardProfileSummary profile)
+    {
+        if (profile.IsActive && lineupStatus is not null)
+        {
+            return lineupStatus switch
+            {
+                LineupStatusCodes.Ok => "Serving",
+                LineupStatusCodes.Refreshing => "Refreshing",
+                LineupStatusCodes.Switching => "Switching",
+                LineupStatusCodes.Degraded => "Degraded — serving last known-good",
+                LineupStatusCodes.NoActiveSnapshot => "No Published Output",
+                LineupStatusCodes.NoActiveProfile => "No Active Profile",
+                _ => "Unknown",
+            };
+        }
+
+        if (!profile.IsEnabled) return "Disabled";
+        if (!profile.IsPublished) return "No Published Output";
+        return profile.HealthStatus switch
+        {
+            ProfileHealthStatus.Ok => "Published",
+            ProfileHealthStatus.Degraded => "Degraded",
+            ProfileHealthStatus.NoOutput => "No Published Output",
+            _ => "Unknown",
+        };
+    }
+
+    private Color ProfileStatusChipColor(DashboardProfileSummary profile)
+    {
+        if (!profile.IsEnabled) return Color.Default;
+        if (!profile.IsPublished) return Color.Warning;
+        return profile.HealthStatus switch
+        {
+            ProfileHealthStatus.Ok => Color.Success,
+            ProfileHealthStatus.Degraded => Color.Warning,
+            _ => Color.Default,
+        };
+    }
+
+    private string ProfileStatusTooltip(string? lineupStatus, DashboardProfileSummary profile)
+    {
+        var label = ProfileStatusLabel(lineupStatus, profile);
+        return profile.IsActive
+            ? $"Current main profile status: {label}."
+            : $"Profile status: {label}.";
+    }
+
     private static Color ChangeClassChipColor(string? changeClass) => changeClass switch
     {
         ChangeClasses.None      => Color.Default,
@@ -639,55 +906,6 @@
         ChangeClasses.Lineup    => Color.Primary,
         ChangeClasses.Breaking  => Color.Warning,
         _                       => Color.Default,
-    };
-
-    private static string LineupStatusLabel(string? status) => status switch
-    {
-        LineupStatusCodes.Ok => "Output Active",
-        LineupStatusCodes.Refreshing => "Output Active — Refreshing",
-        LineupStatusCodes.Switching => "Profile Switch In Progress",
-        LineupStatusCodes.Degraded => "Degraded — refresh failing",
-        LineupStatusCodes.NoActiveProfile => "No Active Profile",
-        LineupStatusCodes.NoActiveSnapshot => "No Published Lineup",
-        _ => "Status Unknown",
-    };
-
-    private static Color LineupStatusChipColor(string? status) => status switch
-    {
-        LineupStatusCodes.Ok => Color.Success,
-        LineupStatusCodes.Refreshing => Color.Info,
-        LineupStatusCodes.Switching => Color.Info,
-        LineupStatusCodes.Degraded => Color.Warning,
-        LineupStatusCodes.NoActiveProfile => Color.Warning,
-        LineupStatusCodes.NoActiveSnapshot => Color.Warning,
-        _ => Color.Default,
-    };
-
-    private static string LineupStatusChipIcon(string? status) => status switch
-    {
-        LineupStatusCodes.Ok => Icons.Material.Filled.CheckCircle,
-        LineupStatusCodes.Refreshing => Icons.Material.Filled.Autorenew,
-        LineupStatusCodes.Switching => Icons.Material.Filled.Sync,
-        LineupStatusCodes.Degraded => Icons.Material.Filled.Warning,
-        LineupStatusCodes.NoActiveProfile => Icons.Material.Filled.Info,
-        LineupStatusCodes.NoActiveSnapshot => Icons.Material.Filled.Warning,
-        _ => Icons.Material.Filled.Help,
-    };
-
-    private static string? SwitchStateLabel(string? switchState) => switchState switch
-    {
-        LineupSwitchStates.Requested => "Switch requested",
-        LineupSwitchStates.InProgress => "Switching…",
-        LineupSwitchStates.Failed => "Switch failed (last known-good active)",
-        _ => null,
-    };
-
-    private static Color SwitchStateChipColor(string? switchState) => switchState switch
-    {
-        LineupSwitchStates.Requested => Color.Info,
-        LineupSwitchStates.InProgress => Color.Info,
-        LineupSwitchStates.Failed => Color.Warning,
-        _ => Color.Default,
     };
 
     private static Color ProviderExpirationChipColor(DateTime expiresUtc)
@@ -714,26 +932,6 @@
         try { RefreshTrigger.CancelRefresh(); }
         catch { }
         await Task.CompletedTask;
-    }
-
-    private async Task CopyAsync(string text)
-    {
-        try
-        {
-            var copied = await JS.InvokeAsync<bool>("m3undleCopyText", text);
-            if (copied)
-            {
-                Snackbar.Add("Copied to clipboard", Severity.Success);
-            }
-            else
-            {
-                Snackbar.Add("Copy failed. Please copy manually.", Severity.Warning);
-            }
-        }
-        catch (JSException)
-        {
-            Snackbar.Add("Copy failed. Please copy manually.", Severity.Warning);
-        }
     }
 
     private bool TryRestorePersistedState()

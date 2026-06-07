@@ -49,7 +49,7 @@ public sealed class ProviderDto
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public bool ForceMpegTs { get; set; }
-    public string CleanRelayMode { get; set; } = "off";
+    public string CleanRelayMode { get; set; } = "auto";
     public List<string> AssociatedProfileIds { get; set; } = [];
     public ProviderLastRefreshDto? LastRefresh { get; set; }
     public List<ProviderLatestSnapshotDto> LatestSnapshots { get; set; } = [];
@@ -84,7 +84,7 @@ public sealed class CreateProviderRequest
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public bool ForceMpegTs { get; set; }
-    public string CleanRelayMode { get; set; } = "off";
+    public string CleanRelayMode { get; set; } = "auto";
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;
@@ -116,7 +116,7 @@ public sealed class UpdateProviderRequest
     public bool IncludeVod { get; set; }
     public bool IncludeSeries { get; set; }
     public bool ForceMpegTs { get; set; }
-    public string CleanRelayMode { get; set; } = "off";
+    public string CleanRelayMode { get; set; } = "auto";
 
     [Range(1, 1800)]
     public int TimeoutSeconds { get; set; } = 120;

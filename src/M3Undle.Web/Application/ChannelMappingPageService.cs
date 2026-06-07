@@ -37,14 +37,21 @@ public sealed class ChannelMappingPageService(
         var filters = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup).ThenInclude(g => g.Provider)
-            .Include(x => x.ChannelFilters)
             .Where(x => x.ProfileId == profileId)
             .ToListAsync(cancellationToken);
+
+        var selectedCounts = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.State == LineupReviewSemantics.ChannelStateIncluded)
+            .GroupBy(x => x.ProfileGroupFilterId)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, cancellationToken);
 
         return filters
             .OrderByDescending(f => f.IsNew)
             .ThenBy(f => f.ProviderGroup.RawName, StringComparer.OrdinalIgnoreCase)
-            .Select(ToDto)
+            .Select(f => ToDto(f, selectedCounts.GetValueOrDefault(f.ProfileGroupFilterId, 0)))
             .ToList();
     }
 
@@ -382,11 +389,8 @@ public sealed class ChannelMappingPageService(
         row.UpdatedUtc = updatedUtc;
     }
 
-    private static GroupFilterDto ToDto(ProfileGroupFilter f)
+    private static GroupFilterDto ToDto(ProfileGroupFilter f, int selectedCount)
     {
-        var selectedCount = f.ChannelFilters?
-            .Count(cf => string.Equals(cf.State, LineupReviewSemantics.ChannelStateIncluded, StringComparison.Ordinal)) ?? 0;
-
         return new GroupFilterDto
         {
             ProfileGroupFilterId = f.ProfileGroupFilterId,
@@ -410,6 +414,48 @@ public sealed class ChannelMappingPageService(
             SelectedChannelCount = selectedCount,
             ChannelCount = f.ProviderGroup.ChannelCount,
         };
+    }
+
+    public async Task<List<MappedChannelPanelItem>> GetMappedChannelsPanelAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var snapshotCreatedUtc = await db.Snapshots
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId && x.Status == "active")
+            .OrderByDescending(x => x.CreatedUtc)
+            .Select(x => (DateTime?)x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var rows = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileGroupFilter.ProfileId == profileId
+                        && x.ProfileGroupFilter.Decision == LineupReviewSemantics.GroupDecisionInclude
+                        && x.State == LineupReviewSemantics.ChannelStateIncluded
+                        && x.ChannelNumber != null)
+            .Select(x => new
+            {
+                x.ChannelNumber,
+                DisplayName = x.DisplayNameOverride ?? x.ProviderChannel.DisplayName,
+                x.UpdatedUtc,
+                FilterId = x.ProfileGroupFilterId,
+                OutputName = x.ProfileGroupFilter.OutputName,
+            })
+            .OrderBy(x => x.ChannelNumber)
+            .ToListAsync(cancellationToken);
+
+        var cutoff = snapshotCreatedUtc;
+        return rows.Select(r => new MappedChannelPanelItem
+        {
+            ChannelNumber = r.ChannelNumber,
+            DisplayName = r.DisplayName,
+            IsLive = cutoff.HasValue && r.UpdatedUtc <= cutoff.Value,
+            FilterId = r.FilterId,
+            OutputName = r.OutputName,
+        }).ToList();
     }
 
     private static string? NormalizeRequestedDecision(string decision)
@@ -451,7 +497,8 @@ public sealed class ChannelMappingPageService(
         bool notifyOnly,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includePendingSummary = true)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -461,8 +508,6 @@ public sealed class ChannelMappingPageService(
 
         var pendingBase = db.ProfileGroupChannelFilters
             .AsNoTracking()
-            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
-            .Include(x => x.ProviderChannel)
             .Where(x => x.ProfileGroupFilter.ProfileId == profileId
                         && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
                         && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
@@ -471,9 +516,23 @@ public sealed class ChannelMappingPageService(
                         && !x.ProviderChannel.IsPlaceholder
                         && x.State == LineupReviewSemantics.ChannelStatePending);
 
-        var pendingTotal = await pendingBase.CountAsync(cancellationToken);
-        var pendingNotified = await pendingBase
-            .CountAsync(x => x.ProfileGroupFilter.TrackNewChannels, cancellationToken);
+        int pendingTotal = 0;
+        int pendingNotified = 0;
+
+        if (includePendingSummary)
+        {
+            var pendingCounts = await pendingBase
+                .GroupBy(_ => 1)
+                .Select(g => new
+                {
+                    PendingTotal = g.Count(),
+                    PendingNotified = g.Count(x => x.ProfileGroupFilter.TrackNewChannels),
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            pendingTotal = pendingCounts?.PendingTotal ?? 0;
+            pendingNotified = pendingCounts?.PendingNotified ?? 0;
+        }
 
         var query = pendingBase;
 
@@ -489,7 +548,9 @@ public sealed class ChannelMappingPageService(
             query = query.Where(x => EF.Functions.Like(x.ProviderChannel.DisplayName.ToUpper(), $"%{term}%"));
         }
 
-        var total = await query.CountAsync(cancellationToken);
+        var total = includePendingSummary
+            ? await query.CountAsync(cancellationToken)
+            : 0;
 
         var items = await query
             .OrderByDescending(x => x.ProfileGroupFilter.TrackNewChannels)
@@ -520,7 +581,7 @@ public sealed class ChannelMappingPageService(
 
         return new ReviewQueueListResponse
         {
-            Total = total,
+            Total = includePendingSummary ? total : items.Count,
             PendingTotal = pendingTotal,
             PendingNotified = pendingNotified,
             Items = items,

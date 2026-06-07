@@ -38,4 +38,7 @@ public sealed class SiteSettings
     public string ObservabilityMetricsMode { get; set; } = "LocalOnly";
     public bool ObservabilityMetricsEnableChannelLabels { get; set; }
     public string? ObservabilityMetricsLocalAllowedCidrs { get; set; }
+
+    public bool XtreamCompatibilityEnabled { get; set; } = true;
+    public string? HdhrAllowedNetworks { get; set; }
 }

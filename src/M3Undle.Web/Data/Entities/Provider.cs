@@ -19,7 +19,7 @@ public sealed class Provider
 
     public bool ForceMpegTs { get; set; }
 
-    public string CleanRelayMode { get; set; } = "off";
+    public string CleanRelayMode { get; set; } = "auto";
 
     // Xtream Codes API provider fields
     public string? XtreamBaseUrl { get; set; }

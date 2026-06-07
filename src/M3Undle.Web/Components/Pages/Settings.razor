@@ -5,6 +5,7 @@
 @using M3Undle.Web.Observability
 @using M3Undle.Web.Streaming.Configuration
 @using M3Undle.Web.Streaming.Observability
+@inject NavigationManager Nav
 @inject ISiteSettingsService SiteSettings
 @inject IEndpointSecurityService EndpointSecurity
 @inject IStreamingSettingsService StreamingSettings
@@ -20,1021 +21,1356 @@
 @inject IMetricsTokenService MetricsTokenService
 @inject IDialogService DialogService
 @inject IJSRuntime JS
+@inject EndpointUrlService EndpointUrlService
 
 <PageTitle>Settings — M3Undle</PageTitle>
 
 <MudText Typo="Typo.h5" Class="mb-4">Settings</MudText>
 
-<MudGrid Spacing="3">
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Global Refresh Schedule</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Default cadence for profiles that do not set their own refresh schedule.
-            </MudText>
+<div class="d-flex align-start" style="gap:24px;">
 
-            @if (_loadingRefreshSettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                <div class="mb-3">
-                    <RefreshIntervalSelect Value="@RefreshIntervalHoursAdapter"
-                                           ValueChanged="@(v => RefreshIntervalHoursAdapter = v)"
-                                           RecommendDefault="true" />
-                </div>
+    @* ── Sidebar nav ───────────────────────────────────────────────────── *@
+    <MudPaper Elevation="1" Class="pa-2" Style="width:190px;min-width:190px;flex-shrink:0;">
+        <MudStack Spacing="0">
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Schedule"
+                       Variant="@(_section == "schedule" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "schedule" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("schedule"))">Schedule</MudButton>
 
-                <MudSwitch T="bool" Label="Startup catch-up" @bind-Value="_refreshStartupCatchup"
-                           Color="Color.Primary" Class="mb-1" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
-                    When enabled, M3Undle will refresh on startup if the last published snapshot is stale.
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Lock"
+                       Variant="@(_section == "security" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "security" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("security"))">Security</MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Stream"
+                       Variant="@(_section == "streaming" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "streaming" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("streaming"))">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
+                    <span>Streaming</span>
+                    @if (_streamingRestartRequired || _genHlsRestartRequired)
+                    {
+                        <MudTooltip Text="Restart required to apply saved changes" Placement="Placement.Right">
+                            <MudIcon Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small" Color="Color.Warning" />
+                        </MudTooltip>
+                    }
+                </MudStack>
+            </MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Router"
+                       Variant="@(_section == "hdhr" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "hdhr" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("hdhr"))">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%">
+                    <span>HDHomeRun</span>
+                    @if (_hdhrRestartRequired)
+                    {
+                        <MudTooltip Text="Restart required to apply saved changes" Placement="Placement.Right">
+                            <MudIcon Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small" Color="Color.Warning" />
+                        </MudTooltip>
+                    }
+                </MudStack>
+            </MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Link"
+                       Variant="@(_section == "endpoints" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "endpoints" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("endpoints"))">Endpoint URLs</MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Cable"
+                       Variant="@(_section == "integrations" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "integrations" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("integrations"))">Integrations</MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Insights"
+                       Variant="@(_section == "observability" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "observability" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("observability"))">Observability</MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Tune"
+                       Variant="@(_section == "system" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "system" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("system"))">System</MudButton>
+        </MudStack>
+    </MudPaper>
+
+    @* ── Section content ───────────────────────────────────────────────── *@
+    <div style="flex:1;min-width:0;">
+
+        @* ════════════════════════════════════════════ SCHEDULE ══════════ *@
+        @if (_section == "schedule")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">Schedule</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    How often M3Undle fetches a fresh lineup from your provider. Individual profiles can
+                    override this. If your provider updates channels infrequently, every 6–12 hours is plenty.
                 </MudText>
 
-                @if (_nextRefreshUtc.HasValue)
+                @if (_loadingRefreshSettings)
                 {
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
-                        Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
-                    </MudText>
+                    <MudProgressCircular Indeterminate="true" />
                 }
-                else if (_refreshScheduleKind == "manual")
+                else
                 {
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
-                        Automatic refresh is disabled. Use the manual refresh button on the Dashboard.
-                    </MudText>
-                }
+                    <div class="mb-3" style="max-width:280px;">
+                        <RefreshIntervalSelect Value="@RefreshIntervalHoursAdapter"
+                                               ValueChanged="@(v => RefreshIntervalHoursAdapter = v)"
+                                               RecommendDefault="true" />
+                    </div>
 
-                @if (!string.IsNullOrWhiteSpace(_refreshError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_refreshError
-                    </MudAlert>
-                }
+                    <MudSwitch T="bool" Label="Startup catch-up" @bind-Value="_refreshStartupCatchup"
+                               Color="Color.Primary" Class="mb-1" />
+                    <div class="mb-4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            If M3Undle was offline during a scheduled refresh, it runs one immediately on startup.
+                            Disable this if you manage refresh timing with an external scheduler.
+                        </MudText>
+                        @if (_nextRefreshUtc.HasValue)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                &nbsp;Next scheduled refresh: <strong>@_nextRefreshUtc.Value.ToLocalTime().ToString("ddd d MMM, h:mm tt")</strong>
+                            </MudText>
+                        }
+                        else if (_refreshScheduleKind == "manual")
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                &nbsp;Automatic refresh is disabled. Use the manual refresh button on the Dashboard.
+                            </MudText>
+                        }
+                    </div>
 
-                @if (!string.IsNullOrWhiteSpace(_refreshSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_refreshSuccess
-                    </MudAlert>
-                }
-
-                <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           Disabled="_savingRefreshSettings"
-                           OnClick="SaveRefreshScheduleAsync">
-                    @(_savingRefreshSettings ? "Saving..." : "Save Refresh Settings")
-                </MudButton>
-            }
-        </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">UI Security</MudText>
-
-            @if (_uiAuthEnabled)
-            {
-                <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true">
-                    UI Authentication is enabled.
-                </MudAlert>
-            }
-            else
-            {
-                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true">
-                    UI authentication is <strong>disabled</strong>. The UI is open on your network.
-                </MudAlert>
-            }
-        </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Endpoint Security</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Controls M3U/XMLTV/stream/HDHR endpoint authentication.
-            </MudText>
-
-            @if (_loadingEndpointSettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                <MudSwitch T="bool" Label="Enable endpoint security" @bind-Value="_endpointEnabled" Class="mb-3" />
-
-                <MudTextField @bind-Value="_endpointUsername"
-                              Label="Endpoint Username"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              FullWidth="true"
-                              Placeholder="iptv-client"
-                              Required="_endpointEnabled" />
-
-                <MudTextField @bind-Value="_endpointPassword"
-                              Label="Endpoint Password"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              FullWidth="true"
-                              Placeholder="Leave blank to keep existing"
-                              InputType="InputType.Password"
-                              HelperText="Stored as password hash in database." />
-
-                <MudTextField @bind-Value="_virtualTunerId"
-                              Label="Virtual Tuner ID"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              FullWidth="true"
-                              Placeholder="hdhr-main"
-                              HelperText="Used as the HDHomeRun tuner identity for retune/reuse behavior." />
-
-                @if (!string.IsNullOrWhiteSpace(_activeProfileId))
-                {
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
-                        Bound profile: @(_activeProfileName ?? _activeProfileId)
-                    </MudText>
-                }
-
-                @if (!string.IsNullOrWhiteSpace(_endpointError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_endpointError
-                    </MudAlert>
-                }
-
-                @if (!string.IsNullOrWhiteSpace(_endpointSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_endpointSuccess
-                    </MudAlert>
-                }
-
-                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               Disabled="_savingEndpointSettings"
-                               OnClick="SaveEndpointSecurityAsync">
-                        @_saveButtonText
-                    </MudButton>
-
-                    @if (_endpointHasCredential)
+                    @if (!string.IsNullOrWhiteSpace(_refreshError))
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success">Credential configured</MudChip>
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-3">@_refreshError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_refreshSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">@_refreshSuccess</MudAlert>
+                    }
+
+                    <div>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="_savingRefreshSettings"
+                                   OnClick="SaveRefreshScheduleAsync">
+                            @(_savingRefreshSettings ? "Applying..." : "Apply")
+                        </MudButton>
+                    </div>
+                }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ SECURITY ══════════ *@
+        @if (_section == "security")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">Security</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-5">
+                    Controls who can reach the M3Undle UI and its media endpoints.
+                </MudText>
+
+                @* UI Auth (read-only status) *@
+                <MudText Typo="Typo.subtitle1" Class="mb-2">UI Authentication</MudText>
+                @if (_uiAuthEnabled)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        UI authentication is enabled. Users must log in to access the interface.
+                    </MudAlert>
+                }
+                else
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-2">
+                        UI authentication is <strong>disabled</strong> — the interface is open to anyone who can
+                        reach this server. Configure ASP.NET Core Identity to enable it.
+                    </MudAlert>
+                }
+
+                <MudDivider Class="my-5" />
+
+                @* Endpoint Credentials *@
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                    <MudText Typo="Typo.subtitle1">Endpoint Credentials</MudText>
+                    @if (!_loadingEndpointSettings)
+                    {
+                        @if (_endpointHasCredential)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">Configured</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">Not configured</MudChip>
+                        }
+                    }
+                </MudStack>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    One credential covers all media endpoints: M3U, XMLTV, streams, and Xtream-compatible
+                    players (TiviMate, IPTV Smarters). Leave enforcement disabled only if M3Undle is not
+                    reachable outside your home network.
+                </MudText>
+
+                @if (_loadingEndpointSettings)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    <MudGrid Spacing="2" Class="mb-3">
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="_endpointUsername"
+                                          Label="Username"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          FullWidth="true"
+                                          Placeholder="iptv-client"
+                                          Required="_endpointEnabled" />
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <MudTextField @bind-Value="_endpointPassword"
+                                          Label="Password"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          FullWidth="true"
+                                          Placeholder="Leave blank to keep existing"
+                                          InputType="InputType.Password"
+                                          HelperText="Stored as a password hash — the plaintext is never saved." />
+                        </MudItem>
+                    </MudGrid>
+
+                    @* Xtream connection block — shown when enforcement is on, credential is set, and Xtream protocol is on *@
+                    @if (_endpointEnabled && _endpointHasCredential && _xtreamEnabled)
+                    {
+                        <MudPaper Outlined="true" Class="pa-3 mb-3" Style="max-width:420px;">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">Xtream connection details</MudText>
+                            <MudStack Spacing="1">
+                                <MudStack Row="true" Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:80px;">Server</MudText>
+                                    <MudText Typo="Typo.caption" Style="font-family:monospace; word-break:break-all;">@Nav.BaseUri.TrimEnd('/')</MudText>
+                                </MudStack>
+                                <MudStack Row="true" Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:80px;">Username</MudText>
+                                    <MudText Typo="Typo.caption" Style="font-family:monospace;">@_endpointUsername</MudText>
+                                </MudStack>
+                                <MudStack Row="true" Spacing="1">
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:80px;">Password</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">●●●● (set)</MudText>
+                                </MudStack>
+                            </MudStack>
+                        </MudPaper>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(_activeProfileId))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                            Bound to profile: @(_activeProfileName ?? _activeProfileId)
+                        </MudText>
+                    }
+
+                    <MudSwitch T="bool" Label="Enable credential enforcement" @bind-Value="_endpointEnabled"
+                               Class="mb-1" Color="Color.Primary" />
+                    <div class="mb-4">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            When enabled, M3U, XMLTV, stream, and Xtream endpoints require the credential above.
+                        </MudText>
+                    </div>
+
+                    @* Advanced *@
+                    <div class="mb-1">
+                        <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                                   StartIcon="@(_showSecurityAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                   OnClick="@(() => _showSecurityAdvanced = !_showSecurityAdvanced)">
+                            Advanced options
+                        </MudButton>
+                    </div>
+                    <MudCollapse Expanded="_showSecurityAdvanced">
+                        <div class="mt-3 pt-3" style="border-top:1px solid var(--mud-palette-divider)">
+                            <MudTextField @bind-Value="_virtualTunerId"
+                                          Label="Virtual Tuner ID"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          FullWidth="true"
+                                          Placeholder="hdhr-main"
+                                          Style="max-width:320px;"
+                                          HelperText="Identity used by HDHR tuner-reuse protocols." />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-4">
+                                Identifies M3Undle to players that support HDHomeRun tuner reuse (Channels DVR,
+                                some Plex setups). When a player retunes to the same channel it reattaches to the
+                                existing stream instead of opening a new connection. Only change this if you run
+                                multiple M3Undle instances and need unique IDs.
+                            </MudText>
+
+                            <MudSwitch T="bool" Label="Enable Xtream protocol" @bind-Value="_xtreamEnabled"
+                                       Color="Color.Primary" Class="mb-1" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Disable only if you have no Xtream-compatible clients. When disabled, all Xtream
+                                routes return 404 regardless of credential state.
+                            </MudText>
+                        </div>
+                    </MudCollapse>
+
+                    @if (!string.IsNullOrWhiteSpace(_endpointError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_endpointError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_endpointSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_endpointSuccess</MudAlert>
+                    }
+
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-4">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="_savingEndpointSettings"
+                                   OnClick="SaveEndpointSecurityAsync">
+                            @(_savingEndpointSettings ? "Applying..." : "Apply")
+                        </MudButton>
+                    </MudStack>
+                }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ STREAMING ═════════ *@
+        @if (_section == "streaming")
+        {
+            @* ── Stream Proxy ─────────────────────────────────────────── *@
+            <MudPaper Elevation="1" Class="pa-6 mb-4">
+                <MudText Typo="Typo.h6" Class="mb-1">Stream Proxy</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Controls how M3Undle relays live streams to your media player. New viewer sessions
+                    inherit these settings immediately; the overall limits take effect after a restart.
+                </MudText>
+
+                @if (_loadingStreamingSettings)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    @if (_streamingRestartRequired)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            Saved settings are not yet active. Restart M3Undle to apply them.
+                        </MudAlert>
+                    }
+                    @if (_activeStreamCount > 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            @_activeStreamCount active stream@(_activeStreamCount == 1 ? "" : "s") currently playing.
+                            Restarting will disconnect all active viewers.
+                        </MudAlert>
+                    }
+
+                    <MudSwitch T="bool" Label="Enable Stream Proxy" @bind-Value="_streamingEnabled"
+                               Class="mb-4" Color="Color.Primary" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Session Limits</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                        Hard cap on concurrent viewers. When reached, new tune requests receive a "tuner busy"
+                        response. Match this to your provider's connection limit — exceeding it will get
+                        streams cut off at the source.
+                    </MudText>
+                    <MudGrid Spacing="2" Class="mb-4">
+                        <MudItem xs="12" sm="6" md="4">
+                            <div class="d-flex align-center gap-2">
+                                <MudNumericField T="int" @bind-Value="_maxConcurrentSessions"
+                                                 Label="Max Simultaneous Streams"
+                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                 Min="1" Immediate="true"
+                                                 HelperText="Maximum concurrent viewers across all channels."
+                                                 Class="flex-grow-1" />
+                                <MudTooltip Text="When this limit is reached, new viewers receive a 'tuner busy' response until an existing stream ends. Set this to your provider's connection limit to avoid getting cut off."
+                                            Arrow="true" Placement="Placement.Top">
+                                    <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                             Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                </MudTooltip>
+                            </div>
+                        </MudItem>
+                        <MudItem xs="12" sm="6" md="4">
+                            <div class="d-flex align-center gap-2">
+                                <MudNumericField T="int" @bind-Value="_idleGraceSeconds"
+                                                 Label="Disconnect Grace Period (sec)"
+                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                 Min="1" Immediate="true"
+                                                 HelperText="Keep the upstream connection open this long after the last viewer leaves."
+                                                 Class="flex-grow-1" />
+                                <MudTooltip Text="When all viewers disconnect from a channel, M3Undle keeps the upstream connection open for this long. Viewers who reconnect quickly — after a player crash or brief pause — pick up without rebuffering from scratch. Default: 15 s."
+                                            Arrow="true" Placement="Placement.Top">
+                                    <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                             Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                </MudTooltip>
+                            </div>
+                        </MudItem>
+                    </MudGrid>
+
+                    @* Advanced *@
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                               StartIcon="@(_showStreamingAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                               OnClick="@(() => _showStreamingAdvanced = !_showStreamingAdvanced)">
+                        Advanced options
+                    </MudButton>
+                    <MudCollapse Expanded="_showStreamingAdvanced">
+                        <div class="mt-3 pt-3" style="border-top:1px solid var(--mud-palette-divider)">
+                            <MudText Typo="Typo.subtitle2" Class="mb-1">Buffering</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                                Memory M3Undle uses to smooth over brief provider hiccups. The defaults work well
+                                for most setups. Raise buffer sizes only if viewers report stuttering on otherwise
+                                reliable networks.
+                            </MudText>
+                            <MudGrid Spacing="2" Class="mb-4">
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_idleGraceHardCapSeconds"
+                                                         Label="Maximum Idle Time (sec)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Immediate="true"
+                                                         HelperText="Hard limit: close any idle stream beyond this. Default: 120 s."
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="Even if viewers keep reconnecting and renewing the grace period, a stream is always closed after this many idle seconds. Prevents unused streams from holding a provider connection indefinitely. Must be ≥ disconnect grace."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_bufferMaxBytesPerSession"
+                                                         Label="Buffer per Stream (bytes)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Max="StreamingSettingsLimits.MaxBytesPerSession" Immediate="true"
+                                                         HelperText="@($"≈ {FormatMiB(_bufferMaxBytesPerSession)} MiB per stream (max 1 GiB)")"
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="Memory reserved per active stream. A larger buffer helps viewers recover from brief network hiccups without losing their place. Default: 4 MiB."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_bufferMaxBytesHardCap"
+                                                         Label="Total Buffer Limit (bytes)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Immediate="true"
+                                                         HelperText="@($"≈ {FormatMiB(_bufferMaxBytesHardCap)} MiB across all streams")"
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="Maximum total buffer memory across all active streams. Prevents the server running out of RAM when many streams are open at once. Must be ≥ buffer per stream. Default: 32 MiB."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_bufferReadChunkSizeBytes"
+                                                         Label="Download Chunk Size (bytes)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Max="StreamingSettingsLimits.MaxReadChunkSizeBytes" Immediate="true"
+                                                         HelperText="@($"≈ {Math.Max(1, _bufferReadChunkSizeBytes / 1024)} KiB per read (max 16 MiB)")"
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="How much data is read from the provider per chunk. Smaller (e.g. 32 KiB) gives quicker stream starts; larger is more efficient on fast connections. Default: 32 KiB."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                            </MudGrid>
+
+                            <MudText Typo="Typo.subtitle2" Class="mb-1">Reconnect Behaviour</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                                How M3Undle responds when the upstream provider goes quiet or drops the connection.
+                                Increase timeouts if your provider occasionally pauses during live broadcasts.
+                            </MudText>
+                            <MudGrid Spacing="2" Class="mb-3">
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_reconnectReadStallTimeoutSeconds"
+                                                         Label="Stall Detection (sec)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Immediate="true"
+                                                         HelperText="Silence before treating the stream as stalled. Default: 30 s."
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="If no data arrives from the provider for this many seconds, M3Undle assumes the stream has stalled and starts reconnect attempts."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_reconnectOutageWindowSeconds"
+                                                         Label="Reconnect Window (sec)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Immediate="true"
+                                                         HelperText="Keep retrying after a stall for this long before giving up. Default: 75 s."
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="After detecting a stall, M3Undle retries the connection for up to this many seconds. If the stream doesn't recover, it closes and viewers must tune in again. Must be ≥ stall detection."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                                <MudItem xs="12" sm="6" md="4">
+                                    <div class="d-flex align-center gap-2">
+                                        <MudNumericField T="int" @bind-Value="_reconnectConnectTimeoutSeconds"
+                                                         Label="Connection Timeout (sec)"
+                                                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                         Min="1" Immediate="true"
+                                                         HelperText="Wait this long for the provider to respond on connect. Default: 15 s."
+                                                         Class="flex-grow-1" />
+                                        <MudTooltip Text="If the provider doesn't start sending data within this many seconds, the attempt is abandoned and the viewer receives a 'service unavailable' response."
+                                                    Arrow="true" Placement="Placement.Top">
+                                            <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                                     Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                        </MudTooltip>
+                                    </div>
+                                </MudItem>
+                            </MudGrid>
+
+                            @if (_streamingRestartRequired && _appliedStreamingSettings is not null)
+                            {
+                                <MudDivider Class="my-3" />
+                                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
+                                    Currently running (before restart)
+                                </MudText>
+                                <MudGrid Spacing="2">
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Proxy</MudText>
+                                        <MudText Typo="Typo.body2">@(_appliedStreamingSettings.StreamingEnabled ? "Enabled" : "Disabled")</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Max Streams</MudText>
+                                        <MudText Typo="Typo.body2">@_appliedStreamingSettings.MaxConcurrentSessions</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Disconnect Grace</MudText>
+                                        <MudText Typo="Typo.body2">@_appliedStreamingSettings.IdleGraceSeconds s</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Buffer / Stream</MudText>
+                                        <MudText Typo="Typo.body2">@FormatMiB(_appliedStreamingSettings.BufferMaxBytesPerSession) MiB</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Total Buffer</MudText>
+                                        <MudText Typo="Typo.body2">@FormatMiB(_appliedStreamingSettings.BufferMaxBytesHardCap) MiB</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stall Timeout</MudText>
+                                        <MudText Typo="Typo.body2">@_appliedStreamingSettings.ReconnectReadStallTimeoutSeconds s</MudText>
+                                    </MudItem>
+                                </MudGrid>
+                            }
+                        </div>
+                    </MudCollapse>
+
+                    @if (!string.IsNullOrWhiteSpace(_streamingError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_streamingError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_streamingSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_streamingSuccess</MudAlert>
+                    }
+
+                    <MudStack Row="true" Spacing="2" Class="mt-4">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="_savingStreamingSettings || _restartingApplication"
+                                   OnClick="SaveStreamingSettingsAsync">
+                            @(_savingStreamingSettings ? "Applying..." : "Apply")
+                        </MudButton>
+                        @if (_streamingRestartRequired)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                       Disabled="_restartingApplication"
+                                       OnClick="RestartApplicationAsync">
+                                @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
+                            </MudButton>
+                        }
+                    </MudStack>
+                }
+            </MudPaper>
+
+            @* ── Browser Playback ──────────────────────────────────────── *@
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">Browser Playback</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    When a browser or Electron client requests a stream that is only available as MPEG-TS,
+                    M3Undle uses FFmpeg to transcode it to HLS on the fly so the browser can play it natively.
+                    Requires FFmpeg to be installed on the server. Changes take effect after a restart.
+                </MudText>
+
+                @if (_loadingGenHlsSettings)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    @if (!_genHlsFfmpegAvailable)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            <strong>FFmpeg not found</strong> — browser playback of TS-only streams is unavailable.
+                            @if (!string.IsNullOrWhiteSpace(_genHlsFfmpegUnavailableReason))
+                            {
+                                <br />@_genHlsFfmpegUnavailableReason
+                            }
+                            <br />Install FFmpeg and restart, or set a custom path in Advanced options below.
+                        </MudAlert>
+                    }
+                    else if (_genHlsEffectivelyEnabled)
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            FFmpeg is available. Browser playback is active.
+                        </MudAlert>
                     }
                     else
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">No credential configured</MudChip>
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            Generated HLS is disabled. Browser clients will not receive HLS for TS-only streams.
+                        </MudAlert>
                     }
-                </MudStack>
-            }
-        </MudPaper>
-    </MudItem>
 
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Observability</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Controls Prometheus metrics scraping and metrics token access.
-            </MudText>
-
-            @if (_loadingObservabilitySettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                @if (_metricsMode == MetricsAccessModes.Public)
-                {
-                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        Metrics are public. Anyone who can reach this server can scrape runtime details.
-                    </MudAlert>
-                }
-
-                <MudSwitch T="bool" Label="Expose metrics endpoint" @bind-Value="_metricsEnabled"
-                           Color="Color.Primary" Class="mb-3" />
-
-                <MudSelect T="string" Label="Metrics access mode" @bind-Value="_metricsMode"
-                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
-                           Disabled="!_metricsEnabled">
-                    <MudSelectItem Value="@MetricsAccessModes.LocalOnly">Local only (loopback + CIDRs)</MudSelectItem>
-                    <MudSelectItem Value="@MetricsAccessModes.Token">Token (Bearer auth required)</MudSelectItem>
-                    <MudSelectItem Value="@MetricsAccessModes.Public">Public — no authentication</MudSelectItem>
-                    <MudSelectItem Value="@MetricsAccessModes.Disabled">Disabled (no endpoint)</MudSelectItem>
-                </MudSelect>
-
-                <MudSwitch T="bool" Label="Enable channel labels" @bind-Value="_metricsEnableChannelLabels"
-                           Color="Color.Primary" Class="mb-0" Disabled="!_metricsEnabled" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
-                    Adds channel_name/channel_id labels to stream metrics. Avoid on large lineups — significantly increases Prometheus cardinality.
-                </MudText>
-
-                <MudTextField @bind-Value="_metricsLocalAllowedCidrs"
-                              Label="Allowed CIDRs for LocalOnly"
-                              Variant="Variant.Outlined"
-                              Margin="Margin.Dense"
-                              FullWidth="true"
-                              Lines="3"
-                              Placeholder="172.18.0.0/16"
-                              Disabled="!_metricsEnabled"
-                              HelperText="Loopback is always allowed. Add one CIDR per line for Docker/internal scrape networks." />
-
-                @if (!string.IsNullOrWhiteSpace(_observabilityError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_observabilityError
-                    </MudAlert>
-                }
-
-                @if (!string.IsNullOrWhiteSpace(_observabilitySuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_observabilitySuccess
-                    </MudAlert>
-                }
-
-                <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           Disabled="_savingObservabilitySettings"
-                           OnClick="SaveObservabilitySettingsAsync">
-                    @(_savingObservabilitySettings ? "Saving..." : "Save Observability Settings")
-                </MudButton>
-
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-3 mb-0">
-                    Scrape endpoint: <code>@_metricsPath</code>
-                </MudText>
-
-                <MudDivider Class="my-4" />
-
-                <MudText Typo="Typo.subtitle2" Class="mb-2">Metrics Tokens</MudText>
-
-                @if (!string.IsNullOrWhiteSpace(_newMetricsToken))
-                {
-                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
-                            <span>New token for @_newMetricsTokenCreatedName: <code>@_newMetricsToken</code></span>
-                            <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
-                                           Size="Size.Small"
-                                           title="Copy token"
-                                           OnClick="CopyNewTokenAsync" />
-                        </MudStack>
-                    </MudAlert>
-                }
-
-                <MudGrid Spacing="2" Class="mb-3">
-                    <MudItem xs="12" sm="5">
-                        <MudTextField @bind-Value="_newMetricsTokenName"
-                                      Label="Token Name"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      FullWidth="true"
-                                      Placeholder="Prometheus" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudDatePicker @bind-Date="_newMetricsTokenExpires"
-                                       Label="Expires"
-                                       Variant="Variant.Outlined"
-                                       Margin="Margin.Dense"
-                                       Clearable="true" />
-                    </MudItem>
-                    <MudItem xs="12" sm="3" Class="d-flex align-center">
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                                   Disabled="_creatingMetricsToken"
-                                   OnClick="CreateMetricsTokenAsync">
-                            @(_creatingMetricsToken ? "Creating..." : "Generate")
-                        </MudButton>
-                    </MudItem>
-                </MudGrid>
-
-                @if (_metricsTokens.Count == 0)
-                {
-                    <MudText Typo="Typo.body2" Color="Color.Secondary">No metrics tokens configured.</MudText>
-                }
-                else
-                {
-                    <MudTable Items="_metricsTokens" Dense="true" Hover="true">
-                        <HeaderContent>
-                            <MudTh>Name</MudTh>
-                            <MudTh>Scope</MudTh>
-                            <MudTh>Created</MudTh>
-                            <MudTh>Last Used</MudTh>
-                            <MudTh>Expires</MudTh>
-                            <MudTh></MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>@context.Name</MudTd>
-                            <MudTd>@context.Scope</MudTd>
-                            <MudTd>@context.CreatedUtc.ToLocalTime().ToString("g")</MudTd>
-                            <MudTd>@(context.LastUsedUtc?.ToLocalTime().ToString("g") ?? "Never")</MudTd>
-                            <MudTd>@(context.ExpiresUtc?.ToLocalTime().ToString("g") ?? "Never")</MudTd>
-                            <MudTd>
-                                <MudIconButton Icon="@Icons.Material.Outlined.Delete"
-                                               Color="Color.Error"
-                                               Size="Size.Small"
-                                               OnClick="() => DeleteMetricsTokenAsync(context)" />
-                            </MudTd>
-                        </RowTemplate>
-                    </MudTable>
-                }
-            }
-        </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">HDHomeRun Emulation</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                M3Undle emulates an HDHomeRun tuner so HDHR-compatible apps (NextPVR, Plex, Channels&nbsp;DVR, etc.) can discover and tune channels.
-                Changes require a restart.
-            </MudText>
-
-            @if (_loadingHdhrSettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                @if (_hdhrDisabledByEnv)
-                {
-                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        HDHomeRun emulation is disabled by the <code>M3UNDLE_HDHR_ENABLED=false</code> environment variable.
-                        Remove the variable and restart to manage HDHR settings here.
-                    </MudAlert>
-                }
-
-                @if (_hdhrRestartRequired)
-                {
-                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        HDHR settings have been saved but are not active yet. Restart M3Undle to apply them.
-                    </MudAlert>
-                }
-
-                <MudGrid Spacing="2" Class="mb-3">
-                    <MudItem xs="12" sm="6" md="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Effective Tuner Count</MudText>
-                        <MudText Typo="Typo.body2">@_hdhrEffectiveTunerCount</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Limit</MudText>
-                        <MudText Typo="Typo.body2">
-                            @if (_hdhrIsStreamLimitEnforced)
-                            {
-                                <span>Enforced</span>
-                            }
-                            else
-                            {
-                                <span>Unlimited (no provider limit or override set)</span>
-                            }
-                        </MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Provider Stream Limit</MudText>
-                        <MudText Typo="Typo.body2">@(_hdhrProviderLimit?.ToString() ?? "Not set")</MudText>
-                    </MudItem>
-                </MudGrid>
-
-                <MudSwitch T="bool" Label="Enable HDHomeRun emulation" @bind-Value="_hdhrEnabled" Class="mb-3"
-                           Color="Color.Primary" Disabled="_hdhrDisabledByEnv" />
-
-                <MudGrid Spacing="2" Class="mb-4">
-                    <MudItem xs="12" sm="6">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int?" @bind-Value="_hdhrTunerCountOverride"
-                                             Label="Tuner Count Override"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Max="32" Immediate="true" Clearable="true"
-                                             Disabled="_hdhrDisabledByEnv"
-                                             HelperText="@($"Blank = auto ({_hdhrEffectiveTunerCount} from {(_hdhrProviderLimit is not null ? "provider" : "default")})")"
-                                             Placeholder="Auto"
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="Number of virtual tuners reported to HDHomeRun clients. Leave blank to auto-detect from your provider's stream limit. This also controls stream limit enforcement when set."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <div class="d-flex align-center gap-2">
-                            <MudTextField @bind-Value="_hdhrFriendlyName"
-                                          Label="Friendly Name"
-                                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                                          Placeholder="M3Undle HDHomeRun"
-                                          Disabled="_hdhrDisabledByEnv"
-                                          HelperText="@($"Shown to HDHR clients. Effective: {_hdhrResolvedFriendlyName}")"
-                                          Class="flex-grow-1" />
-                            <MudTooltip Text="The name shown to apps that discover this device (e.g. Plex, Channels DVR, NextPVR). Leave blank to use the default 'M3Undle HDHomeRun'."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6">
-                        <div class="d-flex align-center gap-2">
-                            <MudTextField @bind-Value="_hdhrAdvertisedBaseUrl"
-                                          Label="Advertised Base URL"
-                                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                                          Placeholder="Auto-detect"
-                                          Disabled="_hdhrDisabledByEnv"
-                                          HelperText="@($"Resolved: {_hdhrResolvedBaseUrl}")"
-                                          Class="flex-grow-1" />
-                            <MudTooltip Text="The URL that HDHR clients use to reach M3Undle. Leave blank to auto-detect from the server's IP and port. Set this if M3Undle is behind a reverse proxy."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                </MudGrid>
-
-                <MudText Typo="Typo.subtitle2" Class="mb-2">Discovery Protocols</MudText>
-                <MudGrid Spacing="2" Class="mb-3">
-                    <MudItem xs="12" sm="4">
-                        <MudSwitch T="bool" Label="Discovery (master)" @bind-Value="_hdhrDiscoveryEnabled"
-                                   Color="Color.Primary" Disabled="_hdhrDisabledByEnv" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudSwitch T="bool" Label="SSDP (UPnP)" @bind-Value="_hdhrSsdpEnabled"
-                                   Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudSwitch T="bool" Label="SiliconDust broadcast" @bind-Value="_hdhrSiliconDustDiscoveryEnabled"
-                                   Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
-                    </MudItem>
-                </MudGrid>
-
-                @if (!string.IsNullOrWhiteSpace(_hdhrError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_hdhrError
-                    </MudAlert>
-                }
-
-                @if (!string.IsNullOrWhiteSpace(_hdhrSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_hdhrSuccess
-                    </MudAlert>
-                }
-
-                <MudStack Row="true" Spacing="2" Class="mb-4">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               Disabled="_savingHdhrSettings || _restartingApplication || _hdhrDisabledByEnv"
-                               OnClick="SaveHdhrSettingsAsync">
-                        @(_savingHdhrSettings ? "Saving..." : "Save HDHR Settings")
-                    </MudButton>
-
-                    @if (_hdhrRestartRequired)
+                    @if (_genHlsRestartRequired)
                     {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                                   Disabled="_restartingApplication"
-                                   OnClick="RestartApplicationAsync">
-                            @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
-                        </MudButton>
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            Browser Playback settings have been saved but are not yet active. Restart M3Undle to apply them.
+                        </MudAlert>
                     }
-                </MudStack>
 
-                <MudDivider Class="mb-3" />
+                    <MudSwitch T="bool" Label="Enable generated HLS" @bind-Value="_genHlsEnabled"
+                               Class="mb-3" Color="Color.Primary" />
 
-                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
-                    Active configuration — requires restart to update
-                </MudText>
-
-                <MudGrid Spacing="2">
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">HDHR Emulation</MudText>
-                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.Enabled == true ? "Enabled" : "Disabled")</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Tuner Count</MudText>
-                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.EffectiveTunerCount</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Friendly Name</MudText>
-                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.ResolvedFriendlyName</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Base URL</MudText>
-                        <MudText Typo="Typo.body2">@_appliedHdhrSettings?.ResolvedBaseUrl</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Discovery</MudText>
-                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.DiscoveryEnabled == true ? "On" : "Off")</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">SSDP</MudText>
-                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.SsdpEnabled == true ? "On" : "Off")</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">SiliconDust</MudText>
-                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings?.SiliconDustDiscoveryEnabled == true ? "On" : "Off")</MudText>
-                    </MudItem>
-                </MudGrid>
-            }
-        </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Stream Proxy</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Controls how M3Undle relays live streams to your media player. Changes are saved immediately but only take effect after restarting the app.
-            </MudText>
-
-            @if (_loadingStreamingSettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                @if (_streamingRestartRequired)
-                {
-                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        Stream settings have been saved but are not active yet. Restart M3Undle to apply them.
-                    </MudAlert>
-                }
-
-                @if (_activeStreamCount > 0)
-                {
-                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        @_activeStreamCount active stream@(_activeStreamCount == 1 ? "" : "s") currently playing.
-                        Restarting will disconnect all active viewers.
-                    </MudAlert>
-                }
-
-                <MudSwitch T="bool" Label="Enable Stream Proxy" @bind-Value="_streamingEnabled" Class="mb-3"
-                           Color="Color.Primary" />
-
-                <MudText Typo="Typo.subtitle2" Class="mb-2 mt-1">Session Limits</MudText>
-                <MudGrid Spacing="2" Class="mb-4">
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_maxConcurrentSessions"
-                                             Label="Max Simultaneous Streams"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="How many streams can play at the same time."
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="When this limit is reached, new viewers receive a 'retry later' response until an existing stream ends. Set this based on your server capacity and the number of streams your provider allows."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_idleGraceSeconds"
-                                             Label="Disconnect Grace Period (sec)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="Seconds to keep a stream alive after the last viewer leaves."
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="When all viewers disconnect from a channel, M3Undle keeps the upstream connection running for this long. This lets viewers reconnect quickly — for example after refreshing their player — without having to buffer from scratch. Default: 15 s."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_idleGraceHardCapSeconds"
-                                             Label="Maximum Idle Time (sec)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="Hard limit on how long a stream stays open with no viewers."
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="Even if viewers keep reconnecting and renewing the grace period, a stream is always closed after this many idle seconds. Prevents unused streams from staying open indefinitely. Must be ≥ disconnect grace. Default: 120 s."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                </MudGrid>
-
-                <MudText Typo="Typo.subtitle2" Class="mb-2">Buffering</MudText>
-                <MudGrid Spacing="2" Class="mb-4">
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_bufferMaxBytesPerSession"
-                                             Label="Buffer per Stream (bytes)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Max="StreamingSettingsLimits.MaxBytesPerSession" Immediate="true"
-                                             HelperText="@($"~ {FormatMiB(_bufferMaxBytesPerSession)} MiB per stream (max 1 GiB)")"
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="Memory reserved to buffer each active stream. A larger buffer gives smoother playback and helps viewers recover from brief network hiccups without losing their place. Default: 4 MiB."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_bufferMaxBytesHardCap"
-                                             Label="Total Buffer Limit (bytes)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="@($"~ {FormatMiB(_bufferMaxBytesHardCap)} MiB across all streams")"
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="The maximum total memory used by all active stream buffers combined. Protects the server from running out of memory when many streams are active at once. Must be ≥ buffer per stream. Default: 32 MiB."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_bufferReadChunkSizeBytes"
-                                             Label="Download Chunk Size (bytes)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Max="StreamingSettingsLimits.MaxReadChunkSizeBytes" Immediate="true"
-                                             HelperText="@($"~ {Math.Max(1, _bufferReadChunkSizeBytes / 1024)} KiB per read (max 16 MiB)")"
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="How much data is fetched from the source in each read. Smaller values (e.g. 32 KiB) give quicker stream starts; larger values are more efficient on fast connections. Default: 32 KiB."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                </MudGrid>
-
-                <MudText Typo="Typo.subtitle2" Class="mb-2">Reconnect Behaviour</MudText>
-                <MudGrid Spacing="2" Class="mb-3">
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_reconnectReadStallTimeoutSeconds"
-                                             Label="Stall Detection Timeout (sec)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="Seconds of silence before M3Undle treats a stream as stalled."
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="If no data arrives from the upstream source for this many seconds, M3Undle assumes the stream has stalled and begins reconnect attempts. Default: 30 s."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_reconnectOutageWindowSeconds"
-                                             Label="Reconnect Window (sec)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="How long M3Undle keeps retrying after a stall before giving up."
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="After detecting a stall, M3Undle retries the connection for up to this many seconds. If the stream doesn't recover in time, it closes and viewers must tune in again manually. Must be ≥ stall timeout. Default: 75 s."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                    <MudItem xs="12" sm="6" md="4">
-                        <div class="d-flex align-center gap-2">
-                            <MudNumericField T="int" @bind-Value="_reconnectConnectTimeoutSeconds"
-                                             Label="Connection Timeout (sec)"
-                                             Variant="Variant.Outlined" Margin="Margin.Dense"
-                                             Min="1" Immediate="true"
-                                             HelperText="Seconds to wait for the source to respond when opening a stream."
-                                             Class="flex-grow-1" />
-                            <MudTooltip Text="If the upstream source doesn't start sending data within this many seconds, the connection attempt is abandoned and the viewer receives a 'service unavailable' response. Default: 15 s."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
-                        </div>
-                    </MudItem>
-                </MudGrid>
-
-                @if (!string.IsNullOrWhiteSpace(_streamingError))
-                {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_streamingError
-                    </MudAlert>
-                }
-
-                @if (!string.IsNullOrWhiteSpace(_streamingSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_streamingSuccess
-                    </MudAlert>
-                }
-
-                <MudStack Row="true" Spacing="2" Class="mb-4">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               Disabled="_savingStreamingSettings || _restartingApplication"
-                               OnClick="SaveStreamingSettingsAsync">
-                        @(_savingStreamingSettings ? "Saving..." : "Save Stream Settings")
+                    @* Advanced *@
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                               StartIcon="@(_showBrowserPlaybackAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                               OnClick="@(() => _showBrowserPlaybackAdvanced = !_showBrowserPlaybackAdvanced)">
+                        Advanced options
                     </MudButton>
-
-                    @if (_streamingRestartRequired)
-                    {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                                   Disabled="_restartingApplication"
-                                   OnClick="RestartApplicationAsync">
-                            @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
-                        </MudButton>
-                    }
-                </MudStack>
-
-                <MudDivider Class="mb-3" />
-
-                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
-                    Active configuration — requires restart to update
-                </MudText>
-
-                <MudGrid Spacing="2">
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Proxy</MudText>
-                        <MudText Typo="Typo.body2">@(_appliedStreamingSettings?.StreamingEnabled == true ? "Enabled" : "Disabled")</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Max Simultaneous Streams</MudText>
-                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.MaxConcurrentSessions</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Disconnect Grace</MudText>
-                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.IdleGraceSeconds s</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Max Idle Time</MudText>
-                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.IdleGraceHardCapSeconds s</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Buffer per Stream</MudText>
-                        <MudText Typo="Typo.body2">@FormatMiB(_appliedStreamingSettings?.BufferMaxBytesPerSession ?? 0) MiB</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Total Buffer Limit</MudText>
-                        <MudText Typo="Typo.body2">@FormatMiB(_appliedStreamingSettings?.BufferMaxBytesHardCap ?? 0) MiB</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Download Chunk Size</MudText>
-                        <MudText Typo="Typo.body2">@((_appliedStreamingSettings?.BufferReadChunkSizeBytes ?? 0) / 1024) KiB</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Stall Detection Timeout</MudText>
-                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.ReconnectReadStallTimeoutSeconds s</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Reconnect Window</MudText>
-                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.ReconnectOutageWindowSeconds s</MudText>
-                    </MudItem>
-                    <MudItem xs="12" sm="4">
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">Connection Timeout</MudText>
-                        <MudText Typo="Typo.body2">@_appliedStreamingSettings?.ReconnectConnectTimeoutSeconds s</MudText>
-                    </MudItem>
-                </MudGrid>
-            }
-        </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Browser Playback</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                Controls HLS generation for browser and Electron clients. When a browser requests a stream
-                that is only available as MPEG-TS, M3Undle uses FFmpeg to convert it to HLS on the fly.
-                Changes require a restart.
-            </MudText>
-
-            @if (_loadingGenHlsSettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                @if (!_genHlsFfmpegAvailable)
-                {
-                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        <strong>FFmpeg not found</strong> — browser playback of TS-only streams is unavailable.
-                        @if (!string.IsNullOrWhiteSpace(_genHlsFfmpegUnavailableReason))
-                        {
-                            <br />@_genHlsFfmpegUnavailableReason
-                        }
-                        <br />Install FFmpeg and restart, or set the path below.
-                    </MudAlert>
-                }
-                else if (_genHlsEffectivelyEnabled)
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        FFmpeg is available. Browser playback is active.
-                    </MudAlert>
-                }
-                else
-                {
-                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        Generated HLS is disabled. Browser clients will not receive HLS for TS-only streams.
-                    </MudAlert>
-                }
-
-                @if (_genHlsRestartRequired)
-                {
-                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
-                        Browser Playback settings have been saved but are not active yet. Restart M3Undle to apply them.
-                    </MudAlert>
-                }
-
-                <MudSwitch T="bool" Label="Enable generated HLS" @bind-Value="_genHlsEnabled" Class="mb-3"
-                           Color="Color.Primary" />
-
-                <MudGrid Spacing="2" Class="mb-3">
-                    <MudItem xs="12" sm="6">
-                        <div class="d-flex align-center gap-2">
+                    <MudCollapse Expanded="_showBrowserPlaybackAdvanced">
+                        <div class="mt-3 pt-3" style="border-top:1px solid var(--mud-palette-divider)">
                             <MudTextField @bind-Value="_genHlsFfmpegPath"
                                           Label="FFmpeg Path"
                                           Variant="Variant.Outlined" Margin="Margin.Dense"
                                           Placeholder="ffmpeg"
-                                          HelperText="@($"Active: {_genHlsConfiguredFfmpegPath}")"
-                                          Class="flex-grow-1" />
-                            <MudTooltip Text="Path to the FFmpeg executable. Leave blank to use the default ('ffmpeg' on PATH). Set an absolute path if FFmpeg is installed in a custom location."
-                                        Arrow="true" Placement="Placement.Top">
-                                <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
-                                         Style="opacity:0.5;cursor:help;margin-bottom:20px" />
-                            </MudTooltip>
+                                          HelperText="@($"Leave blank to use 'ffmpeg' from PATH. Active: {_genHlsConfiguredFfmpegPath}")"
+                                          Style="max-width:420px;" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                                Set an absolute path only if FFmpeg is installed in a location not on your system PATH.
+                                Most users leave this blank.
+                            </MudText>
                         </div>
+                    </MudCollapse>
+
+                    @if (!string.IsNullOrWhiteSpace(_genHlsError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_genHlsError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_genHlsSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_genHlsSuccess</MudAlert>
+                    }
+
+                    <MudStack Row="true" Spacing="2" Class="mt-4">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="_savingGenHlsSettings || _restartingApplication"
+                                   OnClick="SaveGenHlsSettingsAsync">
+                            @(_savingGenHlsSettings ? "Applying..." : "Apply")
+                        </MudButton>
+                        @if (_genHlsRestartRequired)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                       Disabled="_restartingApplication"
+                                       OnClick="RestartApplicationAsync">
+                                @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
+                            </MudButton>
+                        }
+                    </MudStack>
+                }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ HDHR ══════════════ *@
+        @if (_section == "hdhr")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">HDHomeRun Emulation</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    M3Undle emulates an HDHomeRun network tuner so apps like Plex, Channels DVR, and
+                    NextPVR can discover and tune channels via the HDHR protocol. Changes take effect
+                    after a restart.
+                </MudText>
+
+                @if (_loadingHdhrSettings)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    @if (_hdhrDisabledByEnv)
+                    {
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            HDHomeRun emulation is disabled by the <code>M3UNDLE_HDHR_ENABLED=false</code>
+                            environment variable. Remove the variable and restart to manage settings here.
+                        </MudAlert>
+                    }
+                    @if (_hdhrRestartRequired)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            Saved settings are not yet active. Restart M3Undle to apply them.
+                        </MudAlert>
+                    }
+
+                    <MudGrid Spacing="2" Class="mb-4">
+                        <MudItem xs="12" sm="4">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Effective Tuner Count</MudText>
+                            <MudText Typo="Typo.body2">@_hdhrEffectiveTunerCount</MudText>
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Limit</MudText>
+                            <MudText Typo="Typo.body2">@(_hdhrIsStreamLimitEnforced ? "Enforced" : "Unlimited (no provider limit or override set)")</MudText>
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Provider Stream Limit</MudText>
+                            <MudText Typo="Typo.body2">@(_hdhrProviderLimit?.ToString() ?? "Not set")</MudText>
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudSwitch T="bool" Label="Enable HDHomeRun emulation" @bind-Value="_hdhrEnabled"
+                               Class="mb-4" Color="Color.Primary" Disabled="_hdhrDisabledByEnv" />
+
+                    <MudGrid Spacing="2" Class="mb-4">
+                        <MudItem xs="12" sm="6">
+                            <div class="d-flex align-center gap-2">
+                                <MudNumericField T="int?" @bind-Value="_hdhrTunerCountOverride"
+                                                 Label="Tuner Count Override"
+                                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                 Min="1" Max="32" Immediate="true" Clearable="true"
+                                                 Disabled="_hdhrDisabledByEnv"
+                                                 HelperText="@($"Blank = auto ({_hdhrEffectiveTunerCount} from {(_hdhrProviderLimit is not null ? "provider" : "default")})")"
+                                                 Placeholder="Auto"
+                                                 Class="flex-grow-1" />
+                                <MudTooltip Text="Number of virtual tuners reported to HDHR clients. Leave blank to auto-detect from your provider's stream limit. This also controls how many concurrent streams M3Undle enforces when set."
+                                            Arrow="true" Placement="Placement.Top">
+                                    <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                             Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                </MudTooltip>
+                            </div>
+                        </MudItem>
+                        <MudItem xs="12" sm="6">
+                            <div class="d-flex align-center gap-2">
+                                <MudTextField @bind-Value="_hdhrFriendlyName"
+                                              Label="Friendly Name"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                                              Placeholder="M3Undle HDHomeRun"
+                                              Disabled="_hdhrDisabledByEnv"
+                                              HelperText="@($"Shown to apps that discover this device. Effective: {_hdhrResolvedFriendlyName}")"
+                                              Class="flex-grow-1" />
+                                <MudTooltip Text="The name shown in Plex, Channels DVR, and NextPVR when they discover this device. Leave blank for the default 'M3Undle HDHomeRun'."
+                                            Arrow="true" Placement="Placement.Top">
+                                    <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                             Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                </MudTooltip>
+                            </div>
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Discovery Protocols</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                        How M3Undle announces itself on your network. Discovery (master) must be enabled for
+                        SSDP and SiliconDust to work. Disable all if you add the device URL to your player manually.
+                    </MudText>
+                    <MudGrid Spacing="2" Class="mb-4">
+                        <MudItem xs="12" sm="4">
+                            <MudSwitch T="bool" Label="Discovery (master)" @bind-Value="_hdhrDiscoveryEnabled"
+                                       Color="Color.Primary" Disabled="_hdhrDisabledByEnv" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudSwitch T="bool" Label="SSDP (UPnP)" @bind-Value="_hdhrSsdpEnabled"
+                                       Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
+                        </MudItem>
+                    </MudGrid>
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Network Access</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+                        Restricts all HDHR access — discovery, lineup, and stream tuning — to these networks.
+                        Loopback is always allowed. Leave blank to allow all connections (only safe on a trusted LAN).
+                    </MudText>
+                    <MudTextField @bind-Value="_hdhrAllowedNetworks"
+                                  Label="Allowed Networks"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Lines="3"
+                                  Placeholder="192.168.1.0/24"
+                                  Disabled="_hdhrDisabledByEnv"
+                                  HelperText="One CIDR per line. Example: 192.168.1.0/24"
+                                  Class="mb-4"
+                                  Style="max-width:400px;" />
+
+                    @* Advanced *@
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default"
+                               StartIcon="@(_showHdhrAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                               OnClick="@(() => _showHdhrAdvanced = !_showHdhrAdvanced)">
+                        Advanced options
+                    </MudButton>
+                    <MudCollapse Expanded="_showHdhrAdvanced">
+                        <div class="mt-3 pt-3" style="border-top:1px solid var(--mud-palette-divider)">
+                            <div class="d-flex align-center gap-2 mb-3">
+                                <MudTextField @bind-Value="_hdhrAdvertisedBaseUrl"
+                                              Label="Advertised Base URL"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                                              Placeholder="Auto-detect"
+                                              Disabled="_hdhrDisabledByEnv"
+                                              HelperText="@($"Resolved: {_hdhrResolvedBaseUrl}")"
+                                              Style="max-width:420px;"
+                                              Class="flex-grow-1" />
+                                <MudTooltip Text="The URL that HDHR clients use to reach M3Undle. Leave blank to auto-detect from the server's IP and port. Set an absolute URL only if M3Undle sits behind a reverse proxy and the auto-detected address is wrong."
+                                            Arrow="true" Placement="Placement.Top">
+                                    <MudIcon Icon="@Icons.Material.Outlined.HelpOutline" Color="Color.Default" Size="Size.Small"
+                                             Style="opacity:0.5;cursor:help;margin-bottom:20px" />
+                                </MudTooltip>
+                            </div>
+
+                            <MudSwitch T="bool" Label="SiliconDust broadcast" @bind-Value="_hdhrSiliconDustDiscoveryEnabled"
+                                       Color="Color.Primary" Disabled="@(_hdhrDisabledByEnv || !_hdhrDiscoveryEnabled)" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                                Enables the SiliconDust-specific UDP broadcast that some older HDHR clients rely on.
+                                Leave enabled unless you have a specific reason to disable it.
+                            </MudText>
+
+                            @if (_hdhrRestartRequired && _appliedHdhrSettings is not null)
+                            {
+                                <MudDivider Class="my-3" />
+                                <MudText Typo="Typo.subtitle2" Color="Color.Secondary" Class="mb-2">
+                                    Currently running (before restart)
+                                </MudText>
+                                <MudGrid Spacing="2">
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Emulation</MudText>
+                                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings.Enabled ? "Enabled" : "Disabled")</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Tuner Count</MudText>
+                                        <MudText Typo="Typo.body2">@_appliedHdhrSettings.EffectiveTunerCount</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Friendly Name</MudText>
+                                        <MudText Typo="Typo.body2">@_appliedHdhrSettings.ResolvedFriendlyName</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Base URL</MudText>
+                                        <MudText Typo="Typo.body2">@_appliedHdhrSettings.ResolvedBaseUrl</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Discovery</MudText>
+                                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings.DiscoveryEnabled ? "On" : "Off")</MudText>
+                                    </MudItem>
+                                    <MudItem xs="12" sm="4">
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">SSDP</MudText>
+                                        <MudText Typo="Typo.body2">@(_appliedHdhrSettings.SsdpEnabled ? "On" : "Off")</MudText>
+                                    </MudItem>
+                                </MudGrid>
+                            }
+                        </div>
+                    </MudCollapse>
+
+                    @if (!string.IsNullOrWhiteSpace(_hdhrError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_hdhrError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_hdhrSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_hdhrSuccess</MudAlert>
+                    }
+
+                    <MudStack Row="true" Spacing="2" Class="mt-4">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="_savingHdhrSettings || _restartingApplication || _hdhrDisabledByEnv"
+                                   OnClick="SaveHdhrSettingsAsync">
+                            @(_savingHdhrSettings ? "Applying..." : "Apply")
+                        </MudButton>
+                        @if (_hdhrRestartRequired)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                                       Disabled="_restartingApplication"
+                                       OnClick="RestartApplicationAsync">
+                                @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
+                            </MudButton>
+                        }
+                    </MudStack>
+                }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ ENDPOINT URLs ═════ *@
+        @if (_section == "endpoints")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">Endpoint URLs</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Configure alternate base URLs so the copy buttons on the Dashboard and HDHomeRun pages
+                    can offer Docker-network or external variants. Set these via environment variables;
+                    the values shown here are read-only.
+                </MudText>
+
+                @* Host / Public URL *@
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Host / Public Base URL</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                    Override the base URL derived from the browser for copy buttons. Useful if M3Undle runs
+                    behind a port mapping and the browser URL is not what clients should use.
+                </MudText>
+                @{
+                    var publicUrl = EndpointUrlService.GetPublicBaseUrl();
+                }
+                @if (publicUrl is not null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@publicUrl</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">from env</MudChip>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        Not configured — <code>M3UNDLE_PUBLIC_BASE_URL</code> not set.
+                    </MudText>
+                }
+
+                <MudDivider Class="my-4" />
+
+                @* Docker URL *@
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Docker Base URL</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                    The URL other containers on the same Docker network should use to reach M3Undle.
+                    Typically the Compose service name: <code>http://m3undle:8080</code>.
+                </MudText>
+                @{
+                    var dockerUrl = EndpointUrlService.GetDockerBaseUrl();
+                }
+                @if (dockerUrl is not null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@dockerUrl</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">from env</MudChip>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        Not configured — <code>M3UNDLE_DOCKER_BASE_URL</code> not set.
+                    </MudText>
+                }
+
+                <MudDivider Class="my-4" />
+
+                @* External URL *@
+                <MudText Typo="Typo.subtitle1" Class="mb-1">External / Reverse Proxy URL</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                    The publicly reachable URL when M3Undle is behind a reverse proxy.
+                    Example: <code>https://tv.example.com</code>.
+                </MudText>
+                @{
+                    var externalUrl = EndpointUrlService.GetExternalBaseUrl();
+                }
+                @if (externalUrl is not null)
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@externalUrl</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info">from env</MudChip>
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-1">
+                        Not configured — <code>M3UNDLE_EXTERNAL_BASE_URL</code> not set.
+                    </MudText>
+                }
+
+                <MudDivider Class="my-4" />
+
+                @* Container detection *@
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Container Detection</MudText>
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Container detected</MudText>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(EndpointUrlService.IsContainerDetected ? Color.Info : Color.Default)"
+                                 Variant="Variant.Outlined">
+                            @(EndpointUrlService.IsContainerDetected ? "Yes" : "No")
+                        </MudChip>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Detected hostname</MudText>
+                        <MudText Typo="Typo.body2" Style="font-family:monospace;">@EndpointUrlService.DetectedHostname</MudText>
                     </MudItem>
                 </MudGrid>
 
-                @if (!string.IsNullOrWhiteSpace(_genHlsError))
+                @if (EndpointUrlService.IsContainerDetected && EndpointUrlService.IsHostnameLikelyContainerId)
                 {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_genHlsError
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        Container detected, but the hostname (@EndpointUrlService.DetectedHostname) looks like a
+                        randomly generated container ID rather than a service name. Other containers may not be
+                        able to reach M3Undle using this hostname. Set <code>M3UNDLE_DOCKER_BASE_URL</code> to
+                        specify the Docker Compose service name (e.g. <code>http://m3undle:8080</code>).
+                    </MudAlert>
+                }
+                else if (EndpointUrlService.IsContainerDetected && dockerUrl is null)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                        Container detected with hostname <strong>@EndpointUrlService.DetectedHostname</strong>.
+                        If this is the Docker Compose service name and other containers should use it,
+                        set <code>M3UNDLE_DOCKER_BASE_URL=http://@EndpointUrlService.DetectedHostname:8080</code>
+                        to enable Docker URL copy options on the Dashboard and HDHomeRun pages.
                     </MudAlert>
                 }
 
-                @if (!string.IsNullOrWhiteSpace(_genHlsSuccess))
-                {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_genHlsSuccess
-                    </MudAlert>
-                }
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
+                    URL overrides are set via environment variables on the host or in your
+                    <code>docker-compose.yml</code>. Changes take effect after restarting M3Undle.
+                </MudText>
+            </MudPaper>
+        }
 
-                <MudStack Row="true" Spacing="2">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               Disabled="_savingGenHlsSettings || _restartingApplication"
-                               OnClick="SaveGenHlsSettingsAsync">
-                        @(_savingGenHlsSettings ? "Saving..." : "Save Browser Playback Settings")
+        @* ════════════════════════════════════════════ INTEGRATIONS ══════ *@
+        @if (_section == "integrations")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                    <MudText Typo="Typo.h6" Class="flex-grow-1">Downstream Integrations</MudText>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="OpenAddIntegrationDialogAsync">
+                        Add Integration
+                    </MudButton>
+                </MudStack>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    After a successful lineup refresh, M3Undle can notify connected media servers so they pick
+                    up new channels and guide data automatically. Supported targets: Jellyfin, Emby, and generic
+                    webhooks.
+                </MudText>
+
+                @if (_loadingIntegrations)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else if (_integrations.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                        No integrations configured. Add one to enable automatic downstream notifications.
+                    </MudText>
+                }
+                else
+                {
+                    <MudTable Items="_integrations" Dense="true" Hover="true" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Name</MudTh>
+                            <MudTh>Type</MudTh>
+                            <MudTh>URL</MudTh>
+                            <MudTh>Triggers</MudTh>
+                            <MudTh>Status</MudTh>
+                            <MudTh></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Name">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    @if (!context.Enabled)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
+                                    }
+                                    @context.Name
+                                </MudStack>
+                            </MudTd>
+                            <MudTd DataLabel="Type">@IntegrationKindLabel(context.Kind)</MudTd>
+                            <MudTd DataLabel="URL">
+                                <MudText Typo="Typo.caption">@context.BaseUrl</MudText>
+                            </MudTd>
+                            <MudTd DataLabel="Triggers">
+                                <MudStack Row="true" Spacing="1">
+                                    @if (context.TriggerOnLineupUpdate)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Primary">Lineup</MudChip>
+                                    }
+                                    @if (context.TriggerOnGuideUpdate)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary">Guide</MudChip>
+                                    }
+                                </MudStack>
+                            </MudTd>
+                            <MudTd DataLabel="Status">
+                                @if (!string.IsNullOrWhiteSpace(context.LastNotifyError))
+                                {
+                                    <MudTooltip Text="@context.LastNotifyError" Arrow="true">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Error">Error</MudChip>
+                                    </MudTooltip>
+                                }
+                                else if (context.LastNotifiedUtc.HasValue)
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Success">
+                                        OK @context.LastNotifiedUtc.Value.ToLocalTime().ToString("d MMM h:mm tt")
+                                    </MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Never notified</MudText>
+                                }
+                            </MudTd>
+                            <MudTd>
+                                <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
+                                                   OnClick="@(() => OpenEditIntegrationDialogAsync(context))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   OnClick="@(() => DeleteIntegrationAsync(context))" />
+                                </MudStack>
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ OBSERVABILITY ═════ *@
+        @if (_section == "observability")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">Observability</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+                    Exposes a Prometheus-compatible metrics endpoint so you can scrape runtime statistics
+                    into Grafana or any other monitoring stack. Access can be restricted by IP range or bearer token.
+                </MudText>
+
+                @if (_loadingObservabilitySettings)
+                {
+                    <MudProgressCircular Indeterminate="true" />
+                }
+                else
+                {
+                    @if (_metricsMode == MetricsAccessModes.Public)
+                    {
+                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            Metrics are public — anyone who can reach this server can scrape runtime details
+                            including stream activity and channel counts.
+                        </MudAlert>
+                    }
+
+                    <MudSwitch T="bool" Label="Expose metrics endpoint" @bind-Value="_metricsEnabled"
+                               Color="Color.Primary" Class="mb-3" />
+
+                    <MudGrid Spacing="2" Class="mb-3">
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="string" Label="Access mode" @bind-Value="_metricsMode"
+                                       Variant="Variant.Outlined" Margin="Margin.Dense"
+                                       HelperText="@($"Scrape endpoint: {_metricsPath}")"
+                                       Disabled="!_metricsEnabled">
+                                <MudSelectItem Value="@MetricsAccessModes.LocalOnly">Local only (loopback + CIDRs)</MudSelectItem>
+                                <MudSelectItem Value="@MetricsAccessModes.Token">Token (Bearer auth required)</MudSelectItem>
+                                <MudSelectItem Value="@MetricsAccessModes.Public">Public — no authentication</MudSelectItem>
+                                <MudSelectItem Value="@MetricsAccessModes.Disabled">Disabled (no endpoint)</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                    </MudGrid>
+
+                    @if (_metricsMode == MetricsAccessModes.LocalOnly)
+                    {
+                        <MudTextField @bind-Value="_metricsLocalAllowedCidrs"
+                                      Label="Allowed CIDRs"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Lines="3"
+                                      Placeholder="172.18.0.0/16"
+                                      Disabled="!_metricsEnabled"
+                                      HelperText="One CIDR per line. Loopback is always allowed. Add Docker bridge or internal scrape networks here."
+                                      Class="mb-3"
+                                      Style="max-width:400px;" />
+                    }
+
+                    @* Advanced *@
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default" Class="mt-1"
+                               StartIcon="@(_showObservabilityAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                               OnClick="@(() => _showObservabilityAdvanced = !_showObservabilityAdvanced)">
+                        Advanced options
+                    </MudButton>
+                    <MudCollapse Expanded="_showObservabilityAdvanced">
+                        <div class="mt-3 pt-3" style="border-top:1px solid var(--mud-palette-divider)">
+                            <MudSwitch T="bool" Label="Enable channel labels" @bind-Value="_metricsEnableChannelLabels"
+                                       Color="Color.Primary" Class="mb-1" Disabled="!_metricsEnabled" />
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Adds <code>channel_name</code> and <code>channel_id</code> labels to stream metrics.
+                                Useful for per-channel Grafana dashboards, but each unique channel multiplies the
+                                number of Prometheus time series. Avoid on lineups larger than a few hundred channels.
+                            </MudText>
+                        </div>
+                    </MudCollapse>
+
+                    @if (!string.IsNullOrWhiteSpace(_observabilityError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_observabilityError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_observabilitySuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mt-3 mb-2">@_observabilitySuccess</MudAlert>
+                    }
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-4"
+                               Disabled="_savingObservabilitySettings"
+                               OnClick="SaveObservabilitySettingsAsync">
+                        @(_savingObservabilitySettings ? "Applying..." : "Apply")
                     </MudButton>
 
-                    @if (_genHlsRestartRequired)
+                    <MudDivider Class="my-5" />
+
+                    <MudText Typo="Typo.subtitle1" Class="mb-1">Metrics Tokens</MudText>
+                    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                        Bearer tokens for Prometheus scrapers when access mode is set to Token.
+                        Generate one token per scraper so you can revoke individual scrapers independently.
+                    </MudText>
+
+                    @if (!string.IsNullOrWhiteSpace(_newMetricsToken))
                     {
-                        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
-                                   Disabled="_restartingApplication"
-                                   OnClick="RestartApplicationAsync">
-                            @(_restartingApplication ? "Restarting..." : "Restart M3Undle")
-                        </MudButton>
+                        <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-3">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                                <span>Token for <strong>@_newMetricsTokenCreatedName</strong>: <code>@_newMetricsToken</code></span>
+                                <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy"
+                                               Size="Size.Small"
+                                               title="Copy token"
+                                               OnClick="CopyNewTokenAsync" />
+                            </MudStack>
+                        </MudAlert>
                     }
-                </MudStack>
-            }
-        </MudPaper>
-    </MudItem>
 
-    <MudItem xs="12">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
-                <MudText Typo="Typo.h6" Class="flex-grow-1">Downstream Integrations</MudText>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                           StartIcon="@Icons.Material.Filled.Add"
-                           OnClick="OpenAddIntegrationDialogAsync">
-                    Add Integration
-                </MudButton>
-            </MudStack>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                After a successful refresh, M3Undle can automatically notify connected media servers so they pick up new channels and guide data.
-            </MudText>
+                    <MudGrid Spacing="2" Class="mb-3" Style="max-width:520px;">
+                        <MudItem xs="12" sm="5">
+                            <MudTextField @bind-Value="_newMetricsTokenName"
+                                          Label="Token Name"
+                                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                                          FullWidth="true"
+                                          Placeholder="Prometheus" />
+                        </MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudDatePicker @bind-Date="_newMetricsTokenExpires"
+                                           Label="Expires"
+                                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                                           Clearable="true" />
+                        </MudItem>
+                        <MudItem xs="12" sm="3" Class="d-flex align-center">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                       Disabled="_creatingMetricsToken"
+                                       OnClick="CreateMetricsTokenAsync">
+                                @(_creatingMetricsToken ? "Creating..." : "Generate")
+                            </MudButton>
+                        </MudItem>
+                    </MudGrid>
 
-            @if (_loadingIntegrations)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else if (_integrations.Count == 0)
-            {
-                <MudText Typo="Typo.body2" Color="Color.Secondary">
-                    No integrations configured. Add one to enable automatic downstream notifications.
+                    @if (_metricsTokens.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">No tokens configured.</MudText>
+                    }
+                    else
+                    {
+                        <MudTable Items="_metricsTokens" Dense="true" Hover="true" Elevation="0">
+                            <HeaderContent>
+                                <MudTh>Name</MudTh>
+                                <MudTh>Scope</MudTh>
+                                <MudTh>Created</MudTh>
+                                <MudTh>Last Used</MudTh>
+                                <MudTh>Expires</MudTh>
+                                <MudTh></MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.Name</MudTd>
+                                <MudTd>@context.Scope</MudTd>
+                                <MudTd>@context.CreatedUtc.ToLocalTime().ToString("g")</MudTd>
+                                <MudTd>@(context.LastUsedUtc?.ToLocalTime().ToString("g") ?? "Never")</MudTd>
+                                <MudTd>@(context.ExpiresUtc?.ToLocalTime().ToString("g") ?? "Never")</MudTd>
+                                <MudTd>
+                                    <MudIconButton Icon="@Icons.Material.Outlined.Delete"
+                                                   Color="Color.Error"
+                                                   Size="Size.Small"
+                                                   OnClick="() => DeleteMetricsTokenAsync(context)" />
+                                </MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                }
+            </MudPaper>
+        }
+
+        @* ════════════════════════════════════════════ SYSTEM ════════════ *@
+        @if (_section == "system")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.h6" Class="mb-1">System</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-5">
+                    Low-level operational settings. Most users never need to change these from their defaults.
                 </MudText>
-            }
-            else
-            {
-                <MudTable Items="_integrations" Dense="true" Hover="true" Elevation="0">
-                    <HeaderContent>
-                        <MudTh>Name</MudTh>
-                        <MudTh>Type</MudTh>
-                        <MudTh>URL</MudTh>
-                        <MudTh>Triggers</MudTh>
-                        <MudTh>Status</MudTh>
-                        <MudTh></MudTh>
-                    </HeaderContent>
-                    <RowTemplate>
-                        <MudTd DataLabel="Name">
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                @if (!context.Enabled)
-                                {
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Default">Disabled</MudChip>
-                                }
-                                @context.Name
-                            </MudStack>
-                        </MudTd>
-                        <MudTd DataLabel="Type">@IntegrationKindLabel(context.Kind)</MudTd>
-                        <MudTd DataLabel="URL">
-                            <MudText Typo="Typo.caption">@context.BaseUrl</MudText>
-                        </MudTd>
-                        <MudTd DataLabel="Triggers">
-                            <MudStack Row="true" Spacing="1">
-                                @if (context.TriggerOnLineupUpdate)
-                                {
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">Lineup</MudChip>
-                                }
-                                @if (context.TriggerOnGuideUpdate)
-                                {
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Secondary">Guide</MudChip>
-                                }
-                            </MudStack>
-                        </MudTd>
-                        <MudTd DataLabel="Status">
-                            @if (!string.IsNullOrWhiteSpace(context.LastNotifyError))
-                            {
-                                <MudTooltip Text="@context.LastNotifyError" Arrow="true">
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Error</MudChip>
-                                </MudTooltip>
-                            }
-                            else if (context.LastNotifiedUtc.HasValue)
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Success">
-                                    OK @context.LastNotifiedUtc.Value.ToLocalTime().ToString("d MMM h:mm tt")
-                                </MudText>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Never notified</MudText>
-                            }
-                        </MudTd>
-                        <MudTd>
-                            <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
-                                <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small"
-                                               OnClick="@(() => OpenEditIntegrationDialogAsync(context))" />
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
-                                               Color="Color.Error"
-                                               OnClick="@(() => DeleteIntegrationAsync(context))" />
-                            </MudStack>
-                        </MudTd>
-                    </RowTemplate>
-                </MudTable>
-            }
-        </MudPaper>
-    </MudItem>
 
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4" Elevation="1">
-            <MudText Typo="Typo.h6" Class="mb-1">Event History</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
-                System events (provider failures, lineup changes, login attempts) are kept for this many days before being automatically removed.
-            </MudText>
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Event History</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+                    System events — provider failures, lineup changes, login attempts — are kept for this many
+                    days before being automatically purged. Raising this value increases database size; lowering
+                    it reduces the history available for diagnostics.
+                </MudText>
 
-            @if (_loadingEventSettings)
-            {
-                <MudProgressCircular Indeterminate="true" />
-            }
-            else
-            {
-                <MudNumericField T="int" Label="Retention days" @bind-Value="_eventRetentionDays"
-                                 Min="@SystemEventSettings.MinRetentionDays"
-                                 Max="@SystemEventSettings.MaxRetentionDays"
-                                 Class="mb-3" Style="max-width:180px;" />
-
-                @if (!string.IsNullOrWhiteSpace(_eventSettingsError))
+                @if (_loadingEventSettings)
                 {
-                    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_eventSettingsError
-                    </MudAlert>
+                    <MudProgressCircular Indeterminate="true" />
                 }
-                @if (!string.IsNullOrWhiteSpace(_eventSettingsSuccess))
+                else
                 {
-                    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">
-                        @_eventSettingsSuccess
-                    </MudAlert>
-                }
+                    <MudNumericField T="int" Label="Retention (days)" @bind-Value="_eventRetentionDays"
+                                     Min="@SystemEventSettings.MinRetentionDays"
+                                     Max="@SystemEventSettings.MaxRetentionDays"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     Class="mb-3"
+                                     Style="max-width:180px;" />
 
-                <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                           Disabled="_savingEventSettings"
-                           OnClick="SaveEventSettingsAsync">
-                    @(_savingEventSettings ? "Saving..." : "Save")
-                </MudButton>
-            }
-        </MudPaper>
-    </MudItem>
-</MudGrid>
+                    @if (!string.IsNullOrWhiteSpace(_eventSettingsError))
+                    {
+                        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_eventSettingsError</MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_eventSettingsSuccess))
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_eventSettingsSuccess</MudAlert>
+                    }
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="_savingEventSettings"
+                               OnClick="SaveEventSettingsAsync">
+                        @(_savingEventSettings ? "Applying..." : "Apply")
+                    </MudButton>
+                }
+            </MudPaper>
+        }
+
+    </div>
+</div>
 
 @code {
+    private string _section = "schedule";
+
+    private void NavigateToSection(string section)
+    {
+        _section = section;
+        Nav.NavigateTo($"/settings?section={section}", replace: true);
+    }
+
+    private bool _showSecurityAdvanced;
+    private bool _showStreamingAdvanced;
+    private bool _showBrowserPlaybackAdvanced;
+    private bool _showHdhrAdvanced;
+    private bool _showObservabilityAdvanced;
+
     private bool _uiAuthEnabled;
     private bool _loadingEndpointSettings;
     private bool _savingEndpointSettings;
 
     private bool _endpointEnabled;
     private bool _endpointHasCredential;
+    private bool _xtreamEnabled = true;
     private string _endpointUsername = string.Empty;
     private string _endpointPassword = string.Empty;
     private string _virtualTunerId = "hdhr-main";
@@ -1094,6 +1430,7 @@
     private int? _hdhrProviderLimit;
     private bool _hdhrIsStreamLimitEnforced;
     private string _hdhrResolvedBaseUrl = string.Empty;
+    private string _hdhrAllowedNetworks = string.Empty;
     private string? _hdhrError;
     private string? _hdhrSuccess;
     private bool _hdhrDisabledByEnv;
@@ -1125,8 +1462,6 @@
     private string? _genHlsError;
     private string? _genHlsSuccess;
 
-    private string _saveButtonText => _savingEndpointSettings ? "Saving..." : "Save Endpoint Security";
-
     private bool _loadingIntegrations;
     private List<DownstreamIntegrationDto> _integrations = [];
 
@@ -1146,6 +1481,16 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var uri = new Uri(Nav.Uri);
+        var qs = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (qs.TryGetValue("section", out var sectionParam))
+        {
+            var requested = sectionParam.ToString().ToLowerInvariant();
+            if (requested is "schedule" or "security" or "streaming" or "hdhr"
+                         or "endpoints" or "integrations" or "observability" or "system")
+                _section = requested;
+        }
+
         _uiAuthEnabled = await SiteSettings.GetAuthenticationEnabledAsync();
         await Task.WhenAll(LoadRefreshScheduleAsync(), LoadEndpointSecurityAsync(), LoadObservabilitySettingsAsync(), LoadStreamingSettingsAsync(), LoadHdhrSettingsAsync(), LoadGenHlsSettingsAsync(), LoadProfilesAsync(), LoadIntegrationsAsync(), LoadEventSettingsAsync());
     }
@@ -1434,6 +1779,7 @@
             _endpointEnabled = settings.Enabled;
             _endpointUsername = settings.Username ?? string.Empty;
             _endpointHasCredential = settings.HasCredential;
+            _xtreamEnabled = settings.XtreamCompatibilityEnabled;
             _activeProfileId = settings.ActiveProfileId;
             _virtualTunerId = string.IsNullOrWhiteSpace(settings.VirtualTunerId) ? "hdhr-main" : settings.VirtualTunerId;
         }
@@ -1545,7 +1891,8 @@
                 Username: string.IsNullOrWhiteSpace(_endpointUsername) ? null : _endpointUsername.Trim(),
                 Password: string.IsNullOrWhiteSpace(_endpointPassword) ? null : _endpointPassword,
                 ActiveProfileId: _activeProfileId,
-                VirtualTunerId: string.IsNullOrWhiteSpace(_virtualTunerId) ? "hdhr-main" : _virtualTunerId.Trim()), CancellationToken.None);
+                VirtualTunerId: string.IsNullOrWhiteSpace(_virtualTunerId) ? "hdhr-main" : _virtualTunerId.Trim(),
+                XtreamCompatibilityEnabled: _xtreamEnabled), CancellationToken.None);
 
             if (!result.Succeeded)
             {
@@ -1556,10 +1903,11 @@
             _endpointEnabled = result.Settings.Enabled;
             _endpointUsername = result.Settings.Username ?? string.Empty;
             _endpointHasCredential = result.Settings.HasCredential;
+            _xtreamEnabled = result.Settings.XtreamCompatibilityEnabled;
             _activeProfileId = result.Settings.ActiveProfileId;
             _virtualTunerId = string.IsNullOrWhiteSpace(result.Settings.VirtualTunerId) ? "hdhr-main" : result.Settings.VirtualTunerId;
             _endpointPassword = string.Empty;
-            _endpointSuccess = "Endpoint security settings saved.";
+            _endpointSuccess = "Endpoint credentials saved.";
         }
         catch (Exception ex)
         {
@@ -1623,7 +1971,8 @@
                 AdvertisedBaseUrl: string.IsNullOrWhiteSpace(_hdhrAdvertisedBaseUrl) ? null : _hdhrAdvertisedBaseUrl.Trim(),
                 DiscoveryEnabled: _hdhrDiscoveryEnabled,
                 SsdpEnabled: _hdhrSsdpEnabled,
-                SiliconDustDiscoveryEnabled: _hdhrSiliconDustDiscoveryEnabled), CancellationToken.None);
+                SiliconDustDiscoveryEnabled: _hdhrSiliconDustDiscoveryEnabled,
+                AllowedNetworks: string.IsNullOrWhiteSpace(_hdhrAllowedNetworks) ? null : _hdhrAllowedNetworks.Trim()), CancellationToken.None);
 
             if (!result.Succeeded)
             {
@@ -1663,6 +2012,7 @@
         _hdhrProviderLimit = settings.ProviderTunerLimit;
         _hdhrIsStreamLimitEnforced = settings.IsStreamLimitEnforced;
         _hdhrResolvedBaseUrl = settings.ResolvedBaseUrl;
+        _hdhrAllowedNetworks = settings.AllowedNetworks ?? string.Empty;
     }
 
     private async Task LoadGenHlsSettingsAsync()

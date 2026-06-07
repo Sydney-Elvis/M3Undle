@@ -1,0 +1,93 @@
+@using M3Undle.Core
+@using System.Globalization
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3" Class="pa-1">
+
+            <MudStack AlignItems="AlignItems.Center" Spacing="1">
+                <img src="logo-32.png" alt="M3Undle" style="width:56px;height:56px;border-radius:10px;margin-bottom:4px;" />
+                <MudText Typo="Typo.h6">M3Undle</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">IPTV Proxy &amp; Management</MudText>
+            </MudStack>
+
+            <MudText Typo="Typo.body2" Align="Align.Center" Color="Color.Default">
+                @VersionDisplay
+                @if (!string.IsNullOrWhiteSpace(BuildInfo.BuildDateUtc))
+                {
+                    <span>@($" {FormatBuildDate(BuildInfo.BuildDateUtc)}")</span>
+                }
+            </MudText>
+
+            <MudText Typo="Typo.body2" Class="px-1" Style="color: var(--mud-palette-text-secondary); opacity: 0.65;">
+                M3Undle is a modern self-hosted IPTV proxy and playlist management platform focused on reliability, compatibility, and transparency.
+            </MudText>
+
+            <MudStack Row="true" Justify="Justify.Center" Style="flex-wrap:wrap; gap:6px;">
+                <span class="about-tag">Open Source</span>
+                <span class="about-tag">Self Hosted</span>
+                <span class="about-tag">Docker Ready</span>
+                <span class="about-tag">Apache 2.0</span>
+            </MudStack>
+
+            <MudDivider />
+
+            <MudStack Row="true" Spacing="1" Justify="Justify.Center" Style="flex-wrap:wrap; gap:6px 10px; align-items:center;">
+                <MudLink Href="https://github.com/Sydney-Elvis/M3Undle" Target="_blank" Underline="Underline.Hover" Style="color: rgba(31,182,166,0.7);">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Custom.Brands.GitHub" Size="Size.Small" />
+                        <span>GitHub</span>
+                    </MudStack>
+                </MudLink>
+                <span style="opacity:0.3; color: var(--mud-palette-text-secondary);">·</span>
+                <MudLink Href="https://github.com/Sydney-Elvis/M3Undle/issues" Target="_blank" Underline="Underline.Hover" Style="color: rgba(31,182,166,0.7);">Issues</MudLink>
+                <span style="opacity:0.3; color: var(--mud-palette-text-secondary);">·</span>
+                <MudLink Href="https://buymeacoffee.com/jake1164s" Target="_blank" Underline="Underline.Hover" Style="color: rgba(31,182,166,0.7);">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Material.Outlined.EmojiFoodBeverage" Size="Size.Small" />
+                        <span>Buy Me a Coffee</span>
+                    </MudStack>
+                </MudLink>
+                <span style="opacity:0.3; color: var(--mud-palette-text-secondary);">·</span>
+                <MudLink Href="https://github.com/sponsors/Sydney-Elvis" Target="_blank" Color="Color.Warning" Underline="Underline.Hover">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Material.Filled.FavoriteBorder" Size="Size.Small" />
+                        <span>Sponsor</span>
+                    </MudStack>
+                </MudLink>
+            </MudStack>
+
+            <div class="about-footer">
+                M3Undle does not provide IPTV content or playlists.<br />
+                Compatibility may vary by provider and client.
+            </div>
+
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close" Variant="Variant.Text">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public AppBuildInfo BuildInfo { get; set; } = null!;
+
+    private void Close() => MudDialog.Close();
+
+    private string VersionDisplay =>
+        string.IsNullOrWhiteSpace(BuildInfo.GitHash)
+            ? BuildInfo.Version
+            : $"{BuildInfo.Version} ({BuildInfo.GitHash})";
+
+    private static string FormatBuildDate(string? iso)
+    {
+        if (string.IsNullOrWhiteSpace(iso)) return iso ?? string.Empty;
+        return DateTime.TryParse(iso, null, DateTimeStyles.RoundtripKind, out var dt)
+            ? dt.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture)
+            : iso;
+    }
+}

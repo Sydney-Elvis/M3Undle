@@ -16,6 +16,7 @@ public sealed record CustomGroupDto
     public int ChannelCount { get; set; }
     public int SelectedChannelCount { get; set; }
     public int ProviderLinkCount { get; set; }
+    public HashSet<string> LinkedProviderGroupIds { get; set; } = [];
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

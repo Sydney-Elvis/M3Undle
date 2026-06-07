@@ -69,14 +69,24 @@ public sealed class GeneratedHlsSessionManager(
         if (!IsEffectivelyEnabled)
             return null;
 
-        Directory.CreateDirectory(_options.Directory);
-
         if (TryGetReusableSession(request, out var reusableSession))
             return reusableSession;
 
         var sessionId = Guid.NewGuid().ToString("N");
         var sessionDir = Path.Combine(_options.Directory, sessionId);
-        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            Directory.CreateDirectory(sessionDir);
+        }
+        catch (Exception ex) when (IsWorkDirectoryException(ex))
+        {
+            logger.LogWarning(
+                ex,
+                "Generated HLS session startup failed for '{DisplayName}': work directory '{Directory}' is not writable.",
+                request.DisplayName,
+                _options.Directory);
+            return null;
+        }
 
         var manifestPath = Path.Combine(sessionDir, "index.m3u8");
         var segmentPattern = Path.Combine(sessionDir, "segment_%06d.ts");
@@ -354,11 +364,49 @@ public sealed class GeneratedHlsSessionManager(
             return;
         }
 
+        if (!TryPrepareWorkDirectory())
+        {
+            _ffmpegAvailable = false;
+            return;
+        }
+
         logger.LogInformation("Generated HLS enabled. FFmpeg found at '{FfmpegPath}'.", _options.FfmpegPath);
-        Directory.CreateDirectory(_options.Directory);
         CleanupStaleDirectories();
         _sweepTask = Task.Run(() => SweepLoopAsync(_lifetimeCts.Token), CancellationToken.None);
     }
+
+    private bool TryPrepareWorkDirectory()
+    {
+        var probeDirectory = Path.Combine(_options.Directory, $".write-test-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(_options.Directory);
+            Directory.CreateDirectory(probeDirectory);
+            Directory.Delete(probeDirectory);
+            return true;
+        }
+        catch (Exception ex) when (IsWorkDirectoryException(ex))
+        {
+            _ffmpegUnavailableReason =
+                $"Generated HLS work directory '{_options.Directory}' is not writable: {ex.Message}";
+            logger.LogWarning(
+                ex,
+                "Generated HLS auto-disabled: work directory '{Directory}' is not writable.",
+                _options.Directory);
+            return false;
+        }
+        finally
+        {
+            TryDeleteDirectory(probeDirectory);
+        }
+    }
+
+    private static bool IsWorkDirectoryException(Exception ex)
+        => ex is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException
+            or PathTooLongException;
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {

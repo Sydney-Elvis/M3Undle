@@ -313,6 +313,7 @@ public sealed class ChannelMappingPageServiceTests
     private sealed class TestRefreshTrigger : IRefreshTrigger
     {
         public bool IsRefreshing => false;
+        public DateTime? RefreshStartedAt => null;
         public bool TriggerRefresh() => true;
         public bool TriggerBuildOnly() => true;
         public void CancelRefresh() { }

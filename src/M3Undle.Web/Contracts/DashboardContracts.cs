@@ -7,6 +7,12 @@ public enum ProfileHealthStatus
     NoOutput
 }
 
+public sealed record DashboardProviderSummary(
+    string ProviderId,
+    string ProviderName,
+    int? MaxConcurrentStreams,
+    DateTime? ExpiresUtc);
+
 public sealed class DashboardProfileSummary
 {
     public string ProfileId { get; set; } = string.Empty;
@@ -14,9 +20,13 @@ public sealed class DashboardProfileSummary
     public string OutputName { get; set; } = string.Empty;
     public bool IsEnabled { get; set; }
     public bool IsActive { get; set; }
+    public bool IsPublished { get; set; }
     public DateTime? LastPublishedUtc { get; set; }
     public int LiveCount { get; set; }
+    public int MovieCount { get; set; }
+    public int SeriesCount { get; set; }
     public ProfileHealthStatus HealthStatus { get; set; }
+    public List<DashboardProviderSummary> Providers { get; set; } = [];
 }
 
 public sealed record ExpiringProviderWarning(string ProviderId, string ProviderName, DateTime ExpiresUtc);

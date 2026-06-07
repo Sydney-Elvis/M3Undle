@@ -208,9 +208,10 @@ public sealed class ClientEndpointAccessResolverTests
     private sealed class StubEndpointSecurityService(bool enabled, EndpointBindingState? binding = null) : IEndpointSecurityService
     {
         public ValueTask<bool> IsEnabledAsync(CancellationToken cancellationToken) => ValueTask.FromResult(enabled);
+        public ValueTask<bool> IsXtreamEnabledAsync(CancellationToken cancellationToken) => ValueTask.FromResult(true);
 
         public Task<EndpointSecuritySettings> GetSettingsAsync(CancellationToken cancellationToken)
-            => Task.FromResult(new EndpointSecuritySettings(enabled, null, false, null, null));
+            => Task.FromResult(new EndpointSecuritySettings(enabled, null, false, null, null, XtreamCompatibilityEnabled: true));
 
         public Task<EndpointBindingState?> GetBindingAsync(string credentialId, CancellationToken cancellationToken)
             => Task.FromResult(binding);
@@ -219,7 +220,7 @@ public sealed class ClientEndpointAccessResolverTests
             => Task.FromResult(new EndpointSecurityUpdateResult(
                 Succeeded: true,
                 Error: null,
-                Settings: new EndpointSecuritySettings(false, null, false, null, null)));
+                Settings: new EndpointSecuritySettings(false, null, false, null, null, XtreamCompatibilityEnabled: true)));
     }
 
     private sealed class StubCredentialValidator(AccessCredential? credential = null) : ICredentialValidator

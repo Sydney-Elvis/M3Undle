@@ -190,11 +190,76 @@ internal sealed class ProfilesPageService(
         refreshTrigger.TriggerRefresh();
     }
 
-    public async Task<List<ProfilePageItemDto>> GetProfilesAsync(CancellationToken ct)
+    public async Task<(bool XtreamEnabled, bool HdhrEnabled)> GetEndpointFlagsAsync(CancellationToken ct)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        return await BuildProfileListAsync(db, profileId: null, ct);
+        var settings = await db.SiteSettings
+            .AsNoTracking()
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(ct)
+            ?? new Data.Entities.SiteSettings { Id = 1 };
+        return (settings.XtreamCompatibilityEnabled, settings.HdhrEnabled);
+    }
+
+    public async Task<List<ProfilePageItemDto>> GetProfilesAsync(CancellationToken ct, bool includePendingCounts = true)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        return await BuildProfileListAsync(db, profileId: null, ct, includePendingCounts);
+    }
+
+    public async Task<Dictionary<string, (int Groups, int Channels, int Removed)>> GetPendingReviewCountsAsync(CancellationToken ct)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var groupsPendingByProfile = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProviderGroup.ContentType == "live" && x.IsNew)
+            .GroupBy(x => x.ProfileId)
+            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var channelsPendingByProfile = await db.ProfileGroupChannelFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                        && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                        && x.ProviderChannel.ContentType == "live"
+                        && x.ProviderChannel.Active
+                        && !x.ProviderChannel.IsPlaceholder
+                        && x.State == LineupReviewSemantics.ChannelStatePending)
+            .GroupBy(x => x.ProfileGroupFilter.ProfileId)
+            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var groupsRemovedByProfile = await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProviderGroup.ContentType == "live"
+                        && x.Decision != LineupReviewSemantics.GroupDecisionExclude
+                        && !x.ProviderGroup.Active)
+            .GroupBy(x => x.ProfileId)
+            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var result = new Dictionary<string, (int Groups, int Channels, int Removed)>(StringComparer.Ordinal);
+
+        foreach (var group in groupsPendingByProfile)
+            result[group.ProfileId] = (group.Count, 0, 0);
+
+        foreach (var channel in channelsPendingByProfile)
+        {
+            result.TryGetValue(channel.ProfileId, out var existing);
+            result[channel.ProfileId] = (existing.Groups, channel.Count, existing.Removed);
+        }
+
+        foreach (var removed in groupsRemovedByProfile)
+        {
+            result.TryGetValue(removed.ProfileId, out var existing);
+            result[removed.ProfileId] = (existing.Groups, existing.Channels, removed.Count);
+        }
+
+        return result;
     }
 
     public async Task<ProfileDetailDto?> GetProfileDetailAsync(string profileId, CancellationToken ct)
@@ -202,7 +267,7 @@ internal sealed class ProfilesPageService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var list = await BuildProfileListAsync(db, profileId, ct);
+        var list = await BuildProfileListAsync(db, profileId, ct, includePendingCounts: true);
         if (list.Count == 0) return null;
 
         var history = await db.Snapshots
@@ -231,7 +296,7 @@ internal sealed class ProfilesPageService(
     }
 
     private static async Task<List<ProfilePageItemDto>> BuildProfileListAsync(
-        ApplicationDbContext db, string? profileId, CancellationToken ct)
+        ApplicationDbContext db, string? profileId, CancellationToken ct, bool includePendingCounts)
     {
         var profileQuery = db.Profiles.AsNoTracking();
         if (profileId is not null)
@@ -247,78 +312,135 @@ internal sealed class ProfilesPageService(
 
         var profileProviders = await db.ProfileProviders
             .AsNoTracking()
-            .Include(pp => pp.Provider)
             .Where(pp => profileIds.Contains(pp.ProfileId))
             .OrderBy(pp => pp.Priority)
+            .Select(pp => new
+            {
+                pp.ProfileId,
+                pp.ProviderId,
+                pp.Priority,
+                pp.Enabled,
+                ProviderName = pp.Provider.Name,
+                pp.Provider.PlaylistExpiresUtc,
+            })
             .ToListAsync(ct);
 
         var activeSnapshots = await db.Snapshots
             .AsNoTracking()
             .Where(s => profileIds.Contains(s.ProfileId) && s.Status == "active")
             .OrderByDescending(s => s.CreatedUtc)
+            .Select(s => new
+            {
+                s.ProfileId,
+                s.CreatedUtc,
+                s.LiveChannelCount,
+                s.VodChannelCount,
+                s.SeriesChannelCount,
+            })
             .ToListAsync(ct);
 
-        var groupsPendingByProfile = await db.ProfileGroupFilters
-            .AsNoTracking()
-            .Include(x => x.ProviderGroup)
-            .Where(x => profileIds.Contains(x.ProfileId)
-                        && x.ProviderGroup.ContentType == "live"
-                        && x.IsNew)
-            .GroupBy(x => x.ProfileId)
-            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
+        var groupsPendingByProfile = includePendingCounts
+            ? await db.ProfileGroupFilters
+                .AsNoTracking()
+                .Where(x => profileIds.Contains(x.ProfileId)
+                            && x.ProviderGroup.ContentType == "live"
+                            && x.IsNew)
+                .GroupBy(x => x.ProfileId)
+                .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+                .ToListAsync(ct)
+            : [];
 
-        var channelsPendingByProfile = await db.ProfileGroupChannelFilters
-            .AsNoTracking()
-            .Include(x => x.ProfileGroupFilter).ThenInclude(f => f.ProviderGroup)
-            .Include(x => x.ProviderChannel)
-            .Where(x => profileIds.Contains(x.ProfileGroupFilter.ProfileId)
-                        && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
-                        && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
-                        && x.ProviderChannel.ContentType == "live"
-                        && x.ProviderChannel.Active
-                        && !x.ProviderChannel.IsPlaceholder
-                        && x.State == LineupReviewSemantics.ChannelStatePending)
-            .GroupBy(x => x.ProfileGroupFilter.ProfileId)
-            .Select(g => new { ProfileId = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
+        var channelsPendingByProfile = includePendingCounts
+            ? await db.ProfileGroupChannelFilters
+                .AsNoTracking()
+                .Where(x => profileIds.Contains(x.ProfileGroupFilter.ProfileId)
+                            && x.ProfileGroupFilter.ProviderGroup.ContentType == "live"
+                            && x.ProfileGroupFilter.TrackingPolicy == LineupReviewSemantics.TrackingPolicyReview
+                            && x.ProviderChannel.ContentType == "live"
+                            && x.ProviderChannel.Active
+                            && !x.ProviderChannel.IsPlaceholder
+                            && x.State == LineupReviewSemantics.ChannelStatePending)
+                .GroupBy(x => x.ProfileGroupFilter.ProfileId)
+                .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+                .ToListAsync(ct)
+            : [];
 
-        var lastFailedRun = await db.FetchRuns
-            .AsNoTracking()
-            .OrderByDescending(f => f.StartedUtc)
-            .Select(f => new { f.Status })
-            .FirstOrDefaultAsync(ct);
+        var groupsRemovedByProfile = includePendingCounts
+            ? await db.ProfileGroupFilters
+                .AsNoTracking()
+                .Where(x => profileIds.Contains(x.ProfileId)
+                            && x.ProviderGroup.ContentType == "live"
+                            && x.Decision != LineupReviewSemantics.GroupDecisionExclude
+                            && !x.ProviderGroup.Active)
+                .GroupBy(x => x.ProfileId)
+                .Select(g => new { ProfileId = g.Key, Count = g.Count() })
+                .ToListAsync(ct)
+            : [];
+
+
+        // Latest fetch run status per provider — used to scope health to each profile's own providers.
+        var relevantProviderIds = profileProviders.Select(pp => pp.ProviderId).Distinct().ToList();
+        var latestRunsByProvider = new Dictionary<string, string>(StringComparer.Ordinal);
+        var latestRunErrorsByProvider = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (relevantProviderIds.Count > 0)
+        {
+            var recentRuns = await db.FetchRuns
+                .AsNoTracking()
+                .Where(f => relevantProviderIds.Contains(f.ProviderId))
+                .Select(f => new { f.ProviderId, f.StartedUtc, f.Status, f.ErrorSummary })
+                .OrderByDescending(f => f.StartedUtc)
+                .ToListAsync(ct);
+
+            foreach (var run in recentRuns)
+            {
+                latestRunsByProvider.TryAdd(run.ProviderId, run.Status);
+                latestRunErrorsByProvider.TryAdd(run.ProviderId, run.ErrorSummary);
+            }
+        }
+
+        var profileProviderMap = profileProviders
+            .GroupBy(pp => pp.ProfileId)
+            .ToDictionary(g => g.Key, g => g.Select(pp => pp.ProviderId).ToList());
 
         var pendingByProfile = groupsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
         var pendingChannelsByProfileMap = channelsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
+        var removedGroupsByProfileMap = groupsRemovedByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
+
+        var providersByProfile = profileProviders
+            .GroupBy(x => x.ProfileId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(pp => new ProfileProviderInfoDto
+                {
+                    ProviderId = pp.ProviderId,
+                    Name = pp.ProviderName,
+                    Priority = pp.Priority,
+                    Enabled = pp.Enabled,
+                    PlaylistExpiresUtc = pp.PlaylistExpiresUtc,
+                    LastFetchStatus = latestRunsByProvider.GetValueOrDefault(pp.ProviderId),
+                    LastFetchErrorSummary = latestRunErrorsByProvider.GetValueOrDefault(pp.ProviderId),
+                }).ToList());
+
+        var latestSnapshotByProfile = activeSnapshots
+            .GroupBy(s => s.ProfileId)
+            .ToDictionary(g => g.Key, g => g.First());
 
         var result = new List<ProfilePageItemDto>();
 
         foreach (var profile in profiles)
         {
-            var snapshot = activeSnapshots
-                .FirstOrDefault(s => s.ProfileId == profile.ProfileId);
-
-            var providers = profileProviders
-                .Where(pp => pp.ProfileId == profile.ProfileId)
-                .Select(pp => new ProfileProviderInfoDto
-                {
-                    ProviderId = pp.ProviderId,
-                    Name = pp.Provider.Name,
-                    Priority = pp.Priority,
-                    Enabled = pp.Enabled,
-                    PlaylistExpiresUtc = pp.Provider.PlaylistExpiresUtc,
-                })
-                .ToList();
+            var providers = providersByProfile.GetValueOrDefault(profile.ProfileId, []);
+            var snapshot = latestSnapshotByProfile.GetValueOrDefault(profile.ProfileId);
 
             var hasProviders = providers.Count > 0;
 
             var health = ProfileHealthStatus.NoOutput;
             if (hasProviders && snapshot is not null)
             {
-                health = lastFailedRun?.Status == "fail"
-                    ? ProfileHealthStatus.Degraded
-                    : ProfileHealthStatus.Ok;
+                var profileProviderIds = profileProviderMap.GetValueOrDefault(profile.ProfileId, []);
+                var profileHasFailed = profileProviderIds.Any(pid =>
+                    latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
+                health = profileHasFailed ? ProfileHealthStatus.Degraded : ProfileHealthStatus.Ok;
             }
 
             result.Add(new ProfilePageItemDto
@@ -338,6 +460,7 @@ internal sealed class ProfilesPageService(
                 HealthStatus = health,
                 GroupsPendingReview = pendingByProfile.GetValueOrDefault(profile.ProfileId, 0),
                 ChannelsPendingReview = pendingChannelsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),
+                GroupsRemovedFromProvider = removedGroupsByProfileMap.GetValueOrDefault(profile.ProfileId, 0),
             });
         }
 

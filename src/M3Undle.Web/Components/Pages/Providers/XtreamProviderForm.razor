@@ -1,0 +1,190 @@
+@inject ProviderPageService ProviderPageService
+
+<div class="pt-3">
+    @if (!_encryptionAvailable)
+    {
+        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
+            <MudText Typo="Typo.body2"><strong>M3UNDLE_ENCRYPTION_KEY is not set.</strong></MudText>
+            <MudText Typo="Typo.body2" Class="mt-1">
+                Xtream Codes providers require encrypted password storage. Generate a key and set the
+                environment variable before adding this provider type:
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mt-1" Style="font-family:monospace">
+                openssl rand -base64 32
+            </MudText>
+            <MudText Typo="Typo.caption">
+                Then set <code>M3UNDLE_ENCRYPTION_KEY=&lt;output&gt;</code> and restart M3Undle.
+            </MudText>
+        </MudAlert>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
+    }
+
+    <MudForm @ref="_form">
+        <MudStack Spacing="2">
+            <MudTextField Label="Name" @bind-Value="_model.Name"
+                          Required="true" RequiredError="Name is required."
+                          Disabled="!_encryptionAvailable" />
+            <MudTextField Label="Server URL" @bind-Value="_model.XtreamBaseUrl"
+                          Required="true" RequiredError="Server URL is required."
+                          HelperText="e.g. http://yourserver.com:8080"
+                          Disabled="!_encryptionAvailable" />
+            <MudTextField Label="Username" @bind-Value="_model.XtreamUsername"
+                          Required="true" RequiredError="Username is required."
+                          Disabled="!_encryptionAvailable" />
+            <MudTextField Label="Password" @bind-Value="_model.XtreamPassword"
+                          Required="true" RequiredError="Password is required."
+                          InputType="InputType.Password"
+                          Disabled="!_encryptionAvailable" />
+            <MudSwitch @bind-Value="_model.XtreamIncludeXmltv" Color="Color.Primary"
+                       Label="Include XMLTV guide from same server"
+                       Disabled="!_encryptionAvailable" />
+
+            <ProviderContentToggles @bind-IncludeVod="_model.IncludeVod"
+                                    @bind-IncludeSeries="_model.IncludeSeries"
+                                    Disabled="!_encryptionAvailable" />
+
+            <ProviderConcurrentStreams @bind-LimitConcurrentStreams="_model.LimitConcurrentStreams"
+                                       @bind-ConcurrentStreamLimit="_model.ConcurrentStreamLimit"
+                                       Disabled="!_encryptionAvailable" />
+
+            <MudSwitch @bind-Value="_model.Enabled" Color="Color.Success" Label="Enabled"
+                       Disabled="!_encryptionAvailable" />
+
+            <ProviderProfileSelect @bind-ProfileId="_model.ProfileId"
+                                   AvailableProfiles="AvailableProfiles"
+                                   AllProfiles="Profiles"
+                                   AllowAutocreate="true" />
+
+            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Default" Class="mt-1"
+                       Disabled="!_encryptionAvailable"
+                       StartIcon="@(_showAdvanced ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                       OnClick="@(() => _showAdvanced = !_showAdvanced)">
+                Advanced options
+            </MudButton>
+            <MudCollapse Expanded="_showAdvanced">
+                <MudStack Spacing="2" Class="mt-1">
+                    <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_model.TimeoutSeconds"
+                                     Min="1" Max="1800"
+                                     HelperText="How long to wait for the Xtream server to respond before giving up. 120 s is suitable for most providers."
+                                     Disabled="!_encryptionAvailable" />
+                    <ProviderStreamFormat @bind-ForceMpegTs="_model.ForceMpegTs"
+                                          @bind-CleanRelayMode="_model.CleanRelayMode"
+                                          IsXtream="true"
+                                          Disabled="!_encryptionAvailable" />
+                </MudStack>
+            </MudCollapse>
+        </MudStack>
+    </MudForm>
+</div>
+
+@code {
+    [Parameter] public List<ProfileListItemDto> Profiles { get; set; } = [];
+    [Parameter] public List<ProviderDto> ExistingProviders { get; set; } = [];
+    [Parameter] public bool EncryptionAvailable { get; set; }
+    [Parameter] public XtreamPrefill? Prefill { get; set; }
+    [Parameter] public EventCallback<ProviderDto> OnSaved { get; set; }
+
+    private MudForm? _form;
+    private string? _error;
+    private bool _showAdvanced;
+    private bool _encryptionAvailable;
+    private XtreamPrefill? _appliedPrefill;
+
+    private FormModel _model = new() { TimeoutSeconds = 120, Enabled = true };
+
+    private IEnumerable<ProfileListItemDto> AvailableProfiles => Profiles.Where(p =>
+        !ExistingProviders.Any(prov => prov.AssociatedProfileIds.Contains(p.ProfileId)));
+
+    protected override void OnInitialized()
+    {
+        _encryptionAvailable = EncryptionAvailable;
+
+        var defaultProfile = AvailableProfiles.FirstOrDefault(x => x.Enabled);
+        if (defaultProfile is not null)
+            _model.ProfileId = defaultProfile.ProfileId;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _encryptionAvailable = EncryptionAvailable;
+
+        if (Prefill is not null && !ReferenceEquals(Prefill, _appliedPrefill))
+        {
+            _model.Name = Prefill.Name;
+            _model.XtreamBaseUrl = Prefill.BaseUrl;
+            _model.XtreamUsername = Prefill.Username;
+            _model.XtreamPassword = Prefill.Password;
+            _model.XtreamIncludeXmltv = Prefill.IncludeXmltv;
+            _model.Enabled = Prefill.Enabled;
+            _model.TimeoutSeconds = Prefill.TimeoutSeconds;
+            _model.LimitConcurrentStreams = Prefill.LimitConcurrentStreams;
+            _model.ConcurrentStreamLimit = Prefill.ConcurrentStreamLimit;
+            _model.IncludeVod = Prefill.IncludeVod;
+            _model.IncludeSeries = Prefill.IncludeSeries;
+            _model.ForceMpegTs = Prefill.ForceMpegTs;
+            _model.CleanRelayMode = Prefill.CleanRelayMode;
+            _model.ProfileId = Prefill.ProfileId;
+            _appliedPrefill = Prefill;
+        }
+    }
+
+    public async Task TrySubmitAsync()
+    {
+        if (!_encryptionAvailable) return;
+
+        _error = null;
+
+        if (_form is not null) { await _form.ValidateAsync(); if (!_form.IsValid) return; }
+
+        var result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
+        {
+            Name = _model.Name.Trim(),
+            XtreamBaseUrl = _model.XtreamBaseUrl.Trim(),
+            XtreamUsername = _model.XtreamUsername.Trim(),
+            XtreamPassword = _model.XtreamPassword,
+            XtreamIncludeXmltv = _model.XtreamIncludeXmltv,
+            Enabled = _model.Enabled,
+            IncludeVod = _model.IncludeVod,
+            IncludeSeries = _model.IncludeSeries,
+            ForceMpegTs = _model.ForceMpegTs,
+            CleanRelayMode = _model.CleanRelayMode,
+            TimeoutSeconds = _model.TimeoutSeconds,
+            MaxConcurrentStreams = _model.LimitConcurrentStreams ? _model.ConcurrentStreamLimit : null,
+            AssociateToProfileIds = ProfileIdList(_model.ProfileId),
+        }, CancellationToken.None);
+
+        if (!string.IsNullOrWhiteSpace(result.Error))
+        {
+            _error = result.Error;
+            StateHasChanged();
+            return;
+        }
+
+        await OnSaved.InvokeAsync(result.Provider!);
+    }
+
+    private static List<string>? ProfileIdList(string id) =>
+        string.IsNullOrWhiteSpace(id) ? null : [id];
+
+    private sealed class FormModel
+    {
+        public string Name { get; set; } = string.Empty;
+        public string XtreamBaseUrl { get; set; } = string.Empty;
+        public string XtreamUsername { get; set; } = string.Empty;
+        public string XtreamPassword { get; set; } = string.Empty;
+        public bool XtreamIncludeXmltv { get; set; } = true;
+        public bool Enabled { get; set; } = true;
+        public int TimeoutSeconds { get; set; } = 120;
+        public bool LimitConcurrentStreams { get; set; }
+        public int ConcurrentStreamLimit { get; set; } = 1;
+        public bool IncludeVod { get; set; } = true;
+        public bool IncludeSeries { get; set; } = true;
+        public bool ForceMpegTs { get; set; }
+        public string CleanRelayMode { get; set; } = "auto";
+        public string ProfileId { get; set; } = string.Empty;
+    }
+}

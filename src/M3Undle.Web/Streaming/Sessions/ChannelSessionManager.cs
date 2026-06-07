@@ -21,6 +21,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly StreamAdmissionBackoffStore _admissionBackoffStore;
     private readonly StreamingRegistry _registry;
     private readonly StreamingDiagnosticsStore _diagnosticsStore;
+    private readonly IStreamChannelHealthEventRecorder _healthEventRecorder;
+    private readonly IStreamChannelHealthProfileService _healthProfileService;
     private readonly IEventService _eventService;
     private readonly M3UndleMetrics? _metrics;
     private readonly ILoggerFactory _loggerFactory;
@@ -45,6 +47,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         StreamAdmissionBackoffStore admissionBackoffStore,
         StreamingRegistry registry,
         StreamingDiagnosticsStore diagnosticsStore,
+        IStreamChannelHealthEventRecorder healthEventRecorder,
+        IStreamChannelHealthProfileService healthProfileService,
         IEventService eventService,
         ILoggerFactory loggerFactory,
         TimeProvider timeProvider,
@@ -58,6 +62,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         _admissionBackoffStore = admissionBackoffStore;
         _registry = registry;
         _diagnosticsStore = diagnosticsStore;
+        _healthEventRecorder = healthEventRecorder;
+        _healthProfileService = healthProfileService;
         _eventService = eventService;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<ChannelSessionManager>();
@@ -140,12 +146,19 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
                 if (_sessions.TryGetValue(key, out var existing))
                 {
-                    _logger.LogDebug(
-                        "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
-                        existing.SessionId,
-                        source.DisplayName,
-                        existing.SubscriberCount);
-                    return existing;
+                    if (!existing.IsAcceptingSubscribers)
+                    {
+                        _sessions.TryRemove(key, out _);
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "Joining existing session {SessionId} for '{DisplayName}' ({SubscriberCount} viewer(s) already watching).",
+                            existing.SessionId,
+                            source.DisplayName,
+                            existing.SubscriberCount);
+                        return existing;
+                    }
                 }
 
                 EvictExpiredHlsSlotsLocked();
@@ -207,6 +220,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         _strikeStore,
                         _registry,
                         _diagnosticsStore,
+                        _healthEventRecorder,
+                        _healthProfileService,
                         _eventService,
                         _loggerFactory.CreateLogger<ChannelStreamSession>(),
                         RemoveIfClosedAsync,
@@ -270,7 +285,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         bool useSharedSession,
         CancellationToken ct)
     {
-        if (_sessions.TryGetValue(source.SessionKey, out var existing))
+        if (_sessions.TryGetValue(source.SessionKey, out var existing) && existing.IsAcceptingSubscribers)
             return existing;
 
         if (!useSharedSession)

@@ -13,6 +13,8 @@ public sealed class ProfileProviderInfoDto
     public int Priority { get; set; }
     public bool Enabled { get; set; }
     public DateTime? PlaylistExpiresUtc { get; set; }
+    public string? LastFetchStatus { get; set; }
+    public string? LastFetchErrorSummary { get; set; }
 }
 
 public sealed class ProfilePageItemDto
@@ -32,6 +34,7 @@ public sealed class ProfilePageItemDto
     public ProfileHealthStatus HealthStatus { get; set; }
     public int GroupsPendingReview { get; set; }
     public int ChannelsPendingReview { get; set; }
+    public int GroupsRemovedFromProvider { get; set; }
 }
 
 public sealed class ProfileSnapshotHistoryDto

@@ -1,6 +1,7 @@
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace M3Undle.Web.Application;
 
@@ -9,15 +10,18 @@ public interface IHdHomeRunSettingsService
     Task<HdhrSettingsState> GetSettingsAsync(CancellationToken ct = default);
     Task<HdhrSettingsUpdateResult> UpdateAsync(UpdateHdhrSettingsCommand command, CancellationToken ct = default);
     Task ClearRestartRequiredAsync(CancellationToken ct = default);
+    Task<string?> GetAllowedNetworksAsync(CancellationToken ct = default);
 }
 
 public sealed class HdHomeRunSettingsService(
-    ApplicationDbContext db,
+    IServiceScopeFactory scopeFactory,
     HdHomeRunDeviceService deviceService,
     HdHomeRunTunerCountResolver tunerCountResolver) : IHdHomeRunSettingsService
 {
     public async Task<HdhrSettingsState> GetSettingsAsync(CancellationToken ct = default)
     {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var settings = await db.SiteSettings
             .AsNoTracking()
             .OrderBy(x => x.Id)
@@ -37,7 +41,9 @@ public sealed class HdHomeRunSettingsService(
 
     public async Task<HdhrSettingsUpdateResult> UpdateAsync(UpdateHdhrSettingsCommand command, CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings
+           await using var scope = scopeFactory.CreateAsyncScope();
+           var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+           var settings = await db.SiteSettings
             .OrderBy(x => x.Id)
             .FirstOrDefaultAsync(ct);
         if (settings is null)
@@ -73,6 +79,7 @@ public sealed class HdHomeRunSettingsService(
         settings.HdhrSsdpEnabled = command.SsdpEnabled;
         settings.HdhrSiliconDustDiscoveryEnabled = command.SiliconDustDiscoveryEnabled;
         settings.HdhrFriendlyName = string.IsNullOrWhiteSpace(command.FriendlyName) ? null : command.FriendlyName.Trim();
+        settings.HdhrAllowedNetworks = string.IsNullOrWhiteSpace(command.AllowedNetworks) ? null : command.AllowedNetworks.Trim();
 
         if (changed)
             settings.HdhrSettingsRestartRequired = true;
@@ -88,9 +95,22 @@ public sealed class HdHomeRunSettingsService(
             Changed: changed);
     }
 
+    public async Task<string?> GetAllowedNetworksAsync(CancellationToken ct = default)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var settings = await db.SiteSettings
+            .AsNoTracking()
+            .OrderBy(x => x.Id)
+            .FirstOrDefaultAsync(ct);
+        return settings?.HdhrAllowedNetworks;
+    }
+
     public async Task ClearRestartRequiredAsync(CancellationToken ct = default)
     {
-        var settings = await db.SiteSettings
+           await using var scope = scopeFactory.CreateAsyncScope();
+           var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+           var settings = await db.SiteSettings
             .OrderBy(x => x.Id)
             .FirstOrDefaultAsync(ct);
         if (settings is null || !settings.HdhrSettingsRestartRequired)
@@ -117,7 +137,8 @@ public sealed class HdHomeRunSettingsService(
             ResolvedBaseUrl: deviceService.ResolveBaseUrl(),
             DiscoveryEnabled: settings.HdhrDiscoveryEnabled,
             SsdpEnabled: settings.HdhrSsdpEnabled,
-            SiliconDustDiscoveryEnabled: settings.HdhrSiliconDustDiscoveryEnabled);
+            SiliconDustDiscoveryEnabled: settings.HdhrSiliconDustDiscoveryEnabled,
+            AllowedNetworks: settings.HdhrAllowedNetworks);
     }
 
     private HdhrSettingsSnapshot BuildAppliedSnapshot(int? providerLimit)
@@ -138,7 +159,8 @@ public sealed class HdHomeRunSettingsService(
             ResolvedBaseUrl: runtime.ResolvedBaseUrl,
             DiscoveryEnabled: runtime.DiscoveryEnabled,
             SsdpEnabled: runtime.SsdpEnabled,
-            SiliconDustDiscoveryEnabled: runtime.SiliconDustDiscoveryEnabled);
+            SiliconDustDiscoveryEnabled: runtime.SiliconDustDiscoveryEnabled,
+            AllowedNetworks: null);
     }
 
     private static IEnumerable<string> Validate(UpdateHdhrSettingsCommand command)
@@ -181,7 +203,8 @@ public sealed record HdhrSettingsSnapshot(
     string ResolvedBaseUrl,
     bool DiscoveryEnabled,
     bool SsdpEnabled,
-    bool SiliconDustDiscoveryEnabled);
+    bool SiliconDustDiscoveryEnabled,
+    string? AllowedNetworks);
 
 public sealed record HdhrSettingsState(
     HdhrSettingsSnapshot Saved,
@@ -196,7 +219,8 @@ public sealed record UpdateHdhrSettingsCommand(
     string? AdvertisedBaseUrl,
     bool DiscoveryEnabled,
     bool SsdpEnabled,
-    bool SiliconDustDiscoveryEnabled);
+    bool SiliconDustDiscoveryEnabled,
+    string? AllowedNetworks);
 
 public sealed record HdhrSettingsUpdateResult(
     bool Succeeded,

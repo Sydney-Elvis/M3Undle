@@ -1,297 +1,152 @@
 @using M3Undle.Web.Contracts.Providers
+@using M3Undle.Web.Components.ProviderForms
 @inject M3Undle.Web.Application.ProviderPageService ProviderPageService
 @inject M3Undle.Web.Application.ProfilesPageService ProfilesPageService
+@inject ILogger<AddProviderDialog> Logger
 
 <MudDialog Style="min-width:680px">
     <DialogContent>
-        @if (!string.IsNullOrWhiteSpace(_error))
+        @if (_step == DialogStep.Form)
         {
-            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-3">@_error</MudAlert>
-        }
+            <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded="false" ApplyEffectsToContainer="true">
 
-        <MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded="false" ApplyEffectsToContainer="true">
+                <MudTabPanel Text="From URL" Icon="@Icons.Material.Filled.Link">
+                    <UrlProviderForm @ref="_urlFormRef" Mode="UrlProviderMode.Url" Prefill="_urlPrefill"
+                                     Profiles="_localProfiles" ExistingProviders="Providers"
+                                     EncryptionAvailable="_encryptionAvailable"
+                                     OnSaved="HandleSaved" OnSwitchToXtream="HandleSwitchToXtream" />
+                </MudTabPanel>
 
-            @* ------------------------------------------------------------------ *@
-            @* Tab 0: From URL *@
-            @* ------------------------------------------------------------------ *@
-            <MudTabPanel Text="From URL" Icon="@Icons.Material.Filled.Link">
-                <div class="pt-3">
-                    <MudForm @ref="_urlForm">
-                        <MudStack Spacing="2">
-                            <MudTextField Label="Name" @bind-Value="_urlModel.Name" Required="true" RequiredError="Name is required." />
+                <MudTabPanel Text="From File" Icon="@Icons.Material.Filled.FolderOpen">
+                    <UrlProviderForm @ref="_fileFormRef" Mode="UrlProviderMode.File"
+                                     Profiles="_localProfiles" ExistingProviders="Providers"
+                                     EncryptionAvailable="_encryptionAvailable"
+                                     OnSaved="HandleSaved" />
+                </MudTabPanel>
 
-                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                <MudTextField Label="Playlist URL" @bind-Value="_urlModel.PlaylistUrl"
-                                              Required="true" RequiredError="A playlist URL is required."
-                                              HelperText="http/https only. Use %VAR_NAME% for credentials stored in .env"
-                                              Style="flex:1" />
-                                <MudTooltip Text="@_urlHelperText" Placement="Placement.Left" >
-                                    <MudIconButton Icon="@Icons.Material.Filled.Help" Size="Size.Small" Color="Color.Info" />
-                                </MudTooltip>
-                            </MudStack>
+                <MudTabPanel Text="Xtream Codes" Icon="@Icons.Material.Filled.Tv">
+                    <XtreamProviderForm @ref="_xtreamFormRef" Prefill="_xtreamPrefill"
+                                        Profiles="_localProfiles" ExistingProviders="Providers"
+                                        EncryptionAvailable="_encryptionAvailable"
+                                        OnSaved="HandleSaved" />
+                </MudTabPanel>
 
-                            @if (LooksLikeXtreamUrl(_urlModel.PlaylistUrl))
+                @if (_showImportTab)
+                {
+                    <MudTabPanel Text="Import" Icon="@Icons.Material.Filled.FileDownload">
+                        <div class="pt-3">
+                            @if (_configProviders.Count == 0)
                             {
-                                <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
-                                    <MudStack Spacing="1">
-                                        <MudText Typo="Typo.body2"><strong>Xtream API detected.</strong> Add as Xtream Codes for richer channel data, stable stream IDs, and subscription expiry tracking.</MudText>
-                                        <MudSwitch @bind-Value="_urlAddAsXtream" Color="Color.Info"
-                                                   Label="Add as Xtream Codes (recommended)"
-                                                   Disabled="!_encryptionAvailable" />
-                                        @if (_urlAddAsXtream)
-                                        {
-                                            <MudSwitch @bind-Value="_urlAddAsXtreamIncludeXmltv" Color="Color.Primary"
-                                                       Label="Include XMLTV guide from same server" />
-                                        }
-                                        @if (!_encryptionAvailable)
-                                        {
-                                            <MudText Typo="Typo.caption" Color="Color.Warning">M3UNDLE_ENCRYPTION_KEY must be configured to add as Xtream Codes.</MudText>
-                                        }
-                                    </MudStack>
-                                </MudAlert>
+                                <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
                             }
+                            else
+                            {
+                                var selProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
+                                var selImported = !string.IsNullOrEmpty(_importSelectedName) && IsAlreadyImported(_importSelectedName);
+                                var selMissing = selProvider?.MissingEnvVars.Count > 0;
 
-                            <MudTextField Label="XMLTV URL (optional)" @bind-Value="_urlModel.XmltvUrl"
-                                          HelperText="http/https URL for EPG guide data" />
-                            <MudTextField Label="User Agent (optional)" @bind-Value="_urlModel.UserAgent" />
-                            <MudTextField Label="Headers JSON (optional)" @bind-Value="_urlModel.HeadersJson" Lines="2"
-                                          HelperText='e.g. {"X-Custom-Header":"value"}' />
-                            <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_urlModel.TimeoutSeconds" Min="1" Max="1800" />
-                            <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_urlModel.MaxConcurrentStreams" Min="1" Max="100"
-                                             HelperText="Leave blank to use the global setting" />
-                            @RenderContentToggles(_urlModel)
-                            @RenderStreamFormatSection(_urlModel)
-                            <MudSwitch @bind-Value="_urlModel.Enabled" Color="Color.Success" Label="Enabled" />
-                            @RenderProfileSection(_urlModel)
-                        </MudStack>
-                    </MudForm>
-                </div>
-            </MudTabPanel>
-
-            @* ------------------------------------------------------------------ *@
-            @* Tab 1: From File *@
-            @* ------------------------------------------------------------------ *@
-            <MudTabPanel Text="From File" Icon="@Icons.Material.Filled.FolderOpen">
-                <div class="pt-3">
-                    @if (_fileBrowseRootMissing)
-                    {
-                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
-                            <MudText Typo="Typo.body2">@(_fileBrowseError ?? "File browser unavailable.")</MudText>
-                        </MudAlert>
-                    }
-                    <MudForm @ref="_fileForm">
-                        <MudStack Spacing="2">
-                            <MudTextField Label="Name" @bind-Value="_fileModel.Name" Required="true" RequiredError="Name is required." />
-
-                            <MudStack Spacing="1">
-                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
-                                    <MudTextField Label="Selected file" Value="@_fileModel.PlaylistUrl" ReadOnly="true"
-                                                  Placeholder="(no file selected)" Style="flex:1"
-                                                  HelperText="Browse to select an .m3u or .m3u8 file on the server" />
-                                    <MudButton Variant="Variant.Outlined" Size="Size.Small"
-                                               OnClick="OpenFileBrowserAsync" Disabled="_fileBrowseRootMissing">Browse</MudButton>
-                                </MudStack>
-
-                                @if (_showFileBrowser)
-                                {
-                                    <MudPaper Outlined="true" Class="pa-2" Style="max-height:260px;overflow-y:auto">
-                                        @if (_browseLoading)
+                                <MudStack Spacing="3">
+                                    <MudSelect T="string" Label="Provider" @bind-Value="_importSelectedName"
+                                               HelperText="Providers discovered in M3UNDLE_CONFIG_DIR/config.yaml">
+                                        <MudSelectItem T="string" Value="@string.Empty">— select a provider —</MudSelectItem>
+                                        @foreach (var cp in _configProviders)
                                         {
-                                            <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                                            <MudSelectItem T="string" Value="@cp.Name">
+                                                @cp.Name
+                                                @if (IsAlreadyImported(cp.Name)) { <text> (already imported)</text> }
+                                                else if (cp.MissingEnvVars.Count > 0) { <text> (missing env vars)</text> }
+                                            </MudSelectItem>
+                                        }
+                                    </MudSelect>
+
+                                    @if (selProvider is not null)
+                                    {
+                                        <MudTextField Label="Playlist URL" Value="@selProvider.PlaylistUrl"
+                                                      ReadOnly="true" Variant="Variant.Text"
+                                                      Style="font-family:monospace; font-size:0.8rem;" />
+
+                                        @if (!string.IsNullOrWhiteSpace(selProvider.XmltvUrl))
+                                        {
+                                            <MudTextField Label="XMLTV URL" Value="@selProvider.XmltvUrl"
+                                                          ReadOnly="true" Variant="Variant.Text"
+                                                          Style="font-family:monospace; font-size:0.8rem;" />
+                                        }
+
+                                        @if (selMissing)
+                                        {
+                                            <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
+                                                Missing environment variables: @string.Join(", ", selProvider.MissingEnvVars)
+                                            </MudAlert>
+                                        }
+                                        else if (selImported)
+                                        {
+                                            <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
+                                                This provider has already been imported.
+                                            </MudAlert>
                                         }
                                         else
                                         {
-                                            @if (_browseData?.ParentPath is not null)
-                                            {
-                                                <MudListItem T="string" Icon="@Icons.Material.Filled.ArrowUpward"
-                                                             OnClick="() => BrowseToAsync(_browseData.ParentPath)"
-                                                             Dense="true">
-                                                    ..
-                                                </MudListItem>
-                                            }
-                                            @if (_browseData is not null)
-                                            {
-                                                @foreach (var entry in _browseData.Entries)
-                                                {
-                                                    if (entry.IsDirectory)
-                                                    {
-                                                        <MudListItem T="string" Icon="@Icons.Material.Filled.Folder"
-                                                                     OnClick="() => BrowseToAsync(entry.Path)"
-                                                                     Dense="true">
-                                                            @entry.Name
-                                                        </MudListItem>
-                                                    }
-                                                    else
-                                                    {
-                                                        <MudListItem T="string" Icon="@Icons.Material.Filled.AudioFile"
-                                                                     OnClick="() => SelectFileAsync(entry.Path)"
-                                                                     Dense="true"
-                                                                     Style="@(_fileModel.PlaylistUrl == $"file://{entry.Path}" ? "background:var(--mud-palette-primary-lighten)" : "")">
-                                                            @entry.Name
-                                                        </MudListItem>
-                                                    }
-                                                }
-                                                @if (!_browseData.Entries.Any())
-                                                {
-                                                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="pa-2">No .m3u or .m3u8 files found here.</MudText>
-                                                }
-                                            }
+                                            <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                                       OnClick="() => UseImportedProviderUrl(selProvider)">
+                                                Use this URL →
+                                            </MudButton>
                                         }
-                                    </MudPaper>
-                                }
-                            </MudStack>
+                                    }
+                                </MudStack>
+                            }
+                        </div>
+                    </MudTabPanel>
+                }
 
-                            <MudTextField Label="XMLTV URL (optional)" @bind-Value="_fileModel.XmltvUrl"
-                                          HelperText="http/https URL or leave empty" />
-                            <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_fileModel.TimeoutSeconds" Min="1" Max="1800" />
-                            <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_fileModel.MaxConcurrentStreams" Min="1" Max="100"
-                                             HelperText="Leave blank to use the global setting" />
-                            @RenderContentToggles(_fileModel)
-                            @RenderStreamFormatSection(_fileModel)
-                            <MudSwitch @bind-Value="_fileModel.Enabled" Color="Color.Success" Label="Enabled" />
-                            @RenderProfileSection(_fileModel)
-                        </MudStack>
-                    </MudForm>
-                </div>
-            </MudTabPanel>
+            </MudTabs>
+        }
+        else
+        {
+            <div class="pa-4">
+                <MudStack Spacing="3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                        <MudText Typo="Typo.h6">@_savedProvider!.Name added</MudText>
+                    </MudStack>
 
-            @* ------------------------------------------------------------------ *@
-            @* Tab 2: Xtream Codes *@
-            @* ------------------------------------------------------------------ *@
-            <MudTabPanel Text="Xtream Codes" Icon="@Icons.Material.Filled.Tv">
-                <div class="pt-3">
-                    @if (!_encryptionAvailable)
+                    <MudText Typo="Typo.body2">
+                        Does your subscription limit simultaneous streams? Setting this prevents M3Undle from
+                        accepting new stream requests once the limit is reached, protecting active viewers from
+                        being cut off.
+                    </MudText>
+
+                    <ProviderConcurrentStreams @bind-LimitConcurrentStreams="_finalizeLimit"
+                                               @bind-ConcurrentStreamLimit="_finalizeLimitCount" />
+
+                    @if (!string.IsNullOrWhiteSpace(_finalizeError))
                     {
-                        <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-3">
-                            <MudText Typo="Typo.body2"><strong>M3UNDLE_ENCRYPTION_KEY is not set.</strong></MudText>
-                            <MudText Typo="Typo.body2" Class="mt-1">
-                                Xtream Codes providers require encrypted password storage. Generate a key and set the
-                                environment variable before adding this provider type:
-                            </MudText>
-                            <MudText Typo="Typo.caption" Class="mt-1" Style="font-family:monospace">
-                                openssl rand -base64 32
-                            </MudText>
-                            <MudText Typo="Typo.caption">
-                                Then set <code>M3UNDLE_ENCRYPTION_KEY=&lt;output&gt;</code> and restart M3Undle.
-                            </MudText>
-                        </MudAlert>
+                        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">@_finalizeError</MudAlert>
                     }
-                    <MudForm @ref="_xtreamForm">
-                        <MudStack Spacing="2">
-                            <MudTextField Label="Name" @bind-Value="_xtreamModel.Name" Required="true" RequiredError="Name is required."
-                                          Disabled="!_encryptionAvailable" />
-                            <MudTextField Label="Server URL" @bind-Value="_xtreamModel.XtreamBaseUrl"
-                                          Required="true" RequiredError="Server URL is required."
-                                          HelperText="e.g. http://yourserver.com:8080"
-                                          Disabled="!_encryptionAvailable" />
-                            <MudTextField Label="Username" @bind-Value="_xtreamModel.XtreamUsername"
-                                          Required="true" RequiredError="Username is required."
-                                          Disabled="!_encryptionAvailable" />
-                            <MudTextField Label="Password" @bind-Value="_xtreamModel.XtreamPassword"
-                                          Required="true" RequiredError="Password is required."
-                                          InputType="InputType.Password"
-                                          Disabled="!_encryptionAvailable" />
-                            <MudSwitch @bind-Value="_xtreamModel.XtreamIncludeXmltv" Color="Color.Primary"
-                                       Label="Include XMLTV guide from same server"
-                                       Disabled="!_encryptionAvailable" />
-                            <MudNumericField T="int" Label="Timeout (seconds)" @bind-Value="_xtreamModel.TimeoutSeconds" Min="1" Max="1800"
-                                             Disabled="!_encryptionAvailable" />
-                            <MudNumericField T="int?" Label="Max concurrent streams (optional)" @bind-Value="_xtreamModel.MaxConcurrentStreams" Min="1" Max="100"
-                                             HelperText="Leave blank to use the global setting"
-                                             Disabled="!_encryptionAvailable" />
-                            @RenderContentToggles(_xtreamModel)
-                            @RenderStreamFormatSection(_xtreamModel)
-                            <MudSwitch @bind-Value="_xtreamModel.Enabled" Color="Color.Success" Label="Enabled"
-                                       Disabled="!_encryptionAvailable" />
-                            @RenderProfileSection(_xtreamModel)
-                        </MudStack>
-                    </MudForm>
-                </div>
-            </MudTabPanel>
-
-            @* ------------------------------------------------------------------ *@
-            @* Tab 3: Import from config.yaml (only shown when available) *@
-            @* ------------------------------------------------------------------ *@
-            @if (_showImportTab)
-            {
-                <MudTabPanel Text="Import" Icon="@Icons.Material.Filled.FileDownload">
-                    <div class="pt-3">
-                        @if (_configProviders.Count == 0)
-                        {
-                            <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">No providers found in config.yaml.</MudAlert>
-                        }
-                        else
-                        {
-                            var selProvider = _configProviders.FirstOrDefault(p => p.Name == _importSelectedName);
-                            var selImported = !string.IsNullOrEmpty(_importSelectedName) && IsAlreadyImported(_importSelectedName);
-                            var selMissing = selProvider?.MissingEnvVars.Count > 0;
-
-                            <MudStack Spacing="3">
-                                <MudSelect T="string"
-                                           Label="Provider"
-                                           @bind-Value="_importSelectedName"
-                                           HelperText="Providers discovered in M3UNDLE_CONFIG_DIR/config.yaml">
-                                    <MudSelectItem T="string" Value="@string.Empty">— select a provider —</MudSelectItem>
-                                    @foreach (var cp in _configProviders)
-                                    {
-                                        <MudSelectItem T="string" Value="@cp.Name">
-                                            @cp.Name
-                                            @if (IsAlreadyImported(cp.Name)) { <text> (already imported)</text> }
-                                            else if (cp.MissingEnvVars.Count > 0) { <text> (missing env vars)</text> }
-                                        </MudSelectItem>
-                                    }
-                                </MudSelect>
-
-                                @if (selProvider is not null)
-                                {
-                                    <MudTextField Label="Playlist URL" Value="@selProvider.PlaylistUrl"
-                                                  ReadOnly="true" Variant="Variant.Text"
-                                                  Style="font-family:monospace; font-size:0.8rem;" />
-
-                                    @if (!string.IsNullOrWhiteSpace(selProvider.XmltvUrl))
-                                    {
-                                        <MudTextField Label="XMLTV URL" Value="@selProvider.XmltvUrl"
-                                                      ReadOnly="true" Variant="Variant.Text"
-                                                      Style="font-family:monospace; font-size:0.8rem;" />
-                                    }
-
-                                    @if (selMissing)
-                                    {
-                                        <MudAlert Severity="Severity.Error" Dense="true" Variant="Variant.Outlined">
-                                            Missing environment variables: @string.Join(", ", selProvider.MissingEnvVars)
-                                        </MudAlert>
-                                    }
-                                    else if (selImported)
-                                    {
-                                        <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined">
-                                            This provider has already been imported.
-                                        </MudAlert>
-                                    }
-                                    else
-                                    {
-                                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                                   OnClick="() => UseImportedProviderUrl(selProvider)">
-                                            Use this URL →
-                                        </MudButton>
-                                    }
-                                }
-                            </MudStack>
-                        }
-                    </div>
-                </MudTabPanel>
-            }
-
-        </MudTabs>
+                </MudStack>
+            </div>
+        }
     </DialogContent>
     <DialogActions>
-        <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
-        <MudSpacer />
-        @if (_activeTab != ImportTabIndex)
+        @if (_step == DialogStep.Form)
         {
+            <MudButton Variant="Variant.Text" OnClick="Cancel" Disabled="_isSaving">Cancel</MudButton>
+            <MudSpacer />
+            @if (_activeTab != ImportTabIndex)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="_isSaving"
+                           OnClick="SubmitActiveTabAsync">
+                    @(_isSaving ? "Adding..." : "Add Provider")
+                </MudButton>
+            }
+        }
+        else
+        {
+            <MudSpacer />
             <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                       Disabled="@(IsSaveDisabled())"
-                       OnClick="SaveAsync">
-                @(_isSaving ? "Adding..." : "Add Provider")
+                       Disabled="_isSaving"
+                       OnClick="FinalizeDoneAsync">
+                @(_isSaving ? "Saving..." : "Done")
             </MudButton>
         }
     </DialogActions>
@@ -303,60 +158,39 @@
     [Parameter] public List<ProviderDto> Providers { get; set; } = [];
     [Parameter] public EventCallback OnSaved { get; set; }
 
+    private enum DialogStep { Form, Finalize }
+    private DialogStep _step = DialogStep.Form;
+
     private int _activeTab;
     private int ImportTabIndex => _showImportTab ? 3 : -1;
 
-    private MudForm? _urlForm;
-    private MudForm? _fileForm;
-    private MudForm? _xtreamForm;
+    private UrlProviderForm? _urlFormRef;
+    private UrlProviderForm? _fileFormRef;
+    private XtreamProviderForm? _xtreamFormRef;
 
     private bool _isSaving;
-    private string? _error;
     private bool _encryptionAvailable;
-    private bool _fileBrowseRootMissing;
-    private string? _fileBrowseError;
     private bool _showImportTab;
 
-    // URL tab
-    private readonly ProviderFormModel _urlModel = new() { TimeoutSeconds = 120, Enabled = true };
-    private bool _urlAddAsXtream;
-    private bool _urlAddAsXtreamIncludeXmltv;
+    private XtreamPrefill? _xtreamPrefill;
+    private UrlProviderPrefill? _urlPrefill;
 
-    // File tab
-    private readonly ProviderFormModel _fileModel = new() { TimeoutSeconds = 120, Enabled = true };
-    private bool _showFileBrowser;
-    private bool _browseLoading;
-    private FileBrowseDto? _browseData;
+    private List<ProfileListItemDto> _localProfiles = [];
 
-    // Xtream tab
-    private readonly XtreamFormModel _xtreamModel = new() { TimeoutSeconds = 120, Enabled = true };
-
-    // Import tab
     private string _importSelectedName = string.Empty;
     private readonly List<ConfigYamlProviderDto> _configProviders = [];
     private readonly List<ProviderDto> _importedProviders = [];
 
-    private const string _urlHelperText =
-        "Enter an http/https URL.\n\n" +
-        "To keep credentials out of the database, place them in a .env file in M3UNDLE_CONFIG_DIR " +
-        "and reference them with %VAR_NAME% syntax.\n\n" +
-        "Example URL:\n" +
-        "  http://my.server:8080/get.php?username=alice&password=%MY_PASSWORD%\n\n" +
-        ".env file entry:\n" +
-        "  MY_PASSWORD=supersecret";
-
-    private List<ProfileListItemDto> _localProfiles = [];
+    private ProviderDto? _savedProvider;
+    private bool _finalizeLimit;
+    private int _finalizeLimitCount = 1;
+    private string? _finalizeError;
+    private bool _finalizeSeeded;
 
     protected override async Task OnInitializedAsync()
     {
         _localProfiles = [.. Profiles];
-
         _encryptionAvailable = await ProviderPageService.GetEncryptionAvailableAsync();
-
-        var browse = await ProviderPageService.BrowseFilesystemAsync(null);
-        _fileBrowseRootMissing = browse.Data is null;
-        if (_fileBrowseRootMissing)
-            _fileBrowseError = browse.Error;
 
         try
         {
@@ -366,342 +200,118 @@
             _importedProviders.AddRange(pageData.Providers);
             _showImportTab = _configProviders.Count > 0;
         }
-        catch { }
-
-        var defaultProfile = AvailableProfiles.FirstOrDefault(x => x.Enabled);
-        if (defaultProfile is not null)
+        catch (Exception ex)
         {
-            _urlModel.ProfileId = defaultProfile.ProfileId;
-            _fileModel.ProfileId = defaultProfile.ProfileId;
-            _xtreamModel.ProfileId = defaultProfile.ProfileId;
+            Logger.LogWarning(ex, "Failed to load config.yaml providers for Import tab.");
         }
     }
-
-    private IEnumerable<ProfileListItemDto> AvailableProfiles => _localProfiles.Where(p =>
-        !Providers.Any(prov => prov.AssociatedProfileIds.Contains(p.ProfileId)));
-
-    private bool IsSaveDisabled() => _isSaving || (_activeTab == 2 && !_encryptionAvailable);
 
     private void Cancel() => MudDialog.Cancel();
 
-    private RenderFragment RenderProfileSection(ProviderFormModel model) => __builder =>
+    private async Task SubmitActiveTabAsync()
     {
-        <MudSelect T="string" Label="Associated Profile" @bind-Value="model.ProfileId"
-                   ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(Auto-create)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
-            <MudSelectItem T="string" Value="@string.Empty">(Auto-create from name)</MudSelectItem>
-            @foreach (var profile in AvailableProfiles)
-            {
-                <MudSelectItem T="string" Value="@profile.ProfileId">@profile.Name</MudSelectItem>
-            }
-        </MudSelect>
-    };
-
-    private RenderFragment RenderProfileSection(XtreamFormModel model) => __builder =>
-    {
-        <MudSelect T="string" Label="Associated Profile" @bind-Value="model.ProfileId"
-                   ToStringFunc="@(id => string.IsNullOrEmpty(id) ? "(Auto-create)" : _localProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
-            <MudSelectItem T="string" Value="@string.Empty">(Auto-create from name)</MudSelectItem>
-            @foreach (var profile in AvailableProfiles)
-            {
-                <MudSelectItem T="string" Value="@profile.ProfileId">@profile.Name</MudSelectItem>
-            }
-        </MudSelect>
-    };
-
-    private RenderFragment RenderContentToggles(ProviderFormModel model) => __builder =>
-    {
-        <MudDivider Class="my-1" />
-        <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
-        <MudSwitch @bind-Value="model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
-        <MudSwitch @bind-Value="model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
-    };
-
-    private RenderFragment RenderContentToggles(XtreamFormModel model) => __builder =>
-    {
-        <MudDivider Class="my-1" />
-        <MudText Typo="Typo.caption" Color="Color.Secondary">Content Types</MudText>
-        <MudSwitch @bind-Value="model.IncludeVod" Color="Color.Primary" Label="Include VOD / Movies" />
-        <MudSwitch @bind-Value="model.IncludeSeries" Color="Color.Primary" Label="Include Series" />
-    };
-
-    private RenderFragment RenderStreamFormatSection(ProviderFormModel model) => __builder =>
-    {
-        <MudDivider Class="my-1" />
-        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
-        <MudSwitch @bind-Value="model.ForceMpegTs" Color="Color.Warning" Label="Force MPEG-TS (override HLS)" />
-        @if (model.ForceMpegTs)
-        {
-            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                Upstream URLs with <code>output=m3u8</code> will be rewritten to <code>output=ts</code>. HLS delivery to clients is also disabled for this provider.
-            </MudAlert>
-        }
-        <MudSwitch @bind-Value="model.CleanRelayRemux" Color="Color.Warning" Label="Clean relay remux" />
-        @if (model.CleanRelayRemux)
-        {
-            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                Uses FFmpeg to remux live streams and repair timestamps. Adds CPU usage and some startup latency.
-            </MudAlert>
-        }
-    };
-
-    private RenderFragment RenderStreamFormatSection(XtreamFormModel model) => __builder =>
-    {
-        <MudDivider Class="my-1" />
-        <MudText Typo="Typo.caption" Color="Color.Secondary">Stream Format</MudText>
-        <MudSwitch @bind-Value="model.ForceMpegTs" Color="Color.Warning" Label="Force MPEG-TS (override HLS)" />
-        @if (model.ForceMpegTs)
-        {
-            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                HLS delivery to clients is disabled for this provider.
-            </MudAlert>
-        }
-        <MudSwitch @bind-Value="model.CleanRelayRemux" Color="Color.Warning" Label="Clean relay remux" />
-        @if (model.CleanRelayRemux)
-        {
-            <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Text" Class="mt-n1">
-                Uses FFmpeg to remux live streams and repair timestamps. Adds CPU usage and some startup latency.
-            </MudAlert>
-        }
-    };
-
-    // ------------------------------------------------------------------
-    // File browser
-    // ------------------------------------------------------------------
-
-    private async Task OpenFileBrowserAsync()
-    {
-        _showFileBrowser = true;
-        await BrowseToAsync(null);
-    }
-
-    private async Task BrowseToAsync(string? path)
-    {
-        _browseLoading = true;
-        StateHasChanged();
-        try
-        {
-            var browse = await ProviderPageService.BrowseFilesystemAsync(path);
-            if (browse.Data is not null)
-            {
-                _browseData = browse.Data;
-            }
-            else
-            {
-                _fileBrowseRootMissing = true;
-                _fileBrowseError = browse.Error;
-            }
-        }
-        catch { _fileBrowseRootMissing = true; }
-        finally
-        {
-            _browseLoading = false;
-            StateHasChanged();
-        }
-    }
-
-    private Task SelectFileAsync(string filePath)
-    {
-        _fileModel.PlaylistUrl = $"file://{filePath}";
-        _showFileBrowser = false;
-        StateHasChanged();
-        return Task.CompletedTask;
-    }
-
-    // ------------------------------------------------------------------
-    // Save
-    // ------------------------------------------------------------------
-
-    private async Task SaveAsync()
-    {
-        _error = null;
         _isSaving = true;
-
+        StateHasChanged();
         try
         {
-            (ProviderDto? Provider, string? Error) result;
-
-            if (_activeTab == 0)
+            await (_activeTab switch
             {
-                if (_urlForm is not null) { await _urlForm.ValidateAsync(); if (!_urlForm.IsValid) return; }
-
-                if (_urlAddAsXtream && LooksLikeXtreamUrl(_urlModel.PlaylistUrl))
-                {
-                    var creds = ProviderPageService.ParseXtreamUrl(_urlModel.PlaylistUrl.Trim());
-                    if (creds is null)
-                    {
-                        _error = "Unable to extract Xtream credentials from the URL. Ensure it includes username and password parameters.";
-                        return;
-                    }
-                    result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
-                    {
-                        Name = _urlModel.Name.Trim(),
-                        XtreamBaseUrl = creds.Value.BaseUrl,
-                        XtreamUsername = creds.Value.Username,
-                        XtreamPassword = creds.Value.Password,
-                        XtreamIncludeXmltv = _urlAddAsXtreamIncludeXmltv,
-                        Enabled = _urlModel.Enabled,
-                        IncludeVod = _urlModel.IncludeVod,
-                        IncludeSeries = _urlModel.IncludeSeries,
-                        ForceMpegTs = _urlModel.ForceMpegTs,
-                        CleanRelayMode = _urlModel.CleanRelayRemux ? "remux" : "off",
-                        TimeoutSeconds = _urlModel.TimeoutSeconds,
-                        MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
-                        AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
-                    }, CancellationToken.None);
-                }
-                else
-                {
-                    result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
-                    {
-                        Name = _urlModel.Name.Trim(),
-                        PlaylistUrl = _urlModel.PlaylistUrl.Trim(),
-                        XmltvUrl = NullIfEmpty(_urlModel.XmltvUrl),
-                        HeadersJson = NullIfEmpty(_urlModel.HeadersJson),
-                        UserAgent = NullIfEmpty(_urlModel.UserAgent),
-                        Enabled = _urlModel.Enabled,
-                        IncludeVod = _urlModel.IncludeVod,
-                        IncludeSeries = _urlModel.IncludeSeries,
-                        ForceMpegTs = _urlModel.ForceMpegTs,
-                        CleanRelayMode = _urlModel.CleanRelayRemux ? "remux" : "off",
-                        TimeoutSeconds = _urlModel.TimeoutSeconds,
-                        MaxConcurrentStreams = _urlModel.MaxConcurrentStreams,
-                        AssociateToProfileIds = ProfileIdList(_urlModel.ProfileId),
-                    }, CancellationToken.None);
-                }
-            }
-            else if (_activeTab == 1)
-            {
-                if (_fileForm is not null) { await _fileForm.ValidateAsync(); if (!_fileForm.IsValid) return; }
-                if (string.IsNullOrWhiteSpace(_fileModel.PlaylistUrl))
-                {
-                    _error = "Please select a file using the Browse button.";
-                    return;
-                }
-                result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
-                {
-                    Name = _fileModel.Name.Trim(),
-                    PlaylistUrl = _fileModel.PlaylistUrl,
-                    XmltvUrl = NullIfEmpty(_fileModel.XmltvUrl),
-                    Enabled = _fileModel.Enabled,
-                    IncludeVod = _fileModel.IncludeVod,
-                    IncludeSeries = _fileModel.IncludeSeries,
-                    ForceMpegTs = _fileModel.ForceMpegTs,
-                    CleanRelayMode = _fileModel.CleanRelayRemux ? "remux" : "off",
-                    TimeoutSeconds = _fileModel.TimeoutSeconds,
-                    MaxConcurrentStreams = _fileModel.MaxConcurrentStreams,
-                    AssociateToProfileIds = ProfileIdList(_fileModel.ProfileId),
-                }, CancellationToken.None);
-            }
-            else
-            {
-                if (_xtreamForm is not null) { await _xtreamForm.ValidateAsync(); if (!_xtreamForm.IsValid) return; }
-                result = await ProviderPageService.CreateProviderAsync(new CreateProviderRequest
-                {
-                    Name = _xtreamModel.Name.Trim(),
-                    XtreamBaseUrl = _xtreamModel.XtreamBaseUrl.Trim(),
-                    XtreamUsername = _xtreamModel.XtreamUsername.Trim(),
-                    XtreamPassword = _xtreamModel.XtreamPassword,
-                    XtreamIncludeXmltv = _xtreamModel.XtreamIncludeXmltv,
-                    Enabled = _xtreamModel.Enabled,
-                    IncludeVod = _xtreamModel.IncludeVod,
-                    IncludeSeries = _xtreamModel.IncludeSeries,
-                    ForceMpegTs = _xtreamModel.ForceMpegTs,
-                    CleanRelayMode = _xtreamModel.CleanRelayRemux ? "remux" : "off",
-                    TimeoutSeconds = _xtreamModel.TimeoutSeconds,
-                    MaxConcurrentStreams = _xtreamModel.MaxConcurrentStreams,
-                    AssociateToProfileIds = ProfileIdList(_xtreamModel.ProfileId),
-                }, CancellationToken.None);
-            }
-
-            if (!string.IsNullOrWhiteSpace(result.Error))
-            {
-                _error = result.Error;
-                return;
-            }
-
-            var linkedProfileId = result.Provider?.AssociatedProfileIds.FirstOrDefault();
-            if (!string.IsNullOrEmpty(linkedProfileId))
-                await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
-
-            await OnSaved.InvokeAsync();
-            MudDialog.Close(DialogResult.Ok(true));
-        }
-        catch (Exception ex)
-        {
-            _error = $"Failed to save provider: {ex.Message}";
+                0 => _urlFormRef?.TrySubmitAsync() ?? Task.CompletedTask,
+                1 => _fileFormRef?.TrySubmitAsync() ?? Task.CompletedTask,
+                2 => _xtreamFormRef?.TrySubmitAsync() ?? Task.CompletedTask,
+                _ => Task.CompletedTask
+            });
         }
         finally
         {
             _isSaving = false;
+            StateHasChanged();
         }
     }
 
-    // ------------------------------------------------------------------
-    // Import tab helpers
-    // ------------------------------------------------------------------
+    private void HandleSwitchToXtream(XtreamPrefill prefill)
+    {
+        _xtreamPrefill = prefill;
+        _activeTab = 2;
+        StateHasChanged();
+    }
 
-    private static bool LooksLikeXtreamUrl(string? url) =>
-        !string.IsNullOrEmpty(url)
-        && url.Contains("/get.php", StringComparison.OrdinalIgnoreCase)
-        && url.Contains("username=", StringComparison.OrdinalIgnoreCase)
-        && url.Contains("password=", StringComparison.OrdinalIgnoreCase);
+    private async Task HandleSaved(ProviderDto provider)
+    {
+        var linkedProfileId = provider.AssociatedProfileIds.FirstOrDefault();
+        if (!string.IsNullOrEmpty(linkedProfileId))
+            await ProfilesPageService.AutoActivateProfileIfNoneAsync(linkedProfileId, CancellationToken.None);
+
+        _savedProvider = provider;
+
+        if (!_finalizeSeeded)
+        {
+            _finalizeLimit = provider.MaxConcurrentStreams.HasValue;
+            _finalizeLimitCount = provider.MaxConcurrentStreams ?? 1;
+            _finalizeSeeded = true;
+        }
+
+        _step = DialogStep.Finalize;
+        StateHasChanged();
+    }
+
+    private async Task FinalizeDoneAsync()
+    {
+        _isSaving = true;
+        _finalizeError = null;
+        StateHasChanged();
+        try
+        {
+            if (_finalizeLimit && _savedProvider is not null)
+            {
+                var error = await ProviderPageService.UpdateProviderAsync(_savedProvider.ProviderId, new UpdateProviderRequest
+                {
+                    Name = _savedProvider.Name,
+                    PlaylistUrl = _savedProvider.PlaylistUrl,
+                    XmltvUrl = _savedProvider.XmltvUrl,
+                    HeadersJson = _savedProvider.HeadersJson,
+                    UserAgent = _savedProvider.UserAgent,
+                    Enabled = _savedProvider.Enabled,
+                    IncludeVod = _savedProvider.IncludeVod,
+                    IncludeSeries = _savedProvider.IncludeSeries,
+                    ForceMpegTs = _savedProvider.ForceMpegTs,
+                    CleanRelayMode = _savedProvider.CleanRelayMode,
+                    TimeoutSeconds = _savedProvider.TimeoutSeconds,
+                    MaxConcurrentStreams = _finalizeLimitCount,
+                    AssociateToProfileIds = _savedProvider.AssociatedProfileIds.Count > 0
+                        ? _savedProvider.AssociatedProfileIds
+                        : null,
+                    XtreamBaseUrl = _savedProvider.XtreamBaseUrl,
+                    XtreamUsername = _savedProvider.XtreamUsername,
+                    XtreamIncludeXmltv = _savedProvider.XtreamIncludeXmltv,
+                }, CancellationToken.None);
+
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    _finalizeError = error;
+                    return;
+                }
+            }
+
+            await OnSaved.InvokeAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            _isSaving = false;
+            StateHasChanged();
+        }
+    }
 
     private bool IsAlreadyImported(string name) => _importedProviders.Any(p => p.Name == name);
 
     private void UseImportedProviderUrl(ConfigYamlProviderDto provider)
     {
-        _urlModel.Name = provider.Name;
-        _urlModel.PlaylistUrl = provider.PlaylistUrl;
-        if (!string.IsNullOrWhiteSpace(provider.XmltvUrl))
-            _urlModel.XmltvUrl = provider.XmltvUrl;
+        _urlPrefill = new UrlProviderPrefill(
+            Name: provider.Name,
+            Url: provider.PlaylistUrl,
+            XmltvUrl: string.IsNullOrWhiteSpace(provider.XmltvUrl) ? null : provider.XmltvUrl);
         _activeTab = 0;
         StateHasChanged();
     }
-
-    // ------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------
-
-    private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
-    private static List<string>? ProfileIdList(string id) =>
-        string.IsNullOrWhiteSpace(id) ? null : [id];
-
-    // ------------------------------------------------------------------
-    // Inner types
-    // ------------------------------------------------------------------
-
-    private sealed class ProviderFormModel
-    {
-        public string Name { get; set; } = string.Empty;
-        public string PlaylistUrl { get; set; } = string.Empty;
-        public string? XmltvUrl { get; set; }
-        public string? HeadersJson { get; set; }
-        public string? UserAgent { get; set; }
-        public bool Enabled { get; set; } = true;
-        public int TimeoutSeconds { get; set; } = 120;
-        public int? MaxConcurrentStreams { get; set; }
-        public bool IncludeVod { get; set; } = true;
-        public bool IncludeSeries { get; set; } = true;
-        public bool ForceMpegTs { get; set; }
-        public bool CleanRelayRemux { get; set; }
-        public string ProfileId { get; set; } = string.Empty;
-    }
-
-    private sealed class XtreamFormModel
-    {
-        public string Name { get; set; } = string.Empty;
-        public string XtreamBaseUrl { get; set; } = string.Empty;
-        public string XtreamUsername { get; set; } = string.Empty;
-        public string XtreamPassword { get; set; } = string.Empty;
-        public bool XtreamIncludeXmltv { get; set; }
-        public bool Enabled { get; set; } = true;
-        public int TimeoutSeconds { get; set; } = 120;
-        public int? MaxConcurrentStreams { get; set; }
-        public bool IncludeVod { get; set; } = true;
-        public bool IncludeSeries { get; set; } = true;
-        public bool ForceMpegTs { get; set; }
-        public bool CleanRelayRemux { get; set; }
-        public string ProfileId { get; set; } = string.Empty;
-    }
-
 }

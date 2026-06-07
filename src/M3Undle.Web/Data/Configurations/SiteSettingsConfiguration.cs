@@ -100,6 +100,11 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             .HasDefaultValue(false);
         builder.Property(s => s.ObservabilityMetricsLocalAllowedCidrs)
             .HasColumnName("observability_metrics_local_allowed_cidrs");
+        builder.Property(s => s.XtreamCompatibilityEnabled)
+            .HasColumnName("xtream_compatibility_enabled")
+            .HasDefaultValue(true);
+        builder.Property(s => s.HdhrAllowedNetworks)
+            .HasColumnName("hdhr_allowed_networks");
 
         builder.HasData(new SiteSettings
         {
@@ -135,6 +140,8 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             ObservabilityMetricsMode = "LocalOnly",
             ObservabilityMetricsEnableChannelLabels = false,
             ObservabilityMetricsLocalAllowedCidrs = null,
+            XtreamCompatibilityEnabled = true,
+            HdhrAllowedNetworks = null,
         });
     }
 }

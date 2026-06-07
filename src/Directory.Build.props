@@ -25,7 +25,22 @@
   <ItemGroup>
     <AssemblyMetadata Include="BuildDateUtc" Value="$(BuildDateUtc)" />
     <AssemblyMetadata Include="BuildNumber" Value="$(BuildNumber)" Condition="'$(BuildNumber)' != ''" />
+    <AssemblyMetadata Include="GitHash" Value="$(SourceRevisionId)" Condition="'$(SourceRevisionId)' != ''" />
   </ItemGroup>
+
+  <!-- Embed the short git commit hash as assembly metadata at build time.
+       Docker and CI can supply SourceRevisionId; local builds fall back to git. -->
+  <Target Name="EmbedGitHash" BeforeTargets="GetAssemblyAttributes" Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" IgnoreExitCode="true" Condition="'$(_GitShortHash)' == ''">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitShortHash" />
+    </Exec>
+    <PropertyGroup>
+      <_GitShortHash>$(_GitShortHash.Trim())</_GitShortHash>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(_GitShortHash)' != ''">
+      <AssemblyMetadata Include="GitHash" Value="$(_GitShortHash)" />
+    </ItemGroup>
+  </Target>
 
   <!-- Normalize build output paths on non-Windows to avoid literal backslash directories (for example, "bin\Debug"). -->
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux')) Or $([MSBuild]::IsOSPlatform('OSX'))">

@@ -26,4 +26,15 @@ public sealed record StreamSessionSnapshot(
     int? LastUpstreamStatusCode = null,
     double? LastCooldownSeconds = null,
     string RelayMode = "Direct",
-    string? LastRelayFallbackReason = null);
+    string? LastRelayFallbackReason = null,
+    string? RelayPolicy = null,
+    string? RelayDecisionReason = null,
+    string? LastSafeStartKind = null,
+    double? LastRecoveryOutputHeldMs = null,
+    DateTimeOffset? LastRecoveryStartedUtc = null,
+    long TotalBytesRelayed = 0,
+    long? UpstreamBytesPerSecond = null,
+    StreamChannelHealthProfile? HealthProfile = null,
+    string? HealthProfileReason = null,
+    bool RequiresDownstreamRetune = false,
+    string? DownstreamRetuneReason = null);

@@ -29,7 +29,8 @@ public sealed class EndpointSecurityServiceTests
             Username: "iptv-user",
             Password: "secret-pass",
             ActiveProfileId: null,
-            VirtualTunerId: "tuner-a"), CancellationToken.None);
+            VirtualTunerId: "tuner-a",
+            XtreamCompatibilityEnabled: true), CancellationToken.None);
 
         Assert.IsTrue(result.Succeeded, result.Error);
 
@@ -64,14 +65,16 @@ public sealed class EndpointSecurityServiceTests
             Username: "original-user",
             Password: "original-pass",
             ActiveProfileId: null,
-            VirtualTunerId: null), CancellationToken.None);
+            VirtualTunerId: null,
+            XtreamCompatibilityEnabled: true), CancellationToken.None);
 
         var result = await service.UpdateAsync(new UpdateEndpointSecurityCommand(
             Enabled: true,
             Username: "updated-user",
             Password: "updated-pass",
             ActiveProfileId: null,
-            VirtualTunerId: null), CancellationToken.None);
+            VirtualTunerId: null,
+            XtreamCompatibilityEnabled: true), CancellationToken.None);
 
         Assert.IsTrue(result.Succeeded, result.Error);
         Assert.AreEqual("updated-user", result.Settings.Username);
@@ -122,7 +125,8 @@ public sealed class EndpointSecurityServiceTests
             Username: null,
             Password: null,
             ActiveProfileId: null,
-            VirtualTunerId: null), CancellationToken.None);
+            VirtualTunerId: null,
+            XtreamCompatibilityEnabled: true), CancellationToken.None);
 
         Assert.IsFalse(result.Succeeded);
         Assert.IsTrue(result.Error!.Contains("Multiple", StringComparison.OrdinalIgnoreCase));

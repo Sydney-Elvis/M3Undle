@@ -236,6 +236,15 @@ public sealed class WhatsOnGroupDto
     public List<WhatsOnEventDto> Events { get; set; } = [];
 }
 
+public sealed class MappedChannelPanelItem
+{
+    public int? ChannelNumber { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+    public bool IsLive { get; set; }
+    public string FilterId { get; set; } = string.Empty;
+    public string? OutputName { get; set; }
+}
+
 public sealed class WhatsOnThisWeekResponse
 {
     public string ProfileId { get; set; } = string.Empty;

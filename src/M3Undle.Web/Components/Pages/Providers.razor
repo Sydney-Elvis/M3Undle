@@ -5,6 +5,7 @@
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
 @inject IDialogService DialogService
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>M3Undle</PageTitle>
@@ -47,10 +48,7 @@
 }
 
 <MudPaper Class="pa-4" Elevation="1">
-    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
-        <MudText Typo="Typo.h6">Configured Providers</MudText>
-        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync" Disabled="@(_isLoading || _isDeletingProvider)">Reload</MudButton>
-    </MudStack>
+    <MudText Typo="Typo.h6" Class="mb-3">Configured Providers</MudText>
 
     @if (_isLoading)
     {
@@ -62,14 +60,17 @@
     }
     else
     {
-        <MudTable Items="_providers" Hover="true" Dense="true">
+        <MudTable Items="_providers" Hover="true" Dense="true" RowClassFunc="@((p, _) => p.ProviderId == HighlightProvider ? "provider-row-highlight" : string.Empty)">
             <HeaderContent>
                 <MudTh>Name</MudTh>
                 <MudTh>Profile</MudTh>
                 <MudTh>Max Streams</MudTh>
-                <MudTh>Last Refresh</MudTh>
+                <MudTh>
+                    <MudTooltip Text="The last time M3Undle downloaded a fresh channel lineup from this provider" Placement="Placement.Top">
+                        <span style="cursor: help;">Last Refresh</span>
+                    </MudTooltip>
+                </MudTh>
                 <MudTh>Expires</MudTh>
-                <MudTh>Published</MudTh>
                 <MudTh>Status</MudTh>
                 <MudTh>Actions</MudTh>
             </HeaderContent>
@@ -79,15 +80,21 @@
                         <span>@context.Name</span>
                         @if (context.IsXtreamProvider)
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Xtream</MudChip>
+                            <MudTooltip Text="Xtream Codes API — authenticates with a username and password" Placement="Placement.Right">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Xtream</MudChip>
+                            </MudTooltip>
                         }
                         else if (context.PlaylistUrl?.StartsWith("file://", StringComparison.OrdinalIgnoreCase) == true)
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">File</MudChip>
+                            <MudTooltip Text="Local M3U file on disk" Placement="Placement.Right">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">File</MudChip>
+                            </MudTooltip>
                         }
                         else
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">M3U</MudChip>
+                            <MudTooltip Text="Remote M3U playlist fetched from a URL" Placement="Placement.Right">
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">M3U</MudChip>
+                            </MudTooltip>
                         }
                         @if (!context.Enabled)
                         {
@@ -110,39 +117,56 @@
                     }
                 </MudTd>
                 <MudTd>@(context.MaxConcurrentStreams?.ToString() ?? "—")</MudTd>
-                <MudTd>@FormatRefresh(context.LastRefresh)</MudTd>
+                <MudTd>
+                    <MudTooltip Text="@FormatRefreshTooltip(context)">
+                        <span>@FormatRefresh(context.LastRefresh)</span>
+                    </MudTooltip>
+                </MudTd>
                 <MudTd>@ExpiryCell(context.PlaylistExpiresUtc)</MudTd>
-                <MudTd>@FormatSnapshots(context.LatestSnapshots)</MudTd>
                 <MudTd>
                     @if (context.LastRefresh?.Status == "fail")
                     {
                         @if (context.LatestSnapshots.Any(s => s.Status == "active"))
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip>
+                            <MudTooltip Text="@FailTooltip("Last refresh failed, but a previously published lineup is still active.", context.LastRefresh.ErrorSummary)" Placement="Placement.Top">
+                                <span><MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">Degraded</MudChip></span>
+                            </MudTooltip>
                         }
                         else
                         {
-                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip>
+                            <MudTooltip Text="@FailTooltip("Last refresh failed and no lineup is currently published.", context.LastRefresh.ErrorSummary)" Placement="Placement.Top">
+                                <span><MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled">Failed</MudChip></span>
+                            </MudTooltip>
                         }
                     }
                     else if (context.LatestSnapshots.Any(s => s.Status == "active"))
                     {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip>
+                        <MudTooltip Text="@FormatSnapshotsTooltip(context.LatestSnapshots)" Placement="Placement.Top">
+                            <span><MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip></span>
+                        </MudTooltip>
                     }
                 </MudTd>
                 <MudTd>
                     <MudStack Row="true" Spacing="1">
-                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
-                        <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        <MudTooltip Text="Edit provider settings">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small" OnClick="() => OpenEditDialogAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        </MudTooltip>
+                        <MudTooltip Text="@GetToggleTooltip(context)">
+                            <MudIconButton Icon="@(context.Enabled ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)" Color="Color.Secondary" Size="Size.Small" OnClick="() => ToggleEnabledAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                        </MudTooltip>
                         @if (_deletingProviderId == context.ProviderId)
                         {
                             <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Error" />
                         }
                         else
                         {
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                            <MudTooltip Text="Permanently delete this provider and all associated data">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small" OnClick="() => DeleteAsync(context)" Disabled="@IsProviderActionDisabled(context)" />
+                            </MudTooltip>
                         }
-                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@IsProviderActionDisabled(context)">Preview</MudButton>
+                        <MudTooltip Text="Fetch the latest lineup from the provider and show a preview below">
+                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="() => RefreshPreviewAsync(context.ProviderId)" Disabled="@IsProviderActionDisabled(context)">Preview</MudButton>
+                        </MudTooltip>
                     </MudStack>
                 </MudTd>
             </RowTemplate>
@@ -205,10 +229,13 @@
 @* Add and Edit dialogs are opened imperatively via DialogService *@
 
 @code {
+    [SupplyParameterFromQuery(Name = "provider")]
+    public string? HighlightProvider { get; set; }
+
     private readonly List<ProviderDto> _providers = [];
     private readonly List<ProfileListItemDto> _profiles = [];
 
-    private bool _isLoading;
+    private bool _isLoading = true;
     private bool _isRefreshing;
     private bool _isPreviewLoading;
     private string? _previewLoadingProviderId;
@@ -222,15 +249,44 @@
 
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;
+    private PeriodicTimer? _autoRefreshTimer;
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
+    {
+        _ = InitializeAsync();
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && HighlightProvider is not null)
+            await JS.InvokeVoidAsync("scrollToClass", "provider-row-highlight");
+    }
+
+    private async Task InitializeAsync()
     {
         _isRefreshing = RefreshTrigger.IsRefreshing;
 
         var reader = EventBus.Subscribe(out _eventSubscription);
         _ = ListenForEventsAsync(reader, _cts.Token);
 
+        _autoRefreshTimer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+        _ = RunAutoRefreshAsync(_cts.Token);
+
         await LoadAsync();
+    }
+
+    private async Task RunAutoRefreshAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (await _autoRefreshTimer!.WaitForNextTickAsync(ct))
+            {
+                if (!_isLoading && !_isDeletingProvider && !_isRefreshing)
+                    await InvokeAsync(LoadAsync);
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task ListenForEventsAsync(System.Threading.Channels.ChannelReader<AppEvent> reader, CancellationToken ct)
@@ -264,6 +320,7 @@
         _cts.Cancel();
         _cts.Dispose();
         _eventSubscription?.Dispose();
+        _autoRefreshTimer?.Dispose();
     }
 
     private Task OpenAddDialogAsync()
@@ -422,17 +479,40 @@
         }
     }
 
+    private static string FailTooltip(string baseMessage, string? errorSummary)
+        => string.IsNullOrWhiteSpace(errorSummary) ? baseMessage : $"{baseMessage}\n\n{errorSummary}";
+
     private static string FormatRefresh(ProviderLastRefreshDto? refresh)
     {
-        if (refresh is null) return "No refresh yet";
-        if (refresh.Status == "running") return $"running since {refresh.StartedUtc:u}";
-        return $"{refresh.Status} @ {refresh.FinishedUtc?.ToString("u") ?? "?"}";
+        if (refresh is null) return "Never";
+        if (refresh.Status == "running") return "Checking now…";
+        return refresh.FinishedUtc is { } t ? t.ToString("MMM d, yyyy h:mm tt") : "—";
     }
 
-    private static string FormatSnapshots(List<ProviderLatestSnapshotDto> snapshots)
+    private static string FormatRefreshTooltip(ProviderDto provider)
     {
-        if (snapshots.Count == 0) return "None";
-        return string.Join(" | ", snapshots.Select(x => $"{x.Status} @ {x.CreatedUtc:u}"));
+        var refresh = provider.LastRefresh;
+        if (refresh is null) return "This provider has never been checked for a channel lineup.";
+        if (refresh.Status == "running") return "Downloading channel lineup from provider…";
+        var what = provider.IsXtreamProvider && provider.XtreamIncludeXmltv
+            ? "Channel lineup and guide data (EPG)"
+            : "Channel lineup";
+        if (refresh.Status == "fail")
+            return $"{what} update failed — {refresh.ErrorSummary ?? "check the logs for details"}";
+        return refresh.ChannelCountSeen.HasValue
+            ? $"{what} updated — {refresh.ChannelCountSeen} channels found"
+            : $"{what} updated successfully";
+    }
+
+    private static string GetToggleTooltip(ProviderDto provider) =>
+        provider.Enabled ? "Disable this provider" : "Enable this provider";
+
+    private static string FormatSnapshotsTooltip(List<ProviderLatestSnapshotDto> snapshots)
+    {
+        var active = snapshots.Where(x => x.Status == "active").ToList();
+        if (active.Count == 0) return "No active lineup published";
+        if (active.Count == 1) return $"Lineup published {active[0].CreatedUtc:u}";
+        return "Published lineups: " + string.Join(", ", active.Select(x => x.CreatedUtc.ToString("u")));
     }
 
     private bool IsProviderActionDisabled(ProviderDto provider)
@@ -451,9 +531,14 @@
                   : daysLeft < 1 ? $"Expires today"
                   : daysLeft <= 30 ? $"{expiry.Value:yyyy-MM-dd} (in {(int)daysLeft + 1}d)"
                   : expiry.Value.ToString("yyyy-MM-dd");
+        var tooltipText = daysLeft < 0
+            ? $"Your provider access expired on {expiry.Value:MMMM d, yyyy}. Streams from this provider may no longer work."
+            : daysLeft < 1
+            ? $"Your provider access expires today. Renew your subscription to keep streams working."
+            : $"Your provider access expires on {expiry.Value:MMMM d, yyyy}. After this date, streams may stop working.";
 
         builder.OpenComponent<MudTooltip>(0);
-        builder.AddAttribute(1, "Text", expiry.Value.ToString("u"));
+        builder.AddAttribute(1, "Text", tooltipText);
         builder.AddAttribute(2, "ChildContent", (RenderFragment)(inner =>
         {
             if (color == Color.Default)

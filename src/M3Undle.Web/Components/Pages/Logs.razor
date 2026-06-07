@@ -8,7 +8,9 @@
 
 <PageTitle>Logs — M3Undle</PageTitle>
 
-<div class="d-flex align-center mb-4" style="gap:12px">
+<div style="display:flex; flex-direction:column; height:calc(100dvh - 140px); overflow:hidden">
+
+<div class="d-flex align-center mb-4" style="gap:12px; flex-shrink:0">
     <MudText Typo="Typo.h5">Live Log</MudText>
     @if (!_autoScroll)
     {
@@ -22,15 +24,43 @@
     }
 </div>
 
-<MudPaper Elevation="2" Class="pa-0" Style="overflow:hidden">
+<MudStack Row="true" Spacing="2" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Style="flex-shrink:0">
+    <MudTextField T="string"
+                  @bind-Value="_searchTerm"
+                  Placeholder="Search logs..."
+                  Adornment="Adornment.End"
+                  AdornmentIcon="@(!string.IsNullOrWhiteSpace(_searchTerm) ? Icons.Material.Filled.Clear : Icons.Material.Filled.Search)"
+                  OnAdornmentClick="ClearSearch"
+                  Immediate="true"
+                  Margin="Margin.Dense"
+                  Variant="Variant.Outlined"
+                  Style="min-width:260px; flex:1; max-width:460px;" />
+    <TooltipChip Label="@($"{FilteredEntries.Count():N0} shown")"
+                 TooltipText="Log entries currently visible after level and search filters."
+                 Color="Color.Primary"
+                 Variant="Variant.Outlined" />
+</MudStack>
+
+<MudStack Row="true" Spacing="1" Class="mb-2" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Style="flex-shrink:0">
+    @foreach (var level in LogLevels)
+    {
+        <ChipFilterToggle Label="@($"{LevelDisplayName(level)} {CountForLevel(level):N0}")"
+                          Color="@LevelColor(level)"
+                          IsActive="@_enabledLevels.Contains(level)"
+                          TooltipText="@LevelFilterTooltip(level)"
+                          OnClick="@((_) => ToggleLevel(level))" />
+    }
+</MudStack>
+
+<MudPaper Elevation="2" Class="pa-0" Style="overflow:hidden; flex:1; min-height:0">
     <div id="log-container"
-         style="overflow-y:auto; max-height:75vh; font-family:monospace; font-size:0.80rem; padding:8px 12px">
-        @foreach (var entry in _entries)
+         style="overflow-y:auto; height:100%; font-family:monospace; font-size:0.80rem; padding:8px 12px">
+        @foreach (var entry in FilteredEntries)
         {
             <div style="margin-bottom:2px; white-space:pre-wrap; word-break:break-all">
                 <span style="color:var(--mud-palette-text-secondary)">@entry.Timestamp.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</span>
                 <MudChip T="string" Size="Size.Small" Color="@LevelColor(entry.Level)" Variant="Variant.Filled"
-                         Style="height:18px; font-size:0.70rem; padding:0 6px; margin:0 4px; vertical-align:middle">@entry.Level[..3].ToUpperInvariant()</MudChip>
+                         Style="height:18px; font-size:0.70rem; padding:0 6px; margin:0 4px; vertical-align:middle">@ShortLevel(entry.Level)</MudChip>
                 @if (!string.IsNullOrEmpty(entry.EventType))
                 {
                     <span style="color:var(--mud-palette-text-secondary); margin-right:6px">[@entry.EventType]</span>
@@ -45,17 +75,35 @@
     </div>
 </MudPaper>
 
+</div>
+
 @code {
+    private static readonly string[] DefaultLogLevels = ["Fatal", "Error", "Warning", "Information", "Debug", "Verbose"];
+
     private readonly List<LogEntry> _entries = [];
+    private readonly HashSet<string> _enabledLevels = new(DefaultLogLevels, StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _seenLevels = new(DefaultLogLevels, StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _subscription;
     private DotNetObjectReference<Logs>? _dotNetRef;
     private IJSObjectReference? _scrollCleanup;
+    private string _searchTerm = string.Empty;
     private bool _autoScroll = true;
+
+    private IEnumerable<string> LogLevels =>
+        _seenLevels
+            .OrderBy(LevelSortOrder)
+            .ThenBy(level => level, StringComparer.OrdinalIgnoreCase);
+
+    private IEnumerable<LogEntry> FilteredEntries =>
+        _entries.Where(entry => IsLevelEnabled(entry.Level) && MatchesSearch(entry));
 
     protected override void OnInitialized()
     {
         _entries.AddRange(Store.GetRecent());
+        foreach (var entry in _entries)
+            AddSeenLevel(entry.Level);
+
         var reader = Sink.Subscribe(out _subscription);
         _ = StreamLogsAsync(reader, _cts.Token);
     }
@@ -90,6 +138,7 @@
         {
             await foreach (var entry in reader.ReadAllAsync(ct))
             {
+                AddSeenLevel(entry.Level);
                 _entries.Add(entry);
                 if (_entries.Count > 500)
                     _entries.RemoveAt(0);
@@ -109,9 +158,77 @@
         {
             await JS.InvokeVoidAsync("scrollToBottom", "log-container");
         }
+        catch (JSDisconnectedException) { }
         catch (JSException) { }
         catch (TaskCanceledException) { }
     }
+
+    private void ToggleLevel(string level)
+    {
+        if (!_enabledLevels.Add(level))
+            _enabledLevels.Remove(level);
+    }
+
+    private string LevelFilterTooltip(string level)
+    {
+        var label = LevelDisplayName(level);
+        return _enabledLevels.Contains(level)
+            ? $"{label} log entries are visible. Click to hide this level."
+            : $"{label} log entries are hidden. Click to show this level.";
+    }
+
+    private void ClearSearch()
+    {
+        _searchTerm = string.Empty;
+    }
+
+    private int CountForLevel(string level) =>
+        _entries.Count(entry =>
+            string.Equals(entry.Level, level, StringComparison.OrdinalIgnoreCase) &&
+            MatchesSearch(entry));
+
+    private bool IsLevelEnabled(string level) =>
+        _enabledLevels.Contains(level);
+
+    private void AddSeenLevel(string level)
+    {
+        if (string.IsNullOrWhiteSpace(level))
+            return;
+
+        if (_seenLevels.Add(level))
+            _enabledLevels.Add(level);
+    }
+
+    private bool MatchesSearch(LogEntry entry)
+    {
+        if (string.IsNullOrWhiteSpace(_searchTerm))
+            return true;
+
+        var haystack = $"{entry.Timestamp.LocalDateTime:yyyy-MM-dd HH:mm:ss} {entry.Level} {entry.EventType} {entry.Message} {entry.Exception}";
+        var tokens = _searchTerm.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return tokens.All(token => haystack.Contains(token, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int LevelSortOrder(string level) => level switch
+    {
+        "Fatal" => 0,
+        "Error" => 1,
+        "Warning" => 2,
+        "Information" => 3,
+        "Debug" => 4,
+        "Verbose" => 5,
+        _ => 100,
+    };
+
+    private static string LevelDisplayName(string level) => level switch
+    {
+        "Warn" => "Warning",
+        "Info" => "Information",
+        _ => level,
+    };
+
+    private static string ShortLevel(string level) =>
+        level.Length <= 3 ? level.ToUpperInvariant() : level[..3].ToUpperInvariant();
 
     private static Color LevelColor(string level) => level switch
     {
@@ -129,13 +246,10 @@
         _subscription?.Dispose();
         if (_scrollCleanup is not null)
         {
-            try
-            {
-                await _scrollCleanup.InvokeVoidAsync("dispose");
-            }
+            try { await _scrollCleanup.InvokeVoidAsync("dispose"); }
             catch (JSDisconnectedException) { }
             catch (JSException) { }
-            await _scrollCleanup.DisposeAsync();
+            finally { await _scrollCleanup.DisposeAsync(); }
         }
         _dotNetRef?.Dispose();
     }

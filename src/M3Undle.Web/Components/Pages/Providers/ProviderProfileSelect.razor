@@ -1,0 +1,21 @@
+<MudSelect T="string" Label="Associated Profile"
+           Value="ProfileId" ValueChanged="ProfileIdChanged"
+           ToStringFunc="@(id => string.IsNullOrEmpty(id)
+               ? (AllowAutocreate ? "(Auto-create)" : "(None)")
+               : AllProfiles.FirstOrDefault(p => p.ProfileId == id)?.Name ?? id)">
+    <MudSelectItem T="string" Value="@string.Empty">
+        @(AllowAutocreate ? "(Auto-create from name)" : "(None)")
+    </MudSelectItem>
+    @foreach (var profile in AvailableProfiles)
+    {
+        <MudSelectItem T="string" Value="@profile.ProfileId">@profile.Name</MudSelectItem>
+    }
+</MudSelect>
+
+@code {
+    [Parameter] public string ProfileId { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> ProfileIdChanged { get; set; }
+    [Parameter] public IEnumerable<ProfileListItemDto> AvailableProfiles { get; set; } = [];
+    [Parameter] public List<ProfileListItemDto> AllProfiles { get; set; } = [];
+    [Parameter] public bool AllowAutocreate { get; set; } = true;
+}

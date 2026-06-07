@@ -5,6 +5,9 @@ public interface IRefreshTrigger
     /// <summary>Whether a refresh run is currently executing.</summary>
     bool IsRefreshing { get; }
 
+    /// <summary>UTC time the current refresh run started, or <c>null</c> if no refresh is active.</summary>
+    DateTime? RefreshStartedAt { get; }
+
     /// <summary>
     /// Request an immediate full refresh (fetch from provider + rebuild snapshot).
     /// Returns <c>true</c> when the request was queued; <c>false</c> when a refresh is already
