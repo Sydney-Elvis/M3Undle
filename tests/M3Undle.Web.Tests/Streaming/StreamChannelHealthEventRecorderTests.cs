@@ -35,6 +35,7 @@ public sealed class StreamChannelHealthEventRecorderTests
         Assert.AreEqual("channel-1", healthEvent.ProviderChannelId);
         Assert.AreEqual("FfmpegCleanRemux", healthEvent.RelayMode);
         Assert.AreEqual("H264Idr", healthEvent.SafeStartKind);
+        Assert.IsNull(healthEvent.SafeStartWaitMs);
         Assert.AreEqual(11.5, healthEvent.OutputHeldMs);
         Assert.AreEqual(1250, healthEvent.RecoveryDurationMs);
         Assert.AreEqual(8084, healthEvent.BytesSuppressed);
