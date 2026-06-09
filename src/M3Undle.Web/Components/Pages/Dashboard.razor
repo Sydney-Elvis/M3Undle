@@ -434,11 +434,11 @@
                     }
                     else
                     {
-                        <MudStack Spacing="1">
-                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Server</MudText>
-                                <MudText Typo="Typo.caption">@Nav.BaseUri.TrimEnd('/')</MudText>
-                            </MudStack>
+                        <MudStack Spacing="2">
+                            <div>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Server</MudText>
+                                <EndpointCopyRow DefaultUrl="@XtreamServerUrl" ExtraVariants="@GetXtreamServerUrlVariants()" />
+                            </div>
                             @if (_endpointSecuritySettings.Username is not null)
                             {
                                 <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
@@ -547,6 +547,20 @@
                 return $"{baseUri}/xmltv/m3undle.xml";
             return $"{baseUri}/xmltv/m3undle.xml?profile={Uri.EscapeDataString(profile.DisplayName)}";
         }
+    }
+
+    private string XtreamServerUrl => Nav.BaseUri.TrimEnd('/');
+
+    private IReadOnlyList<EndpointUrlVariant> GetXtreamServerUrlVariants()
+    {
+        var variants = new List<EndpointUrlVariant>();
+        var dockerBase = EndpointUrlService.GetDockerBaseUrl();
+        if (dockerBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy Docker URL", dockerBase));
+        var externalBase = EndpointUrlService.GetExternalBaseUrl();
+        if (externalBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy External URL", externalBase));
+        return variants;
     }
 
     private IReadOnlyList<EndpointUrlVariant> GetUrlVariants(string fullUrl)
