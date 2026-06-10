@@ -242,6 +242,7 @@ public sealed class ReadinessEndpointTests
     {
         public bool IsRefreshing { get; } = isRefreshing;
         public DateTime? RefreshStartedAt => null;
+        public string? CurrentActivity => null;
 
         public bool TriggerRefresh() => false;
 

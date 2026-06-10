@@ -314,6 +314,7 @@ public sealed class ChannelMappingPageServiceTests
     {
         public bool IsRefreshing => false;
         public DateTime? RefreshStartedAt => null;
+        public string? CurrentActivity => null;
         public bool TriggerRefresh() => true;
         public bool TriggerBuildOnly() => true;
         public void CancelRefresh() { }

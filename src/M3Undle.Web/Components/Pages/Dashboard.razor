@@ -164,7 +164,7 @@
                                 {
                                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
                                         <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                                        <MudText Typo="Typo.body2">Refreshing… @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
+                                        <MudText Typo="Typo.body2">@(RefreshTrigger.CurrentActivity ?? "Refreshing…") @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
                                         <MudButton Size="Size.Small"
                                                    Variant="Variant.Outlined"
                                                    Color="Color.Error"

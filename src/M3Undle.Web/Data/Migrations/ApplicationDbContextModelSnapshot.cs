@@ -1953,6 +1953,30 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("snapshots", (string)null);
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.XtreamSeriesCache", b =>
+                {
+                    b.Property<string>("ProviderId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_id");
+
+                    b.Property<int>("SeriesId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("series_id");
+
+                    b.Property<long>("LastModifiedEpoch")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_modified_epoch");
+
+                    b.Property<string>("EpisodesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("episodes_json");
+
+                    b.HasKey("ProviderId", "SeriesId");
+
+                    b.ToTable("xtream_series_cache", (string)null);
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.StreamChannelHealthEvent", b =>
                 {
                     b.Property<string>("StreamChannelHealthEventId")
@@ -2658,6 +2682,17 @@ namespace M3Undle.Web.Data.Migrations
                         .WithMany("ProviderGroups")
                         .HasForeignKey("ProviderId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Provider");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.XtreamSeriesCache", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
+                        .WithMany()
+                        .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("Provider");

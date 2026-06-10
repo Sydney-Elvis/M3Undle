@@ -1,6 +1,7 @@
 using M3Undle.Core.M3u;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data.Entities;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Net;
@@ -17,10 +18,23 @@ public sealed class StreamTimeoutTests
     [TestMethod]
     public async Task FetchPlaylist_HttpError_ThrowsProviderFetchException()
     {
-        var fetcher = CreateFetcher(new ErrorHttpMessageHandler(HttpStatusCode.InternalServerError));
+        var fetcher = CreateFetcher(new ErrorHttpMessageHandler(HttpStatusCode.NotFound));
 
         await AssertThrowsAsync<ProviderFetchException>(
             () => fetcher.FetchPlaylistAsync(SimpleProvider(), CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task FetchPlaylist_5xxError_ThrowsImmediatelyWithNoRetry()
+    {
+        // Single-attempt only — no retry loop on 5xx for non-Xtream URL-mode providers.
+        var handler = new CountingStatusHttpMessageHandler(HttpStatusCode.ServiceUnavailable);
+        var fetcher = CreateFetcher(handler);
+
+        await AssertThrowsAsync<ProviderFetchException>(
+            () => fetcher.FetchPlaylistAsync(SimpleProvider(), CancellationToken.None));
+
+        Assert.AreEqual(1, handler.CallCount, "Should attempt exactly once — no retries.");
     }
 
     [TestMethod]
@@ -30,6 +44,28 @@ public sealed class StreamTimeoutTests
 
         await AssertThrowsAsync<ProviderFetchException>(
             () => fetcher.FetchPlaylistAsync(SimpleProvider(), CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task FetchPlaylist_ConnectionStall_ThrowsWithTimeoutMessage()
+    {
+        var fetcher = CreateFetcher(new StalledConnectionHttpMessageHandler());
+
+        var ex = await AssertThrowsAsync<ProviderFetchException>(
+            () => fetcher.FetchPlaylistAsync(SimpleProvider(timeoutSeconds: 1), CancellationToken.None));
+
+        StringAssert.Contains(ex.Message, "waiting for server response");
+    }
+
+    [TestMethod]
+    public async Task FetchPlaylist_BodyStreamStall_ThrowsWithInactivityMessage()
+    {
+        var fetcher = CreateFetcher(new StalledBodyHttpMessageHandler());
+
+        var ex = await AssertThrowsAsync<ProviderFetchException>(
+            () => fetcher.FetchPlaylistAsync(SimpleProvider(timeoutSeconds: 1), CancellationToken.None));
+
+        StringAssert.Contains(ex.Message, "no data received");
     }
 
     [TestMethod]
@@ -104,7 +140,7 @@ public sealed class StreamTimeoutTests
     [TestMethod]
     public async Task FetchXmltvAsync_HttpError_ThrowsProviderFetchException()
     {
-        var fetcher = CreateFetcher(new ErrorHttpMessageHandler(HttpStatusCode.ServiceUnavailable));
+        var fetcher = CreateFetcher(new ErrorHttpMessageHandler(HttpStatusCode.NotFound));
 
         await AssertThrowsAsync<ProviderFetchException>(
             () => fetcher.FetchXmltvAsync(SimpleProviderWithXmltvUrl(), CancellationToken.None));
@@ -182,16 +218,17 @@ public sealed class StreamTimeoutTests
     // Test helpers
     // -------------------------------------------------------------------------
 
-    private static async Task AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
+    private static async Task<TException> AssertThrowsAsync<TException>(Func<Task> action) where TException : Exception
     {
         try
         {
             await action();
             Assert.Fail($"Expected {typeof(TException).Name} to be thrown.");
+            throw new InvalidOperationException("unreachable");
         }
-        catch (TException)
+        catch (TException ex)
         {
-            // Expected
+            return ex;
         }
     }
 
@@ -199,22 +236,34 @@ public sealed class StreamTimeoutTests
     {
         var factory = new FakeHttpClientFactory(handler);
         var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
+        var encryption = new SecretEncryptionService(envSvc);
+        var activityTracker = new RefreshActivityTracker();
+        var services = new ServiceCollection();
+        var sp = services.BuildServiceProvider();
+        var xtreamClient = new XtreamLineupClient(
+            factory,
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            encryption,
+            activityTracker,
+            NullLogger<XtreamLineupClient>.Instance);
         return new ProviderFetcher(
             factory,
             new PlaylistParser(),
             envSvc,
-            new SecretEncryptionService(envSvc),
+            encryption,
+            xtreamClient,
+            activityTracker,
             NullLogger<ProviderFetcher>.Instance);
     }
 
-    private static Provider SimpleProvider() => new()
+    private static Provider SimpleProvider(int timeoutSeconds = 20) => new()
     {
         ProviderId = "p1",
         Name = "test",
         Enabled = true,
         PlaylistUrl = "http://example.com/playlist.m3u",
         XmltvUrl = null,
-        TimeoutSeconds = 20,
+        TimeoutSeconds = timeoutSeconds,
         CreatedUtc = DateTime.UtcNow,
         UpdatedUtc = DateTime.UtcNow,
     };
@@ -269,10 +318,60 @@ public sealed class StreamTimeoutTests
             => Task.FromResult(new HttpResponseMessage(statusCode));
     }
 
+    private sealed class CountingStatusHttpMessageHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    {
+        public int CallCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return Task.FromResult(new HttpResponseMessage(statusCode));
+        }
+    }
+
     private sealed class TimeoutHttpMessageHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout being exceeded.");
     }
-}
 
+    private sealed class StalledConnectionHttpMessageHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("unreachable");
+        }
+    }
+
+    // Simulates a server that sends 200 headers immediately but never writes any body bytes.
+    private sealed class StalledBodyHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new StalledStream()),
+            });
+    }
+
+    private sealed class StalledStream : System.IO.Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+}

@@ -1481,11 +1481,34 @@ namespace M3Undle.Web.Data.Migrations
                 name: "ix_system_events_occurred_at",
                 table: "system_events",
                 column: "occurred_at");
+
+            migrationBuilder.CreateTable(
+                name: "xtream_series_cache",
+                columns: table => new
+                {
+                    provider_id = table.Column<string>(type: "TEXT", nullable: false),
+                    series_id = table.Column<int>(type: "INTEGER", nullable: false),
+                    last_modified_epoch = table.Column<long>(type: "INTEGER", nullable: false),
+                    episodes_json = table.Column<string>(type: "TEXT", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_xtream_series_cache", x => new { x.provider_id, x.series_id });
+                    table.ForeignKey(
+                        name: "FK_xtream_series_cache_providers_provider_id",
+                        column: x => x.provider_id,
+                        principalTable: "providers",
+                        principalColumn: "provider_id",
+                        onDelete: ReferentialAction.Cascade);
+                });
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropTable(
+                name: "xtream_series_cache");
+
             migrationBuilder.DropTable(
                 name: "AspNetRoleClaims");
 

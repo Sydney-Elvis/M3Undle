@@ -35,6 +35,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<SystemEvent> SystemEvents => Set<SystemEvent>();
     public DbSet<MetricsToken> MetricsTokens => Set<MetricsToken>();
     public DbSet<StreamChannelHealthEvent> StreamChannelHealthEvents => Set<StreamChannelHealthEvent>();
+    public DbSet<XtreamSeriesCache> XtreamSeriesCache => Set<XtreamSeriesCache>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

@@ -307,6 +307,8 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(AppBuildInfo.ForEntryAssembly());
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<IEventService, EventService>();
+builder.Services.AddSingleton<RefreshActivityTracker>();
+builder.Services.AddSingleton<XtreamLineupClient>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddSingleton<M3Undle.Core.Epg.XmltvParser>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
@@ -413,6 +415,15 @@ using (var scope = app.Services.CreateScope())
     appliedMigrations = db.Database.GetPendingMigrations().ToList();
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+    db.Database.ExecuteSqlRaw(
+        "CREATE TABLE IF NOT EXISTS xtream_series_cache (" +
+        "provider_id TEXT NOT NULL, " +
+        "series_id INTEGER NOT NULL, " +
+        "last_modified_epoch INTEGER NOT NULL, " +
+        "episodes_json TEXT NOT NULL, " +
+        "CONSTRAINT PK_xtream_series_cache PRIMARY KEY (provider_id, series_id), " +
+        "CONSTRAINT FK_xtream_series_cache_providers_provider_id FOREIGN KEY (provider_id) REFERENCES providers (provider_id) ON DELETE CASCADE);"
+    );
 
     var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
     await streamingSettings.ClearRestartRequiredAsync();

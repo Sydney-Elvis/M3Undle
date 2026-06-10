@@ -1222,11 +1222,23 @@ public sealed class SnapshotHandlingTests
         var effectiveHandler = handler ?? new FakeHttpMessageHandler(statusCode, content);
         var factory = new FakeHttpClientFactory(effectiveHandler);
         var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
+        var encryption = new SecretEncryptionService(envSvc);
+        var activityTracker = new RefreshActivityTracker();
+        var xtreamServices = new ServiceCollection();
+        var xtreamSp = xtreamServices.BuildServiceProvider();
+        var xtreamClient = new XtreamLineupClient(
+            factory,
+            xtreamSp.GetRequiredService<IServiceScopeFactory>(),
+            encryption,
+            activityTracker,
+            NullLogger<XtreamLineupClient>.Instance);
         var fetcher = new ProviderFetcher(
             factory,
             new PlaylistParser(),
             envSvc,
-            new SecretEncryptionService(envSvc),
+            encryption,
+            xtreamClient,
+            activityTracker,
             NullLogger<ProviderFetcher>.Instance);
         var env = new FakeWebHostEnvironment(tempDir);
         var runtimePaths = new RuntimePaths(

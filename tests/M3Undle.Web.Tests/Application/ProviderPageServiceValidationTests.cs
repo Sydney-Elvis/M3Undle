@@ -277,6 +277,7 @@ public sealed class ProviderPageServiceValidationTests
     {
         public bool IsRefreshing { get; private set; } = isRefreshing;
         public DateTime? RefreshStartedAt => null;
+        public string? CurrentActivity => null;
         public bool TriggerRefresh()
         {
             IsRefreshing = true;

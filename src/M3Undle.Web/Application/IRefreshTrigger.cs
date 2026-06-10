@@ -9,6 +9,12 @@ public interface IRefreshTrigger
     DateTime? RefreshStartedAt { get; }
 
     /// <summary>
+    /// Short human-readable description of what the refresh is currently doing,
+    /// e.g. "Retrying… (attempt 2 of 6)". <c>null</c> when idle or during normal fetching.
+    /// </summary>
+    string? CurrentActivity { get; }
+
+    /// <summary>
     /// Request an immediate full refresh (fetch from provider + rebuild snapshot).
     /// Returns <c>true</c> when the request was queued; <c>false</c> when a refresh is already
     /// in progress (caller should return HTTP 409).
