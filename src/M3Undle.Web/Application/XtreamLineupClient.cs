@@ -179,8 +179,8 @@ public sealed class XtreamLineupClient(
         // Load existing cache.
         var cache = await LoadSeriesCacheAsync(providerId, cancellationToken);
 
-        // New/changed series are expanded in the background — the lineup fetch never blocks
-        // on get_series_info. Episodes appear on subsequent builds as the cache fills.
+        // New/changed series: expand inline within a time budget so fast providers load
+        // completely on the first sync; whatever doesn't fit moves to the background worker.
         // Changed-but-cached series keep publishing their old episodes until re-expanded.
         var toExpand = seriesList
             .Where(s => !cache.TryGetValue(s.SeriesId, out var cached) || cached.LastModifiedEpoch != s.LastModifiedEpoch)
@@ -189,12 +189,25 @@ public sealed class XtreamLineupClient(
 
         if (toExpand.Count > 0)
         {
+            var priority = await GetExpansionPriorityAsync(providerId, cancellationToken);
             var job = new XtreamSeriesExpansionJob(
-                providerId, provider.Name, baseUrl, username, password, timeoutSeconds, toExpand);
-            if (seriesExpansionQueue.TryEnqueue(job))
-                logger.LogInformation(
-                    "Queued background expansion of {ToExpand}/{Total} series for provider {ProviderId}.",
-                    toExpand.Count, seriesList.Count, providerId);
+                providerId, provider.Name, baseUrl, username, password, timeoutSeconds, toExpand, priority);
+
+            var budget = TimeSpan.FromSeconds(Math.Clamp(provider.TimeoutSeconds, 30, 180));
+            activityTracker.Set($"Loading series ({toExpand.Count:N0} to fetch)…");
+            var inlineResults = await seriesExpansionQueue.TryExpandInlineAsync(job, budget, cancellationToken);
+
+            foreach (var item in inlineResults)
+            {
+                bytes += System.Text.Encoding.UTF8.GetByteCount(item.EpisodesJson);
+                cache[item.SeriesId] = new XtreamSeriesCache
+                {
+                    ProviderId = providerId,
+                    SeriesId = item.SeriesId,
+                    LastModifiedEpoch = item.LastModifiedEpoch,
+                    EpisodesJson = item.EpisodesJson,
+                };
+            }
         }
 
         // Remove cache entries for series that no longer exist.
@@ -460,6 +473,21 @@ public sealed class XtreamLineupClient(
             .Where(x => x.ProviderId == providerId)
             .ToListAsync(cancellationToken);
         return rows.ToDictionary(x => x.SeriesId);
+    }
+
+    // Providers linked to the active profile expand before standby providers.
+    private async Task<int> GetExpansionPriorityAsync(string providerId, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var isActiveProfileProvider = await db.ProfileProviders
+            .AsNoTracking()
+            .AnyAsync(x => x.ProviderId == providerId
+                           && x.Enabled
+                           && x.Profile.Enabled
+                           && x.Profile.IsActive,
+                cancellationToken);
+        return isActiveProfileProvider ? 0 : 1;
     }
 
     private async Task DeleteStaleCacheAsync(

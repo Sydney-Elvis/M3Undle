@@ -1,4 +1,4 @@
-using System.Threading.Channels;
+using System.Collections.Concurrent;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +7,8 @@ namespace M3Undle.Web.Application;
 
 public sealed record XtreamSeriesStub(int SeriesId, long LastModifiedEpoch);
 
+public sealed record XtreamSeriesExpanded(int SeriesId, long LastModifiedEpoch, string EpisodesJson);
+
 public sealed record XtreamSeriesExpansionJob(
     string ProviderId,
     string ProviderName,
@@ -14,7 +16,8 @@ public sealed record XtreamSeriesExpansionJob(
     string Username,
     string Password,
     int TimeoutSeconds,
-    IReadOnlyList<XtreamSeriesStub> Series);
+    IReadOnlyList<XtreamSeriesStub> Series,
+    int Priority = 1);
 
 public sealed record XtreamSeriesExpansionStatus(
     string ProviderId,
@@ -33,15 +36,29 @@ public interface IXtreamSeriesExpansionQueue
     /// </summary>
     bool TryEnqueue(XtreamSeriesExpansionJob job);
 
-    /// <summary>Status of the currently running job, or <c>null</c> when idle.</summary>
-    XtreamSeriesExpansionStatus? CurrentStatus { get; }
+    /// <summary>
+    /// Expand as much of the job as fits inside <paramref name="budget"/>, persisting results
+    /// and returning what was expanded so the caller can publish it immediately. The remainder
+    /// is automatically queued for background expansion. Returns an empty list (and queues
+    /// nothing extra) when a job for this provider is already queued or running.
+    /// </summary>
+    Task<IReadOnlyList<XtreamSeriesExpanded>> TryExpandInlineAsync(
+        XtreamSeriesExpansionJob job, TimeSpan budget, CancellationToken cancellationToken);
+
+    /// <summary>Statuses of currently running jobs (empty when idle).</summary>
+    IReadOnlyList<XtreamSeriesExpansionStatus> ActiveJobs { get; }
+
+    /// <summary>Number of jobs waiting for a slot.</summary>
+    int WaitingJobs { get; }
 }
 
 /// <summary>
 /// Background worker that expands Xtream series into episodes via get_series_info.
-/// Lineup fetch never blocks on this: it enqueues new/changed series here and builds
-/// from whatever the cache already holds. Progress is persisted in batches, so a
-/// restart or shutdown resumes where it left off on the next refresh.
+/// The lineup fetch first expands inline within a small time budget (fast providers load
+/// completely on first sync), then hands the remainder here. Jobs for different providers
+/// run concurrently — a slow 29K-series panel never blocks a fast one — and providers
+/// linked to the active profile are scheduled first. Progress is persisted in batches,
+/// so a restart or shutdown resumes where it left off on the next refresh.
 /// </summary>
 public sealed class XtreamSeriesExpansionService(
     IHttpClientFactory httpClientFactory,
@@ -51,57 +68,157 @@ public sealed class XtreamSeriesExpansionService(
     ILogger<XtreamSeriesExpansionService> logger)
     : BackgroundService, IXtreamSeriesExpansionQueue
 {
-    // 4 parallel get_series_info calls — enough to cut hours to ~quarter without
-    // looking like abuse to panels that IP-block aggressive clients.
-    private const int ExpandConcurrency = 4;
+    // Parallel get_series_info calls per provider job. Same code measures ~14.6 series/s on a
+    // fast panel at 4 — if a slow panel's rate doesn't improve at 8, the panel is serializing
+    // per-account and more concurrency won't help (the completion log prints the rate).
+    private const int ExpandConcurrency = 8;
     private const int SaveBatchSize = 100;
     // Trigger an intermediate snapshot rebuild every N saved series so episodes
     // appear progressively on very large providers instead of all at the end.
     private const int ProgressRefreshEvery = 2500;
+    // Provider jobs running simultaneously (different panels — no shared rate limit).
+    private const int MaxConcurrentJobs = 2;
 
-    private readonly Channel<XtreamSeriesExpansionJob> _jobs = Channel.CreateUnbounded<XtreamSeriesExpansionJob>();
-    private readonly HashSet<string> _pendingProviders = [];
-    private readonly Lock _pendingLock = new();
-    private volatile XtreamSeriesExpansionStatus? _currentStatus;
+    private sealed record QueuedJob(XtreamSeriesExpansionJob Job, DateTime EnqueuedUtc);
 
-    public XtreamSeriesExpansionStatus? CurrentStatus => _currentStatus;
+    private readonly Lock _lock = new();
+    private readonly List<QueuedJob> _waiting = [];
+    private readonly HashSet<string> _knownProviders = [];   // queued, running, or inline-expanding
+    private readonly ConcurrentDictionary<string, XtreamSeriesExpansionStatus> _running = new();
+    private readonly SemaphoreSlim _wake = new(0);
+    private int _runningCount;
+
+    public IReadOnlyList<XtreamSeriesExpansionStatus> ActiveJobs => [.. _running.Values];
+
+    public int WaitingJobs
+    {
+        get { lock (_lock) { return _waiting.Count; } }
+    }
 
     public bool TryEnqueue(XtreamSeriesExpansionJob job)
     {
-        lock (_pendingLock)
+        lock (_lock)
         {
-            if (!_pendingProviders.Add(job.ProviderId))
+            if (!_knownProviders.Add(job.ProviderId))
                 return false;
+            _waiting.Add(new QueuedJob(job, DateTime.UtcNow));
+        }
+        _wake.Release();
+        return true;
+    }
+
+    public async Task<IReadOnlyList<XtreamSeriesExpanded>> TryExpandInlineAsync(
+        XtreamSeriesExpansionJob job, TimeSpan budget, CancellationToken cancellationToken)
+    {
+        // If this provider is already queued or mid-expansion, don't double-fetch the same
+        // series — build from cache and let the existing job finish.
+        lock (_lock)
+        {
+            if (!_knownProviders.Add(job.ProviderId))
+                return [];
         }
 
-        if (_jobs.Writer.TryWrite(job))
-            return true;
+        List<XtreamSeriesExpanded> expanded;
+        List<XtreamSeriesStub> remainder;
+        try
+        {
+            var deadline = DateTime.UtcNow + budget;
+            (expanded, remainder, _) = await ExpandCoreAsync(job, deadline, progress: null, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Refresh was cancelled mid-inline — push the whole job to the background instead.
+            EnqueueOwned(job);
+            throw;
+        }
+        catch
+        {
+            lock (_lock) { _knownProviders.Remove(job.ProviderId); }
+            throw;
+        }
 
-        lock (_pendingLock) { _pendingProviders.Remove(job.ProviderId); }
-        return false;
+        if (remainder.Count > 0)
+        {
+            logger.LogInformation(
+                "Inline series expansion hit its {Budget}s budget for provider {ProviderId}: {Done}/{Total} done — queuing {Remainder} for background.",
+                (int)budget.TotalSeconds, job.ProviderId, expanded.Count, job.Series.Count, remainder.Count);
+            EnqueueOwned(job with { Series = remainder });
+        }
+        else
+        {
+            logger.LogInformation(
+                "Inline series expansion completed for provider {ProviderId}: {Done}/{Total} series within budget.",
+                job.ProviderId, expanded.Count, job.Series.Count);
+            lock (_lock) { _knownProviders.Remove(job.ProviderId); }
+        }
+
+        return expanded;
+    }
+
+    // Enqueue a job whose provider slot is already registered in _knownProviders (inline handoff).
+    private void EnqueueOwned(XtreamSeriesExpansionJob job)
+    {
+        lock (_lock) { _waiting.Add(new QueuedJob(job, DateTime.UtcNow)); }
+        _wake.Release();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var job in _jobs.Reader.ReadAllAsync(stoppingToken))
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await ExpandJobAsync(job, stoppingToken);
+                await _wake.WaitAsync(stoppingToken);
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
-                // Shutdown — saved batches persist, remainder resumes next refresh.
                 break;
             }
-            catch (Exception ex)
+
+            while (true)
             {
-                logger.LogError(ex, "Series expansion job failed for provider {ProviderId}.", job.ProviderId);
-            }
-            finally
-            {
-                _currentStatus = null;
-                lock (_pendingLock) { _pendingProviders.Remove(job.ProviderId); }
+                XtreamSeriesExpansionJob? next;
+                lock (_lock)
+                {
+                    if (_runningCount >= MaxConcurrentJobs || _waiting.Count == 0)
+                        break;
+
+                    // Active-profile providers first, then FIFO.
+                    var pick = _waiting
+                        .OrderBy(x => x.Job.Priority)
+                        .ThenBy(x => x.EnqueuedUtc)
+                        .First();
+                    _waiting.Remove(pick);
+                    next = pick.Job;
+                    _runningCount++;
+                }
+
+                var job = next;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ExpandJobAsync(job, stoppingToken);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        // Shutdown — saved batches persist, remainder resumes next refresh.
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Series expansion job failed for provider {ProviderId}.", job.ProviderId);
+                    }
+                    finally
+                    {
+                        _running.TryRemove(job.ProviderId, out _);
+                        lock (_lock)
+                        {
+                            _knownProviders.Remove(job.ProviderId);
+                            _runningCount--;
+                        }
+                        _wake.Release();
+                    }
+                }, stoppingToken);
             }
         }
     }
@@ -110,120 +227,160 @@ public sealed class XtreamSeriesExpansionService(
     {
         var startedUtc = DateTime.UtcNow;
         logger.LogInformation(
-            "Series expansion started for provider {ProviderId}: {Count} series queued, concurrency {Concurrency}.",
-            job.ProviderId, job.Series.Count, ExpandConcurrency);
+            "Series expansion started for provider {ProviderId}: {Count} series queued, concurrency {Concurrency}, priority {Priority}.",
+            job.ProviderId, job.Series.Count, ExpandConcurrency, job.Priority);
 
-        using var client = httpClientFactory.CreateClient();
-        var sem = new SemaphoreSlim(ExpandConcurrency);
-        int completed = 0, failed = 0, savedSinceRefresh = 0;
-        var anySaved = false;
-
-        _currentStatus = new XtreamSeriesExpansionStatus(
+        _running[job.ProviderId] = new XtreamSeriesExpansionStatus(
             job.ProviderId, job.ProviderName, job.Series.Count, 0, 0, startedUtc);
 
-        foreach (var batch in job.Series.Chunk(SaveBatchSize))
+        var savedSinceRefresh = 0;
+
+        void OnProgress(int completed, int failed)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            _running[job.ProviderId] = new XtreamSeriesExpansionStatus(
+                job.ProviderId, job.ProviderName, job.Series.Count, completed, failed, startedUtc);
 
-            var results = new (XtreamSeriesStub Stub, string? EpisodesJson)[batch.Length];
-
-            await Task.WhenAll(batch.Select(async (stub, idx) =>
+            var sinceRefresh = Interlocked.Increment(ref savedSinceRefresh);
+            if (sinceRefresh >= ProgressRefreshEvery)
             {
-                await sem.WaitAsync(cancellationToken);
+                Interlocked.Exchange(ref savedSinceRefresh, 0);
+                refreshTrigger.TriggerRefresh();
+            }
+        }
+
+        var (expanded, _, failed) = await ExpandCoreAsync(job, deadline: null, OnProgress, cancellationToken);
+
+        var elapsed = DateTime.UtcNow - startedUtc;
+        var rate = elapsed.TotalSeconds > 0 ? expanded.Count / elapsed.TotalSeconds : 0;
+        logger.LogInformation(
+            "Series expansion finished for provider {ProviderId}: {Completed} expanded, {Failed} failed in {Elapsed:hh\\:mm\\:ss} ({Rate:F1} series/s).",
+            job.ProviderId, expanded.Count, failed, elapsed, rate);
+
+        if (expanded.Count > 0)
+        {
+            await PublishCompletionEventAsync(job, expanded.Count, failed);
+            await TriggerRefreshWithRetryAsync(cancellationToken);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Expansion core — worker pool shared by inline and background paths.
+    // Workers pull from a shared queue so the pipeline stays full (no batch-tail
+    // drain); persistence happens off the fetch path under its own gate.
+    // -------------------------------------------------------------------------
+
+    private async Task<(List<XtreamSeriesExpanded> Expanded, List<XtreamSeriesStub> Remainder, int Failed)> ExpandCoreAsync(
+        XtreamSeriesExpansionJob job,
+        DateTime? deadline,
+        Action<int, int>? progress,
+        CancellationToken cancellationToken)
+    {
+        var pending = new ConcurrentQueue<XtreamSeriesStub>(job.Series);
+        var expanded = new List<XtreamSeriesExpanded>();
+        var failedStubs = new ConcurrentBag<XtreamSeriesStub>();
+        var saveBuffer = new List<XtreamSeriesExpanded>();
+        var bufferLock = new Lock();
+        var persistGate = new SemaphoreSlim(1);
+        int completed = 0, failed = 0;
+
+        using var client = httpClientFactory.CreateClient();
+
+        async Task PersistBufferedAsync(bool force)
+        {
+            List<XtreamSeriesExpanded>? toSave = null;
+            lock (bufferLock)
+            {
+                if (saveBuffer.Count >= SaveBatchSize || (force && saveBuffer.Count > 0))
+                {
+                    toSave = [.. saveBuffer];
+                    saveBuffer.Clear();
+                }
+            }
+            if (toSave is null)
+                return;
+
+            await persistGate.WaitAsync(CancellationToken.None);
+            try { await PersistBatchAsync(job.ProviderId, toSave); }
+            finally { persistGate.Release(); }
+        }
+
+        async Task WorkerAsync()
+        {
+            while (!cancellationToken.IsCancellationRequested
+                   && (deadline is null || DateTime.UtcNow < deadline)
+                   && pending.TryDequeue(out var stub))
+            {
+                string json;
                 try
                 {
                     var infoUrl =
                         $"{job.BaseUrl}/player_api.php?username={Uri.EscapeDataString(job.Username)}" +
                         $"&password={Uri.EscapeDataString(job.Password)}&action=get_series_info&series_id={stub.SeriesId}";
-                    var json = await HttpFetchHelper.FetchStringAsync(client, infoUrl, job.TimeoutSeconds, cancellationToken);
-                    results[idx] = (stub, json);
+                    json = await HttpFetchHelper.FetchStringAsync(client, infoUrl, job.TimeoutSeconds, cancellationToken);
                 }
                 catch (Exception ex) when (ex is HttpRequestException or ProviderFetchException)
                 {
                     logger.LogDebug("get_series_info failed for series {SeriesId}: {Message}", stub.SeriesId, ex.Message);
-                    results[idx] = (stub, null);
+                    failedStubs.Add(stub);
+                    progress?.Invoke(completed, Interlocked.Increment(ref failed));
+                    continue;
                 }
-                finally { sem.Release(); }
-            }));
 
-            int batchSaved;
-            try
-            {
-                batchSaved = await PersistBatchAsync(job.ProviderId, results, cancellationToken);
-            }
-            catch (DbUpdateException ex)
-            {
-                // Provider was most likely deleted mid-job — abort, nothing left to do.
-                logger.LogWarning(ex, "Series cache persist failed for provider {ProviderId} — aborting expansion job.", job.ProviderId);
-                return;
-            }
-
-            completed += batchSaved;
-            failed += batch.Length - batchSaved;
-            anySaved |= batchSaved > 0;
-            savedSinceRefresh += batchSaved;
-
-            _currentStatus = new XtreamSeriesExpansionStatus(
-                job.ProviderId, job.ProviderName, job.Series.Count, completed, failed, startedUtc);
-
-            if (savedSinceRefresh >= ProgressRefreshEvery)
-            {
-                savedSinceRefresh = 0;
-                refreshTrigger.TriggerRefresh();
+                var item = new XtreamSeriesExpanded(stub.SeriesId, stub.LastModifiedEpoch, json);
+                lock (bufferLock)
+                {
+                    expanded.Add(item);
+                    saveBuffer.Add(item);
+                }
+                progress?.Invoke(Interlocked.Increment(ref completed), failed);
+                await PersistBufferedAsync(force: false);
             }
         }
 
-        var elapsed = DateTime.UtcNow - startedUtc;
-        logger.LogInformation(
-            "Series expansion finished for provider {ProviderId}: {Completed} expanded, {Failed} failed in {Elapsed:hh\\:mm\\:ss}.",
-            job.ProviderId, completed, failed, elapsed);
-
-        if (anySaved)
+        try
         {
-            await PublishCompletionEventAsync(job, completed, failed);
-            await TriggerRefreshWithRetryAsync(cancellationToken);
+            await Task.WhenAll(Enumerable.Range(0, ExpandConcurrency).Select(_ => WorkerAsync()));
         }
+        finally
+        {
+            // Always flush what we have — even on cancellation, completed work is kept.
+            await PersistBufferedAsync(force: true);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Remainder = untouched series + failures (failures retry in the background/next sync).
+        var remainder = pending.ToList();
+        remainder.AddRange(failedStubs);
+        return (expanded, remainder, failed);
     }
 
-    private async Task<int> PersistBatchAsync(
-        string providerId,
-        (XtreamSeriesStub Stub, string? EpisodesJson)[] results,
-        CancellationToken cancellationToken)
+    private async Task PersistBatchAsync(string providerId, List<XtreamSeriesExpanded> items)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-        var saved = 0;
-        foreach (var (stub, episodesJson) in results)
+        foreach (var item in items)
         {
-            // Failed fetches are not persisted — keep any prior entry so the series retries next sync.
-            if (episodesJson is null)
-                continue;
-
-            var existing = await db.XtreamSeriesCache.FindAsync(
-                [providerId, stub.SeriesId], cancellationToken);
-
+            var existing = await db.XtreamSeriesCache.FindAsync([providerId, item.SeriesId], CancellationToken.None);
             if (existing is null)
             {
                 db.XtreamSeriesCache.Add(new XtreamSeriesCache
                 {
                     ProviderId = providerId,
-                    SeriesId = stub.SeriesId,
-                    LastModifiedEpoch = stub.LastModifiedEpoch,
-                    EpisodesJson = episodesJson,
+                    SeriesId = item.SeriesId,
+                    LastModifiedEpoch = item.LastModifiedEpoch,
+                    EpisodesJson = item.EpisodesJson,
                 });
             }
             else
             {
-                existing.LastModifiedEpoch = stub.LastModifiedEpoch;
-                existing.EpisodesJson = episodesJson;
+                existing.LastModifiedEpoch = item.LastModifiedEpoch;
+                existing.EpisodesJson = item.EpisodesJson;
             }
-            saved++;
         }
 
-        if (saved > 0)
-            await db.SaveChangesAsync(CancellationToken.None);
-        return saved;
+        await db.SaveChangesAsync(CancellationToken.None);
     }
 
     private async Task PublishCompletionEventAsync(XtreamSeriesExpansionJob job, int completed, int failed)

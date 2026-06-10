@@ -173,10 +173,10 @@ public sealed class XtreamLineupClientTests
         var result = await client.BuildLineupFromCredentialsAsync(
             provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
-        // No episodes yet — expansion is queued for the background worker.
+        // No inline results from the stub queue — expansion is handed to the worker.
         Assert.IsEmpty(result.Channels);
         Assert.IsFalse(handler.RequestedPaths.Any(p => p.Contains("get_series_info")),
-            "Lineup fetch must never call get_series_info inline.");
+            "The lineup client itself must never call get_series_info — the expansion service owns that.");
 
         Assert.HasCount(1, queue.Jobs);
         var job = queue.Jobs[0];
@@ -185,6 +185,34 @@ public sealed class XtreamLineupClientTests
         Assert.HasCount(1, job.Series);
         Assert.AreEqual(1001, job.Series[0].SeriesId);
         Assert.AreEqual(1000L, job.Series[0].LastModifiedEpoch);
+    }
+
+    [TestMethod]
+    public async Task BuildLineup_InlineExpansionResults_PublishImmediately()
+    {
+        var handler = new MultiRouteHandler
+        {
+            ["/player_api.php"] = AuthOk(),
+            ["/player_api.php?action=get_live_categories"] = "[]",
+            ["/player_api.php?action=get_live_streams"] = "[]",
+            ["/player_api.php?action=get_series_categories"] = """[{"category_id":"5","category_name":"Drama"}]""",
+            ["/player_api.php?action=get_series"] = """[{"series_id":1001,"name":"Breaking Bad","cover":"","category_id":"5","last_modified":"1000"}]""",
+        };
+
+        var provider = SimpleProvider("p1");
+        provider.IncludeSeries = true;
+
+        var (client, _, queue) = CreateClient(handler, seedProviderId: "p1");
+        queue.InlineResults[1001] = new XtreamSeriesExpanded(1001, 1000L,
+            SeriesInfoJson(1001, "Breaking Bad", season: "1", episodes: [("1", 1, "Pilot", "mkv")]));
+
+        var result = await client.BuildLineupFromCredentialsAsync(
+            provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
+
+        // Episodes fetched inside the inline budget appear in the very first lineup.
+        Assert.HasCount(1, result.Channels);
+        Assert.Contains("Pilot", result.Channels[0].DisplayName);
+        Assert.AreEqual("Drama", result.Channels[0].GroupTitle);
     }
 
     [TestMethod]

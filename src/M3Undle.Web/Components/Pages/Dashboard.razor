@@ -205,16 +205,22 @@
                                              Variant="Variant.Outlined"
                                              Style="align-self:flex-start;" />
                             }
-                            @if (SeriesExpansionQueue.CurrentStatus is { } seriesSync)
+                            @foreach (var seriesSync in SeriesExpansionQueue.ActiveJobs)
                             {
                                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
                                     <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Info" />
                                     <MudText Typo="Typo.body2">
-                                        Series sync: @seriesSync.Completed.ToString("N0") / @seriesSync.Total.ToString("N0") in background
+                                        @seriesSync.ProviderName series sync: @seriesSync.Completed.ToString("N0") / @seriesSync.Total.ToString("N0") in background
                                         @(seriesSync.Failed > 0 ? $"— {seriesSync.Failed:N0} failed (will retry)" : "")
                                     </MudText>
                                 </MudStack>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Episodes appear as they sync — live channels are unaffected.</MudText>
+                            }
+                            @if (SeriesExpansionQueue.ActiveJobs.Count > 0)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Episodes appear as they sync — live channels are unaffected.
+                                    @(SeriesExpansionQueue.WaitingJobs > 0 ? $"{SeriesExpansionQueue.WaitingJobs} provider(s) queued." : "")
+                                </MudText>
                             }
                         </MudStack>
 
@@ -661,7 +667,7 @@
         var restoredFromPrerender = TryRestorePersistedState();
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
 
-        if (_isRefreshing || SeriesExpansionQueue.CurrentStatus is not null)
+        if (_isRefreshing || SeriesExpansionQueue.ActiveJobs.Count > 0)
             StartElapsedTimer();
 
         var reader = EventBus.Subscribe(out _eventSubscription);
@@ -725,7 +731,7 @@
                     _isCancelling = false;
                     _refreshStartedAt = null;
                     // Keep ticking while a background series sync is active so its counters stay live.
-                    if (SeriesExpansionQueue.CurrentStatus is null)
+                    if (SeriesExpansionQueue.ActiveJobs.Count == 0)
                         StopElapsedTimer();
                     if (!_isLoading)
                         await InvokeAsync(LoadAllAsync);
@@ -856,7 +862,7 @@
             {
                 await InvokeAsync(StateHasChanged);
                 // Self-stop once nothing is active (covers a series sync that ends without a follow-up refresh).
-                if (!ShowRefreshing && SeriesExpansionQueue.CurrentStatus is null)
+                if (!ShowRefreshing && SeriesExpansionQueue.ActiveJobs.Count == 0)
                     break;
             }
         }

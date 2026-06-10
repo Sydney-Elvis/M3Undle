@@ -100,6 +100,67 @@ public sealed class XtreamSeriesExpansionServiceTests
         Assert.IsTrue(service.TryEnqueue(Job("p2", [new(3, 3L)])));
     }
 
+    [TestMethod]
+    public async Task TryExpandInline_CompletesWithinBudget_PersistsAndReturnsAllWithNothingQueued()
+    {
+        var handler = new SeriesInfoHandler
+        {
+            [1001] = """{"info":{"name":"Breaking Bad"},"episodes":{"1":[{"id":"1","episode_num":1,"title":"Pilot","container_extension":"mkv"}]}}""",
+        };
+
+        var (service, scopeFactory, _) = CreateService(handler, seedProviderId: "p1");
+
+        var result = await service.TryExpandInlineAsync(
+            Job("p1", [new(1001, 100L)]), TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual(1001, result[0].SeriesId);
+        Assert.AreEqual(0, service.WaitingJobs, "Fully expanded inline — nothing should go to the background.");
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.IsNotNull(await db.XtreamSeriesCache.FindAsync("p1", 1001));
+
+        // Provider slot must be released so future syncs can expand again.
+        Assert.IsTrue(service.TryEnqueue(Job("p1", [new(2, 2L)])));
+    }
+
+    [TestMethod]
+    public async Task TryExpandInline_BudgetExhausted_QueuesRemainderForBackground()
+    {
+        var (service, _, _) = CreateService(new SeriesInfoHandler(), seedProviderId: "p1");
+
+        // Zero budget — deadline is already past, so nothing is fetched inline.
+        var result = await service.TryExpandInlineAsync(
+            Job("p1", [new(1001, 100L), new(1002, 200L)]), TimeSpan.Zero, CancellationToken.None);
+
+        Assert.IsEmpty(result);
+        Assert.AreEqual(1, service.WaitingJobs, "Unfinished remainder must be queued for the background worker.");
+        Assert.IsFalse(service.TryEnqueue(Job("p1", [new(3, 3L)])),
+            "Provider stays deduped while its remainder job is waiting.");
+    }
+
+    [TestMethod]
+    public async Task TryExpandInline_ProviderAlreadyQueued_SkipsWithoutFetching()
+    {
+        var handler = new SeriesInfoHandler
+        {
+            [1001] = """{"info":{},"episodes":{}}""",
+        };
+
+        var (service, scopeFactory, _) = CreateService(handler, seedProviderId: "p1");
+        Assert.IsTrue(service.TryEnqueue(Job("p1", [new(1001, 100L)])));
+
+        var result = await service.TryExpandInlineAsync(
+            Job("p1", [new(1001, 100L)]), TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Assert.IsEmpty(result, "Inline expansion must not double-fetch a provider that already has a job.");
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.IsNull(await db.XtreamSeriesCache.FindAsync("p1", 1001));
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
