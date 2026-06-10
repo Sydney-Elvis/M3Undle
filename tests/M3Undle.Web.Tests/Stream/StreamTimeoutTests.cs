@@ -245,6 +245,7 @@ public sealed class StreamTimeoutTests
             sp.GetRequiredService<IServiceScopeFactory>(),
             encryption,
             activityTracker,
+            new M3Undle.Web.Tests.Stubs.NullSeriesExpansionQueue(),
             NullLogger<XtreamLineupClient>.Instance);
         return new ProviderFetcher(
             factory,

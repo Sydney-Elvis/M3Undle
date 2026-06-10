@@ -1,6 +1,7 @@
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
+using M3Undle.Web.Tests.Stubs;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,7 +28,7 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = """[{"stream_id":100,"name":"CNN","epg_channel_id":"cnn.us","stream_icon":"","category_id":"1"}]""",
         };
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -49,7 +50,7 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = """[{"stream_id":"42","name":"ESPN","epg_channel_id":"espn.hd","category_id":"1"}]""",
         };
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -67,7 +68,7 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = """[{"stream_id":1,"name":"Channel A","category_id":"1"}]""",
         };
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -85,7 +86,7 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = """[{"stream_id":7,"name":"BBC","epg_channel_id":"bbc","category_ids":[1,2]}]""",
         };
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -116,7 +117,7 @@ public sealed class XtreamLineupClientTests
         var provider = SimpleProvider("p1");
         provider.IncludeVod = true;
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -140,7 +141,7 @@ public sealed class XtreamLineupClientTests
         var provider = SimpleProvider("p1");
         provider.IncludeVod = false;
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -154,7 +155,7 @@ public sealed class XtreamLineupClientTests
     // -------------------------------------------------------------------------
 
     [TestMethod]
-    public async Task BuildLineup_SeriesFirstSync_CallsGetSeriesInfoAndPopulatesCache()
+    public async Task BuildLineup_SeriesFirstSync_DoesNotBlockAndEnqueuesBackgroundExpansion()
     {
         var handler = new MultiRouteHandler
         {
@@ -163,32 +164,27 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = "[]",
             ["/player_api.php?action=get_series_categories"] = """[{"category_id":"5","category_name":"Drama"}]""",
             ["/player_api.php?action=get_series"] = """[{"series_id":1001,"name":"Breaking Bad","cover":"","category_id":"5","last_modified":"1000"}]""",
-            ["/player_api.php?action=get_series_info&series_id=1001"] = SeriesInfoJson(1001, "Breaking Bad",
-                season: "1", episodes: [("1", 1, "Pilot", "mkv"), ("2", 2, "Cat's in the Bag", "mkv")]),
         };
 
         var provider = SimpleProvider("p1");
         provider.IncludeSeries = true;
 
-        var (client, db) = CreateClient(handler, seedProviderId: "p1");
+        var (client, _, queue) = CreateClient(handler, seedProviderId: "p1");
         var result = await client.BuildLineupFromCredentialsAsync(
             provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
-        // Two episodes expected
-        Assert.HasCount(2, result.Channels);
-        Assert.IsTrue(result.Channels.Any(c => c.DisplayName.Contains("Pilot")));
-        Assert.IsTrue(result.Channels.Any(c => c.DisplayName.Contains("Cat")));
-        Assert.IsTrue(result.Channels.All(c => c.StreamUrl.StartsWith("http://panel.test:8080/series/")));
+        // No episodes yet — expansion is queued for the background worker.
+        Assert.IsEmpty(result.Channels);
+        Assert.IsFalse(handler.RequestedPaths.Any(p => p.Contains("get_series_info")),
+            "Lineup fetch must never call get_series_info inline.");
 
-        // Cache should be populated
-        await using var scope = db.CreateAsyncScope();
-        var ctx = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var cacheRow = await ctx.XtreamSeriesCache.FindAsync("p1", 1001);
-        Assert.IsNotNull(cacheRow);
-        Assert.AreEqual(1000L, cacheRow!.LastModifiedEpoch);
-
-        // get_series_info was called once
-        Assert.IsTrue(handler.RequestedPaths.Any(p => p.Contains("get_series_info")));
+        Assert.HasCount(1, queue.Jobs);
+        var job = queue.Jobs[0];
+        Assert.AreEqual("p1", job.ProviderId);
+        Assert.AreEqual("http://panel.test:8080", job.BaseUrl);
+        Assert.HasCount(1, job.Series);
+        Assert.AreEqual(1001, job.Series[0].SeriesId);
+        Assert.AreEqual(1000L, job.Series[0].LastModifiedEpoch);
     }
 
     [TestMethod]
@@ -210,7 +206,7 @@ public sealed class XtreamLineupClientTests
         var provider = SimpleProvider("p1");
         provider.IncludeSeries = true;
 
-        var (client, scopeFactory) = CreateClient(handler, seedProviderId: "p1");
+        var (client, scopeFactory, queue) = CreateClient(handler, seedProviderId: "p1");
 
         // Pre-populate the cache
         await using (var scope = scopeFactory.CreateAsyncScope())
@@ -232,18 +228,15 @@ public sealed class XtreamLineupClientTests
         // Episodes should still come from cache
         Assert.HasCount(2, result.Channels);
 
-        // get_series_info should NOT have been called
-        Assert.IsFalse(handler.RequestedPaths.Any(p => p.Contains("get_series_info")),
-            "get_series_info should not be called when last_modified is unchanged.");
+        // Nothing to expand — no background job queued
+        Assert.IsEmpty(queue.Jobs);
     }
 
     [TestMethod]
-    public async Task BuildLineup_SeriesChangedLastModified_RefetchesEpisodes()
+    public async Task BuildLineup_SeriesChangedLastModified_PublishesStaleEpisodesAndEnqueuesRefetch()
     {
         var oldEpisodesJson = SeriesInfoJson(1001, "Breaking Bad",
             season: "1", episodes: [("10", 1, "Pilot", "mkv")]);
-        var newEpisodesJson = SeriesInfoJson(1001, "Breaking Bad",
-            season: "1", episodes: [("10", 1, "Pilot", "mkv"), ("11", 2, "Cat's in the Bag", "mkv")]);
 
         var handler = new MultiRouteHandler
         {
@@ -252,13 +245,12 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = "[]",
             ["/player_api.php?action=get_series_categories"] = "[]",
             ["/player_api.php?action=get_series"] = """[{"series_id":1001,"name":"Breaking Bad","cover":"","category_id":"5","last_modified":"2000"}]""",
-            ["/player_api.php?action=get_series_info&series_id=1001"] = newEpisodesJson,
         };
 
         var provider = SimpleProvider("p1");
         provider.IncludeSeries = true;
 
-        var (client, scopeFactory) = CreateClient(handler, seedProviderId: "p1");
+        var (client, scopeFactory, queue) = CreateClient(handler, seedProviderId: "p1");
 
         // Pre-populate the cache with old last_modified
         await using (var scope = scopeFactory.CreateAsyncScope())
@@ -277,43 +269,13 @@ public sealed class XtreamLineupClientTests
         var result = await client.BuildLineupFromCredentialsAsync(
             provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
-        // Should have new episode count
-        Assert.HasCount(2, result.Channels);
-        Assert.IsTrue(handler.RequestedPaths.Any(p => p.Contains("get_series_info")));
+        // Stale cached episodes still publish until the background re-fetch lands.
+        Assert.HasCount(1, result.Channels);
+        Assert.IsFalse(handler.RequestedPaths.Any(p => p.Contains("get_series_info")));
 
-        // Cache should be updated
-        await using var verifyScope = scopeFactory.CreateAsyncScope();
-        var ctx2 = verifyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var cacheRow = await ctx2.XtreamSeriesCache.FindAsync("p1", 1001);
-        Assert.AreEqual(2000L, cacheRow!.LastModifiedEpoch);
-    }
-
-    [TestMethod]
-    public async Task BuildLineup_SeriesInfoFetchFails_NotCachedSoItRetriesNextSync()
-    {
-        var handler = new MultiRouteHandler
-        {
-            ["/player_api.php"] = AuthOk(),
-            ["/player_api.php?action=get_live_categories"] = "[]",
-            ["/player_api.php?action=get_live_streams"] = "[]",
-            ["/player_api.php?action=get_series_categories"] = "[]",
-            ["/player_api.php?action=get_series"] = """[{"series_id":1001,"name":"Breaking Bad","cover":"","category_id":"5","last_modified":"1000"}]""",
-            // No route for get_series_info → handler returns 404 → fetch fails
-        };
-
-        var provider = SimpleProvider("p1");
-        provider.IncludeSeries = true;
-
-        var (client, scopeFactory) = CreateClient(handler, seedProviderId: "p1");
-        var result = await client.BuildLineupFromCredentialsAsync(
-            provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
-
-        // No episodes this run, and crucially: nothing cached, so next sync retries.
-        Assert.IsEmpty(result.Channels);
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var ctx = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        Assert.IsNull(await ctx.XtreamSeriesCache.FindAsync("p1", 1001),
-            "Failed get_series_info must not be cached — it would never retry.");
+        // Changed series queued for background re-expansion with the NEW epoch.
+        Assert.HasCount(1, queue.Jobs);
+        Assert.AreEqual(2000L, queue.Jobs[0].Series.Single(s => s.SeriesId == 1001).LastModifiedEpoch);
     }
 
     [TestMethod]
@@ -326,19 +288,34 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = "[]",
             ["/player_api.php?action=get_series_categories"] = """[{"category_id":"5","category_name":"Drama"}]""",
             ["/player_api.php?action=get_series"] = """[{"series_id":1001,"name":"Breaking Bad","cover":"","category_id":"5","last_modified":"1000"}]""",
-            ["/player_api.php?action=get_series_info&series_id=1001"] = SeriesInfoJson(1001, "Breaking Bad",
-                season: "1", episodes: [("1", 1, "Pilot", "mkv")]),
         };
 
         var provider = SimpleProvider("p1");
         provider.IncludeSeries = true;
 
-        var (client, _) = CreateClient(handler, seedProviderId: "p1");
+        var (client, scopeFactory, _) = CreateClient(handler, seedProviderId: "p1");
+
+        // Episodes already cached (as the background worker would have left them).
+        await using (var scope = scopeFactory.CreateAsyncScope())
+        {
+            var ctx = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            ctx.XtreamSeriesCache.Add(new XtreamSeriesCache
+            {
+                ProviderId = "p1",
+                SeriesId = 1001,
+                LastModifiedEpoch = 1000L,
+                EpisodesJson = SeriesInfoJson(1001, "Breaking Bad",
+                    season: "1", episodes: [("1", 1, "Pilot", "mkv")]),
+            });
+            await ctx.SaveChangesAsync();
+        }
+
         var result = await client.BuildLineupFromCredentialsAsync(
             provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
         Assert.HasCount(1, result.Channels);
         Assert.AreEqual("Drama", result.Channels[0].GroupTitle);
+        Assert.AreEqual("http://panel.test:8080/series/user/pass/1.mkv", result.Channels[0].StreamUrl);
     }
 
     // -------------------------------------------------------------------------
@@ -356,7 +333,7 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = "[]",
         };
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -377,7 +354,7 @@ public sealed class XtreamLineupClientTests
             ["/player_api.php?action=get_live_streams"] = """[{"stream_id":55,"name":"Sky News","category_id":"1"}]""",
         };
 
-        var (client, _) = CreateClient(handler);
+        var (client, _, _) = CreateClient(handler);
         var result = await client.BuildLineupFromCredentialsAsync(
             SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
 
@@ -389,8 +366,27 @@ public sealed class XtreamLineupClientTests
     // Helpers
     // -------------------------------------------------------------------------
 
-    private static (XtreamLineupClient Client, IServiceScopeFactory ScopeFactory) CreateClient(
+    private static (XtreamLineupClient Client, IServiceScopeFactory ScopeFactory, RecordingSeriesExpansionQueue Queue) CreateClient(
         HttpMessageHandler handler, string? seedProviderId = null)
+    {
+        var scopeFactory = CreateScopeFactory(seedProviderId);
+        var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
+        var encryption = new SecretEncryptionService(envSvc);
+        var factory = new FakeHttpClientFactory(handler);
+        var queue = new RecordingSeriesExpansionQueue();
+
+        var client = new XtreamLineupClient(
+            factory,
+            scopeFactory,
+            encryption,
+            new RefreshActivityTracker(),
+            queue,
+            NullLogger<XtreamLineupClient>.Instance);
+
+        return (client, scopeFactory, queue);
+    }
+
+    internal static IServiceScopeFactory CreateScopeFactory(string? seedProviderId)
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         connection.Open();
@@ -424,18 +420,7 @@ public sealed class XtreamLineupClientTests
             }
         }
 
-        var envSvc = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
-        var encryption = new SecretEncryptionService(envSvc);
-        var factory = new FakeHttpClientFactory(handler);
-
-        var client = new XtreamLineupClient(
-            factory,
-            scopeFactory,
-            encryption,
-            new RefreshActivityTracker(),
-            NullLogger<XtreamLineupClient>.Instance);
-
-        return (client, scopeFactory);
+        return scopeFactory;
     }
 
     private static Provider SimpleProvider(string providerId) => new()

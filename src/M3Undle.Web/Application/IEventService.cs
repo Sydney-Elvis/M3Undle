@@ -25,6 +25,7 @@ public static class SystemEventTypes
     public const string AccountLocked = "AccountLocked";
     public const string AppRestarted = "AppRestarted";
     public const string DatabaseMigrationApplied = "DatabaseMigrationApplied";
+    public const string SeriesSyncCompleted = "SeriesSyncCompleted";
 }
 
 public interface IEventService

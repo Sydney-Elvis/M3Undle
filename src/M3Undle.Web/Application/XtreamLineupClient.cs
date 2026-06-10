@@ -15,10 +15,9 @@ public sealed class XtreamLineupClient(
     IServiceScopeFactory scopeFactory,
     SecretEncryptionService secretEncryption,
     RefreshActivityTracker activityTracker,
+    IXtreamSeriesExpansionQueue seriesExpansionQueue,
     ILogger<XtreamLineupClient> logger)
 {
-    private const int SeriesExpandConcurrency = 3;
-
     // Called for Xtream-mode providers (XtreamBaseUrl is set).
     public Task<PlaylistFetchResult> BuildLineupAsync(Provider provider, CancellationToken cancellationToken)
     {
@@ -88,7 +87,7 @@ public sealed class XtreamLineupClient(
             {
                 activityTracker.Set("Fetching series…");
                 var (seriesBytes, seriesChannels) = await FetchSeriesAsync(
-                    client, baseUrl, username, password, provider.ProviderId,
+                    client, baseUrl, username, password, provider,
                     provider.TimeoutSeconds, cancellationToken);
                 channels.AddRange(seriesChannels);
                 totalBytes += seriesBytes;
@@ -163,8 +162,9 @@ public sealed class XtreamLineupClient(
 
     private async Task<(long Bytes, List<ParsedProviderChannel> Channels)> FetchSeriesAsync(
         HttpClient client, string baseUrl, string username, string password,
-        string providerId, int timeoutSeconds, CancellationToken cancellationToken)
+        Provider provider, int timeoutSeconds, CancellationToken cancellationToken)
     {
+        var providerId = provider.ProviderId;
         var catUrl = BuildActionUrl(baseUrl, username, password, "get_series_categories");
         var listUrl = BuildActionUrl(baseUrl, username, password, "get_series");
 
@@ -179,59 +179,22 @@ public sealed class XtreamLineupClient(
         // Load existing cache.
         var cache = await LoadSeriesCacheAsync(providerId, cancellationToken);
 
-        // Determine which series need expansion.
+        // New/changed series are expanded in the background — the lineup fetch never blocks
+        // on get_series_info. Episodes appear on subsequent builds as the cache fills.
+        // Changed-but-cached series keep publishing their old episodes until re-expanded.
         var toExpand = seriesList
             .Where(s => !cache.TryGetValue(s.SeriesId, out var cached) || cached.LastModifiedEpoch != s.LastModifiedEpoch)
+            .Select(s => new XtreamSeriesStub(s.SeriesId, s.LastModifiedEpoch))
             .ToList();
 
         if (toExpand.Count > 0)
         {
-            logger.LogDebug("Series expansion: {ToExpand}/{Total} series changed/new for provider {ProviderId}.",
-                toExpand.Count, seriesList.Count, providerId);
-
-            var sem = new SemaphoreSlim(SeriesExpandConcurrency);
-            // EpisodesJson is null when the fetch failed — failures are NOT cached, so they retry next sync.
-            var expanded = new (int SeriesId, string? EpisodesJson)[toExpand.Count];
-            var expandBytes = 0L;
-
-            await Task.WhenAll(toExpand.Select(async (series, idx) =>
-            {
-                await sem.WaitAsync(cancellationToken);
-                try
-                {
-                    activityTracker.Set($"Expanding series {idx + 1}/{toExpand.Count}…");
-                    var infoUrl = $"{BuildActionUrl(baseUrl, username, password, "get_series_info")}&series_id={series.SeriesId}";
-                    var infoJson = await HttpFetchHelper.FetchStringAsync(client, infoUrl, timeoutSeconds, cancellationToken);
-                    Interlocked.Add(ref expandBytes, System.Text.Encoding.UTF8.GetByteCount(infoJson));
-                    expanded[idx] = (series.SeriesId, infoJson);
-                }
-                catch (Exception ex) when (ex is HttpRequestException or ProviderFetchException)
-                {
-                    logger.LogDebug("get_series_info failed for series {SeriesId}: {Message}", series.SeriesId, ex.Message);
-                    expanded[idx] = (series.SeriesId, null);
-                }
-                finally { sem.Release(); }
-            }));
-
-            bytes += expandBytes;
-
-            // Persist updated cache entries (successful fetches only).
-            await SaveSeriesCacheAsync(providerId, toExpand, expanded, cancellationToken);
-
-            // Merge into local cache dict for channel building.
-            for (var i = 0; i < toExpand.Count; i++)
-            {
-                if (expanded[i].EpisodesJson is not { } episodesJson)
-                    continue;
-
-                cache[toExpand[i].SeriesId] = new XtreamSeriesCache
-                {
-                    ProviderId = providerId,
-                    SeriesId = toExpand[i].SeriesId,
-                    LastModifiedEpoch = toExpand[i].LastModifiedEpoch,
-                    EpisodesJson = episodesJson,
-                };
-            }
+            var job = new XtreamSeriesExpansionJob(
+                providerId, provider.Name, baseUrl, username, password, timeoutSeconds, toExpand);
+            if (seriesExpansionQueue.TryEnqueue(job))
+                logger.LogInformation(
+                    "Queued background expansion of {ToExpand}/{Total} series for provider {ProviderId}.",
+                    toExpand.Count, seriesList.Count, providerId);
         }
 
         // Remove cache entries for series that no longer exist.
@@ -497,50 +460,6 @@ public sealed class XtreamLineupClient(
             .Where(x => x.ProviderId == providerId)
             .ToListAsync(cancellationToken);
         return rows.ToDictionary(x => x.SeriesId);
-    }
-
-    private async Task SaveSeriesCacheAsync(
-        string providerId,
-        List<(int SeriesId, string Name, string? Cover, int CategoryId, long LastModifiedEpoch)> seriesMeta,
-        (int SeriesId, string? EpisodesJson)[] expanded,
-        CancellationToken cancellationToken)
-    {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-
-        var seriesMetaById = seriesMeta.ToDictionary(s => s.SeriesId);
-
-        for (var i = 0; i < expanded.Length; i++)
-        {
-            var (seriesId, episodesJson) = expanded[i];
-
-            // Failed fetches are not persisted — keep any prior entry so the series retries next sync.
-            if (episodesJson is null)
-                continue;
-
-            var meta = seriesMetaById[seriesId];
-
-            var existing = await db.XtreamSeriesCache.FindAsync(
-                [providerId, seriesId], cancellationToken);
-
-            if (existing is null)
-            {
-                db.XtreamSeriesCache.Add(new XtreamSeriesCache
-                {
-                    ProviderId = providerId,
-                    SeriesId = seriesId,
-                    LastModifiedEpoch = meta.LastModifiedEpoch,
-                    EpisodesJson = episodesJson,
-                });
-            }
-            else
-            {
-                existing.LastModifiedEpoch = meta.LastModifiedEpoch;
-                existing.EpisodesJson = episodesJson;
-            }
-        }
-
-        await db.SaveChangesAsync(CancellationToken.None);
     }
 
     private async Task DeleteStaleCacheAsync(

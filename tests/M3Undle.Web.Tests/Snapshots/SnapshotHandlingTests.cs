@@ -1231,6 +1231,7 @@ public sealed class SnapshotHandlingTests
             xtreamSp.GetRequiredService<IServiceScopeFactory>(),
             encryption,
             activityTracker,
+            new NullSeriesExpansionQueue(),
             NullLogger<XtreamLineupClient>.Instance);
         var fetcher = new ProviderFetcher(
             factory,

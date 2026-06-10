@@ -7,6 +7,7 @@
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
+@inject IXtreamSeriesExpansionQueue SeriesExpansionQueue
 @inject DashboardStatsService DashboardStats
 @inject LineupStatusService StatusService
 @inject IRefreshScheduleService RefreshScheduleService
@@ -203,6 +204,17 @@
                                              Color="@ProfileStatusChipColor(selectedProfile)"
                                              Variant="Variant.Outlined"
                                              Style="align-self:flex-start;" />
+                            }
+                            @if (SeriesExpansionQueue.CurrentStatus is { } seriesSync)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
+                                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Info" />
+                                    <MudText Typo="Typo.body2">
+                                        Series sync: @seriesSync.Completed.ToString("N0") / @seriesSync.Total.ToString("N0") in background
+                                        @(seriesSync.Failed > 0 ? $"— {seriesSync.Failed:N0} failed (will retry)" : "")
+                                    </MudText>
+                                </MudStack>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Episodes appear as they sync — live channels are unaffected.</MudText>
                             }
                         </MudStack>
 
@@ -649,7 +661,7 @@
         var restoredFromPrerender = TryRestorePersistedState();
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
 
-        if (_isRefreshing)
+        if (_isRefreshing || SeriesExpansionQueue.CurrentStatus is not null)
             StartElapsedTimer();
 
         var reader = EventBus.Subscribe(out _eventSubscription);
@@ -712,7 +724,9 @@
                     _isRefreshing = false;
                     _isCancelling = false;
                     _refreshStartedAt = null;
-                    StopElapsedTimer();
+                    // Keep ticking while a background series sync is active so its counters stay live.
+                    if (SeriesExpansionQueue.CurrentStatus is null)
+                        StopElapsedTimer();
                     if (!_isLoading)
                         await InvokeAsync(LoadAllAsync);
                 }
@@ -839,7 +853,12 @@
         try
         {
             while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
                 await InvokeAsync(StateHasChanged);
+                // Self-stop once nothing is active (covers a series sync that ends without a follow-up refresh).
+                if (!ShowRefreshing && SeriesExpansionQueue.CurrentStatus is null)
+                    break;
+            }
         }
         catch (OperationCanceledException) { }
     }
