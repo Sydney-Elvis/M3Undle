@@ -67,6 +67,8 @@ TestResults/
 .stignore
 AGENTS.md
 CLAUDE.md
+.stignore
+.stfolder/
 
 # Temporary files
 *.tmp

@@ -939,6 +939,98 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_AbortLongAfterRecovery_NotCountedAsClientAbortAfterRecovery()
+    {
+        // Issue #96: an abort outside the post-recovery window (here: any delay, since
+        // the window is zero) is an ordinary disconnect — a channel change or idle
+        // close — and must NOT be recorded as ClientAbortAfterRecovery. That false
+        // signal is what previously drove channels Unstable and triggered the
+        // forced-retune loop.
+        var (session, subscriber, fixture) = await StartSessionThroughRecoveryAsync(
+            postRecoveryAbortWindow: TimeSpan.Zero);
+
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.SubscriberRemoved).Any(x =>
+                    x.DisconnectReason == SubscriberDisconnectReason.ClientAborted),
+            TimeSpan.FromSeconds(5));
+
+        Assert.IsFalse(
+            fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery).Any(),
+            "A late abort must not be recorded as ClientAbortAfterRecovery.");
+
+        await session.DisposeAsync();
+        await fixture.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_AbortShortlyAfterRecovery_CountedAsClientAbortAfterRecovery()
+    {
+        // The genuine case: a client that aborts within the post-recovery window is
+        // plausibly poisoned by the recovery splice and remains valid health evidence.
+        var (session, subscriber, fixture) = await StartSessionThroughRecoveryAsync(
+            postRecoveryAbortWindow: TimeSpan.FromMinutes(10));
+
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery).Any(),
+            TimeSpan.FromSeconds(5));
+
+        Assert.IsTrue(
+            fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery).Any(),
+            "A prompt abort after recovery must remain ClientAbortAfterRecovery evidence.");
+
+        await session.DisposeAsync();
+        await fixture.DisposeAsync();
+    }
+
+    // Drives a session through one stall + safe-start recovery and returns it with an
+    // attached subscriber that has received recovered output, ready for an abort test.
+    private async Task<(ChannelStreamSession Session, SubscriberConnection Subscriber, SessionFixture Fixture)>
+        StartSessionThroughRecoveryAsync(TimeSpan postRecoveryAbortWindow)
+    {
+        var safeChunk = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(safeChunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(MpegTsSafeStartupSequence(), safeChunk, ct));
+
+        var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+                PostRecoveryAbortWindow = postRecoveryAbortWindow,
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(8));
+        await WaitUntilAsync(() => subscriber.BytesSent >= 188 * 7, TimeSpan.FromSeconds(5));
+
+        return (session, subscriber, fixture);
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_UnsafeRecoveryForcesControlledClose()
     {
         var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket(0xDD));
@@ -1110,6 +1202,19 @@ public sealed class ChannelSessionIntegrationTests
                 DisplayName = "Test Channel",
                 EventKind = "ClientAbortAfterRecovery",
                 EventUtc = DateTime.UtcNow.AddMinutes(-5),
+                ClientAbortAfterRecovery = true,
+            },
+            // Issue #96: the forced downstream retune is now a last resort requiring
+            // >= 3 genuine post-recovery aborts (was 2). Seed a third so this test still
+            // exercises the ControlledDownstreamRetune boundary under the new policy.
+            new StreamChannelHealthEvent
+            {
+                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
+                ProviderId = "provider-1",
+                ProviderChannelId = "channel-1",
+                DisplayName = "Test Channel",
+                EventKind = "ClientAbortAfterRecovery",
+                EventUtc = DateTime.UtcNow.AddMinutes(-3),
                 ClientAbortAfterRecovery = true,
             });
 

@@ -99,6 +99,87 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
+    public async Task GetRelayPolicyDecision_AutoCautious_SelectsCleanRemux()
+    {
+        // Issue #96: escalate at first real instability. Cautious channels now select
+        // clean remux under Auto (previously only Unstable did), so a misbehaving
+        // channel is protected without first failing the user.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var policy = new StreamChannelRecoveryPolicy(
+            StreamChannelHealthProfile.Cautious,
+            TimeSpan.FromSeconds(3),
+            512 * 1024,
+            AllowPacketBoundaryRecoveryFallback: true,
+            RequireDownstreamRetune: false,
+            DownstreamRetuneReason: null,
+            Reason: "cautious test profile");
+
+        var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
+
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, decision.SelectedRelayMode);
+        StringAssert.Contains(decision.Reason, "Cautious");
+    }
+
+    [TestMethod]
+    public async Task GetRelayPolicyDecision_AutoStable_SelectsDirect()
+    {
+        // Stable channels stay direct and near-live; only non-Stable profiles remux.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var policy = new StreamChannelRecoveryPolicy(
+            StreamChannelHealthProfile.Stable,
+            TimeSpan.FromSeconds(3),
+            512 * 1024,
+            AllowPacketBoundaryRecoveryFallback: true,
+            RequireDownstreamRetune: false,
+            DownstreamRetuneReason: null,
+            Reason: "stable test profile");
+
+        var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
+
+        Assert.AreEqual(UpstreamRelayModes.Direct, decision.SelectedRelayMode);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_TwoAbortsAfterRecovery_DoesNotRequireDownstreamRetune()
+    {
+        // Issue #96: the forced downstream retune is now a last resort requiring >= 3
+        // genuine post-recovery aborts. Two aborts classify Unstable (clean remux) but
+        // must not force a downstream close.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("RecoveryOutputResumed", safeStartKind: "H264Idr"),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
+        Assert.IsFalse(policy.RequireDownstreamRetune);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_ThreeAbortsAfterIdrRecovery_RequiresDownstreamRetune()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("RecoveryOutputResumed", safeStartKind: "H264Idr"),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
+        Assert.IsTrue(policy.RequireDownstreamRetune);
+    }
+
+    [TestMethod]
     public async Task GetEvidenceAsync_WithCleanWatchAfterAdverseEvent_ExposesLastCleanWatchUtc()
     {
         var cleanWatchTime = DateTime.UtcNow - TimeSpan.FromMinutes(10);

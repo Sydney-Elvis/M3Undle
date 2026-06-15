@@ -5,11 +5,32 @@ public sealed class ReconnectOptions
     public TimeSpan ReadStallTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// For MPEG-TS relay sessions: how long to wait with no non-null TS content
-    /// before reconnecting. Shorter than ReadStallTimeout so CDN segment-gap
-    /// stalls are detected quickly without waiting the full byte-arrival timeout.
+    /// For direct MPEG-TS relay sessions: how long to wait with no non-null TS
+    /// content before reconnecting. Shorter than ReadStallTimeout so CDN
+    /// segment-gap stalls are detected quickly without waiting the full
+    /// byte-arrival timeout. Kept low because a direct stall means M3Undle itself
+    /// must reconnect — the sooner detected, the shorter the on-screen freeze.
     /// </summary>
-    public TimeSpan ContentStallTimeout { get; set; } = TimeSpan.FromSeconds(8);
+    public TimeSpan ContentStallTimeout { get; set; } = TimeSpan.FromSeconds(4);
+
+    /// <summary>
+    /// For FFmpeg relay sessions (clean remux / HLS): how long to wait with no
+    /// output before M3Undle tears the FFmpeg process down and reconnects the
+    /// whole session. Deliberately longer than <see cref="ContentStallTimeout"/>
+    /// because FFmpeg reconnects to the provider internally; tearing it down too
+    /// eagerly would fight its own recovery and cause more disruption than the
+    /// blip it is riding out.
+    /// </summary>
+    public TimeSpan FfmpegRelayStallTimeout { get; set; } = TimeSpan.FromSeconds(12);
+
+    /// <summary>
+    /// Only client aborts that occur within this window of a recovery resume are
+    /// counted as <c>ClientAbortAfterRecovery</c> health evidence. Aborts later
+    /// than this (channel changes, idle closes, unrelated disconnects minutes
+    /// after a clean recovery) are ordinary disconnects and must not poison the
+    /// channel health profile. See issue #96.
+    /// </summary>
+    public TimeSpan PostRecoveryAbortWindow { get; set; } = TimeSpan.FromSeconds(15);
 
     public TimeSpan OutageWindow { get; set; } = TimeSpan.FromSeconds(75);
 

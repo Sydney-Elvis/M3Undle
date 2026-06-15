@@ -414,6 +414,16 @@ public sealed class UpstreamStreamConnector(
         info.ArgumentList.Add("1");
         info.ArgumentList.Add("-reconnect_at_eof");
         info.ArgumentList.Add("1");
+        // Issue #96: let FFmpeg ride out provider blips itself instead of exiting
+        // (which makes M3Undle tear down and reconnect the whole session). Reconnect
+        // on network errors too. reconnect_delay_max is the delay after which FFmpeg
+        // GIVES UP; keep it well above FfmpegRelayStallTimeout so FFmpeg is still
+        // actively retrying throughout M3Undle's teardown window rather than sitting
+        // idle after an early give-up.
+        info.ArgumentList.Add("-reconnect_on_network_error");
+        info.ArgumentList.Add("1");
+        info.ArgumentList.Add("-reconnect_delay_max");
+        info.ArgumentList.Add("30");
         if (!isHlsInput)
         {
             info.ArgumentList.Add("-reconnect_streamed");
