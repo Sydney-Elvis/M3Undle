@@ -406,14 +406,25 @@ public sealed class UpstreamStreamConnector(
             CreateNoWindow = true,
         };
 
+        // Clean remux also receives the upstream .m3u8 directly, so detect HLS by the
+        // actual input URL, not just the dedicated HLS-relay path flag.
+        var inputIsHls = isHlsInput || HlsDetection.GetExplicitHlsCandidates(inputUrl).Count > 0;
+
         info.ArgumentList.Add("-hide_banner");
         info.ArgumentList.Add("-nostdin");
         info.ArgumentList.Add("-loglevel");
         info.ArgumentList.Add("warning");
         info.ArgumentList.Add("-reconnect");
         info.ArgumentList.Add("1");
-        info.ArgumentList.Add("-reconnect_at_eof");
-        info.ArgumentList.Add("1");
+        // -reconnect_at_eof is fatal for HLS: every playlist/segment fetch ends in a
+        // normal EOF, which FFmpeg's HTTP layer then treats as a failure and keeps
+        // reconnecting the *playlist* instead of pulling segments — producing zero
+        // output. Only apply it to continuous (non-HLS) inputs.
+        if (!inputIsHls)
+        {
+            info.ArgumentList.Add("-reconnect_at_eof");
+            info.ArgumentList.Add("1");
+        }
         // Issue #96: let FFmpeg ride out provider blips itself instead of exiting
         // (which makes M3Undle tear down and reconnect the whole session). Reconnect
         // on network errors too. reconnect_delay_max is the delay after which FFmpeg

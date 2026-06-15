@@ -136,6 +136,9 @@ public sealed class UpstreamStreamConnectorTests
             Assert.IsTrue(args.Contains("-allowed_extensions"));
             Assert.IsTrue(args.Contains("ALL"));
             Assert.IsFalse(args.Contains("-reconnect_streamed"));
+            Assert.IsFalse(
+                args.Contains("-reconnect_at_eof"),
+                "-reconnect_at_eof breaks HLS: every playlist/segment fetch ends in EOF and FFmpeg never pulls segments.");
 
             var firstBytes = await ReadExactAsciiAsync(connection.Stream, 4, TimeSpan.FromSeconds(2));
             Assert.AreEqual("HEAD", firstBytes);
@@ -331,6 +334,7 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "-reconnect_streamed");
             StringAssert.Contains(argsText, "-avoid_negative_ts");
             StringAssert.Contains(argsText, "make_zero");
+            StringAssert.Contains(argsText, "-reconnect_at_eof");
             Assert.IsFalse(
                 argsText.Contains("-use_wallclock_as_timestamps", StringComparison.Ordinal),
                 "Clean remux must not stamp live packets with wall-clock time; downstream HLS remuxers can preserve that as a large timeline jump.");
