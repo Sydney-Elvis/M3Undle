@@ -28,7 +28,7 @@ Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and othe
 > [!IMPORTANT]
 > **Beta Status**
 >
-> M3Undle has completed all alpha milestones and is entering beta. The core workflow is fully implemented: streaming is hardened with shared-stream support, adaptive stream health tracking, and relay policy for unstable providers. Observability, Xtream detection, HDHomeRun integration, and interface polish are all in place.
+> M3Undle has completed all alpha milestones and is now in beta. The core workflow is fully implemented: streaming is hardened with shared-stream support, adaptive stream health tracking, and relay policy for unstable providers. Observability, Xtream detection, HDHomeRun integration, and interface polish are all in place.
 >
 > Beta focuses on broader DVR client validation, documentation, and final hardening before a stable release. It is suitable for real LAN use, but expect provider- and client-specific edge cases to surface during testing.
 
@@ -103,6 +103,10 @@ Start by reducing the provider catalog to something your clients should actually
 
 Instead of making every client parse the full provider list, M3Undle publishes only the lineup you built.
 
+The provider dialog supports URL playlists, local files, Xtream Codes, imported configuration, optional XMLTV guide URLs, content-type toggles, provider stream limits, and profile association.
+
+![Add Provider dialog showing URL playlist setup, optional XMLTV guide URL, content-type toggles, stream limit controls, and automatic profile association](docs/images/readme-add-provider.png)
+
 ![Channel Mapping page with group filter applied, showing mapped and unmapped groups with channel counts](docs/images/readme-filter.png)
 
 ![Custom Locals group with channel search showing selected local channels with assigned numbers](docs/images/readme-channel-search.png)
@@ -131,9 +135,19 @@ Proxy live streams through M3Undle, hide provider credentials from clients, shar
 
 ![Stream Monitor showing two active sessions with buffer usage and three connected clients sharing streams](docs/images/readme-streams.png)
 
+The stream health panel highlights unstable channels over a 24-hour observation window. A channel can remain cautious when recent upstream failures have not yet been offset by recoveries, and it can relax back toward stable once clean watch time accumulates.
+
+![Stream health panel for Antiques Roadshow PBS showing a cautious channel with four upstream failures, no recoveries, and an improving trend](docs/images/readme-stream-health1.png)
+
+![Stream health panel for The Pet Collective Sweden showing a cautious channel with two upstream failures, accumulated clean watch time, and a recovery toward stable](docs/images/readme-stream-health2.png)
+
 ### Observability
 
 Expose Prometheus-compatible metrics, liveness/readiness probes, and authenticated diagnostics APIs for monitoring provider refreshes, streams, lineup publishing, EPG status, and HDHomeRun activity.
+
+The dashboard surfaces copy-ready client endpoints, current published state, and system events such as startup and migration activity without requiring log access for routine checks.
+
+![Dashboard with system events drawer open, showing published profile status, M3U and XMLTV endpoint URLs, HDHomeRun details, and recent startup events](docs/images/readme-events.png)
 
 ### Profiles and publishing
 
@@ -257,7 +271,7 @@ After v1.0.0, planned work moves toward more advanced provider handling:
 
 ## Support
 
-M3Undle is built as an open-source project and is currently focused on getting through alpha, beta, and v1.0.0.
+M3Undle is built as an open-source project and is currently focused on getting through beta, release candidate validation, and v1.0.0.
 
 If you find it useful and want to support the work:
 
@@ -286,7 +300,7 @@ Before submitting a pull request:
 - avoid mixing formatting-only changes with functional changes
 - describe the client, provider type, and endpoint path involved if the change affects playback or compatibility
 
-More detailed contributor docs will be added as the project moves toward beta.
+More detailed contributor docs will be added during beta.
 
 ## Disclaimer
 
