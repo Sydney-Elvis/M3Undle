@@ -1757,7 +1757,7 @@ public sealed class SnapshotBuilder(
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
                      && x.Decision == "exclude"
-                     && x.ProviderGroup.ContentType == "live")
+                     && (x.ProviderGroup.ContentType == "live" || x.ProviderGroup.ContentType == "mixed"))
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 
