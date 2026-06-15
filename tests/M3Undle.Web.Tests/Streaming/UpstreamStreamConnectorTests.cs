@@ -139,6 +139,9 @@ public sealed class UpstreamStreamConnectorTests
             Assert.IsFalse(
                 args.Contains("-reconnect_at_eof"),
                 "-reconnect_at_eof breaks HLS: every playlist/segment fetch ends in EOF and FFmpeg never pulls segments.");
+            // HLS relay must NOT pass -map: FFmpeg's default selection picks the best variant
+            // without pulling in all quality levels as separate video streams.
+            Assert.IsFalse(args.Contains("-map"), "HLS relay must not use -map (causes multi-video MPEG-TS)");
 
             var firstBytes = await ReadExactAsciiAsync(connection.Stream, 4, TimeSpan.FromSeconds(2));
             Assert.AreEqual("HEAD", firstBytes);

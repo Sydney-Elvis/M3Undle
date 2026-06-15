@@ -474,10 +474,17 @@ public sealed class UpstreamStreamConnector(
 
         info.ArgumentList.Add("-i");
         info.ArgumentList.Add(inputUrl);
-        info.ArgumentList.Add("-map");
-        info.ArgumentList.Add("0:v?");
-        info.ArgumentList.Add("-map");
-        info.ArgumentList.Add("0:a?");
+        // For HLS inputs, omit -map entirely: FFmpeg's default stream selection picks the best
+        // variant from the master playlist without pulling in all quality levels as separate
+        // video streams. Explicit -map 0:v? would include every variant and produce a
+        // multi-video MPEG-TS that downstream segmenters warn about and browser players reject.
+        if (!inputIsHls)
+        {
+            info.ArgumentList.Add("-map");
+            info.ArgumentList.Add("0:v?");
+            info.ArgumentList.Add("-map");
+            info.ArgumentList.Add("0:a?");
+        }
         info.ArgumentList.Add("-c");
         info.ArgumentList.Add("copy");
         info.ArgumentList.Add("-muxpreload");
