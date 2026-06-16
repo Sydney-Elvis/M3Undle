@@ -451,11 +451,12 @@
         }
     }
 
-    private async Task CancelPreviewAsync()
+    private Task CancelPreviewAsync()
     {
         _isCancellingPreview = true;
         _previewCts?.Cancel();
         StateHasChanged();
+        return Task.CompletedTask;
     }
 
     private async Task RefreshPreviewAsync(string providerId)

@@ -21,8 +21,9 @@ internal static class HttpFetchHelper
             connectCts.CancelAfter(idleTimeout);
             try
             {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 response = await client.SendAsync(
-                    new HttpRequestMessage(HttpMethod.Get, url),
+                    request,
                     HttpCompletionOption.ResponseHeadersRead,
                     connectCts.Token);
             }

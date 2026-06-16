@@ -348,6 +348,34 @@ public sealed class UpstreamStreamConnectorTests
         }
     }
 
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayInputIsExplicitHls_DoesNotUseContinuousReconnectFlags()
+    {
+        var argsFile = Path.GetTempFileName();
+        try
+        {
+            using var fixture = await ConnectorFixture.CreateAsync(
+                streamUrl: $"http://provider.test/channel.m3u8?ffmpegMode=relay-success&prefix=HEAD&suffix=TAIL&delayMs=200&argsOut={Uri.EscapeDataString(argsFile)}",
+                ffmpegPath: "",
+                handler: new RecordingHttpMessageHandler(_ => throw new AssertFailedException("Direct HTTP must not be called when clean relay starts.")),
+                cleanRelayMode: "remux",
+                cleanRelayOptions: new CleanRelayOptions { FfmpegPath = FakeFfmpegBinary.LocateExecutable() },
+                forceMpegTs: false);
+
+            await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+            Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, connection.RelayMode);
+
+            var argsText = await File.ReadAllTextAsync(argsFile);
+            Assert.IsFalse(argsText.Contains("-reconnect_streamed", StringComparison.Ordinal));
+            Assert.IsFalse(argsText.Contains("-reconnect_at_eof", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(argsFile);
+        }
+    }
+
     private static HttpResponseMessage CreateHttpResponse(string body)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)

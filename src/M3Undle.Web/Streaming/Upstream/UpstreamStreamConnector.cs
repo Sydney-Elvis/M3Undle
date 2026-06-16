@@ -435,7 +435,7 @@ public sealed class UpstreamStreamConnector(
         info.ArgumentList.Add("1");
         info.ArgumentList.Add("-reconnect_delay_max");
         info.ArgumentList.Add("30");
-        if (!isHlsInput)
+        if (!inputIsHls)
         {
             info.ArgumentList.Add("-reconnect_streamed");
             info.ArgumentList.Add("1");
