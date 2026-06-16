@@ -4,6 +4,54 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.1] — 2026-06-16
+
+Beta 1 is the first beta release following Alpha 7. It fixes two playback bugs that broke HLS-sourced channels for every client, refines the adaptive stream recovery introduced in Alpha 7 to stop a class of channels from retuning far more than necessary, and makes provider onboarding faster and more resilient for large or slow catalogs.
+
+### HLS playback
+
+Two separate issues combined to break every HLS-sourced channel (iptv-org, Samsung FAST, PBS, and similar), then persisted as an Electron-only failure after the first was fixed.
+
+- Fixed HLS channels producing no video at all. An HTTP reconnect setting meant for continuous streams was being applied to HLS as well, where every playlist and segment fetch ends in a normal end-of-file; M3Undle treated each one as a failure and looped on the playlist instead of advancing through it
+- Fixed Electron-based players, such as IPTVnator, failing once the above was fixed. They were being redirected to a generated HLS stream meant for browsers instead of receiving the raw MPEG-TS stream their player pipeline expects
+
+### Adaptive stream recovery
+
+- Fixed a stream-health tracking bug that caused some noisy channels to retune far more often than necessary — one channel that the recovery engine was already handling correctly still retuned 20 times in under three hours. Fixes #96
+- Auto relay policy now also selects clean relay for Cautious channels, not just Unstable, catching more problem channels before they need a hard retune
+
+### Provider onboarding
+
+- Fixed slow or very large providers timing out before they finished loading. Providers now only time out when no data is being received rather than on total elapsed time, so large catalogs complete instead of failing. Fixes #105
+- Series catalogs for Xtream providers now load in the background after a provider is added, making the initial add noticeably faster for large catalogs
+
+### Channel mapping
+
+- Fixed a provider group named "undefined" causing channels to disappear from the mapping page entirely instead of just showing as unmapped — affected iptv-org and similar providers
+- Fixed a malformed M3U entry swallowing the channel listed after it, silently dropping that channel from the lineup. Fixes #107
+
+### Dashboard
+
+- Added a copy link for the Xtream endpoint URL to match the other published endpoint URLs. Fixes #104
+
+### Docker and health
+
+- Fixed a newly deployed, not-yet-configured container reporting itself unhealthy to Docker; the dedicated health endpoint still correctly reports degraded until setup is complete, so monitoring isn't fooled, but compose no longer errors out on first boot. Fixes #103
+- Fixed HDHomeRun tuner count defaulting to 1 when tuner count isn't tied to stream tracking
+
+### Documentation
+
+- Refreshed README screenshots for the dashboard, add-provider flow, channel search, filters, events, and stream health pages
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.1
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-alpha.7] — 2026-06-05
 
 Alpha 7 is the final alpha milestone. It delivers adaptive live stream recovery for noisy provider channels, a first-class relay policy per provider, significant interface polish across nearly every page, and the consolidated schema migration that closes out all alpha database changes. Beta testing begins after this release.
@@ -149,5 +197,6 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
+[v1.0.0-beta.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.7...v1.0.0-beta.1
 [v1.0.0-alpha.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.6...v1.0.0-alpha.7
 [v1.0.0-alpha.6]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.5...v1.0.0-alpha.6
