@@ -282,7 +282,7 @@ Most HDHR behavior is configurable in **Settings → HDHomeRun**. The main excep
 | `M3Undle__HdHomeRun__DiscoveryEnabled` | `true` | Enables SSDP and SiliconDust network discovery. Normally change this in **Settings → HDHomeRun**. Only set it here if you want a startup default or managed deployment behavior. Requires UDP ports (see [Docker Networking for HDHomeRun](#docker-networking-for-hdhr)). |
 | `M3Undle__HdHomeRun__SsdpEnabled` | `true` | Controls the SSDP/UPnP listener on UDP 1900. Normally change this in **Settings → HDHomeRun**. |
 | `M3Undle__HdHomeRun__SiliconDustDiscoveryEnabled` | `true` | Controls the SiliconDust discovery listener on UDP 65001. Normally change this in **Settings → HDHomeRun**. |
-| `M3Undle__HdHomeRun__TunerCount` | `4` | Sets the fallback virtual tuner count when no provider limit or UI override is in effect. Normally change this in **Settings → HDHomeRun**. |
+| `M3Undle__HdHomeRun__TunerCount` | `6` | Virtual tuner count advertised when no provider limit or UI override is in effect. This is the advertised count only, not a server-side cap; clients allocate against it and often reserve one tuner for EPG, so keep it well above 1. When a limit *is* enforced, the advertised count equals that limit instead. Normally change this in **Settings → HDHomeRun**. |
 | `M3Undle__HdHomeRun__AdvertisedBaseUrl` | *(auto-detect)* | Base URL returned in `discover.json` and discovery responses (for example `http://192.168.1.50:5004`). Normally leave this blank and let M3Undle auto-detect it. Set it only for advanced Docker NAT, LAN discovery, or reverse-proxy scenarios. This can also be changed in **Settings → HDHomeRun**. |
 | `M3Undle__HdHomeRun__FriendlyName` | `M3Undle HDHomeRun` | Device name shown in client apps. Rarely needed. This is currently an env/config-only setting, not a web UI field. |
 
@@ -482,10 +482,10 @@ With `network_mode: host`, the container shares the host's network stack directl
 
 ### Tuner count
 
-The `TunerCount` setting (default: `4`) controls how many simultaneous streams the emulated tuner advertises when no provider limit or UI override is in effect. Most users should change this in **Settings → HDHomeRun** if needed. If your deployment needs a startup default from Docker, set:
+The `TunerCount` setting (default: `6`) controls how many virtual tuners the emulated device advertises when no provider limit or UI override is in effect. It is the advertised count only — not a server-side stream cap. Clients allocate against it and commonly reserve one tuner for EPG/PSIP scanning, so a value of 1 can leave no tuner free for live TV; keep it comfortably above 1. When a provider limit or UI override *is* set, the advertised count matches that limit (and is enforced server-side). Most users should change this in **Settings → HDHomeRun** if needed. If your deployment needs a startup default from Docker, set:
 
 ```yaml
-M3Undle__HdHomeRun__TunerCount: "4"
+M3Undle__HdHomeRun__TunerCount: "6"
 ```
 
 The tuner count is editable in the web UI under **Settings → HDHomeRun**.
