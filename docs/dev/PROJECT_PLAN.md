@@ -166,7 +166,7 @@ Status: Complete. All checklist items passed. End-to-end DVR client validation (
 ### Alpha 5 — Remaining Features
 Goal: Finish remaining lineup-management features before Beta hardening.
 
-Status: In progress. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
+Status: Complete. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 
 - [x] Channel reorder (explicit sort position via Number Manager) — #3
 - [x] Custom `tvg-id` override per channel (lock-gated field in channel edit dialog)
