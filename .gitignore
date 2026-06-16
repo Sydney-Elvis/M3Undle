@@ -63,8 +63,12 @@ TestResults/
 .ai_docs/
 .local_artifacts/
 .claude/
+.stfolder/
+.stignore
 AGENTS.md
 CLAUDE.md
+.stignore
+.stfolder/
 
 # Temporary files
 *.tmp

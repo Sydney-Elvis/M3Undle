@@ -17,6 +17,7 @@ public sealed class SnapshotRefreshService(
     AppEventBus eventBus,
     IEventService eventService,
     TimeProvider timeProvider,
+    RefreshActivityTracker activityTracker,
     ILogger<SnapshotRefreshService> logger)
     : BackgroundService, IRefreshTrigger
 {
@@ -48,6 +49,8 @@ public sealed class SnapshotRefreshService(
     public bool IsRefreshing => _executionGate.CurrentCount == 0;
 
     public DateTime? RefreshStartedAt => _refreshStartedAt;
+
+    public string? CurrentActivity => activityTracker.CurrentActivity;
 
     public bool TriggerRefresh()
     {
@@ -421,6 +424,7 @@ public sealed class SnapshotRefreshService(
         }
         finally
         {
+            activityTracker.Clear();
             _refreshStartedAt = null;
             _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,
@@ -550,6 +554,7 @@ public sealed class SnapshotRefreshService(
         }
         finally
         {
+            activityTracker.Clear();
             _refreshStartedAt = null;
             _currentRunCts = null;
             eventBus.Publish(AppEventKind.RefreshCompleted, succeeded, errorSummary, changeClass,

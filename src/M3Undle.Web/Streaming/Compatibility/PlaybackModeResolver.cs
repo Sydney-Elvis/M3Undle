@@ -12,6 +12,13 @@ public static class PlaybackModeResolver
     }
 
     public static bool IsBrowserClient(HttpContext context)
-        => context.Request.Headers.UserAgent.ToString()
-            .Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
+    {
+        var ua = context.Request.Headers.UserAgent.ToString();
+        // Electron apps (e.g. iptvnator) use mpegts.js/MSE to play MPEG-TS directly;
+        // redirecting them to generated HLS causes mpegts.js to receive M3U8 text instead
+        // of binary TS packets and fail. Electron UAs always contain "Electron/".
+        if (ua.Contains("Electron/", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return ua.Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
+    }
 }

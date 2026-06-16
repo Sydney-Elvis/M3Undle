@@ -248,24 +248,45 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             var abortDelay = _lastRecoveryResumedUtc is { } resumedUtc
                 ? DateTimeOffset.UtcNow - resumedUtc
                 : (TimeSpan?)null;
-            RecordDiagnostic(
-                StreamDiagnosticEventKind.ClientAbortAfterRecovery,
-                subscriber: subscriber,
-                disconnectReason: reason,
-                clientAbortAfterRecoveryDelay: abortDelay,
-                message: "Client aborted after MPEG-TS recovery resumed.");
-            _logger.LogWarning(
-                "Client aborted after MPEG-TS recovery: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} LastOutputHeldMs={LastOutputHeldMs} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent} DisconnectReason={DisconnectReason}",
-                _sessionId,
-                _source.DisplayName,
-                _source.ProviderId,
-                _source.ProviderChannelId,
-                _relayMode,
-                _lastSafeStartKind,
-                _lastRecoveryOutputHeldMs,
-                abortDelay?.TotalMilliseconds,
-                subscriber.BytesSent,
-                reason);
+            // Issue #96: only aborts shortly after the resume are plausibly caused by
+            // the recovery splice. Later aborts (channel change, idle close, or an
+            // unrelated disconnect minutes after a clean recovery) are ordinary
+            // disconnects. Recording them as ClientAbortAfterRecovery is the false
+            // signal that previously drove channels to Unstable and triggered the
+            // forced-retune loop, so they must not poison channel health.
+            var withinPostRecoveryWindow = abortDelay is { } delay
+                && delay <= _reconnectOptions.PostRecoveryAbortWindow;
+            if (withinPostRecoveryWindow)
+            {
+                RecordDiagnostic(
+                    StreamDiagnosticEventKind.ClientAbortAfterRecovery,
+                    subscriber: subscriber,
+                    disconnectReason: reason,
+                    clientAbortAfterRecoveryDelay: abortDelay,
+                    message: "Client aborted after MPEG-TS recovery resumed.");
+                _logger.LogWarning(
+                    "Client aborted after MPEG-TS recovery: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} LastOutputHeldMs={LastOutputHeldMs} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent} DisconnectReason={DisconnectReason}",
+                    _sessionId,
+                    _source.DisplayName,
+                    _source.ProviderId,
+                    _source.ProviderChannelId,
+                    _relayMode,
+                    _lastSafeStartKind,
+                    _lastRecoveryOutputHeldMs,
+                    abortDelay?.TotalMilliseconds,
+                    subscriber.BytesSent,
+                    reason);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Client disconnect after recovery NOT counted as health evidence (outside post-recovery window): SessionId={SessionId} DisplayName={DisplayName} AbortDelayMs={AbortDelayMs} WindowMs={WindowMs} BytesSent={BytesSent}",
+                    _sessionId,
+                    _source.DisplayName,
+                    abortDelay?.TotalMilliseconds,
+                    _reconnectOptions.PostRecoveryAbortWindow.TotalMilliseconds,
+                    subscriber.BytesSent);
+            }
         }
 
         lock (_gate)
@@ -382,7 +403,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         PublishSnapshots();
                     }
 
-                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, _currentRecoveryPolicy, _sessionCts.Token);
+                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, BuildEffectiveConnectPolicy(), _sessionCts.Token);
                     _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
@@ -836,11 +857,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (!IsMpegTsRelay())
             return _reconnectOptions.ReadStallTimeout;
 
-        if (_reconnectOptions.ContentStallTimeout <= TimeSpan.Zero)
+        // Issue #96: FFmpeg relay (clean remux / HLS->TS) reconnects to the provider
+        // internally, so give it longer before M3Undle tears the process down and
+        // reconnects the whole session — tearing it down too eagerly fights FFmpeg's
+        // own recovery. Direct relay uses the short content-stall timeout so M3Undle
+        // detects a stall and reconnects quickly, minimizing the on-screen freeze.
+        var contentTimeout = IsFfmpegRelay()
+            ? _reconnectOptions.FfmpegRelayStallTimeout
+            : _reconnectOptions.ContentStallTimeout;
+
+        if (contentTimeout <= TimeSpan.Zero)
             return _reconnectOptions.ReadStallTimeout;
 
-        return _reconnectOptions.ContentStallTimeout < _reconnectOptions.ReadStallTimeout
-            ? _reconnectOptions.ContentStallTimeout
+        return contentTimeout < _reconnectOptions.ReadStallTimeout
+            ? contentTimeout
             : _reconnectOptions.ReadStallTimeout;
     }
 
@@ -1153,6 +1183,30 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private StreamChannelRecoveryPolicy ResolveRecoveryPolicy()
         => _currentRecoveryPolicy ?? StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
+
+    // Issue #96: in-session escalation. The persisted health profile lags within a
+    // session (events are written asynchronously and the profile is cached ~30s), so
+    // a channel that starts Stable would stay on Direct relay even as it stalls
+    // repeatedly. Once this session has seen at least one upstream failure, treat the
+    // channel as at least Cautious for the relay decision so Auto upgrades it to clean
+    // remux on this connect — protecting the user now instead of after the database
+    // catches up. Recovery behaviour (hold limits, retune) still follows the
+    // database-derived policy; only the relay-mode input is escalated.
+    private StreamChannelRecoveryPolicy? BuildEffectiveConnectPolicy()
+    {
+        var policy = _currentRecoveryPolicy;
+        if (policy is null || _reconnectAttempts == 0 || policy.Profile != StreamChannelHealthProfile.Stable)
+            return policy;
+
+        return policy with
+        {
+            Profile = StreamChannelHealthProfile.Cautious,
+            Reason = $"In-session escalation: {_reconnectAttempts} upstream failure(s) observed this session. {policy.Reason}",
+        };
+    }
+
+    private bool IsFfmpegRelay()
+        => !string.Equals(_relayMode, UpstreamRelayModes.Direct, StringComparison.Ordinal);
 
     private void SetState(SessionState state)
     {

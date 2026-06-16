@@ -66,7 +66,11 @@ public sealed class StreamChannelHealthProfileService(
             CleanRelayModes.On => StreamRelayPolicyDecision.CleanRemux(
                 normalizedPolicy,
                 "Provider relay policy is On; clean remux is forced for this provider."),
-            CleanRelayModes.Auto when recoveryPolicy.Profile == StreamChannelHealthProfile.Unstable =>
+            // Issue #96: escalate at first real instability. Any non-Stable profile
+            // (Cautious or Unstable) selects clean remux under Auto so a misbehaving
+            // channel is protected on the next connect instead of failing the user
+            // first. Stable channels stay direct and near-live.
+            CleanRelayModes.Auto when recoveryPolicy.Profile != StreamChannelHealthProfile.Stable =>
                 StreamRelayPolicyDecision.CleanRemux(
                     normalizedPolicy,
                     $"Provider relay policy is Auto and channel health is {recoveryPolicy.Profile}; clean remux selected. {recoveryPolicy.Reason}"),
@@ -314,8 +318,13 @@ public sealed class StreamChannelHealthProfileService(
     private static StreamChannelRecoveryPolicy BuildPolicy(HealthSummary summary, ReconnectOptions options)
     {
         var profile = DeriveProfile(summary);
+        // Issue #96: a forced downstream retune is a deliberate, user-visible stop,
+        // so it is now a last resort. With the post-recovery abort window fix the
+        // ClientAbortAfterRecovery count is genuine (aborts shortly after a resume),
+        // and Unstable channels already ride blips on clean remux. Only repeated
+        // genuine post-IDR aborts (>= 3) justify closing the downstream.
         var requireRetune = profile == StreamChannelHealthProfile.Unstable
-            && summary.ClientAbortAfterRecovery >= 2
+            && summary.ClientAbortAfterRecovery >= 3
             && summary.IdrRecoveryResumes >= 1;
         return profile switch
         {

@@ -320,7 +320,7 @@ public sealed class SnapshotBuilder(
         if (provider.XtreamBaseUrl is null)
             await UpdateXtreamCapabilityAsync(provider, cancellationToken);
         else
-            await UpdateXtreamExpiryAsync(provider, cancellationToken);
+            await UpdateXtreamExpiryAsync(provider, playlistResult.AccountInfo, cancellationToken);
 
         // 5. EPG fetch + DB sync
         string xmltvContent;
@@ -520,9 +520,10 @@ public sealed class SnapshotBuilder(
         return result;
     }
 
-    private async Task UpdateXtreamExpiryAsync(Provider provider, CancellationToken cancellationToken)
+    private async Task UpdateXtreamExpiryAsync(Provider provider, XtreamAccountInfo? accountInfo, CancellationToken cancellationToken)
     {
-        var info = await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
+        // Use AccountInfo carried from the lineup fetch; fall back to a dedicated probe only when not available.
+        var info = accountInfo ?? await fetcher.TryProbeXtreamAsync(provider, cancellationToken);
         if (info is null || info.ExpiresUtc == provider.PlaylistExpiresUtc)
             return;
 
@@ -1756,7 +1757,7 @@ public sealed class SnapshotBuilder(
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
                      && x.Decision == "exclude"
-                     && x.ProviderGroup.ContentType == "live")
+                     && (x.ProviderGroup.ContentType == "live" || x.ProviderGroup.ContentType == "mixed"))
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 

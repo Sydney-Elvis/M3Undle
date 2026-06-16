@@ -1473,9 +1473,9 @@ public static class ProviderApiEndpoints
             errors["xmltvUrl"] = ["Local XMLTV file not found on the server."];
         }
 
-        if (timeoutSeconds is < 1 or > 300)
+        if (timeoutSeconds is < 1 or > 1800)
         {
-            errors["timeoutSeconds"] = ["timeoutSeconds must be between 1 and 300."];
+            errors["timeoutSeconds"] = ["timeoutSeconds must be between 1 and 1800."];
         }
 
         if (!string.IsNullOrWhiteSpace(headersJson) && !TryValidateHeadersJson(headersJson, out var headersJsonError))

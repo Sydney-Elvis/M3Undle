@@ -7,6 +7,7 @@
 @inject ISnackbar Snackbar
 @inject AppEventBus EventBus
 @inject IRefreshTrigger RefreshTrigger
+@inject IXtreamSeriesExpansionQueue SeriesExpansionQueue
 @inject DashboardStatsService DashboardStats
 @inject LineupStatusService StatusService
 @inject IRefreshScheduleService RefreshScheduleService
@@ -164,7 +165,7 @@
                                 {
                                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
                                         <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                                        <MudText Typo="Typo.body2">Refreshing… @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
+                                        <MudText Typo="Typo.body2">@(RefreshTrigger.CurrentActivity ?? "Refreshing…") @(!string.IsNullOrEmpty(ElapsedText) ? $"({ElapsedText} elapsed)" : "")</MudText>
                                         <MudButton Size="Size.Small"
                                                    Variant="Variant.Outlined"
                                                    Color="Color.Error"
@@ -203,6 +204,23 @@
                                              Color="@ProfileStatusChipColor(selectedProfile)"
                                              Variant="Variant.Outlined"
                                              Style="align-self:flex-start;" />
+                            }
+                            @foreach (var seriesSync in SeriesExpansionQueue.ActiveJobs)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
+                                    <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Info" />
+                                    <MudText Typo="Typo.body2">
+                                        @seriesSync.ProviderName series sync: @seriesSync.Completed.ToString("N0") / @seriesSync.Total.ToString("N0") in background
+                                        @(seriesSync.Failed > 0 ? $"— {seriesSync.Failed:N0} failed (will retry)" : "")
+                                    </MudText>
+                                </MudStack>
+                            }
+                            @if (SeriesExpansionQueue.ActiveJobs.Count > 0)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Episodes appear as they sync — live channels are unaffected.
+                                    @(SeriesExpansionQueue.WaitingJobs > 0 ? $"{SeriesExpansionQueue.WaitingJobs} provider(s) queued." : "")
+                                </MudText>
                             }
                         </MudStack>
 
@@ -434,11 +452,11 @@
                     }
                     else
                     {
-                        <MudStack Spacing="1">
-                            <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
-                                <MudText Typo="Typo.caption" Color="Color.Secondary" Style="min-width:110px;">Server</MudText>
-                                <MudText Typo="Typo.caption">@Nav.BaseUri.TrimEnd('/')</MudText>
-                            </MudStack>
+                        <MudStack Spacing="2">
+                            <div>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">Server</MudText>
+                                <EndpointCopyRow DefaultUrl="@XtreamServerUrl" ExtraVariants="@GetXtreamServerUrlVariants()" />
+                            </div>
                             @if (_endpointSecuritySettings.Username is not null)
                             {
                                 <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap">
@@ -549,6 +567,20 @@
         }
     }
 
+    private string XtreamServerUrl => Nav.BaseUri.TrimEnd('/');
+
+    private IReadOnlyList<EndpointUrlVariant> GetXtreamServerUrlVariants()
+    {
+        var variants = new List<EndpointUrlVariant>();
+        var dockerBase = EndpointUrlService.GetDockerBaseUrl();
+        if (dockerBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy Docker URL", dockerBase));
+        var externalBase = EndpointUrlService.GetExternalBaseUrl();
+        if (externalBase is not null)
+            variants.Add(new EndpointUrlVariant("Copy External URL", externalBase));
+        return variants;
+    }
+
     private IReadOnlyList<EndpointUrlVariant> GetUrlVariants(string fullUrl)
     {
         if (!Uri.TryCreate(fullUrl, UriKind.Absolute, out var parsed))
@@ -635,7 +667,7 @@
         var restoredFromPrerender = TryRestorePersistedState();
         _persistSubscription = ApplicationState.RegisterOnPersisting(PersistStateAsync);
 
-        if (_isRefreshing)
+        if (_isRefreshing || SeriesExpansionQueue.ActiveJobs.Count > 0)
             StartElapsedTimer();
 
         var reader = EventBus.Subscribe(out _eventSubscription);
@@ -698,7 +730,9 @@
                     _isRefreshing = false;
                     _isCancelling = false;
                     _refreshStartedAt = null;
-                    StopElapsedTimer();
+                    // Keep ticking while a background series sync is active so its counters stay live.
+                    if (SeriesExpansionQueue.ActiveJobs.Count == 0)
+                        StopElapsedTimer();
                     if (!_isLoading)
                         await InvokeAsync(LoadAllAsync);
                 }
@@ -825,7 +859,12 @@
         try
         {
             while (await timer.WaitForNextTickAsync(_cts.Token))
+            {
                 await InvokeAsync(StateHasChanged);
+                // Self-stop once nothing is active (covers a series sync that ends without a follow-up refresh).
+                if (!ShowRefreshing && SeriesExpansionQueue.ActiveJobs.Count == 0)
+                    break;
+            }
         }
         catch (OperationCanceledException) { }
     }

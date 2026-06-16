@@ -186,7 +186,14 @@
 
         @if (_isPreviewLoading)
         {
-            <MudProgressCircular Indeterminate="true" />
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" />
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Fetching provider playlist…</MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                           OnClick="CancelPreviewAsync" Disabled="_isCancellingPreview">
+                    @(_isCancellingPreview ? "Cancelling…" : "Cancel")
+                </MudButton>
+            </MudStack>
         }
         else if (_preview is not null)
         {
@@ -248,6 +255,8 @@
     private string? _error;
 
     private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource? _previewCts;
+    private bool _isCancellingPreview;
     private IDisposable? _eventSubscription;
     private PeriodicTimer? _autoRefreshTimer;
 
@@ -442,11 +451,23 @@
         }
     }
 
+    private Task CancelPreviewAsync()
+    {
+        _isCancellingPreview = true;
+        _previewCts?.Cancel();
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
     private async Task RefreshPreviewAsync(string providerId)
     {
         _isPreviewLoading = true;
+        _isCancellingPreview = false;
         _previewLoadingProviderId = providerId;
         _error = null;
+
+        using var previewCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        _previewCts = previewCts;
 
         try
         {
@@ -456,7 +477,14 @@
                 GroupContains = _previewGroupFilter,
             };
 
-            var result = await ProviderPageService.RefreshPreviewAsync(providerId, payload, _cts.Token);
+            var result = await ProviderPageService.RefreshPreviewAsync(providerId, payload, previewCts.Token);
+
+            if (previewCts.IsCancellationRequested && !_cts.IsCancellationRequested)
+            {
+                _preview = null;
+                return;
+            }
+
             if (!string.IsNullOrWhiteSpace(result.Error))
             {
                 _error = result.Error;
@@ -467,6 +495,10 @@
             _preview = result.Preview;
             await LoadAsync();
         }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _preview = null;
+        }
         catch (Exception ex)
         {
             _error = $"Failed to refresh preview: {ex.Message}";
@@ -475,7 +507,9 @@
         finally
         {
             _isPreviewLoading = false;
+            _isCancellingPreview = false;
             _previewLoadingProviderId = null;
+            _previewCts = null;
         }
     }
 

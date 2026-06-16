@@ -136,6 +136,12 @@ public sealed class UpstreamStreamConnectorTests
             Assert.IsTrue(args.Contains("-allowed_extensions"));
             Assert.IsTrue(args.Contains("ALL"));
             Assert.IsFalse(args.Contains("-reconnect_streamed"));
+            Assert.IsFalse(
+                args.Contains("-reconnect_at_eof"),
+                "-reconnect_at_eof breaks HLS: every playlist/segment fetch ends in EOF and FFmpeg never pulls segments.");
+            // HLS relay must NOT pass -map: FFmpeg's default selection picks the best variant
+            // without pulling in all quality levels as separate video streams.
+            Assert.IsFalse(args.Contains("-map"), "HLS relay must not use -map (causes multi-video MPEG-TS)");
 
             var firstBytes = await ReadExactAsciiAsync(connection.Stream, 4, TimeSpan.FromSeconds(2));
             Assert.AreEqual("HEAD", firstBytes);
@@ -331,9 +337,38 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "-reconnect_streamed");
             StringAssert.Contains(argsText, "-avoid_negative_ts");
             StringAssert.Contains(argsText, "make_zero");
+            StringAssert.Contains(argsText, "-reconnect_at_eof");
             Assert.IsFalse(
                 argsText.Contains("-use_wallclock_as_timestamps", StringComparison.Ordinal),
                 "Clean remux must not stamp live packets with wall-clock time; downstream HLS remuxers can preserve that as a large timeline jump.");
+        }
+        finally
+        {
+            File.Delete(argsFile);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConnectAsync_WhenCleanRelayInputIsExplicitHls_DoesNotUseContinuousReconnectFlags()
+    {
+        var argsFile = Path.GetTempFileName();
+        try
+        {
+            using var fixture = await ConnectorFixture.CreateAsync(
+                streamUrl: $"http://provider.test/channel.m3u8?ffmpegMode=relay-success&prefix=HEAD&suffix=TAIL&delayMs=200&argsOut={Uri.EscapeDataString(argsFile)}",
+                ffmpegPath: "",
+                handler: new RecordingHttpMessageHandler(_ => throw new AssertFailedException("Direct HTTP must not be called when clean relay starts.")),
+                cleanRelayMode: "remux",
+                cleanRelayOptions: new CleanRelayOptions { FfmpegPath = FakeFfmpegBinary.LocateExecutable() },
+                forceMpegTs: false);
+
+            await using var connection = await fixture.Connector.ConnectAsync(fixture.Source, CancellationToken.None);
+
+            Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, connection.RelayMode);
+
+            var argsText = await File.ReadAllTextAsync(argsFile);
+            Assert.IsFalse(argsText.Contains("-reconnect_streamed", StringComparison.Ordinal));
+            Assert.IsFalse(argsText.Contains("-reconnect_at_eof", StringComparison.Ordinal));
         }
         finally
         {

@@ -340,6 +340,7 @@ public sealed class ProfilesPageServiceTests
 
         public bool IsRefreshing => IsRefreshingValue;
         public DateTime? RefreshStartedAt => null;
+        public string? CurrentActivity => null;
 
         public bool TriggerRefresh()
         {

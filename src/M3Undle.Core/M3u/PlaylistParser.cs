@@ -40,8 +40,16 @@ public sealed class PlaylistParser
                 string? url = null;
                 if (index < lines.Length)
                 {
-                    url = lines[index].Trim();
-                    index++;
+                    var candidate = lines[index].Trim();
+                    // Only consume the line as a URL if it doesn't start with '#'.
+                    // A line starting with '#' means the previous entry had no URL and
+                    // the next entry's #EXTINF (or other directive) would be incorrectly
+                    // consumed, causing the next channel to be silently dropped.
+                    if (!candidate.StartsWith("#", StringComparison.Ordinal))
+                    {
+                        url = candidate;
+                        index++;
+                    }
                 }
 
                 entries.Add(new M3uEntry(metadata, url));

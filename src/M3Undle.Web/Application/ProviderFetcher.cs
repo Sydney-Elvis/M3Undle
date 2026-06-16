@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using M3Undle.Core.M3u;
 using M3Undle.Core.Providers;
@@ -14,6 +15,8 @@ public sealed class ProviderFetcher(
     PlaylistParser playlistParser,
     EnvironmentVariableService envVarService,
     SecretEncryptionService secretEncryption,
+    XtreamLineupClient xtreamLineupClient,
+    RefreshActivityTracker activityTracker,
     ILogger<ProviderFetcher> logger)
 {
     private static readonly string EmptyXmltvDocument =
@@ -28,66 +31,59 @@ public sealed class ProviderFetcher(
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
         logger.LogDebug("Fetching playlist for provider {ProviderId}.", provider.ProviderId);
 
-        var effectivePlaylistUrl = ResolvePlaylistUrl(provider);
-        string content;
+        // Xtream-mode: use player_api.php JSON assembly instead of get.php monolithic M3U.
+        if (provider.XtreamBaseUrl is not null)
+            return await xtreamLineupClient.BuildLineupAsync(provider, cancellationToken);
+
+        var effectivePlaylistUrl = SubstituteProviderUrl(provider.PlaylistUrl);
 
         if (effectivePlaylistUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
         {
             var localPath = new Uri(effectivePlaylistUrl).LocalPath;
             try
             {
-                content = await File.ReadAllTextAsync(localPath, cancellationToken);
+                var content = await File.ReadAllTextAsync(localPath, cancellationToken);
+                return ParseM3uContent(content, cancellationToken);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 throw new ProviderFetchException($"Local file read failed: {ex.Message}", ex);
             }
         }
-        else
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
 
-            try
-            {
-                using var client = httpClientFactory.CreateClient();
-                if (provider.XtreamBaseUrl is null)
-                {
-                    ApplyHeadersFromJson(client, provider.HeadersJson);
-                    if (!string.IsNullOrWhiteSpace(provider.UserAgent))
-                        client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
-                }
-
-                var resolvedUrl = provider.XtreamBaseUrl is null
-                    ? SubstituteProviderUrl(effectivePlaylistUrl)
-                    : effectivePlaylistUrl;
-                content = await client.GetStringAsync(resolvedUrl, timeoutCts.Token);
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-            {
-                if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                    throw new ProviderFetchException($"Playlist fetch timed out after {provider.TimeoutSeconds}s.", ex);
-                throw new ProviderFetchException($"Playlist fetch failed: {ex.Message}", ex);
-            }
-        }
-
-        List<ParsedProviderChannel> channels;
         try
         {
-            var document = playlistParser.Parse(content, cancellationToken);
-            channels = document.Entries
-                .Where(x => !string.IsNullOrWhiteSpace(x.Url))
-                .Select(ParseEntry)
-                .ToList();
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            throw new ProviderParseException($"Playlist parse failed: {ex.Message}", ex);
-        }
+            using var client = httpClientFactory.CreateClient();
+            ApplyHeadersFromJson(client, provider.HeadersJson);
+            if (!string.IsNullOrWhiteSpace(provider.UserAgent))
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
 
-        return new PlaylistFetchResult(
-            Channels: channels,
-            Bytes: System.Text.Encoding.UTF8.GetByteCount(content));
+            string content;
+            try
+            {
+                content = await HttpFetchHelper.FetchStringAsync(client, effectivePlaylistUrl, provider.TimeoutSeconds, cancellationToken);
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode is { } code && (int)code >= 500)
+            {
+                // If the failing URL is an Xtream get.php URL, fall back to player_api.php assembly.
+                if (XtreamProviderUrls.TryExtractCredentials(effectivePlaylistUrl, out var baseUrl, out var username, out var password))
+                {
+                    logger.LogWarning(
+                        "URL-mode get.php returned {StatusCode} for provider {ProviderId} — falling back to player_api.php assembly.",
+                        (int)code, provider.ProviderId);
+                    return await xtreamLineupClient.BuildLineupFromCredentialsAsync(provider, baseUrl, username, password, cancellationToken);
+                }
+                throw;
+            }
+
+            activityTracker.Clear();
+            return ParseM3uContent(content, cancellationToken);
+        }
+        catch (ProviderFetchException) { throw; }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            throw new ProviderFetchException($"Playlist fetch failed: {ex.Message}", ex);
+        }
     }
 
     public async Task<XmltvFetchResult> FetchXmltvAsync(Provider provider, CancellationToken cancellationToken)
@@ -96,9 +92,7 @@ public sealed class ProviderFetcher(
 
         var effectiveXmltvUrl = ResolveXmltvUrl(provider);
         if (string.IsNullOrWhiteSpace(effectiveXmltvUrl))
-        {
             return new XmltvFetchResult(Xml: EmptyXmltvDocument, Bytes: 0);
-        }
 
         logger.LogDebug("Fetching XMLTV for provider {ProviderId}.", provider.ProviderId);
 
@@ -108,16 +102,13 @@ public sealed class ProviderFetcher(
             try
             {
                 var xml = await File.ReadAllTextAsync(localPath, cancellationToken);
-                return new XmltvFetchResult(Xml: xml, Bytes: System.Text.Encoding.UTF8.GetByteCount(xml));
+                return new XmltvFetchResult(Xml: xml, Bytes: Encoding.UTF8.GetByteCount(xml));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 throw new ProviderFetchException($"Local XMLTV file read failed: {ex.Message}", ex);
             }
         }
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(provider.TimeoutSeconds));
 
         try
         {
@@ -129,16 +120,12 @@ public sealed class ProviderFetcher(
                     client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
             }
 
-            var resolvedUrl = provider.XtreamBaseUrl is null
-                ? SubstituteProviderUrl(effectiveXmltvUrl)
-                : effectiveXmltvUrl;
-            var xml = await client.GetStringAsync(resolvedUrl, timeoutCts.Token);
-            return new XmltvFetchResult(Xml: xml, Bytes: System.Text.Encoding.UTF8.GetByteCount(xml));
+            var xml = await HttpFetchHelper.FetchStringAsync(client, effectiveXmltvUrl, provider.TimeoutSeconds, cancellationToken);
+            return new XmltvFetchResult(Xml: xml, Bytes: Encoding.UTF8.GetByteCount(xml));
         }
+        catch (ProviderFetchException) { throw; }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            if (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                throw new ProviderFetchException($"XMLTV fetch timed out after {provider.TimeoutSeconds}s.", ex);
             throw new ProviderFetchException($"XMLTV fetch failed: {ex.Message}", ex);
         }
     }
@@ -176,9 +163,7 @@ public sealed class ProviderFetcher(
 
             DateTime? expiresUtc = null;
             if (TryGetUnixSeconds(userInfo, "exp_date", out var expUnix))
-            {
                 expiresUtc = DateTimeOffset.FromUnixTimeSeconds(expUnix).UtcDateTime;
-            }
 
             string? status = null;
             if (userInfo.TryGetProperty("status", out var statusEl) && statusEl.ValueKind == JsonValueKind.String)
@@ -228,6 +213,34 @@ public sealed class ProviderFetcher(
     internal static void ApplyHeadersFromJson(HttpClient client, string? headersJson)
         => ProviderRequestHeaders.ApplyTo(client, headersJson);
 
+    internal static string? NormalizeProviderChannelKey(string? value)
+        => ProviderChannelNormalizer.NormalizeProviderChannelKey(value);
+
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
+    private PlaylistFetchResult ParseM3uContent(string content, CancellationToken cancellationToken)
+    {
+        List<ParsedProviderChannel> channels;
+        try
+        {
+            var document = playlistParser.Parse(content, cancellationToken);
+            channels = document.Entries
+                .Where(x => !string.IsNullOrWhiteSpace(x.Url))
+                .Select(ParseEntry)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new ProviderParseException($"Playlist parse failed: {ex.Message}", ex);
+        }
+
+        return new PlaylistFetchResult(
+            Channels: channels,
+            Bytes: Encoding.UTF8.GetByteCount(content));
+    }
+
     private bool TryResolveXtreamProbeCredentials(
         Provider provider,
         out string baseUrl,
@@ -249,8 +262,7 @@ public sealed class ProviderFetcher(
             {
                 logger.LogDebug(
                     "Xtream capability probe skipped for provider {ProviderId}: password decrypt failed: {Message}",
-                    provider.ProviderId,
-                    ex.Message);
+                    provider.ProviderId, ex.Message);
                 return false;
             }
 
@@ -260,20 +272,46 @@ public sealed class ProviderFetcher(
         }
 
         string playlistUrl;
-        try
-        {
-            playlistUrl = SubstituteProviderUrl(provider.PlaylistUrl);
-        }
+        try { playlistUrl = SubstituteProviderUrl(provider.PlaylistUrl); }
         catch (ProviderFetchException ex)
         {
             logger.LogDebug(
                 "Xtream capability probe skipped for provider {ProviderId}: {Message}",
-                provider.ProviderId,
-                ex.Message);
+                provider.ProviderId, ex.Message);
             return false;
         }
 
         return XtreamProviderUrls.TryExtractCredentials(playlistUrl, out baseUrl, out username, out password);
+    }
+
+    private string? ResolveXmltvUrl(Provider provider)
+    {
+        if (provider.XtreamBaseUrl is null)
+            return string.IsNullOrWhiteSpace(provider.XmltvUrl)
+                ? provider.XmltvUrl
+                : SubstituteProviderUrl(provider.XmltvUrl);
+
+        if (!provider.XtreamIncludeXmltv)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(provider.XtreamEncryptedPassword))
+            return null;
+
+        string password;
+        try { password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword); }
+        catch (InvalidOperationException) { return null; }
+
+        return XtreamProviderUrls.BuildXmltvUrl(provider.XtreamBaseUrl, provider.XtreamUsername, password);
+    }
+
+    private string SubstituteProviderUrl(string url)
+    {
+        try { return envVarService.SubstituteEnvVars(url); }
+        catch (InvalidOperationException ex)
+        {
+            throw new ProviderFetchException(
+                $"Provider URL contains undefined environment variables: {ex.Message}", ex);
+        }
     }
 
     private static bool TryGetUnixSeconds(JsonElement element, string propertyName, out long value)
@@ -288,67 +326,6 @@ public sealed class ProviderFetcher(
         return property.ValueKind == JsonValueKind.String
             && long.TryParse(property.GetString(), out value);
     }
-
-    private string ResolvePlaylistUrl(Provider provider)
-    {
-        if (provider.XtreamBaseUrl is null)
-            return provider.PlaylistUrl;
-
-        if (string.IsNullOrWhiteSpace(provider.XtreamEncryptedPassword))
-            throw new ProviderFetchException("Xtream Codes provider has no stored password. Update the password in provider settings.");
-
-        string password;
-        try
-        {
-            password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new ProviderFetchException($"Failed to decrypt Xtream password: {ex.Message}", ex);
-        }
-
-        return XtreamProviderUrls.BuildPlaylistUrl(provider.XtreamBaseUrl, provider.XtreamUsername, password);
-    }
-
-    private string? ResolveXmltvUrl(Provider provider)
-    {
-        if (provider.XtreamBaseUrl is null)
-            return provider.XmltvUrl;
-
-        if (!provider.XtreamIncludeXmltv)
-            return null;
-
-        if (string.IsNullOrWhiteSpace(provider.XtreamEncryptedPassword))
-            return null;
-
-        string password;
-        try
-        {
-            password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword);
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-
-        return XtreamProviderUrls.BuildXmltvUrl(provider.XtreamBaseUrl, provider.XtreamUsername, password);
-    }
-
-    private string SubstituteProviderUrl(string url)
-    {
-        try
-        {
-            return envVarService.SubstituteEnvVars(url);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new ProviderFetchException(
-                $"Provider URL contains undefined environment variables: {ex.Message}", ex);
-        }
-    }
-
-    internal static string? NormalizeProviderChannelKey(string? value)
-        => ProviderChannelNormalizer.NormalizeProviderChannelKey(value);
 }
 
 // -------------------------------------------------------------------------
@@ -357,7 +334,8 @@ public sealed class ProviderFetcher(
 
 public sealed record PlaylistFetchResult(
     IReadOnlyList<ParsedProviderChannel> Channels,
-    long Bytes);
+    long Bytes,
+    XtreamAccountInfo? AccountInfo = null);
 
 public sealed record XmltvFetchResult(
     string Xml,
