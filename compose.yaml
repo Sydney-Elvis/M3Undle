@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_REVISION: ${SOURCE_REVISION:-}
     image: m3undle:local
     container_name: m3undle
     user: "${PUID}:${PGID}"

@@ -48,10 +48,13 @@ public sealed record AppBuildInfo(string Version, string? BuildDateUtc, string? 
     private static string? NormalizeGitHash(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
-            return value;
+            return null;
 
         var trimmed = value.Trim();
-        return trimmed.Length > 7 ? trimmed[..7] : trimmed;
+        var candidate = trimmed.Length > 7 ? trimmed[..7] : trimmed;
+        return candidate.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F')
+            ? candidate
+            : null;
     }
 
     public string ToDisplayString()
