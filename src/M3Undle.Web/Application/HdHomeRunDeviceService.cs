@@ -269,7 +269,7 @@ public sealed class HdHomeRunDeviceService(
         return new HdHomeRunIdentityFile
         {
             DeviceId = GenerateDeviceId(),
-            DeviceAuth = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)),
+            DeviceAuth = string.Empty,
             FriendlyName = friendlyName,
             ModelNumber = modelNumber,
         };
@@ -311,8 +311,6 @@ public sealed class HdHomeRunDeviceService(
     private static bool IsValidIdentity(HdHomeRunIdentityFile identity)
     {
         if (!IsValidDeviceId(identity.DeviceId))
-            return false;
-        if (string.IsNullOrWhiteSpace(identity.DeviceAuth))
             return false;
         if (string.IsNullOrWhiteSpace(identity.FriendlyName))
             return false;

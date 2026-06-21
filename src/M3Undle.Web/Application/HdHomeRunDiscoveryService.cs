@@ -380,7 +380,8 @@ public sealed class HdHomeRunDiscoveryService(
         WriteTlvU32(payload, TagDeviceType, DeviceTypeTuner);
         WriteTlvU32(payload, TagDeviceId, deviceId);
         WriteTlvByte(payload, TagTunerCount, tunerCount);
-        WriteTlvString(payload, TagDeviceAuth, deviceAuth);
+        if (!string.IsNullOrEmpty(deviceAuth))
+            WriteTlvString(payload, TagDeviceAuth, deviceAuth);
         WriteTlvString(payload, TagBaseUrl, baseUrl);
         WriteTlvString(payload, TagLineupUrl, lineupUrl);
 
