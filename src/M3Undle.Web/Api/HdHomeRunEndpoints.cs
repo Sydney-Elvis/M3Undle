@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml;
 using M3Undle.Web.Application;
 using M3Undle.Web.Observability;
@@ -78,7 +79,7 @@ public static class HdHomeRunEndpoints
             FirmwareName: device.FirmwareName,
             FirmwareVersion: device.FirmwareVersion,
             DeviceID: device.DeviceId,
-            DeviceAuth: device.DeviceAuth,
+            DeviceAuth: string.IsNullOrEmpty(device.DeviceAuth) ? null : device.DeviceAuth,
             BaseURL: baseUrl,
             LineupURL: $"{hdhrBaseUrl}/lineup.json".ApplyClientAccessQuery(context),
             TunerCount: device.TunerCount);
@@ -423,7 +424,7 @@ public static class HdHomeRunEndpoints
         string FirmwareName,
         string FirmwareVersion,
         string DeviceID,
-        string DeviceAuth,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DeviceAuth,
         string BaseURL,
         string LineupURL,
         int TunerCount);

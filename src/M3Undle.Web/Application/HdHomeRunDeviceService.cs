@@ -323,7 +323,7 @@ public sealed class HdHomeRunDeviceService(
         => new()
         {
             DeviceId = identity.DeviceId.Trim().ToUpperInvariant(),
-            DeviceAuth = identity.DeviceAuth.Trim(),
+            DeviceAuth = identity.DeviceAuth?.Trim() ?? string.Empty,
             FriendlyName = identity.FriendlyName.Trim(),
             ModelNumber = identity.ModelNumber.Trim(),
         };
