@@ -939,6 +939,173 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_MpegTsReconnect_ZeroSubscribersAfterFirstSafeStart_SessionSurvivesAndEmitsSecondSafeStart()
+    {
+        // Reproduces the exact Bug 1 / TS-SAFE-02 trigger:
+        //   1. First connection streams the safe-start sequence then stalls.
+        //   2. Initial subscriber attaches, receives bytes until safe-start fires, then detaches
+        //      — leaving the session with zero external subscribers (idle-grace clock starts).
+        //   3. Stall is detected; session reconnects (0 s backoff) while idle-grace is still counting.
+        //   4. Second connection delivers a fresh safe-start sequence.
+        //   5. Session must survive until the second safe-start fires (idle-grace must NOT win).
+        //   6. A late subscriber attaching after reconnect must receive 0x47-aligned bytes.
+        //
+        // Previously this scenario killed the session during the FFmpeg reconnect path because
+        // Bug 2B caused Cautious→FfmpegCleanRemux, which blocked ConnectAsync for up to 10 s
+        // while idle-grace (15 s) expired. With Cautious→Direct the reconnect is near-instant
+        // and the session survives well within the idle-grace window.
+        var safeSequence = MpegTsSafeStartupSequence();
+
+        // Connection 2+ (default): cycle through the safe-start sequence forever so the
+        // second connection establishes a safe start immediately.
+        // Connection 1 (queued): emit the safe-start sequence once then stall so the
+        // stall timer fires and the session reconnects.
+        var handler = FakeStreamingHandler.StreamForeverSequence(safeSequence);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(safeSequence, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                // Long enough that the near-instant direct reconnect wins comfortably.
+                IdleGrace = TimeSpan.FromSeconds(4),
+            },
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(300),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var initialSubscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), initCts.Token);
+
+        // Wait for the first safe-start, then drop the subscriber — zero external subscribers,
+        // idle-grace begins.
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count > 0,
+            TimeSpan.FromSeconds(8));
+
+        initCts.Cancel();
+        await initialSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await initialSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // Wait for the reconnect to recover AND a second safe-start to be selected.
+        // If idle-grace fires first this will time out — that is the regression.
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0
+               && fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count >= 2,
+            TimeSpan.FromSeconds(8));
+
+        var safeStartCount = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected).Count;
+        var reconnectCount = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.ReconnectRecovered).Count;
+
+        Assert.IsGreaterThanOrEqualTo(2, safeStartCount,
+            "A second MpegTsSafeStartSelected must fire after the reconnect — idle-grace must not kill the session first.");
+        Assert.IsGreaterThanOrEqualTo(1, reconnectCount,
+            "ReconnectRecovered must be emitted after the stall.");
+
+        // Late subscriber must receive TS-aligned data from the current generation.
+        var lateContext = CreateResponseCaptureContext();
+        using var lateCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var lateSubscriber = await session.AttachSubscriberAsync(lateContext.Context, lateCts.Token);
+        await WaitUntilAsync(() => lateSubscriber.BytesSent >= 188, TimeSpan.FromSeconds(5));
+
+        lateCts.Cancel();
+        await lateSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await lateSubscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = lateContext.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(188, data.Length,
+            "Late subscriber must receive at least one full TS packet after reconnect.");
+        Assert.AreEqual(0x47, data[0],
+            "First byte must be a TS sync byte — late subscriber must attach from a safe-start point.");
+        Assert.AreEqual(0, data.Length % 188,
+            "Late subscriber must receive whole TS packets only.");
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_AutoRelayWithCautiousEscalation_UsesDirectNotCleanRemux()
+    {
+        // Pins the load-bearing relay-mode decision that fixed Bug 1 / TS-SAFE-02:
+        // when a session's first upstream fails (in-session escalation: Stable→Cautious),
+        // Auto relay must select Direct, not FfmpegCleanRemux.
+        //
+        // If Cautious incorrectly maps to FfmpegCleanRemux (the pre-fix Bug 2B state),
+        // ConnectAsync blocks waiting for FFmpeg startup output. With no FFmpeg configured
+        // this falls back to direct but records FfmpegRelayFallbackToDirect. With a real
+        // FFmpeg path on a stalling provider the block can outlast idle-grace, killing the
+        // session before the reconnect delivers any data — the Bug 1 root cause.
+        //
+        // After the fix Cautious→Direct is selected by policy: no FFmpeg is attempted,
+        // no FfmpegRelayFallbackToDirect event is emitted, and RelayMode is Direct.
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            cleanRelayMode: "auto",
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(300),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        // Wait for the reconnect to complete (upstream failure → reconnect → recovered).
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0,
+            TimeSpan.FromSeconds(8));
+
+        // Cautious in-session escalation must not route the reconnect through FFmpeg clean remux.
+        var fallbackEvents = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.FfmpegRelayFallbackToDirect);
+        var ffmpegStartedEvents = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.FfmpegRelayStarted);
+
+        Assert.IsFalse(fallbackEvents.Any(),
+            "FfmpegRelayFallbackToDirect must not be emitted: Cautious Auto must select Direct by policy, not by FFmpeg fallback.");
+        Assert.IsFalse(ffmpegStartedEvents.Any(),
+            "FfmpegRelayStarted must not be emitted for a Cautious Auto channel — only Unstable triggers clean remux.");
+
+        // Direct HTTP must be confirmed as the relay path after reconnect.
+        var snapshot = fixture.Registry.TryGetSession(session.SessionId);
+        Assert.IsNotNull(snapshot);
+        Assert.AreEqual(UpstreamRelayModes.Direct, snapshot.RelayMode,
+            "Relay mode after reconnect must be Direct for a Cautious Auto channel.");
+        Assert.IsGreaterThan(0, handler.ConnectionCount,
+            "Direct HTTP upstream must have been opened.");
+
+        cts.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_AbortLongAfterRecovery_NotCountedAsClientAbortAfterRecovery()
     {
         // Issue #96: an abort outside the post-recovery window (here: any delay, since
@@ -1076,7 +1243,7 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_UnstableChannel_DisallowsPacketBoundaryFallback()
+    public async Task Session_MpegTsReconnect_UnstableChannel_RetunesInsteadOfPacketBoundaryFallback()
     {
         var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket(0xDD));
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
@@ -1130,18 +1297,18 @@ public sealed class ChannelSessionIntegrationTests
         await WaitUntilAsync(
             () => fixture.DiagnosticsStore.Query(
                 sessionId: session.SessionId,
-                kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Count > 0,
+                kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Count > 0,
             TimeSpan.FromSeconds(8));
         await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.AreEqual(SessionState.Faulted, session.State);
+        Assert.AreEqual(SessionState.Closed, session.State);
         Assert.IsFalse(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
             kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Any(x =>
                 string.Equals(x.SafeStartKind, "FallbackPacketBoundary", StringComparison.Ordinal)));
         Assert.IsTrue(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
-            kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Any());
+            kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Any());
     }
 
     [TestMethod]
@@ -1204,9 +1371,6 @@ public sealed class ChannelSessionIntegrationTests
                 EventUtc = DateTime.UtcNow.AddMinutes(-5),
                 ClientAbortAfterRecovery = true,
             },
-            // Issue #96: the forced downstream retune is now a last resort requiring
-            // >= 3 genuine post-recovery aborts (was 2). Seed a third so this test still
-            // exercises the ControlledDownstreamRetune boundary under the new policy.
             new StreamChannelHealthEvent
             {
                 StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
@@ -2983,6 +3147,28 @@ public sealed class ChannelSessionIntegrationTests
                         await pipe.Writer.WriteAsync(forever, ct);
                         await Task.Delay(5, ct);
                     }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { }
+                finally { pipe.Writer.Complete(); }
+            });
+            return Task.FromResult(CreateStreamingResponse(pipe.Reader.AsStream()));
+        }
+
+        public static Task<HttpResponseMessage> WriteSequenceThenStall(IReadOnlyList<byte[]> sequence, CancellationToken ct)
+        {
+            var pipe = new Pipe();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (var chunk in sequence)
+                    {
+                        await pipe.Writer.WriteAsync(chunk, ct);
+                        await Task.Delay(5, ct);
+                    }
+
+                    await Task.Delay(Timeout.Infinite, ct);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception) { }

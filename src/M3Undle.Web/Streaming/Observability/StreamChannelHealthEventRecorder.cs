@@ -127,8 +127,11 @@ public sealed class StreamChannelHealthEventRecorder(
 
         var isRecoveryFailure = diagnosticEvent.Kind is StreamDiagnosticEventKind.RecoveryHoldLimitExceeded
             or StreamDiagnosticEventKind.RecoveryFailedUnsafe;
-        var isForcedRetune = diagnosticEvent.Kind is StreamDiagnosticEventKind.RecoveryForcedRetune
-            or StreamDiagnosticEventKind.ControlledDownstreamRetune
+        // ControlledDownstreamRetune is a deliberate policy action, not new evidence of stream
+        // instability. Including it in ForcedRetune would keep DeriveProfile at Unstable (ForcedRetunes > 0)
+        // for the entire 24-hour observation window, causing every subsequent recovery to trigger
+        // another controlled retune — a self-reinforcing loop. Only genuine scan failures count.
+        var isForcedRetune = diagnosticEvent.Kind == StreamDiagnosticEventKind.RecoveryForcedRetune
             || isRecoveryFailure;
         var isAbortAfterRecovery = diagnosticEvent.Kind == StreamDiagnosticEventKind.ClientAbortAfterRecovery;
         var isTsSyncLoss = diagnosticEvent.Kind == StreamDiagnosticEventKind.MpegTsSyncLost;
