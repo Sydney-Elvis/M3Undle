@@ -45,10 +45,11 @@ public static class XtreamEndpoints
 
     public static IEndpointRouteBuilder MapXtreamEndpoints(this IEndpointRouteBuilder app)
     {
-        // player_api.php and get.php use query-string/form auth — handled by MapClientSurface
+        // player_api.php, get.php, and xmltv.php use query-string/form auth — handled by MapClientSurface
         var client = app.MapClientSurface();
         client.MapMethods("player_api.php", ["GET", "POST"], ServePlayerApiAsync);
         client.MapMethods("get.php", ["GET", "POST"], ServeGetM3uAsync);
+        client.MapMethods("xmltv.php", ["GET", "POST"], ServeXmltvAsync);
 
         // Xtream path-embedded-credential streaming: /live/{user}/{pass}/{id}[.ext]
         // These use a dedicated filter that reads credentials from the route values.
@@ -403,6 +404,29 @@ public static class XtreamEndpoints
             .MinAsync(e => e, cancellationToken);
 
         await m3uSerializer.WriteAsync(context, lineup, minExpiry, cancellationToken);
+    }
+
+    // -------------------------------------------------------------------------
+    // xmltv.php — Xtream-style XMLTV EPG endpoint
+    // -------------------------------------------------------------------------
+
+    private static async Task<IResult> ServeXmltvAsync(
+        HttpContext context,
+        ILineupRenderer lineupRenderer,
+        IXmlTvSerializer xmlTvSerializer,
+        CancellationToken cancellationToken)
+    {
+        var access = context.GetResolvedClientAccess();
+        var lineup = await lineupRenderer.TryRenderActiveLineupAsync(
+            access.Binding.ActiveProfileId, cancellationToken);
+        if (lineup is null)
+        {
+            return TypedResults.Problem(
+                "No active snapshot available.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        return xmlTvSerializer.Serialize(lineup);
     }
 
     // -------------------------------------------------------------------------
