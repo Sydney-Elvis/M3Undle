@@ -416,17 +416,26 @@ public static class XtreamEndpoints
         IXmlTvSerializer xmlTvSerializer,
         CancellationToken cancellationToken)
     {
-        var access = context.GetResolvedClientAccess();
-        var lineup = await lineupRenderer.TryRenderActiveLineupAsync(
-            access.Binding.ActiveProfileId, cancellationToken);
-        if (lineup is null)
+        try
+        {
+            var access = context.GetResolvedClientAccess();
+            var lineup = await lineupRenderer.TryRenderActiveLineupAsync(
+                access.Binding.ActiveProfileId, cancellationToken);
+            if (lineup is null)
+            {
+                return TypedResults.Problem(
+                    "No active snapshot available.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return xmlTvSerializer.Serialize(lineup);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
         {
             return TypedResults.Problem(
-                "No active snapshot available.",
+                "Active snapshot data is unavailable.",
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
-
-        return xmlTvSerializer.Serialize(lineup);
     }
 
     // -------------------------------------------------------------------------
