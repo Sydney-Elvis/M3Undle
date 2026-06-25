@@ -1186,12 +1186,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     // Issue #96: in-session escalation. The persisted health profile lags within a
     // session (events are written asynchronously and the profile is cached ~30s), so
-    // a channel that starts Stable would stay on Direct relay even as it stalls
-    // repeatedly. Once this session has seen at least one upstream failure, treat the
-    // channel as at least Cautious for the relay decision so Auto upgrades it to clean
-    // remux on this connect — protecting the user now instead of after the database
-    // catches up. Recovery behaviour (hold limits, retune) still follows the
-    // database-derived policy; only the relay-mode input is escalated.
+    // a channel that starts Stable would not reflect in-session failures until the
+    // database-derived policy catches up. Treat the channel as at least Cautious for
+    // this connect after a failure; Auto relay still remuxes only Unstable channels.
+    // Recovery behaviour (hold limits, retune) still follows the database-derived
+    // policy; only the relay-decision input is escalated.
     private StreamChannelRecoveryPolicy? BuildEffectiveConnectPolicy()
     {
         var policy = _currentRecoveryPolicy;

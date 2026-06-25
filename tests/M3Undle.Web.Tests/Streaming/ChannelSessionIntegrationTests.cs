@@ -1076,7 +1076,7 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_UnstableChannel_DisallowsPacketBoundaryFallback()
+    public async Task Session_MpegTsReconnect_UnstableChannel_RetunesInsteadOfPacketBoundaryFallback()
     {
         var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket(0xDD));
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
@@ -1130,18 +1130,18 @@ public sealed class ChannelSessionIntegrationTests
         await WaitUntilAsync(
             () => fixture.DiagnosticsStore.Query(
                 sessionId: session.SessionId,
-                kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Count > 0,
+                kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Count > 0,
             TimeSpan.FromSeconds(8));
         await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.AreEqual(SessionState.Faulted, session.State);
+        Assert.AreEqual(SessionState.Closed, session.State);
         Assert.IsFalse(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
             kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Any(x =>
                 string.Equals(x.SafeStartKind, "FallbackPacketBoundary", StringComparison.Ordinal)));
         Assert.IsTrue(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
-            kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Any());
+            kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Any());
     }
 
     [TestMethod]
@@ -1204,9 +1204,6 @@ public sealed class ChannelSessionIntegrationTests
                 EventUtc = DateTime.UtcNow.AddMinutes(-5),
                 ClientAbortAfterRecovery = true,
             },
-            // Issue #96: the forced downstream retune is now a last resort requiring
-            // >= 3 genuine post-recovery aborts (was 2). Seed a third so this test still
-            // exercises the ControlledDownstreamRetune boundary under the new policy.
             new StreamChannelHealthEvent
             {
                 StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
