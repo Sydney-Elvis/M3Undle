@@ -64,6 +64,36 @@ public sealed class XtreamEndpointTests
     }
 
     [TestMethod]
+    public async Task XmltvPhp_GetWithQueryStringCredentials_ReturnsXmlFeed()
+    {
+        await using var factory = new XmltvPhpFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/xmltv.php?username=test-user&password=secret");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual("application/xml", response.Content.Headers.ContentType?.MediaType);
+        var body = await response.Content.ReadAsStringAsync();
+        StringAssert.StartsWith(body, "<?xml");
+    }
+
+    [TestMethod]
+    public async Task XmltvPhp_PostFormCredentials_ReturnsXmlFeed()
+    {
+        await using var factory = new XmltvPhpFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsync("/xmltv.php", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["username"] = "test-user",
+            ["password"] = "secret",
+        }));
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual("application/xml", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [TestMethod]
     public void BuildGeneratedXtreamHlsManifestRedirectUrl_UsesXtreamPathCredentials()
     {
         var context = CreateXtreamRouteContext(
@@ -154,6 +184,58 @@ public sealed class XtreamEndpointTests
         context.Request.RouteValues["xtreamUser"] = username;
         context.Request.RouteValues["xtreamPass"] = password;
         return context;
+    }
+
+    private sealed class XmltvPhpFactory : WebApplicationFactory<Program>, IAsyncDisposable
+    {
+        private readonly string _tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-xmltvphp-{Guid.NewGuid():N}");
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            Directory.CreateDirectory(_tempDataDir);
+
+            builder.ConfigureAppConfiguration((_, configBuilder) =>
+            {
+                configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["M3Undle:Paths:DataDirectory"] = _tempDataDir,
+                });
+            });
+
+            builder.ConfigureTestServices(services =>
+            {
+                var dbDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(DbContextOptions<ApplicationDbContext>));
+                if (dbDescriptor is not null)
+                    services.Remove(dbDescriptor);
+
+                services.AddDbContext<ApplicationDbContext>(options =>
+                    options.UseSqlite(WebApplicationFactoryTestCleanup.CreateSqliteConnectionString(_tempDataDir))
+                           .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning)));
+
+                services.RemoveAll<IAccessResolver>();
+                services.AddScoped<IAccessResolver, StubAccessResolver>();
+
+                services.RemoveAll<ILineupRenderer>();
+                services.AddScoped<ILineupRenderer, StubLineupRenderer>();
+
+                services.RemoveAll<IXmlTvSerializer>();
+                services.AddSingleton<IXmlTvSerializer, StubXmlTvSerializer>();
+            });
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync();
+            await WebApplicationFactoryTestCleanup.DeleteDirectoryWhenUnlockedAsync(_tempDataDir);
+        }
+    }
+
+    private sealed class StubXmlTvSerializer : IXmlTvSerializer
+    {
+        private const string MinimalXmlTv = """<?xml version="1.0" encoding="utf-8"?><tv></tv>""";
+
+        public IResult Serialize(RenderedLineup lineup)
+            => Results.Content(MinimalXmlTv, "application/xml");
     }
 
     private sealed class StubAccessResolver : IAccessResolver
