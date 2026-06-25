@@ -379,7 +379,7 @@ public sealed class StreamChannelHealthProfileService(
         };
 
     private static string BuildDownstreamRetuneReason(HealthSummary summary)
-        => $"Channel health is Unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}.";
+        => $"Channel health is Unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, idrRecoveries={summary.IdrRecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}.";
 
     private static TimeSpan Max(TimeSpan left, TimeSpan right) => left >= right ? left : right;
 
