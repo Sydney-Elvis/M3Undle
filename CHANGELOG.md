@@ -4,6 +4,51 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.2] — 2026-06-26
+
+Beta 2 is a focused compatibility and stream-recovery release. It improves HDHomeRun-style discovery behavior, adds the Xtream Codes XMLTV compatibility endpoint expected by more clients, and tightens the adaptive stream health policy around unstable MPEG-TS channels.
+
+### Xtream compatibility
+
+- Added `/xmltv.php` as an Xtream Codes-style XMLTV EPG endpoint with the same query-string and form credential handling used by `/player_api.php` and `/get.php`
+- Included `/xmltv.php` in the media-surface routing rules so clients can reach the endpoint without UI authentication
+- Added endpoint coverage for both GET query-string credentials and POST form credentials
+
+### HDHomeRun compatibility
+
+- Stopped generating and publishing a random HDHomeRun `DeviceAuth` value when one is not needed
+- Omitted empty `DeviceAuth` values from `discover.json` and SiliconDust discovery replies, matching client expectations more closely
+- Kept existing HDHomeRun device identity validation while allowing identity files with no auth token
+
+### Adaptive stream recovery
+
+- Fixed Unstable channel policy so Unstable always requires a controlled downstream retune instead of waiting for additional abort thresholds
+- Restored Auto relay behavior so Stable and Cautious channels use direct relay, while only Unstable channels select clean remux automatically
+- Improved downstream retune diagnostics with the full health summary, including upstream failures, recovery counts, aborts after recovery, forced retunes, and TS sync loss
+- Added regression coverage for the Unstable retune policy and the Cautious Auto relay decision
+
+### MPEG-TS safe start
+
+- Added regression coverage for a reconnect scenario where a channel stalls after the first MPEG-TS safe start, reconnects with no active subscribers, and must still emit a second safe-start event before a late subscriber attaches
+- Verified late subscribers after reconnect receive TS-aligned data from the current stream generation instead of stale or empty startup bytes
+
+### Build and dependencies
+
+- Fixed build revision display so invalid or missing source revision values are ignored instead of shown as hashes
+- Added `SOURCE_REVISION` build-arg support to the local compose build path
+- Updated GitHub Actions workflows to `actions/checkout@v7`
+- Updated `Scalar.AspNetCore` to 2.16.5
+- Pinned `SQLitePCLRaw.lib.e_sqlite3` to 3.50.3
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.2
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.1] — 2026-06-16
 
 Beta 1 is the first beta release following Alpha 7. It fixes two playback bugs that broke HLS-sourced channels for every client, refines the adaptive stream recovery introduced in Alpha 7 to stop a class of channels from retuning far more than necessary, and makes provider onboarding faster and more resilient for large or slow catalogs.
@@ -197,6 +242,7 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
+[v1.0.0-beta.2]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [v1.0.0-beta.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.7...v1.0.0-beta.1
 [v1.0.0-alpha.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.6...v1.0.0-alpha.7
 [v1.0.0-alpha.6]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.5...v1.0.0-alpha.6
