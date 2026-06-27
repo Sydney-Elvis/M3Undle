@@ -199,7 +199,9 @@ public sealed class StreamingSettingsServiceTests
 
         Assert.AreEqual(256 * 1024, options.MaxBytesPerSession);
         Assert.AreEqual(64 * 1024, options.ReadChunkSizeBytes);
-        Assert.AreEqual(4, options.SubscriberQueueCapacity);
+        // Base depth (256 KiB / 64 KiB = 4) is multiplied by the subscriber-queue depth
+        // multiplier (4) so the queue can absorb short client read pauses.
+        Assert.AreEqual(16, options.SubscriberQueueCapacity);
     }
 
     private static StreamingSettingsService CreateService(ApplicationDbContext db)

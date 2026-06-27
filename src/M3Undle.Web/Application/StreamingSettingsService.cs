@@ -213,7 +213,16 @@ public sealed class BufferDbOptionsConfigurator(IServiceScopeFactory scopeFactor
         options.MaxBytesPerSession = settings.StreamBufferMaxBytesPerSession;
         options.MaxBytesHardCap = settings.StreamBufferMaxBytesHardCap;
         options.ReadChunkSizeBytes = settings.StreamBufferReadChunkSizeBytes;
-        options.SubscriberQueueCapacity = Math.Max(1, settings.StreamBufferMaxBytesPerSession / Math.Max(1, settings.StreamBufferReadChunkSizeBytes));
+
+        // The per-subscriber outbound queue must absorb short client read pauses (player
+        // startup buffering, brief socket stalls) without dropping live chunks. Size it to
+        // several times the ring-buffer byte budget — decoupled from the ring itself, since
+        // a pinned slow client does not stall the producer — so a momentary pause does not
+        // immediately back the queue up. Sustained backlog is handled by the slow-client
+        // grace timer, not by this depth.
+        const int subscriberQueueDepthMultiplier = 4;
+        var baseQueueDepth = Math.Max(1, settings.StreamBufferMaxBytesPerSession / Math.Max(1, settings.StreamBufferReadChunkSizeBytes));
+        options.SubscriberQueueCapacity = baseQueueDepth * subscriberQueueDepthMultiplier;
     }
 }
 

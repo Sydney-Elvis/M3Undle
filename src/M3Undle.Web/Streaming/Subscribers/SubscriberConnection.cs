@@ -11,6 +11,18 @@ public sealed record HdhrSubscriberDiagnostics(
     string StreamKey,
     string VirtualPath);
 
+public enum SubscriberQueueOverflowResult
+{
+    /// <summary>First overflow after the client was keeping up — the grace window just started.</summary>
+    EnteredGrace,
+
+    /// <summary>Still within the grace window — drop the overflowing chunk but keep the client.</summary>
+    WithinGrace,
+
+    /// <summary>Queue has stayed full past the grace window — evict as a slow client.</summary>
+    GraceExceeded,
+}
+
 public sealed class SubscriberConnection
 {
     private readonly HttpContext _context;
@@ -24,6 +36,8 @@ public sealed class SubscriberConnection
     private Task? _pumpTask;
     private long _bytesSent;
     private int _queueDepth;
+    private long _queueFullSinceTicks;
+    private readonly int _queueLowWaterMark;
     private HdhrSubscriberDiagnostics? _hdhrDiagnostics;
 
     public SubscriberConnection(
@@ -41,7 +55,9 @@ public sealed class SubscriberConnection
         _writer = context.Response.BodyWriter;
         _onCompleted = onCompleted;
 
-        var options = new BoundedChannelOptions(Math.Max(1, queueCapacity))
+        var effectiveCapacity = Math.Max(1, queueCapacity);
+        _queueLowWaterMark = Math.Max(1, effectiveCapacity / 2);
+        var options = new BoundedChannelOptions(effectiveCapacity)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -117,8 +133,38 @@ public sealed class SubscriberConnection
         if (!_outbound.Writer.TryWrite(lease))
             return false;
 
-        Interlocked.Increment(ref _queueDepth);
+        var depth = Interlocked.Increment(ref _queueDepth);
+
+        // Once the client has drained back below the low-water mark it is keeping up
+        // again, so clear any slow-client grace timer. Requiring real headroom (not just
+        // a single accepted chunk) means a consumer that stays pinned near capacity keeps
+        // the timer running and is eventually evicted.
+        if (depth <= _queueLowWaterMark)
+            Volatile.Write(ref _queueFullSinceTicks, 0);
+
         return true;
+    }
+
+    /// <summary>
+    /// Records that a live chunk could not be enqueued because the outbound queue is full.
+    /// The queue stays bounded (the overflowing chunk is dropped by the caller); this only
+    /// decides whether a sustained backlog has lasted long enough to evict the subscriber.
+    /// </summary>
+    public SubscriberQueueOverflowResult RegisterQueueOverflow(TimeSpan grace)
+    {
+        var now = Environment.TickCount64;
+        var since = Volatile.Read(ref _queueFullSinceTicks);
+        if (since == 0)
+        {
+            // TickCount64 is 0 only in the first millisecond after boot; map it to 1 so 0
+            // stays a reliable "not currently backed up" sentinel.
+            Volatile.Write(ref _queueFullSinceTicks, now == 0 ? 1 : now);
+            return SubscriberQueueOverflowResult.EnteredGrace;
+        }
+
+        return now - since >= (long)grace.TotalMilliseconds
+            ? SubscriberQueueOverflowResult.GraceExceeded
+            : SubscriberQueueOverflowResult.WithinGrace;
     }
 
     public Task CompleteAsync(SubscriberDisconnectReason reason)

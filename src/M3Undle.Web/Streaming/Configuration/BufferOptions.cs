@@ -8,6 +8,14 @@ public sealed class BufferOptions
 
     public int ReadChunkSizeBytes { get; set; } = 32 * 1024;
 
-    public int SubscriberQueueCapacity { get; set; } = 128;
-}
+    public int SubscriberQueueCapacity { get; set; } = 512;
 
+    /// <summary>
+    /// How long a subscriber's outbound queue may stay continuously full before the
+    /// subscriber is evicted as a slow client. Within this window overflowing live
+    /// chunks are dropped but the subscriber stays connected, which tolerates brief
+    /// reader pauses (player startup buffering, momentary socket stalls) instead of
+    /// disconnecting on the first overflow.
+    /// </summary>
+    public TimeSpan SlowClientGracePeriod { get; set; } = TimeSpan.FromSeconds(5);
+}

@@ -120,4 +120,51 @@ public sealed class SubscriberConnectionTests
 
         CollectionAssert.AreEqual(new byte[] { 0xE0 }, body.ToArray());
     }
+
+    [TestMethod]
+    public void RegisterQueueOverflow_WithinGracePeriod_KeepsClientConnected()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // A long grace means a transient backlog never asks the session to evict the client;
+        // the first overflow opens the window and subsequent overflows stay within it.
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)));
+        Assert.AreEqual(SubscriberQueueOverflowResult.WithinGrace, subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)));
+        Assert.AreEqual(SubscriberQueueOverflowResult.WithinGrace, subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)));
+    }
+
+    [TestMethod]
+    public void RegisterQueueOverflow_AfterGraceElapsed_RequestsEviction()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // With a zero grace, the first overflow opens the window and the next overflow has
+        // already exceeded it, so the session is told to evict the stuck consumer.
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+        Assert.AreEqual(SubscriberQueueOverflowResult.GraceExceeded, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+    }
+
+    [TestMethod]
+    public void TryEnqueue_AfterDrainingBelowLowWater_ClearsGraceTimer()
+    {
+        var buffer = new RingBuffer(maxBytes: 1024);
+        using var chunk = buffer.Write(new byte[] { 0xF0 });
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // Open the grace window, then accept a chunk that leaves the queue below the
+        // low-water mark — the client is keeping up again, so the timer must reset and the
+        // next overflow starts a fresh window instead of immediately evicting.
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+        Assert.IsTrue(subscriber.TryEnqueue(chunk.Duplicate()));
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+    }
+
+    private static SubscriberConnection CreateSubscriber(int queueCapacity)
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        return new SubscriberConnection(
+            "session-overflow", "/test", context, queueCapacity,
+            onCompleted: (_, _) => Task.CompletedTask);
+    }
 }

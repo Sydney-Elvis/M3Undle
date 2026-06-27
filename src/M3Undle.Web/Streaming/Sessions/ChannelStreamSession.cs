@@ -785,12 +785,29 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 if (subscriber.IsCompleted)
                     continue;
 
+                // Live push stream: a momentarily slow reader (player startup buffering, a
+                // brief socket pause) fills the bounded queue. Drop the overflow chunk to
+                // keep latency bounded but keep the client connected, and only evict it as a
+                // slow client once the queue has stayed full past the grace period — which
+                // marks a genuinely stuck consumer rather than a transient hiccup.
+                var overflow = subscriber.RegisterQueueOverflow(_bufferOptions.SlowClientGracePeriod);
+                if (overflow != SubscriberQueueOverflowResult.GraceExceeded)
+                {
+                    if (overflow == SubscriberQueueOverflowResult.EnteredGrace)
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.SubscriberQueueFull,
+                            subscriber: subscriber,
+                            queueDepth: Math.Max(1, subscriber.QueueDepth),
+                            message: "Subscriber queue full; dropping live chunks within slow-client grace window.");
+                    continue;
+                }
+
                 RecordDiagnostic(
                     StreamDiagnosticEventKind.SubscriberQueueFull,
                     subscriber: subscriber,
                     disconnectReason: SubscriberDisconnectReason.SlowClient,
                     queueDepth: Math.Max(1, subscriber.QueueDepth),
-                    message: "Subscriber queue rejected live stream chunk; removing subscriber as slow client.");
+                    message: "Subscriber queue stayed full beyond slow-client grace; removing subscriber as slow client.");
                 slowSubscribers ??= [];
                 slowSubscribers.Add(subscriber);
                 continue;
