@@ -522,6 +522,8 @@ public sealed class GeneratedHlsSessionManager(
         info.ArgumentList.Add("0:a?");
         info.ArgumentList.Add("-c");
         info.ArgumentList.Add("copy");
+        info.ArgumentList.Add("-bsf:v");
+        info.ArgumentList.Add("dump_extra");
         info.ArgumentList.Add("-f");
         info.ArgumentList.Add("hls");
         info.ArgumentList.Add("-hls_time");

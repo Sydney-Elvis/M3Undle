@@ -1031,7 +1031,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         var fallbackBytes = ResolveRecoverySafeStartSearchLimitBytes();
 
-        if (kind == MpegTsStartupKind.PatPmt && _mpegTsCandidateSafeStartSequence is null)
+        if (kind == MpegTsStartupKind.PatPmt)
         {
             _mpegTsCandidateSafeStartGeneration = lease.Generation;
             _mpegTsCandidateSafeStartSequence = batchLength == MpegTsBoundaryScanner.PacketSize
