@@ -181,6 +181,7 @@ else
             <HeaderContent>
                 <MudTh>Client</MudTh>
                 <MudTh>IP</MudTh>
+                <MudTh>Delivery</MudTh>
                 <MudTh>Transfer</MudTh>
                 <MudTh>Backlog</MudTh>
                 <MudTh>Connected</MudTh>
@@ -196,16 +197,19 @@ else
                     </MudTooltip>
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
                         @(channelName ?? context.RequestedRoute)
-                        @if (context.Transport == ClientTransport.GeneratedHls)
-                        {
-                            <span> · HLS</span>
-                        }
                     </MudText>
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudTooltip Text="@IpTooltip(context.RemoteIp)" Placement="Placement.Top">
                         <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
                     </MudTooltip>
+                </MudTd>
+                <MudTd DataLabel="Delivery">
+                    <TooltipChip Label="@DeliveryLabel(context.Delivery)"
+                                 TooltipText="@DeliveryTooltip(context)"
+                                 Color="Color.Info"
+                                 Variant="Variant.Outlined"
+                                 Size="Size.Small" />
                 </MudTd>
                 <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
@@ -353,6 +357,7 @@ else
         foreach (var c in _clients)
         {
             hc.Add(c.ClientId); hc.Add(c.BytesPerSecond); hc.Add(c.QueueDepth); hc.Add(c.BytesSent);
+            hc.Add(c.Delivery);
         }
         hc.Add(_recentEnded.Count);
         return hc.ToHashCode();
@@ -543,6 +548,21 @@ else
             userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
         return "Unknown";
+    }
+
+    private static string DeliveryLabel(DeliveryMethod method) => method switch
+    {
+        DeliveryMethod.Hls => "HLS",
+        DeliveryMethod.RemuxTs => "Remux TS",
+        _ => "Raw TS",
+    };
+
+    private static string DeliveryTooltip(StreamClientSnapshot client)
+    {
+        var label = DeliveryLabel(client.Delivery);
+        return string.IsNullOrWhiteSpace(client.DeliveryReason)
+            ? $"Delivery method for this client: {label}."
+            : $"Delivery method for this client: {label} — {client.DeliveryReason}.";
     }
 
     private static string FormatRate(long? bytesPerSecond) => bytesPerSecond switch

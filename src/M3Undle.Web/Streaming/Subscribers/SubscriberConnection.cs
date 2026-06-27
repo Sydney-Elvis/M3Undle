@@ -189,7 +189,9 @@ public sealed class SubscriberConnection
             ConnectedUtc,
             BytesSent,
             QueueDepth,
-            IsInternal);
+            IsInternal,
+            Delivery: DeliveryMethod.RawTs,
+            DeliveryReason: "Direct MPEG-TS passthrough (no remux)");
 
     private async Task PumpAsync(BufferSnapshot initialSnapshot, CancellationToken ct)
     {

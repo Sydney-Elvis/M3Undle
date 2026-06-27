@@ -17,5 +17,8 @@ public sealed class BufferOptions
     /// reader pauses (player startup buffering, momentary socket stalls) instead of
     /// disconnecting on the first overflow.
     /// </summary>
-    public TimeSpan SlowClientGracePeriod { get; set; } = TimeSpan.FromSeconds(5);
+    // Bounded slow-client grace (research hard-cap neighborhood for direct TS). A genuinely
+    // stuck client is evicted within this window rather than pinning memory indefinitely.
+    // The proper fix for burst-buffering clients is HLS / boundary resync, not a longer grace.
+    public TimeSpan SlowClientGracePeriod { get; set; } = TimeSpan.FromSeconds(10);
 }

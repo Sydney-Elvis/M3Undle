@@ -214,13 +214,13 @@ public sealed class BufferDbOptionsConfigurator(IServiceScopeFactory scopeFactor
         options.MaxBytesHardCap = settings.StreamBufferMaxBytesHardCap;
         options.ReadChunkSizeBytes = settings.StreamBufferReadChunkSizeBytes;
 
-        // The per-subscriber outbound queue must absorb short client read pauses (player
-        // startup buffering, brief socket stalls) without dropping live chunks. Size it to
-        // several times the ring-buffer byte budget — decoupled from the ring itself, since
-        // a pinned slow client does not stall the producer — so a momentary pause does not
-        // immediately back the queue up. Sustained backlog is handled by the slow-client
-        // grace timer, not by this depth.
-        const int subscriberQueueDepthMultiplier = 4;
+        // Per-subscriber outbound queue depth. Bounded to ~13-32 MB of pinned ring chunks
+        // (research-aligned for direct TS, ~10-20 MB), enough to ride out brief read pauses
+        // from continuous-reader clients (VLC/desktop/servers) without pinning unbounded
+        // memory. Burst-buffering clients (ExoPlayer/Roku) are served HLS, not direct TS;
+        // the proper direct-TS fix (start-near-live + resync at a clean boundary instead of
+        // dropping bytes) is tracked with the HLS/remux output work.
+        const int subscriberQueueDepthMultiplier = 8;
         var baseQueueDepth = Math.Max(1, settings.StreamBufferMaxBytesPerSession / Math.Max(1, settings.StreamBufferReadChunkSizeBytes));
         options.SubscriberQueueCapacity = baseQueueDepth * subscriberQueueDepthMultiplier;
     }
