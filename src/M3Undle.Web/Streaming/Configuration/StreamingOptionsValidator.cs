@@ -23,6 +23,9 @@ public sealed class BufferOptionsValidator : IValidateOptions<BufferOptions>
         if (options.SlowClientGracePeriod <= TimeSpan.Zero)
             errors.Add("Buffer:SlowClientGracePeriod must be greater than zero.");
 
+        if (options.WriteStallTimeout <= TimeSpan.Zero)
+            errors.Add("Buffer:WriteStallTimeout must be greater than zero.");
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);

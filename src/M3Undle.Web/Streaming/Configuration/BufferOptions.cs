@@ -21,4 +21,13 @@ public sealed class BufferOptions
     // stuck client is evicted within this window rather than pinning memory indefinitely.
     // The proper fix for burst-buffering clients is HLS / boundary resync, not a longer grace.
     public TimeSpan SlowClientGracePeriod { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long a single PipeWriter flush may block before the subscriber is considered
+    /// dead and disconnected. Detects zombie TCP connections that hold the socket open but
+    /// never drain data (crash without RST, network black-hole). Set conservatively enough
+    /// that burst-buffering players (ExoPlayer, ~30–50 s idle) are not evicted during
+    /// their legitimate fill-then-drain cycle; HLS (Stage 3) is the proper fix for those.
+    /// </summary>
+    public TimeSpan WriteStallTimeout { get; set; } = TimeSpan.FromSeconds(60);
 }

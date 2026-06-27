@@ -16,7 +16,7 @@ public enum SubscriberQueueOverflowResult
     /// <summary>First overflow after the client was keeping up — the grace window just started.</summary>
     EnteredGrace,
 
-    /// <summary>Still within the grace window — drop the overflowing chunk but keep the client.</summary>
+    /// <summary>Still within the grace window — skip the overflowing chunk but keep the client.</summary>
     WithinGrace,
 
     /// <summary>Queue has stayed full past the grace window — evict as a slow client.</summary>
@@ -29,6 +29,7 @@ public sealed class SubscriberConnection
     private readonly PipeWriter _writer;
     private readonly Channel<BufferLease> _outbound;
     private readonly Func<SubscriberConnection, SubscriberDisconnectReason, Task> _onCompleted;
+    private readonly TimeSpan _writeStallTimeout;
     private readonly object _gate = new();
 
     private bool _started;
@@ -38,6 +39,7 @@ public sealed class SubscriberConnection
     private int _queueDepth;
     private long _queueFullSinceTicks;
     private readonly int _queueLowWaterMark;
+    private int _resyncPending;
     private HdhrSubscriberDiagnostics? _hdhrDiagnostics;
 
     public SubscriberConnection(
@@ -45,6 +47,7 @@ public sealed class SubscriberConnection
         string requestedRoute,
         HttpContext context,
         int queueCapacity,
+        TimeSpan writeStallTimeout,
         Func<SubscriberConnection, SubscriberDisconnectReason, Task> onCompleted,
         bool isInternal = false)
     {
@@ -54,6 +57,7 @@ public sealed class SubscriberConnection
         _context = context;
         _writer = context.Response.BodyWriter;
         _onCompleted = onCompleted;
+        _writeStallTimeout = writeStallTimeout;
 
         var effectiveCapacity = Math.Max(1, queueCapacity);
         _queueLowWaterMark = Math.Max(1, effectiveCapacity / 2);
@@ -98,7 +102,11 @@ public sealed class SubscriberConnection
 
     public int QueueDepth => Math.Max(0, Volatile.Read(ref _queueDepth));
 
+    public int LowWaterMark => _queueLowWaterMark;
+
     public bool IsCompleted => Volatile.Read(ref _completed) == 1;
+
+    public bool IsResyncPending => Volatile.Read(ref _resyncPending) == 1;
 
     public Task Completion => _pumpTask ?? Task.CompletedTask;
 
@@ -167,6 +175,23 @@ public sealed class SubscriberConnection
             : SubscriberQueueOverflowResult.WithinGrace;
     }
 
+    /// <summary>
+    /// Marks this subscriber as needing a resync: no more chunks will be enqueued until
+    /// <see cref="ClearResyncPending"/> is called at a clean TS boundary.
+    /// </summary>
+    public void SetResyncPending()
+        => Volatile.Write(ref _resyncPending, 1);
+
+    /// <summary>
+    /// Clears the resync-pending flag and resets the slow-client grace timer so the
+    /// subscriber starts fresh after a successful boundary resync.
+    /// </summary>
+    public void ClearResyncPending()
+    {
+        Volatile.Write(ref _resyncPending, 0);
+        Volatile.Write(ref _queueFullSinceTicks, 0);
+    }
+
     public Task CompleteAsync(SubscriberDisconnectReason reason)
     {
         if (Interlocked.Exchange(ref _completed, 1) == 1)
@@ -231,6 +256,10 @@ public sealed class SubscriberConnection
         {
             await CompleteAsync(SubscriberDisconnectReason.ClientAborted);
         }
+        catch (WriteStallException)
+        {
+            await CompleteAsync(SubscriberDisconnectReason.WriteStall);
+        }
         catch (IOException)
         {
             await CompleteAsync(SubscriberDisconnectReason.WriteFailure);
@@ -243,8 +272,22 @@ public sealed class SubscriberConnection
         if (bytes.IsEmpty)
             return;
 
-        await _writer.WriteAsync(bytes, ct);
-        await _writer.FlushAsync(ct);
+        using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        stallCts.CancelAfter(_writeStallTimeout);
+
+        try
+        {
+            await _writer.WriteAsync(bytes, stallCts.Token);
+            await _writer.FlushAsync(stallCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && stallCts.IsCancellationRequested)
+        {
+            // The per-write stall timer fired; the client's socket is wedged.
+            throw new WriteStallException();
+        }
+
         Interlocked.Add(ref _bytesSent, bytes.Length);
     }
+
+    private sealed class WriteStallException : Exception;
 }

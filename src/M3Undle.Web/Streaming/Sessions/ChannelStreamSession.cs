@@ -189,6 +189,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 requestedRoute: _source.RequestedRoute,
                 context: context,
                 queueCapacity: _bufferOptions.SubscriberQueueCapacity,
+                writeStallTimeout: _bufferOptions.WriteStallTimeout,
                 onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason),
                 isInternal: isInternal);
 
@@ -757,7 +758,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 return resetStallTimer;
             }
 
-            await PublishToSubscribersAsync(published);
+            await PublishToSubscribersAsync(published, isAtSafeBoundary: safeStart.Selected);
         }
         else
         {
@@ -772,12 +773,49 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         return resetStallTimer;
     }
 
-    private async Task PublishToSubscribersAsync(BufferLease published)
+    private async Task PublishToSubscribersAsync(BufferLease published, bool isAtSafeBoundary = false)
     {
         List<SubscriberConnection>? slowSubscribers = null;
 
         foreach (var subscriber in _subscribers.Values)
         {
+            // A subscriber in resync-pending state had its queue overflow; it is waiting
+            // for the queue to drain and a clean TS boundary to arrive so delivery can
+            // resume from a correct splice point (no mid-PES byte drops).
+            if (subscriber.IsResyncPending)
+            {
+                if (isAtSafeBoundary && subscriber.QueueDepth <= subscriber.LowWaterMark)
+                {
+                    // Queue has drained enough and a clean IDR boundary arrived — resume.
+                    subscriber.ClearResyncPending();
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.SubscriberQueueFull,
+                        subscriber: subscriber,
+                        queueDepth: subscriber.QueueDepth,
+                        message: "Subscriber resynced at clean TS boundary; resuming delivery.");
+                    // Fall through to normal enqueue below.
+                }
+                else
+                {
+                    // Still seeking a clean boundary — advance the grace timer as if each
+                    // skipped chunk were an overflow. If resync takes longer than the grace
+                    // period the subscriber is considered genuinely stuck and evicted.
+                    var resyncOverflow = subscriber.RegisterQueueOverflow(_bufferOptions.SlowClientGracePeriod);
+                    if (resyncOverflow == SubscriberQueueOverflowResult.GraceExceeded)
+                    {
+                        RecordDiagnostic(
+                            StreamDiagnosticEventKind.SubscriberQueueFull,
+                            subscriber: subscriber,
+                            disconnectReason: SubscriberDisconnectReason.SlowClient,
+                            queueDepth: subscriber.QueueDepth,
+                            message: "Subscriber resync timed out within slow-client grace; removing as slow client.");
+                        slowSubscribers ??= [];
+                        slowSubscribers.Add(subscriber);
+                    }
+                    continue;
+                }
+            }
+
             var perSubscriber = published.Duplicate();
             if (!subscriber.TryEnqueue(perSubscriber))
             {
@@ -785,31 +823,35 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 if (subscriber.IsCompleted)
                     continue;
 
-                // Live push stream: a momentarily slow reader (player startup buffering, a
-                // brief socket pause) fills the bounded queue. Drop the overflow chunk to
-                // keep latency bounded but keep the client connected, and only evict it as a
-                // slow client once the queue has stayed full past the grace period — which
-                // marks a genuinely stuck consumer rather than a transient hiccup.
+                // Queue is full — enter resync mode instead of dropping arbitrary bytes.
+                // Dropping bytes mid-stream corrupts MPEG-TS continuity and PES framing;
+                // resync waits for the next clean IDR boundary so the client can recover
+                // from a valid decode point. The grace period caps how long we wait before
+                // giving up and evicting a subscriber that never drains.
                 var overflow = subscriber.RegisterQueueOverflow(_bufferOptions.SlowClientGracePeriod);
-                if (overflow != SubscriberQueueOverflowResult.GraceExceeded)
+                if (overflow == SubscriberQueueOverflowResult.GraceExceeded)
+                {
+                    RecordDiagnostic(
+                        StreamDiagnosticEventKind.SubscriberQueueFull,
+                        subscriber: subscriber,
+                        disconnectReason: SubscriberDisconnectReason.SlowClient,
+                        queueDepth: Math.Max(1, subscriber.QueueDepth),
+                        message: "Subscriber queue stayed full beyond slow-client grace; removing subscriber as slow client.");
+                    slowSubscribers ??= [];
+                    slowSubscribers.Add(subscriber);
+                }
+                else
                 {
                     if (overflow == SubscriberQueueOverflowResult.EnteredGrace)
+                    {
+                        subscriber.SetResyncPending();
                         RecordDiagnostic(
                             StreamDiagnosticEventKind.SubscriberQueueFull,
                             subscriber: subscriber,
                             queueDepth: Math.Max(1, subscriber.QueueDepth),
-                            message: "Subscriber queue full; dropping live chunks within slow-client grace window.");
-                    continue;
+                            message: "Subscriber queue full; entering resync mode — waiting for next clean TS boundary.");
+                    }
                 }
-
-                RecordDiagnostic(
-                    StreamDiagnosticEventKind.SubscriberQueueFull,
-                    subscriber: subscriber,
-                    disconnectReason: SubscriberDisconnectReason.SlowClient,
-                    queueDepth: Math.Max(1, subscriber.QueueDepth),
-                    message: "Subscriber queue stayed full beyond slow-client grace; removing subscriber as slow client.");
-                slowSubscribers ??= [];
-                slowSubscribers.Add(subscriber);
                 continue;
             }
 
@@ -829,13 +871,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryOutputHoldActive)
             return _buffer.CreateLiveEdgeSnapshot();
 
-        if (IsMpegTsRelay() && isInternal)
-            return _buffer.CreateSafeStartSnapshot();
-
-        // External MPEG-TS subscribers include the current buffer so they don't miss data
-        // that arrived between headers-ready and subscriber registration (race window).
         if (IsMpegTsRelay())
-            return _buffer.CreateSnapshot();
+        {
+            // Start all TS subscribers (internal HLS relay and external direct) at the most
+            // recent PAT/PMT + IDR boundary so they start 2–5 s behind live at a clean
+            // decode point rather than dumping the entire ring buffer. Falls back to the
+            // full snapshot before the first IDR has been indexed (early seconds of a new
+            // stream) so the client still gets initial data during that window.
+            var safeStart = _buffer.CreateSafeStartSnapshot();
+            return safeStart.Chunks.Count > 0 ? safeStart : _buffer.CreateSnapshot();
+        }
 
         return _buffer.CreateLiveEdgeSnapshot();
     }
@@ -1077,11 +1122,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         var snapshot = _buffer.CreateSafeStartSnapshot();
         try
         {
+            var firstChunk = true;
             foreach (var lease in snapshot.Chunks)
             {
                 using (lease)
                 {
-                    await PublishToSubscribersAsync(lease);
+                    // The snapshot starts at a verified safe boundary; mark the first chunk
+                    // so that any subscriber in resync-pending state can resume here.
+                    await PublishToSubscribersAsync(lease, isAtSafeBoundary: firstChunk);
+                    firstChunk = false;
                 }
             }
         }
@@ -1519,7 +1568,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private void LogSubscriberRemoved(SubscriberConnection subscriber, SubscriberDisconnectReason reason)
     {
-        var level = reason == SubscriberDisconnectReason.SlowClient ? LogLevel.Warning : LogLevel.Information;
+        var level = reason is SubscriberDisconnectReason.SlowClient or SubscriberDisconnectReason.WriteStall
+            ? LogLevel.Warning
+            : LogLevel.Information;
         _logger.Log(
             level,
             "Subscriber removed: SessionId={SessionId} DisplayName={DisplayName} RequestedRoute={RequestedRoute} RequestPath={RequestPath} RouteClassification={RouteClassification} ClientId={ClientId} RemoteIp={RemoteIp} UserAgent={UserAgent} Classification={Classification} DisconnectReason={DisconnectReason} BytesSent={BytesSent} ExternalSubscriberCount={ExternalSubscriberCount} InternalSubscriberCount={InternalSubscriberCount} PendingAttachCount={PendingAttachCount}",

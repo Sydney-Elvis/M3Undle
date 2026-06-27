@@ -1164,7 +1164,20 @@ public sealed class GeneratedHlsSessionManager(
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
         public static string CreateClientKey(string? remoteIp, string? userAgent)
-            => $"{remoteIp}\x1f{userAgent}";
+            => remoteIp ?? userAgent ?? string.Empty;
+
+        // Higher score = more identifiable. Named app UAs beat generic platform UAs.
+        private static int GetUaSpecificity(string? ua)
+        {
+            if (string.IsNullOrEmpty(ua)) return 0;
+            if (ua.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.Contains("Smarters", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.StartsWith("Dalvik/", StringComparison.OrdinalIgnoreCase)) return 1;
+            if (ua.StartsWith("okhttp/", StringComparison.OrdinalIgnoreCase)) return 1;
+            return 2;
+        }
 
         public static bool HasClientFingerprint(string? remoteIp, string? userAgent)
             => !string.IsNullOrWhiteSpace(remoteIp) || !string.IsNullOrWhiteSpace(userAgent);
@@ -1178,11 +1191,17 @@ public sealed class GeneratedHlsSessionManager(
             {
                 if (_hlsClients.TryGetValue(clientKey, out var existing))
                 {
+                    // Upgrade the stored UA when a more identifiable one arrives (e.g. SmartersPro
+                    // app-layer request arrives after the initial Dalvik/ExoPlayer platform request).
+                    var preferredUa = GetUaSpecificity(userAgent) > GetUaSpecificity(existing.UserAgent)
+                        ? userAgent
+                        : existing.UserAgent;
                     var updated = existing with
                     {
                         LastAccessUtc = now,
                         RequestedRoute = requestedRoute,
                         CountAsViewer = existing.CountAsViewer || countAsViewer,
+                        UserAgent = preferredUa,
                     };
                     _hlsClients[clientKey] = updated;
                     return new TrackedHlsClient(updated, IsNewClient: false);

@@ -31,6 +31,7 @@ public sealed class SubscriberConnectionTests
         context.Response.Body = body;
         var subscriber = new SubscriberConnection(
             "session-1", "/test", context, queueCapacity: 64,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
         // Enqueue the overlapping range (2-4) plus the new range (5-6).
@@ -72,6 +73,7 @@ public sealed class SubscriberConnectionTests
         context.Response.Body = body;
         var subscriber = new SubscriberConnection(
             "session-2", "/test", context, queueCapacity: 64,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
         subscriber.TryEnqueue(l0.Duplicate());
@@ -99,6 +101,7 @@ public sealed class SubscriberConnectionTests
         context.Response.Body = body;
         var subscriber = new SubscriberConnection(
             "session-3", "/test", context, queueCapacity: 1,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
         var firstQueued = first.Duplicate();
@@ -159,12 +162,44 @@ public sealed class SubscriberConnectionTests
         Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
     }
 
+    [TestMethod]
+    public void SetResyncPending_SetsFlag_AndClearResyncPending_ClearsIt()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        Assert.IsFalse(subscriber.IsResyncPending, "Resync should not be pending after construction.");
+
+        subscriber.SetResyncPending();
+        Assert.IsTrue(subscriber.IsResyncPending, "SetResyncPending must raise the flag.");
+
+        subscriber.ClearResyncPending();
+        Assert.IsFalse(subscriber.IsResyncPending, "ClearResyncPending must clear the flag.");
+    }
+
+    [TestMethod]
+    public void ClearResyncPending_AlsoClearsGraceTimer()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // Open the grace window, enter resync, clear resync — the next overflow should be
+        // treated as a fresh EnteredGrace rather than a continuation of the old window.
+        subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1));
+        subscriber.SetResyncPending();
+        subscriber.ClearResyncPending();
+
+        Assert.AreEqual(
+            SubscriberQueueOverflowResult.EnteredGrace,
+            subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)),
+            "Grace timer must be reset by ClearResyncPending so the next overflow starts a fresh window.");
+    }
+
     private static SubscriberConnection CreateSubscriber(int queueCapacity)
     {
         var context = new DefaultHttpContext();
         context.Response.Body = new MemoryStream();
         return new SubscriberConnection(
             "session-overflow", "/test", context, queueCapacity,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
     }
 }

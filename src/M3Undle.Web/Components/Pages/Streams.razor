@@ -522,8 +522,12 @@ else
     private static string DetectClientType(string? userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent)) return "Unknown";
+
         // Named apps — check before generic components they may use internally.
         if (userAgent.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return "TiviMate";
+        // SmartersPro is the UA sent by IPTV Smarters Pro on Android TV.
+        if (userAgent.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return "Smarters Pro";
+        if (userAgent.Contains("Smarters Player", StringComparison.OrdinalIgnoreCase)) return "Smarters";
         if (userAgent.Contains("IPTV Smarters", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("IPTVSmarters", StringComparison.OrdinalIgnoreCase)) return "Smarters";
         if (userAgent.Contains("Jellyfin", StringComparison.OrdinalIgnoreCase)) return "Jellyfin";
@@ -538,6 +542,8 @@ else
         if (userAgent.Contains("Perfect Player", StringComparison.OrdinalIgnoreCase)) return "Perfect Player";
         if (userAgent.Contains("GSE", StringComparison.OrdinalIgnoreCase)) return "GSE Player";
         if (userAgent.Contains("MrMC", StringComparison.OrdinalIgnoreCase)) return "MrMC";
+        if (userAgent.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return "Roku";
+
         // Generic media components — likely a media server's internal fetcher.
         if (userAgent.Contains("VLC", StringComparison.OrdinalIgnoreCase)) return "VLC";
         // Lavf is the ffmpeg libavformat UA prefix used by Jellyfin/Emby LiveTV transcoder.
@@ -547,6 +553,16 @@ else
         if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
+
+        // Dalvik is the Android runtime UA, seen when an IPTV app makes its initial
+        // connection before switching to its own UA. The full string includes device info.
+        if (userAgent.StartsWith("Dalvik", StringComparison.OrdinalIgnoreCase))
+            return userAgent.Contains("TV", StringComparison.OrdinalIgnoreCase) ? "Android TV" : "Android";
+
+        // okhttp is a common Android HTTP client; if an IPTV app doesn't set a custom UA
+        // this is what appears. Hover to see the full User-Agent for context.
+        if (userAgent.StartsWith("okhttp", StringComparison.OrdinalIgnoreCase)) return "Android App";
+
         return "Unknown";
     }
 

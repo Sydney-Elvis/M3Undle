@@ -21,4 +21,24 @@ public static class PlaybackModeResolver
             return false;
         return ua.Contains("Mozilla/", StringComparison.OrdinalIgnoreCase);
     }
+
+    // Returns true for clients known to burst-buffer (ExoPlayer/Media3, Roku) where
+    // direct TS push reliably loses to the client's own buffer management.
+    public static bool IsBurstBufferingClient(HttpContext context)
+        => IsBurstBufferingUserAgent(context.Request.Headers.UserAgent.ToString());
+
+    public static bool IsBurstBufferingUserAgent(string? userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent))
+            return false;
+        if (userAgent.Contains("Roku", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (userAgent.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (userAgent.StartsWith("Dalvik/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (userAgent.StartsWith("okhttp/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
 }
