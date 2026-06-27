@@ -35,9 +35,18 @@ public static class PlaybackModeResolver
             return true;
         if (userAgent.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase))
             return true;
-        if (userAgent.StartsWith("Dalvik/", StringComparison.OrdinalIgnoreCase))
+        // The actual root cause is ExoPlayer/Media3's burst-then-idle buffering; match the
+        // engine names directly so any player embedding it is covered, not just known apps.
+        if (userAgent.Contains("ExoPlayer", StringComparison.OrdinalIgnoreCase))
             return true;
-        if (userAgent.StartsWith("okhttp/", StringComparison.OrdinalIgnoreCase))
+        if (userAgent.Contains("Media3", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // Dalvik (Android runtime) and okhttp (the HTTP client used by virtually every
+        // Android IPTV app) commonly appear mid-string, after an app name — use Contains,
+        // not StartsWith, so "AppName/1.0 (okhttp/4.12)" style UAs are still caught.
+        if (userAgent.Contains("Dalvik/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (userAgent.Contains("okhttp/", StringComparison.OrdinalIgnoreCase))
             return true;
         return false;
     }

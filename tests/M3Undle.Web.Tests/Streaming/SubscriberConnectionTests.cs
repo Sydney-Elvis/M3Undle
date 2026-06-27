@@ -193,6 +193,45 @@ public sealed class SubscriberConnectionTests
             "Grace timer must be reset by ClearResyncPending so the next overflow starts a fresh window.");
     }
 
+    [TestMethod]
+    public void ResetSlowClientGrace_ClearsTimer_WithoutClearingResync()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // While resyncing, a client that is still draining resets its grace timer (it is only
+        // waiting for the next clean boundary) but stays in resync state.
+        subscriber.SetResyncPending();
+        subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1));
+        subscriber.ResetSlowClientGrace();
+
+        Assert.IsTrue(subscriber.IsResyncPending, "ResetSlowClientGrace must not clear the resync flag.");
+        Assert.AreEqual(
+            SubscriberQueueOverflowResult.EnteredGrace,
+            subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)),
+            "Grace timer must be reset so a draining resync client is not evicted.");
+    }
+
+    [TestMethod]
+    public void RegisterResyncDrainProgress_StalledOrGrowingDepth_ReportsNoProgress()
+    {
+        var buffer = new RingBuffer(maxBytes: 1024);
+        var subscriber = CreateSubscriber(queueCapacity: 8);
+
+        using (var first = buffer.Write(new byte[] { 0xF0 }))
+            Assert.IsTrue(subscriber.TryEnqueue(first.Duplicate()));
+
+        // Enter resync; the entry depth (1) becomes the progress baseline.
+        subscriber.SetResyncPending();
+
+        // Depth holds steady at 1 — a stuck client makes no progress, so grace must accrue.
+        Assert.IsFalse(subscriber.RegisterResyncDrainProgress());
+
+        // Depth grows to 2 — still no drain progress.
+        using (var second = buffer.Write(new byte[] { 0xF1 }))
+            Assert.IsTrue(subscriber.TryEnqueue(second.Duplicate()));
+        Assert.IsFalse(subscriber.RegisterResyncDrainProgress());
+    }
+
     private static SubscriberConnection CreateSubscriber(int queueCapacity)
     {
         var context = new DefaultHttpContext();

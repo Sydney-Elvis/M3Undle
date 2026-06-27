@@ -40,6 +40,7 @@ public sealed class SubscriberConnection
     private long _queueFullSinceTicks;
     private readonly int _queueLowWaterMark;
     private int _resyncPending;
+    private int _resyncLastDepth;
     private HdhrSubscriberDiagnostics? _hdhrDiagnostics;
 
     public SubscriberConnection(
@@ -176,11 +177,37 @@ public sealed class SubscriberConnection
     }
 
     /// <summary>
+    /// Resets the slow-client grace timer without clearing resync state. Used while a
+    /// subscriber is resyncing and still draining: it is keeping up and merely waiting for
+    /// the next clean TS boundary, so it must not accumulate grace it cannot influence.
+    /// </summary>
+    public void ResetSlowClientGrace()
+        => Volatile.Write(ref _queueFullSinceTicks, 0);
+
+    /// <summary>
+    /// Reports whether the outbound queue has drained since the previous resync tick. A
+    /// strictly smaller depth means the client is making progress (keep its grace timer
+    /// reset); a depth that holds steady or grows means it is genuinely stuck (let the grace
+    /// timer run). Single-threaded: only called from the session publish loop while resyncing.
+    /// </summary>
+    public bool RegisterResyncDrainProgress()
+    {
+        var depth = Volatile.Read(ref _queueDepth);
+        var previous = _resyncLastDepth;
+        _resyncLastDepth = depth;
+        return depth < previous;
+    }
+
+    /// <summary>
     /// Marks this subscriber as needing a resync: no more chunks will be enqueued until
-    /// <see cref="ClearResyncPending"/> is called at a clean TS boundary.
+    /// <see cref="ClearResyncPending"/> is called at a clean TS boundary. Captures the
+    /// current queue depth as the baseline for drain-progress tracking.
     /// </summary>
     public void SetResyncPending()
-        => Volatile.Write(ref _resyncPending, 1);
+    {
+        _resyncLastDepth = Volatile.Read(ref _queueDepth);
+        Volatile.Write(ref _resyncPending, 1);
+    }
 
     /// <summary>
     /// Clears the resync-pending flag and resets the slow-client grace timer so the

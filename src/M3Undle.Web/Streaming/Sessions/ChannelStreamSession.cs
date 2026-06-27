@@ -795,11 +795,21 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         message: "Subscriber resynced at clean TS boundary; resuming delivery.");
                     // Fall through to normal enqueue below.
                 }
+                else if (subscriber.RegisterResyncDrainProgress())
+                {
+                    // The queue drained since the last tick — the client is keeping up and is
+                    // only waiting for the next clean IDR boundary we have yet to produce, so
+                    // reset the grace timer instead of accumulating eviction pressure it cannot
+                    // influence. (Without this, a healthy client could be evicted during a long
+                    // GOP simply because boundaries are sparse.)
+                    subscriber.ResetSlowClientGrace();
+                    continue;
+                }
                 else
                 {
-                    // Still seeking a clean boundary — advance the grace timer as if each
-                    // skipped chunk were an overflow. If resync takes longer than the grace
-                    // period the subscriber is considered genuinely stuck and evicted.
+                    // No drain progress since the last tick — the client is genuinely stuck.
+                    // Advance the grace timer as if each skipped chunk were an overflow; if the
+                    // stall outlasts the grace period the subscriber is evicted as a slow client.
                     var resyncOverflow = subscriber.RegisterQueueOverflow(_bufferOptions.SlowClientGracePeriod);
                     if (resyncOverflow == SubscriberQueueOverflowResult.GraceExceeded)
                     {
@@ -808,7 +818,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             subscriber: subscriber,
                             disconnectReason: SubscriberDisconnectReason.SlowClient,
                             queueDepth: subscriber.QueueDepth,
-                            message: "Subscriber resync timed out within slow-client grace; removing as slow client.");
+                            message: "Subscriber resync stalled beyond slow-client grace; removing as slow client.");
                         slowSubscribers ??= [];
                         slowSubscribers.Add(subscriber);
                     }

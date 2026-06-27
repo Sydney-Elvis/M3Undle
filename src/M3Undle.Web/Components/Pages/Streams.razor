@@ -195,9 +195,16 @@ else
                     <MudTooltip Text="@ClientTypeTooltip(context.UserAgent, context.RequestedRoute)" Placement="Placement.Right">
                         <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
                     </MudTooltip>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        @(channelName ?? context.RequestedRoute)
-                    </MudText>
+                    @if (channelName is not null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@channelName</MudText>
+                    }
+                    else if (!string.IsNullOrEmpty(context.RequestedRoute))
+                    {
+                        <MudTooltip Text="@context.RequestedRoute" Placement="Placement.Bottom">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@RouteSummary(context.RequestedRoute)</MudText>
+                        </MudTooltip>
+                    }
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudTooltip Text="@IpTooltip(context.RemoteIp)" Placement="Placement.Top">
@@ -518,6 +525,18 @@ else
         "StartupFatal" => "Startup failure",
         _ => kind ?? "Unknown",
     };
+
+    // Friendly caption for a request route when the channel name can't be resolved
+    // (e.g. generated-HLS clients keyed by the FFmpeg session, not the channel session).
+    // The full route is shown on hover; the inline caption stays uncluttered.
+    private static string RouteSummary(string route)
+    {
+        if (route.Contains("/hls/generated/", StringComparison.OrdinalIgnoreCase))
+            return "HLS segments";
+        if (route.Contains("/hls/", StringComparison.OrdinalIgnoreCase))
+            return "HLS manifest";
+        return "Stream request";
+    }
 
     private static string DetectClientType(string? userAgent)
     {
