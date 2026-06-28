@@ -126,7 +126,7 @@ public static class XtreamEndpoints
         {
             user_info = new
             {
-                username = access.Credential.Username,
+                username = access.UrlCredential?.Username ?? access.Credential.Username,
                 // Deliberately never echo endpoint credentials back in account-info responses.
                 // The field remains present for shape compatibility, but value is always redacted.
                 password = string.Empty,
@@ -179,7 +179,7 @@ public static class XtreamEndpoints
     {
         var access = context.GetResolvedClientAccess();
         var baseUrl = GetBaseUrl(context);
-        var username = access.Credential.Username;
+        var username = access.UrlCredential?.Username ?? access.Credential.Username;
         var password = access.UrlCredential?.Password ?? string.Empty;
         var categoryFilter = GetRequestValue(context.Request, form, "category_id");
         var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
@@ -300,7 +300,7 @@ public static class XtreamEndpoints
 
         var access   = context.GetResolvedClientAccess();
         var baseUrl  = GetBaseUrl(context);
-        var username = access.Credential.Username;
+        var username = access.UrlCredential?.Username ?? access.Credential.Username;
         var password = access.UrlCredential?.Password ?? string.Empty;
         var added    = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
 

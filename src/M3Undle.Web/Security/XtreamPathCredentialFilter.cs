@@ -65,7 +65,7 @@ internal sealed class XtreamPathCredentialFilter(
                 Credential: fallback,
                 Binding: new AccessBinding(fallback.Id, profileId, [profileId], "hdhr-main"),
                 Transport: ClientCredentialTransport.None,
-                UrlCredential: null);
+                UrlCredential: new AccessUrlCredential(username, password));
         }
         else
         {
