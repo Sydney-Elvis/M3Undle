@@ -542,7 +542,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             BytesSent: 0,
             QueueDepth: 0,
             Delivery: DeliveryMethod.Hls,
-            DeliveryReason: "Native HLS passthrough (upstream serves HLS)"));
+            DeliveryReason: "Native HLS passthrough (upstream serves HLS)",
+            DisplayName: slot.DisplayName));
 
         _registry.UpsertProvider(new StreamProviderSnapshot(
             SessionId: slot.SessionId,

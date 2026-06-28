@@ -180,24 +180,29 @@ else
         <MudTable T="StreamClientSnapshot" Items="_clients" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
             <HeaderContent>
                 <MudTh>Client</MudTh>
+                <MudTh>Channel</MudTh>
                 <MudTh>IP</MudTh>
+                <MudTh>Source</MudTh>
                 <MudTh>Delivery</MudTh>
                 <MudTh>Transfer</MudTh>
                 <MudTh>Backlog</MudTh>
                 <MudTh>Connected</MudTh>
             </HeaderContent>
             <RowTemplate>
+                @{
+                    var clientSession = _sessions.FirstOrDefault(s => s.SessionId == context.SessionId);
+                    var channelName = context.DisplayName ?? clientSession?.DisplayName;
+                    var connectionSource = ConnectionSource(context.RequestedRoute);
+                }
                 <MudTd DataLabel="Client">
-                    @{
-                        var clientSession = _sessions.FirstOrDefault(s => s.SessionId == context.SessionId);
-                        var channelName = clientSession?.DisplayName;
-                    }
                     <MudTooltip Text="@ClientTypeTooltip(context.UserAgent, context.RequestedRoute)" Placement="Placement.Right">
                         <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
                     </MudTooltip>
+                </MudTd>
+                <MudTd DataLabel="Channel">
                     @if (channelName is not null)
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">@channelName</MudText>
+                        <MudText Typo="Typo.body2">@channelName</MudText>
                     }
                     else if (!string.IsNullOrEmpty(context.RequestedRoute))
                     {
@@ -205,11 +210,29 @@ else
                             <MudText Typo="Typo.caption" Color="Color.Secondary">@RouteSummary(context.RequestedRoute)</MudText>
                         </MudTooltip>
                     }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudTooltip Text="@IpTooltip(context.RemoteIp)" Placement="Placement.Top">
                         <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
                     </MudTooltip>
+                </MudTd>
+                <MudTd DataLabel="Source">
+                    @if (connectionSource is not null)
+                    {
+                        <TooltipChip Label="@connectionSource"
+                                     TooltipText="@ConnectionSourceTooltip(connectionSource)"
+                                     Color="@ConnectionSourceColor(connectionSource)"
+                                     Variant="Variant.Outlined"
+                                     Size="Size.Small" />
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                    }
                 </MudTd>
                 <MudTd DataLabel="Delivery">
                     <TooltipChip Label="@DeliveryLabel(context.Delivery)"
@@ -538,17 +561,68 @@ else
         return "Stream request";
     }
 
+    private static Color ConnectionSourceColor(string? source) => source switch
+    {
+        "Xtream" => Color.Primary,
+        "HDHomeRun" => Color.Secondary,
+        _ => Color.Default,
+    };
+
+    private static string ConnectionSourceTooltip(string? source) => source switch
+    {
+        "Xtream" => "Client connected via the Xtream Codes API.",
+        "HDHomeRun" => "Client connected via the HDHomeRun-compatible API.",
+        "M3U" => "Client connected via the M3U playlist.",
+        _ => "Connection source unknown.",
+    };
+
+    // Returns the connection protocol the client used to reach this stream.
+    // M3U compatibility routes vs Xtream API routes are distinguished by path shape:
+    //   Xtream TS  : /live/{user}/{pass}/{id}  /movie/...  /series/...
+    //   Xtream HLS : /hls/{user}/{pass}/{id}/index.m3u8
+    //   Xtream segs: /hls/generated/{user}/{pass}/{sessionId}/{asset}  (4+ segments after "generated")
+    //   M3U segs   : /hls/generated/{sessionId}/{asset}                (2 segments after "generated")
+    private static string? ConnectionSource(string? route)
+    {
+        if (string.IsNullOrEmpty(route)) return null;
+
+        if (route.StartsWith("/live/", StringComparison.OrdinalIgnoreCase)
+            || route.StartsWith("/movie/", StringComparison.OrdinalIgnoreCase)
+            || route.StartsWith("/series/", StringComparison.OrdinalIgnoreCase))
+            return "Xtream";
+
+        // /hls/{user}/{pass}/{id}/index.m3u8 — Xtream external HLS manifest
+        if (route.StartsWith("/hls/", StringComparison.OrdinalIgnoreCase)
+            && !route.StartsWith("/hls/generated/", StringComparison.OrdinalIgnoreCase))
+            return "Xtream";
+
+        if (route.StartsWith("/hls/generated/", StringComparison.OrdinalIgnoreCase))
+        {
+            var afterGenerated = route["/hls/generated/".Length..];
+            // Xtream: user/pass/sessionId/asset → 3+ slashes; M3U: sessionId/asset → 1 slash
+            return afterGenerated.Count(c => c == '/') >= 3 ? "Xtream" : "M3U";
+        }
+
+        if (route.StartsWith("/hdhr/", StringComparison.OrdinalIgnoreCase)
+            || route.StartsWith("/tune/", StringComparison.OrdinalIgnoreCase)
+            || route.StartsWith("/auto/", StringComparison.OrdinalIgnoreCase))
+            return "HDHomeRun";
+
+        return "M3U";
+    }
+
     private static string DetectClientType(string? userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent)) return "Unknown";
 
         // Named apps — check before generic components they may use internally.
         if (userAgent.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return "TiviMate";
-        // SmartersPro is the UA sent by IPTV Smarters Pro on Android TV.
-        if (userAgent.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return "Smarters Pro";
-        if (userAgent.Contains("Smarters Player", StringComparison.OrdinalIgnoreCase)) return "Smarters";
-        if (userAgent.Contains("IPTV Smarters", StringComparison.OrdinalIgnoreCase) ||
-            userAgent.Contains("IPTVSmarters", StringComparison.OrdinalIgnoreCase)) return "Smarters";
+        // IPTV Smarters sends several UA spellings across its request types: "SmartersPro"
+        // (no space) on segment pulls, "Smarters Pro" (with space) on the manifest/TS request,
+        // plus "IPTV Smarters" / "Smarters Player" on older builds. Match "Smarters" generically
+        // so no variant slips through to "Unknown", then distinguish the Pro tier.
+        if (userAgent.Contains("Smarters", StringComparison.OrdinalIgnoreCase))
+            return userAgent.Contains("Pro", StringComparison.OrdinalIgnoreCase) ? "Smarters Pro" : "Smarters";
         if (userAgent.Contains("Jellyfin", StringComparison.OrdinalIgnoreCase)) return "Jellyfin";
         if (userAgent.Contains("Emby", StringComparison.OrdinalIgnoreCase)) return "Emby";
         if (userAgent.Contains("Plex", StringComparison.OrdinalIgnoreCase)) return "Plex";
@@ -572,6 +646,13 @@ else
         if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
+
+        // ExoPlayer/Media3 — Google's Android media playback engine. Apps that delegate HLS
+        // playback to ExoPlayer (e.g. Smarters via Xtream) will appear with this UA instead
+        // of their own app UA. Check before Dalvik since ExoPlayer UAs may also contain Dalvik.
+        if (userAgent.Contains("ExoPlayer", StringComparison.OrdinalIgnoreCase) ||
+            userAgent.Contains("Media3", StringComparison.OrdinalIgnoreCase))
+            return "ExoPlayer";
 
         // Dalvik is the Android runtime UA, seen when an IPTV app makes its initial
         // connection before switching to its own UA. The full string includes device info.

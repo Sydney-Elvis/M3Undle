@@ -36,5 +36,6 @@ public sealed record StreamClientSnapshot(
     ClientTransport Transport = ClientTransport.DirectRelay,
     long? BytesPerSecond = null,
     DeliveryMethod Delivery = DeliveryMethod.RawTs,
-    string? DeliveryReason = null);
+    string? DeliveryReason = null,
+    string? DisplayName = null);
 
