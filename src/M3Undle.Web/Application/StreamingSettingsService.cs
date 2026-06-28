@@ -222,7 +222,8 @@ public sealed class BufferDbOptionsConfigurator(IServiceScopeFactory scopeFactor
         // dropping bytes) is tracked with the HLS/remux output work.
         const int subscriberQueueDepthMultiplier = 8;
         var baseQueueDepth = Math.Max(1, settings.StreamBufferMaxBytesPerSession / Math.Max(1, settings.StreamBufferReadChunkSizeBytes));
-        options.SubscriberQueueCapacity = baseQueueDepth * subscriberQueueDepthMultiplier;
+        var capacity = (long)baseQueueDepth * subscriberQueueDepthMultiplier;
+        options.SubscriberQueueCapacity = capacity > int.MaxValue ? int.MaxValue : (int)capacity;
     }
 }
 

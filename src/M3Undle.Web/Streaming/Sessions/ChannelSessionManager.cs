@@ -541,8 +541,8 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             ConnectedUtc: slot.StartedUtc,
             BytesSent: 0,
             QueueDepth: 0,
-            Delivery: DeliveryMethod.RawTs,
-            DeliveryReason: "Direct MPEG-TS passthrough (no remux)"));
+            Delivery: DeliveryMethod.Hls,
+            DeliveryReason: "Native HLS passthrough (upstream serves HLS)"));
 
         _registry.UpsertProvider(new StreamProviderSnapshot(
             SessionId: slot.SessionId,

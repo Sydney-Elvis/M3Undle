@@ -248,6 +248,9 @@ public sealed class SubscriberConnection
     private async Task PumpAsync(BufferSnapshot initialSnapshot, CancellationToken ct)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _context.RequestAborted);
+        // One stall CTS per pump, linked to the outer token so it fires on disconnect too.
+        // TryReset() re-arms the timer before each write without allocating a new source.
+        using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
         var token = linkedCts.Token;
         var snapshotGeneration = initialSnapshot.Generation;
         var snapshotLastSequence = initialSnapshot.LastSequence;
@@ -258,7 +261,7 @@ public sealed class SubscriberConnection
             {
                 using (lease)
                 {
-                    await WriteLeaseAsync(lease, token);
+                    await WriteLeaseAsync(lease, stallCts, token);
                 }
             }
 
@@ -272,7 +275,7 @@ public sealed class SubscriberConnection
                         if (lease.Generation == snapshotGeneration && lease.Sequence <= snapshotLastSequence)
                             continue;
 
-                        await WriteLeaseAsync(lease, token);
+                        await WriteLeaseAsync(lease, stallCts, token);
                     }
                 }
             }
@@ -293,13 +296,16 @@ public sealed class SubscriberConnection
         }
     }
 
-    private async Task WriteLeaseAsync(BufferLease lease, CancellationToken ct)
+    private async Task WriteLeaseAsync(BufferLease lease, CancellationTokenSource stallCts, CancellationToken outerCt)
     {
         var bytes = lease.Memory;
         if (bytes.IsEmpty)
             return;
 
-        using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // Re-arm the shared stall CTS for this write. TryReset clears the previous
+        // timer on the hot path; if it returns false the outer token already fired and
+        // CancelAfter is a no-op — the next await will throw immediately, which is fine.
+        stallCts.TryReset();
         stallCts.CancelAfter(_writeStallTimeout);
 
         try
@@ -307,7 +313,7 @@ public sealed class SubscriberConnection
             await _writer.WriteAsync(bytes, stallCts.Token);
             await _writer.FlushAsync(stallCts.Token);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested && stallCts.IsCancellationRequested)
+        catch (OperationCanceledException) when (!outerCt.IsCancellationRequested && stallCts.IsCancellationRequested)
         {
             // The per-write stall timer fired; the client's socket is wedged.
             throw new WriteStallException();

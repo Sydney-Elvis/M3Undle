@@ -795,13 +795,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         message: "Subscriber resynced at clean TS boundary; resuming delivery.");
                     // Fall through to normal enqueue below.
                 }
-                else if (subscriber.RegisterResyncDrainProgress())
+                else if (subscriber.RegisterResyncDrainProgress() || subscriber.QueueDepth <= subscriber.LowWaterMark)
                 {
-                    // The queue drained since the last tick — the client is keeping up and is
+                    // The queue drained since the last tick, OR it has already settled at or
+                    // below the low-water mark — either way the client is keeping up and is
                     // only waiting for the next clean IDR boundary we have yet to produce, so
                     // reset the grace timer instead of accumulating eviction pressure it cannot
                     // influence. (Without this, a healthy client could be evicted during a long
-                    // GOP simply because boundaries are sparse.)
+                    // GOP simply because boundaries are sparse and the queue stops shrinking
+                    // once it reaches zero.)
                     subscriber.ResetSlowClientGrace();
                     continue;
                 }
