@@ -566,7 +566,7 @@ public static class XtreamEndpoints
             return;
         }
 
-        var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs);
+        var requiresHls = clientRequestedHls || PlaybackModeResolver.RequiresHls(context, forceTs);
 
         // HLS slot reservation only applies to non-shared (native upstream HLS) sessions.
         ChannelSessionManager.HlsSlotReservation? hlsSlotReservation = null;
