@@ -22,6 +22,52 @@ namespace M3Undle.Web.Tests.Api;
 public sealed class XtreamEndpointTests
 {
     [TestMethod]
+    public async Task PlayerApi_NoAction_ReturnsAccountInfoWithEchoedCredentials()
+    {
+        await using var factory = new XtreamApiFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsync("/player_api.php", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["username"] = "test-user",
+            ["password"] = "secret",
+        }));
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var userInfo = json.RootElement.GetProperty("user_info");
+        var serverInfo = json.RootElement.GetProperty("server_info");
+
+        // Clients like IPTV Smarters use the returned username/password for all
+        // subsequent requests — empty values cause the download phase to silently stop.
+        Assert.AreEqual(1, userInfo.GetProperty("auth").GetInt32());
+        Assert.AreEqual("test-user", userInfo.GetProperty("username").GetString());
+        Assert.AreEqual("secret", userInfo.GetProperty("password").GetString());
+
+        Assert.IsTrue(serverInfo.TryGetProperty("url", out _));
+        Assert.IsTrue(serverInfo.TryGetProperty("port", out _));
+    }
+
+    [TestMethod]
+    public async Task PlayerApi_GetAccountInfoAction_ReturnsAccountInfoWithEchoedCredentials()
+    {
+        await using var factory = new XtreamApiFactory();
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/player_api.php?username=test-user&password=secret&action=get_account_info");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var userInfo = json.RootElement.GetProperty("user_info");
+
+        Assert.AreEqual(1, userInfo.GetProperty("auth").GetInt32());
+        Assert.AreEqual("test-user", userInfo.GetProperty("username").GetString());
+        Assert.AreEqual("secret", userInfo.GetProperty("password").GetString());
+    }
+
+    [TestMethod]
     public async Task PlayerApi_PostFormAction_ReturnsLiveStreams()
     {
         await using var factory = new XtreamApiFactory();
