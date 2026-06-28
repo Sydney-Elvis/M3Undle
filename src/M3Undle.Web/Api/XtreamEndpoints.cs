@@ -545,14 +545,20 @@ public static class XtreamEndpoints
         // analysis on values sourced directly from the request.
         var urlPass = access.UrlCredential?.Password;
         var clientRequestedHls = streamId.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
-        if (!forceTs && resolved.UseSharedSession
+        var clientRequestedTs  = streamId.EndsWith(".ts",   StringComparison.OrdinalIgnoreCase);
+        // Don't redirect to HLS if the client explicitly requested TS — honour the extension.
+        if (!forceTs && resolved.UseSharedSession && !clientRequestedTs
             && (clientRequestedHls || PlaybackModeResolver.IsBurstBufferingClient(context))
             && urlPass is not null)
         {
             var numericStreamId = streamId.Contains('.')
                 ? streamId[..streamId.LastIndexOf('.')]
                 : streamId;
-            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8";
+            // Pass the app-layer UA as a hint so the manifest handler can seed client tracking
+            // with the app identity rather than whatever the media player sends on follow-up requests.
+            var requestUa = context.Request.Headers.UserAgent.ToString();
+            var uaHint    = string.IsNullOrEmpty(requestUa) ? string.Empty : $"?_ua={Uri.EscapeDataString(requestUa)}";
+            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8{uaHint}";
             logger.LogInformation(
                 "Auto-HLS redirect (Xtream): channel={Channel} id={StreamId} client={Client}",
                 entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
@@ -921,12 +927,17 @@ public static class XtreamEndpoints
             return;
         }
 
+        // Prefer the UA hint seeded by the redirect (the app-layer UA from ServeXtreamStreamAsync)
+        // over whatever the media player sends on this follow-up request — the hint is more specific.
+        var hintUa      = context.Request.Query["_ua"].ToString();
+        var requestUa   = context.Request.Headers.UserAgent.ToString();
+        var effectiveUa = string.IsNullOrEmpty(hintUa) ? requestUa : hintUa;
         generatedHlsSessionManager.TrackClient(
             generatedSession.SessionId,
             context.Connection.RemoteIpAddress?.ToString(),
-            context.Request.Headers.UserAgent.ToString(),
+            effectiveUa,
             context.Request.Path.Value ?? string.Empty,
-            GeneratedHlsSessionManager.ShouldCountAsViewer(context.Request.Headers.UserAgent.ToString()));
+            GeneratedHlsSessionManager.ShouldCountAsViewer(effectiveUa));
 
         var manifest = await generatedHlsSessionManager.ReadManifestAsync(generatedSession.SessionId, cancellationToken);
         if (manifest is null)
