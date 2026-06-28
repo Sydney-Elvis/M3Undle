@@ -573,6 +573,13 @@ else
             userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
 
+        // ExoPlayer/Media3 — Google's Android media playback engine. Apps that delegate HLS
+        // playback to ExoPlayer (e.g. Smarters via Xtream) will appear with this UA instead
+        // of their own app UA. Check before Dalvik since ExoPlayer UAs may also contain Dalvik.
+        if (userAgent.Contains("ExoPlayer", StringComparison.OrdinalIgnoreCase) ||
+            userAgent.Contains("Media3", StringComparison.OrdinalIgnoreCase))
+            return "ExoPlayer";
+
         // Dalvik is the Android runtime UA, seen when an IPTV app makes its initial
         // connection before switching to its own UA. The full string includes device info.
         if (userAgent.StartsWith("Dalvik", StringComparison.OrdinalIgnoreCase))
