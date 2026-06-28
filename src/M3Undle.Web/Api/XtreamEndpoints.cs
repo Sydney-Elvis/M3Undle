@@ -87,10 +87,11 @@ public static class XtreamEndpoints
         var form = await TryReadFormAsync(context.Request, cancellationToken);
         var action = GetRequestValue(context.Request, form, "action");
 
+        var actionForLog    = (string.IsNullOrEmpty(action) ? "get_account_info" : action).ReplaceLineEndings(" ");
+        var clientForLog    = (context.Connection.RemoteIpAddress?.ToString() ?? "unknown").ReplaceLineEndings(" ");
+        var userAgentForLog = context.Request.Headers.UserAgent.ToString().ReplaceLineEndings(" ");
         logger.LogInformation("Xtream API: action={Action} client={Client} ua={UserAgent}",
-            string.IsNullOrEmpty(action) ? "get_account_info" : action,
-            context.Connection.RemoteIpAddress,
-            context.Request.Headers.UserAgent.ToString());
+            actionForLog, clientForLog, userAgentForLog);
 
         // No action or explicit get_account_info → return account + server info
         if (string.IsNullOrEmpty(action) || action == "get_account_info")
@@ -189,8 +190,8 @@ public static class XtreamEndpoints
     {
         var access = context.GetResolvedClientAccess();
         var baseUrl = GetBaseUrl(context);
-        var username = access.UrlCredential?.Username ?? access.Credential.Username;
-        var password = access.UrlCredential?.Password ?? string.Empty;
+        var username = Uri.EscapeDataString(access.UrlCredential?.Username ?? access.Credential.Username);
+        var password = Uri.EscapeDataString(access.UrlCredential?.Password ?? string.Empty);
         var categoryFilter = GetRequestValue(context.Request, form, "category_id");
         var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
 
@@ -310,8 +311,8 @@ public static class XtreamEndpoints
 
         var access   = context.GetResolvedClientAccess();
         var baseUrl  = GetBaseUrl(context);
-        var username = access.UrlCredential?.Username ?? access.Credential.Username;
-        var password = access.UrlCredential?.Password ?? string.Empty;
+        var username = Uri.EscapeDataString(access.UrlCredential?.Username ?? access.Credential.Username);
+        var password = Uri.EscapeDataString(access.UrlCredential?.Password ?? string.Empty);
         var added    = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
 
         var match = lineup.Channels
