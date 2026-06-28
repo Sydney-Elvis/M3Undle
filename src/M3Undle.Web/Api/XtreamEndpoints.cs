@@ -79,11 +79,18 @@ public static class XtreamEndpoints
         ILineupRenderer lineupRenderer,
         XtreamStreamIdCache streamIdCache,
         ApplicationDbContext db,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
+        var logger = loggerFactory.CreateLogger("M3Undle.XtreamApi");
         var access = context.GetResolvedClientAccess();
         var form = await TryReadFormAsync(context.Request, cancellationToken);
         var action = GetRequestValue(context.Request, form, "action");
+
+        logger.LogInformation("Xtream API: action={Action} client={Client} ua={UserAgent}",
+            string.IsNullOrEmpty(action) ? "get_account_info" : action,
+            context.Connection.RemoteIpAddress,
+            context.Request.Headers.UserAgent.ToString());
 
         // No action or explicit get_account_info → return account + server info
         if (string.IsNullOrEmpty(action) || action == "get_account_info")
@@ -128,9 +135,11 @@ public static class XtreamEndpoints
             user_info = new
             {
                 username = access.UrlCredential?.Username ?? access.Credential.Username,
-                // Deliberately never echo endpoint credentials back in account-info responses.
-                // The field remains present for shape compatibility, but value is always redacted.
-                password = string.Empty,
+                // Echo the URL credential password (what the client submitted) so that Xtream
+                // clients that use the auth response to seed subsequent requests work correctly.
+                // This is the external/URL credential only — the internal M3Undle account
+                // password is never exposed here.
+                password = access.UrlCredential?.Password ?? string.Empty,
                 message = string.Empty,
                 auth = 1,
                 status = "Active",
