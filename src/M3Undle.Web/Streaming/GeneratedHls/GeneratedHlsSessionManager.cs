@@ -268,7 +268,8 @@ public sealed class GeneratedHlsSessionManager(
                 record.ClientId, record.SessionId, record.RequestedRoute,
                 record.RemoteIp, record.UserAgent, record.ConnectedUtc,
                 BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls,
-                Delivery: DeliveryMethod.Hls, DeliveryReason: "Generated HLS (segmented pull)"));
+                Delivery: DeliveryMethod.Hls, DeliveryReason: "Generated HLS (segmented pull)",
+                DisplayName: session.DisplayName));
         }
 
         registry.UpsertSession(session.ToSnapshot());
