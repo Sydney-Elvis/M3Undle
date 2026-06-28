@@ -817,7 +817,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             StreamDiagnosticEventKind.SubscriberQueueFull,
                             subscriber: subscriber,
                             disconnectReason: SubscriberDisconnectReason.SlowClient,
-                            queueDepth: subscriber.QueueDepth,
+                            queueDepth: Math.Max(1, subscriber.QueueDepth),
                             message: "Subscriber resync stalled beyond slow-client grace; removing as slow client.");
                         slowSubscribers ??= [];
                         slowSubscribers.Add(subscriber);

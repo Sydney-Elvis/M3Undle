@@ -589,7 +589,7 @@ public static class CompatibilityEndpoints
 
         if (!forceTs && resolved.UseSharedSession && PlaybackModeResolver.IsBurstBufferingClient(context))
         {
-            var hlsUrl = $"{GetBaseUrl(context)}/hls/{Uri.EscapeDataString(streamKey)}/index.m3u8";
+            var hlsUrl = $"/hls/{Uri.EscapeDataString(streamKey)}/index.m3u8";
             hlsUrl = hlsUrl.ApplyClientAccessQuery(context);
             logger.LogInformation(
                 "Auto-HLS redirect: channel={Channel} key={StreamKey} client={Client}",

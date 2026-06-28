@@ -536,11 +536,11 @@ public static class XtreamEndpoints
             var numericStreamId = streamId.Contains('.')
                 ? streamId[..streamId.LastIndexOf('.')]
                 : streamId;
-            var hlsUrl = $"{GetBaseUrl(context)}/hls/{xUser}/{xPass}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8";
+            var hlsPath = $"/hls/{xUser}/{xPass}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8";
             logger.LogInformation(
                 "Auto-HLS redirect (Xtream): channel={Channel} id={StreamId} client={Client}",
                 entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
-            context.Response.Redirect(hlsUrl, permanent: false);
+            context.Response.Redirect(hlsPath, permanent: false);
             return;
         }
 
