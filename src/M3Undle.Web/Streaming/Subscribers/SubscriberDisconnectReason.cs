@@ -8,4 +8,5 @@ public enum SubscriberDisconnectReason
     SlowClient = 3,
     SessionClosed = 4,
     Retuned = 5,
+    WriteStall = 6,
 }

@@ -267,7 +267,8 @@ public sealed class GeneratedHlsSessionManager(
             registry.UpsertClient(new StreamClientSnapshot(
                 record.ClientId, record.SessionId, record.RequestedRoute,
                 record.RemoteIp, record.UserAgent, record.ConnectedUtc,
-                BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls));
+                BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls,
+                Delivery: DeliveryMethod.Hls, DeliveryReason: "Generated HLS (segmented pull)"));
         }
 
         registry.UpsertSession(session.ToSnapshot());
@@ -521,6 +522,8 @@ public sealed class GeneratedHlsSessionManager(
         info.ArgumentList.Add("0:a?");
         info.ArgumentList.Add("-c");
         info.ArgumentList.Add("copy");
+        info.ArgumentList.Add("-bsf:v");
+        info.ArgumentList.Add("dump_extra");
         info.ArgumentList.Add("-f");
         info.ArgumentList.Add("hls");
         info.ArgumentList.Add("-hls_time");
@@ -1163,7 +1166,20 @@ public sealed class GeneratedHlsSessionManager(
             => Interlocked.Exchange(ref _lastAccessUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
         public static string CreateClientKey(string? remoteIp, string? userAgent)
-            => $"{remoteIp}\x1f{userAgent}";
+            => remoteIp ?? userAgent ?? string.Empty;
+
+        // Higher score = more identifiable. Named app UAs beat generic platform UAs.
+        private static int GetUaSpecificity(string? ua)
+        {
+            if (string.IsNullOrEmpty(ua)) return 0;
+            if (ua.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.Contains("Smarters", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return 3;
+            if (ua.StartsWith("Dalvik/", StringComparison.OrdinalIgnoreCase)) return 1;
+            if (ua.StartsWith("okhttp/", StringComparison.OrdinalIgnoreCase)) return 1;
+            return 2;
+        }
 
         public static bool HasClientFingerprint(string? remoteIp, string? userAgent)
             => !string.IsNullOrWhiteSpace(remoteIp) || !string.IsNullOrWhiteSpace(userAgent);
@@ -1177,11 +1193,17 @@ public sealed class GeneratedHlsSessionManager(
             {
                 if (_hlsClients.TryGetValue(clientKey, out var existing))
                 {
+                    // Upgrade the stored UA when a more identifiable one arrives (e.g. SmartersPro
+                    // app-layer request arrives after the initial Dalvik/ExoPlayer platform request).
+                    var preferredUa = GetUaSpecificity(userAgent) > GetUaSpecificity(existing.UserAgent)
+                        ? userAgent
+                        : existing.UserAgent;
                     var updated = existing with
                     {
                         LastAccessUtc = now,
                         RequestedRoute = requestedRoute,
                         CountAsViewer = existing.CountAsViewer || countAsViewer,
+                        UserAgent = preferredUa,
                     };
                     _hlsClients[clientKey] = updated;
                     return new TrackedHlsClient(updated, IsNewClient: false);

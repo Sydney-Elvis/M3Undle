@@ -17,6 +17,15 @@ public sealed class BufferOptionsValidator : IValidateOptions<BufferOptions>
         if (options.ReadChunkSizeBytes <= 0 || options.ReadChunkSizeBytes > StreamingSettingsLimits.MaxReadChunkSizeBytes)
             errors.Add($"Buffer:ReadChunkSizeBytes must be between 1 and {StreamingSettingsLimits.MaxReadChunkSizeBytes} bytes (16 MiB).");
 
+        if (options.SubscriberQueueCapacity <= 0)
+            errors.Add("Buffer:SubscriberQueueCapacity must be greater than 0.");
+
+        if (options.SlowClientGracePeriod <= TimeSpan.Zero)
+            errors.Add("Buffer:SlowClientGracePeriod must be greater than zero.");
+
+        if (options.WriteStallTimeout <= TimeSpan.Zero)
+            errors.Add("Buffer:WriteStallTimeout must be greater than zero.");
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);

@@ -63,6 +63,7 @@ public static class CompatibilityEndpoints
         client.MapGet("auto/v{vchannel}", ServeHdhrAutoTuneByVChannelAsync);
         client.MapGet("auto/ch{channel}", ServeHdhrAutoTuneByChannelAsync);
         client.MapGet("auto/{channel}", ServeHdhrAutoTuneByChannelAsync);
+        client.MapGet("hls/{streamKey}/index.m3u8", ServeExternalHlsManifestAsync);
         client.MapGet("hls/{streamKey}/proxy", ServeHlsProxyAsync);
         client.MapGet("hls/generated/{sessionId}/{*asset}", ServeGeneratedHlsAssetAsync);
 
@@ -585,6 +586,18 @@ public static class CompatibilityEndpoints
             entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
 
         var forceTs = IsHdHomeRunTuneRoute(context.Request.Path) || (resolved.SourceDescriptor?.ForceMpegTs ?? false);
+
+        if (!forceTs && resolved.UseSharedSession && PlaybackModeResolver.IsBurstBufferingClient(context))
+        {
+            var hlsUrl = $"/hls/{Uri.EscapeDataString(streamKey)}/index.m3u8";
+            hlsUrl = hlsUrl.ApplyClientAccessQuery(context);
+            logger.LogInformation(
+                "Auto-HLS redirect: channel={Channel} key={StreamKey} client={Client}",
+                entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
+            context.Response.Redirect(hlsUrl, permanent: false);
+            return;
+        }
+
         var requiresHls = PlaybackModeResolver.RequiresHls(context, forceTs);
 
         // HLS slot reservation only applies to non-shared (native upstream HLS) sessions.
@@ -967,6 +980,140 @@ public static class CompatibilityEndpoints
         }
 
         await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
+    }
+
+    private static async Task ServeExternalHlsManifestAsync(
+        string streamKey,
+        HttpContext context,
+        StreamRequestResolver streamRequestResolver,
+        ChannelSessionManager channelSessionManager,
+        GeneratedHlsSessionManager generatedHlsSessionManager,
+        InternalRelaySecretService internalRelaySecretService,
+        HlsManifestRewriter hlsManifestRewriter,
+        IOptions<StreamProxyOptions> streamProxyOptions,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        var logger = loggerFactory.CreateLogger("M3Undle.Stream");
+        using var streamScope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Stream" });
+
+        StreamResolveResult resolved;
+        try
+        {
+            resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return;
+        }
+
+        if (!resolved.IsSuccess || resolved.Entry is null || resolved.SourceDescriptor is null)
+        {
+            context.Response.StatusCode = resolved.FailureStatusCode ?? StatusCodes.Status404NotFound;
+            if (!string.IsNullOrWhiteSpace(resolved.FailureMessage))
+                await context.Response.WriteAsync(resolved.FailureMessage, cancellationToken);
+            return;
+        }
+
+        if (!streamProxyOptions.Value.StreamingEnabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsync("Stream proxy is disabled.", cancellationToken);
+            return;
+        }
+
+        var entry = resolved.Entry;
+        var source = resolved.SourceDescriptor;
+
+        var parentSession = await channelSessionManager.TryGetOrCreateForGeneratedHlsAsync(
+            source, useSharedSession: true, cancellationToken);
+
+        string generatedStreamUrl = source.StreamUrl;
+        string? generatedRelaySecret = null;
+        string? parentStreamSessionId = null;
+
+        if (parentSession is not null)
+        {
+            var sk = source.SessionKey;
+            parentStreamSessionId = parentSession.SessionId;
+            generatedStreamUrl =
+                $"http://127.0.0.1:{context.Connection.LocalPort}/internal/relay/{Uri.EscapeDataString(sk.ProviderId)}/{Uri.EscapeDataString(sk.ProviderChannelId)}.ts";
+            generatedRelaySecret = internalRelaySecretService.Secret;
+        }
+
+        var generatedSession = await generatedHlsSessionManager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: generatedStreamUrl,
+                DisplayName: source.DisplayName,
+                ProviderId: generatedRelaySecret is null ? source.ProviderId : null,
+                AdmissionKey: source.SessionKey,
+                InternalRelaySecret: generatedRelaySecret,
+                ParentStreamSessionId: parentStreamSessionId,
+                RequestedRoute: context.Request.Path.Value ?? "/hls/manifest"),
+            cancellationToken);
+
+        if (generatedSession is null)
+        {
+            logger.LogWarning(
+                "External HLS startup failed: channel={Channel} key={StreamKey}",
+                entry.DisplayName,
+                streamKey);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.Append("Retry-After", "5");
+            await context.Response.WriteAsync("HLS unavailable for this channel.", cancellationToken);
+            return;
+        }
+
+        generatedHlsSessionManager.TrackClient(
+            generatedSession.SessionId,
+            context.Connection.RemoteIpAddress?.ToString(),
+            context.Request.Headers.UserAgent.ToString(),
+            context.Request.Path.Value ?? string.Empty,
+            GeneratedHlsSessionManager.ShouldCountAsViewer(context.Request.Headers.UserAgent.ToString()));
+
+        var manifest = await generatedHlsSessionManager.ReadManifestAsync(generatedSession.SessionId, cancellationToken);
+        if (manifest is null)
+        {
+            logger.LogDebug(
+                "External HLS manifest not ready: channel={Channel} key={StreamKey} session={SessionId}",
+                entry.DisplayName,
+                streamKey,
+                generatedSession.SessionId);
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.Append("Retry-After", "2");
+            await context.Response.WriteAsync("HLS manifest not ready yet.", cancellationToken);
+            return;
+        }
+
+        var manifestUrl = new Uri($"{GetBaseUrl(context)}{context.Request.Path}");
+        var segmentBase = $"{GetBaseUrl(context)}/hls/generated/{Uri.EscapeDataString(generatedSession.SessionId)}";
+
+        var rewritten = hlsManifestRewriter.Rewrite(
+            manifest,
+            manifestUrl,
+            uri =>
+            {
+                var fileName = Path.GetFileName(uri.AbsolutePath);
+                if (string.IsNullOrWhiteSpace(fileName))
+                    return uri.ToString();
+                var segmentUrl = $"{segmentBase}/{Uri.EscapeDataString(fileName)}";
+                return segmentUrl.ApplyClientAccessQuery(context);
+            });
+
+        logger.LogInformation(
+            "External HLS manifest served: channel={Channel} key={StreamKey} session={SessionId}",
+            entry.DisplayName,
+            streamKey,
+            generatedSession.SessionId);
+
+        context.Response.ContentType = "application/vnd.apple.mpegurl";
+        context.Response.Headers.CacheControl = "no-cache";
+        await context.Response.WriteAsync(rewritten, cancellationToken);
     }
 
     private static async Task ServeGeneratedHlsAssetAsync(

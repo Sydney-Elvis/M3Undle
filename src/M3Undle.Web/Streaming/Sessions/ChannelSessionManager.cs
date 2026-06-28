@@ -540,7 +540,9 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             UserAgent: slot.UserAgent,
             ConnectedUtc: slot.StartedUtc,
             BytesSent: 0,
-            QueueDepth: 0));
+            QueueDepth: 0,
+            Delivery: DeliveryMethod.Hls,
+            DeliveryReason: "Native HLS passthrough (upstream serves HLS)"));
 
         _registry.UpsertProvider(new StreamProviderSnapshot(
             SessionId: slot.SessionId,

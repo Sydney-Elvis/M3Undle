@@ -319,6 +319,7 @@ public sealed class HdHomeRunTunerManagerTests
             requestedRoute: "/hdhr/tune/test",
             context: new DefaultHttpContext(),
             queueCapacity: 4,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
