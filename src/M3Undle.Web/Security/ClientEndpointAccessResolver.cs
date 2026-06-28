@@ -27,6 +27,14 @@ internal sealed class ClientEndpointAccessResolver(
                 Enabled: true,
                 AuthType: AccessCredentialAuthType.UsernamePassword);
 
+            // Read credentials from the request for echo-back only — no validation is performed.
+            // Clients (e.g. Smarters Pro on TV) verify that the returned username matches what
+            // they sent; returning "anonymous" causes them to reject the connection.
+            var requestCredentials = await TryReadCredentialsAsync(context, cancellationToken);
+            var fallbackUrlCredential = requestCredentials.HasValue
+                ? new AccessUrlCredential(requestCredentials.Value.Username, requestCredentials.Value.Password)
+                : null;
+
             return ClientAccessResolutionResult.Success(new ResolvedClientAccess(
                 Credential: fallbackCredential,
                 Binding: new AccessBinding(
@@ -35,7 +43,7 @@ internal sealed class ClientEndpointAccessResolver(
                     AllowedProfileIds: [profileId],
                     VirtualTunerId: "hdhr-main"),
                 Transport: ClientCredentialTransport.None,
-                UrlCredential: null));
+                UrlCredential: fallbackUrlCredential));
         }
 
         var credentials = await TryReadCredentialsAsync(context, cancellationToken);
