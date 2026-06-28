@@ -534,7 +534,9 @@ public static class XtreamEndpoints
         // the redirect path is built from trusted data and does not trigger open-redirect
         // analysis on values sourced directly from the request.
         var urlPass = access.UrlCredential?.Password;
-        if (!forceTs && resolved.UseSharedSession && PlaybackModeResolver.IsBurstBufferingClient(context)
+        var clientRequestedHls = streamId.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
+        if (!forceTs && resolved.UseSharedSession
+            && (clientRequestedHls || PlaybackModeResolver.IsBurstBufferingClient(context))
             && urlPass is not null)
         {
             var numericStreamId = streamId.Contains('.')

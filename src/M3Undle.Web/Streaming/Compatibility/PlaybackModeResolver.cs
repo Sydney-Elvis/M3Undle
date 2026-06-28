@@ -35,6 +35,8 @@ public static class PlaybackModeResolver
             return true;
         if (userAgent.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase))
             return true;
+        if (userAgent.Contains("Smarters Pro", StringComparison.OrdinalIgnoreCase))
+            return true;
         // The actual root cause is ExoPlayer/Media3's burst-then-idle buffering; match the
         // engine names directly so any player embedding it is covered, not just known apps.
         if (userAgent.Contains("ExoPlayer", StringComparison.OrdinalIgnoreCase))
