@@ -181,6 +181,7 @@ else
             <HeaderContent>
                 <MudTh>Client</MudTh>
                 <MudTh>IP</MudTh>
+                <MudTh>Delivery</MudTh>
                 <MudTh>Transfer</MudTh>
                 <MudTh>Backlog</MudTh>
                 <MudTh>Connected</MudTh>
@@ -194,18 +195,28 @@ else
                     <MudTooltip Text="@ClientTypeTooltip(context.UserAgent, context.RequestedRoute)" Placement="Placement.Right">
                         <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
                     </MudTooltip>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        @(channelName ?? context.RequestedRoute)
-                        @if (context.Transport == ClientTransport.GeneratedHls)
-                        {
-                            <span> · HLS</span>
-                        }
-                    </MudText>
+                    @if (channelName is not null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@channelName</MudText>
+                    }
+                    else if (!string.IsNullOrEmpty(context.RequestedRoute))
+                    {
+                        <MudTooltip Text="@context.RequestedRoute" Placement="Placement.Bottom">
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@RouteSummary(context.RequestedRoute)</MudText>
+                        </MudTooltip>
+                    }
                 </MudTd>
                 <MudTd DataLabel="IP">
                     <MudTooltip Text="@IpTooltip(context.RemoteIp)" Placement="Placement.Top">
                         <MudText Typo="Typo.body2">@(context.RemoteIp ?? "—")</MudText>
                     </MudTooltip>
+                </MudTd>
+                <MudTd DataLabel="Delivery">
+                    <TooltipChip Label="@DeliveryLabel(context.Delivery)"
+                                 TooltipText="@DeliveryTooltip(context)"
+                                 Color="Color.Info"
+                                 Variant="Variant.Outlined"
+                                 Size="Size.Small" />
                 </MudTd>
                 <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
@@ -353,6 +364,7 @@ else
         foreach (var c in _clients)
         {
             hc.Add(c.ClientId); hc.Add(c.BytesPerSecond); hc.Add(c.QueueDepth); hc.Add(c.BytesSent);
+            hc.Add(c.Delivery);
         }
         hc.Add(_recentEnded.Count);
         return hc.ToHashCode();
@@ -514,11 +526,27 @@ else
         _ => kind ?? "Unknown",
     };
 
+    // Friendly caption for a request route when the channel name can't be resolved
+    // (e.g. generated-HLS clients keyed by the FFmpeg session, not the channel session).
+    // The full route is shown on hover; the inline caption stays uncluttered.
+    private static string RouteSummary(string route)
+    {
+        if (route.Contains("/hls/generated/", StringComparison.OrdinalIgnoreCase))
+            return "HLS segments";
+        if (route.Contains("/hls/", StringComparison.OrdinalIgnoreCase))
+            return "HLS manifest";
+        return "Stream request";
+    }
+
     private static string DetectClientType(string? userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent)) return "Unknown";
+
         // Named apps — check before generic components they may use internally.
         if (userAgent.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return "TiviMate";
+        // SmartersPro is the UA sent by IPTV Smarters Pro on Android TV.
+        if (userAgent.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return "Smarters Pro";
+        if (userAgent.Contains("Smarters Player", StringComparison.OrdinalIgnoreCase)) return "Smarters";
         if (userAgent.Contains("IPTV Smarters", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("IPTVSmarters", StringComparison.OrdinalIgnoreCase)) return "Smarters";
         if (userAgent.Contains("Jellyfin", StringComparison.OrdinalIgnoreCase)) return "Jellyfin";
@@ -533,6 +561,8 @@ else
         if (userAgent.Contains("Perfect Player", StringComparison.OrdinalIgnoreCase)) return "Perfect Player";
         if (userAgent.Contains("GSE", StringComparison.OrdinalIgnoreCase)) return "GSE Player";
         if (userAgent.Contains("MrMC", StringComparison.OrdinalIgnoreCase)) return "MrMC";
+        if (userAgent.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return "Roku";
+
         // Generic media components — likely a media server's internal fetcher.
         if (userAgent.Contains("VLC", StringComparison.OrdinalIgnoreCase)) return "VLC";
         // Lavf is the ffmpeg libavformat UA prefix used by Jellyfin/Emby LiveTV transcoder.
@@ -542,7 +572,32 @@ else
         if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
             userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
+
+        // Dalvik is the Android runtime UA, seen when an IPTV app makes its initial
+        // connection before switching to its own UA. The full string includes device info.
+        if (userAgent.StartsWith("Dalvik", StringComparison.OrdinalIgnoreCase))
+            return userAgent.Contains("TV", StringComparison.OrdinalIgnoreCase) ? "Android TV" : "Android";
+
+        // okhttp is a common Android HTTP client; if an IPTV app doesn't set a custom UA
+        // this is what appears. Hover to see the full User-Agent for context.
+        if (userAgent.StartsWith("okhttp", StringComparison.OrdinalIgnoreCase)) return "Android App";
+
         return "Unknown";
+    }
+
+    private static string DeliveryLabel(DeliveryMethod method) => method switch
+    {
+        DeliveryMethod.Hls => "HLS",
+        DeliveryMethod.RemuxTs => "Remux TS",
+        _ => "Raw TS",
+    };
+
+    private static string DeliveryTooltip(StreamClientSnapshot client)
+    {
+        var label = DeliveryLabel(client.Delivery);
+        return string.IsNullOrWhiteSpace(client.DeliveryReason)
+            ? $"Delivery method for this client: {label}."
+            : $"Delivery method for this client: {label} — {client.DeliveryReason}.";
     }
 
     private static string FormatRate(long? bytesPerSecond) => bytesPerSecond switch

@@ -31,6 +31,7 @@ public sealed class SubscriberConnectionTests
         context.Response.Body = body;
         var subscriber = new SubscriberConnection(
             "session-1", "/test", context, queueCapacity: 64,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
         // Enqueue the overlapping range (2-4) plus the new range (5-6).
@@ -72,6 +73,7 @@ public sealed class SubscriberConnectionTests
         context.Response.Body = body;
         var subscriber = new SubscriberConnection(
             "session-2", "/test", context, queueCapacity: 64,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
         subscriber.TryEnqueue(l0.Duplicate());
@@ -99,6 +101,7 @@ public sealed class SubscriberConnectionTests
         context.Response.Body = body;
         var subscriber = new SubscriberConnection(
             "session-3", "/test", context, queueCapacity: 1,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
             onCompleted: (_, _) => Task.CompletedTask);
 
         var firstQueued = first.Duplicate();
@@ -119,5 +122,123 @@ public sealed class SubscriberConnectionTests
         await subscriber.Completion;
 
         CollectionAssert.AreEqual(new byte[] { 0xE0 }, body.ToArray());
+    }
+
+    [TestMethod]
+    public void RegisterQueueOverflow_WithinGracePeriod_KeepsClientConnected()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // A long grace means a transient backlog never asks the session to evict the client;
+        // the first overflow opens the window and subsequent overflows stay within it.
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)));
+        Assert.AreEqual(SubscriberQueueOverflowResult.WithinGrace, subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)));
+        Assert.AreEqual(SubscriberQueueOverflowResult.WithinGrace, subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)));
+    }
+
+    [TestMethod]
+    public void RegisterQueueOverflow_AfterGraceElapsed_RequestsEviction()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // With a zero grace, the first overflow opens the window and the next overflow has
+        // already exceeded it, so the session is told to evict the stuck consumer.
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+        Assert.AreEqual(SubscriberQueueOverflowResult.GraceExceeded, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+    }
+
+    [TestMethod]
+    public void TryEnqueue_AfterDrainingBelowLowWater_ClearsGraceTimer()
+    {
+        var buffer = new RingBuffer(maxBytes: 1024);
+        using var chunk = buffer.Write(new byte[] { 0xF0 });
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // Open the grace window, then accept a chunk that leaves the queue below the
+        // low-water mark — the client is keeping up again, so the timer must reset and the
+        // next overflow starts a fresh window instead of immediately evicting.
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+        Assert.IsTrue(subscriber.TryEnqueue(chunk.Duplicate()));
+        Assert.AreEqual(SubscriberQueueOverflowResult.EnteredGrace, subscriber.RegisterQueueOverflow(TimeSpan.Zero));
+    }
+
+    [TestMethod]
+    public void SetResyncPending_SetsFlag_AndClearResyncPending_ClearsIt()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        Assert.IsFalse(subscriber.IsResyncPending, "Resync should not be pending after construction.");
+
+        subscriber.SetResyncPending();
+        Assert.IsTrue(subscriber.IsResyncPending, "SetResyncPending must raise the flag.");
+
+        subscriber.ClearResyncPending();
+        Assert.IsFalse(subscriber.IsResyncPending, "ClearResyncPending must clear the flag.");
+    }
+
+    [TestMethod]
+    public void ClearResyncPending_AlsoClearsGraceTimer()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // Open the grace window, enter resync, clear resync — the next overflow should be
+        // treated as a fresh EnteredGrace rather than a continuation of the old window.
+        subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1));
+        subscriber.SetResyncPending();
+        subscriber.ClearResyncPending();
+
+        Assert.AreEqual(
+            SubscriberQueueOverflowResult.EnteredGrace,
+            subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)),
+            "Grace timer must be reset by ClearResyncPending so the next overflow starts a fresh window.");
+    }
+
+    [TestMethod]
+    public void ResetSlowClientGrace_ClearsTimer_WithoutClearingResync()
+    {
+        var subscriber = CreateSubscriber(queueCapacity: 4);
+
+        // While resyncing, a client that is still draining resets its grace timer (it is only
+        // waiting for the next clean boundary) but stays in resync state.
+        subscriber.SetResyncPending();
+        subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1));
+        subscriber.ResetSlowClientGrace();
+
+        Assert.IsTrue(subscriber.IsResyncPending, "ResetSlowClientGrace must not clear the resync flag.");
+        Assert.AreEqual(
+            SubscriberQueueOverflowResult.EnteredGrace,
+            subscriber.RegisterQueueOverflow(TimeSpan.FromHours(1)),
+            "Grace timer must be reset so a draining resync client is not evicted.");
+    }
+
+    [TestMethod]
+    public void RegisterResyncDrainProgress_StalledOrGrowingDepth_ReportsNoProgress()
+    {
+        var buffer = new RingBuffer(maxBytes: 1024);
+        var subscriber = CreateSubscriber(queueCapacity: 8);
+
+        using (var first = buffer.Write(new byte[] { 0xF0 }))
+            Assert.IsTrue(subscriber.TryEnqueue(first.Duplicate()));
+
+        // Enter resync; the entry depth (1) becomes the progress baseline.
+        subscriber.SetResyncPending();
+
+        // Depth holds steady at 1 — a stuck client makes no progress, so grace must accrue.
+        Assert.IsFalse(subscriber.RegisterResyncDrainProgress());
+
+        // Depth grows to 2 — still no drain progress.
+        using (var second = buffer.Write(new byte[] { 0xF1 }))
+            Assert.IsTrue(subscriber.TryEnqueue(second.Duplicate()));
+        Assert.IsFalse(subscriber.RegisterResyncDrainProgress());
+    }
+
+    private static SubscriberConnection CreateSubscriber(int queueCapacity)
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+        return new SubscriberConnection(
+            "session-overflow", "/test", context, queueCapacity,
+            writeStallTimeout: TimeSpan.FromSeconds(30),
+            onCompleted: (_, _) => Task.CompletedTask);
     }
 }

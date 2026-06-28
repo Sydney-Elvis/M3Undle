@@ -91,6 +91,9 @@ public sealed class ChannelSessionIntegrationTests
                 SubscriberQueueCapacity = 1,
                 MaxBytesPerSession = 64 * 1024,
                 MaxBytesHardCap = 4 * 1024 * 1024,
+                // Short grace so the permanently-blocked consumer is evicted within the test
+                // window; the production default tolerates transient pauses for much longer.
+                SlowClientGracePeriod = TimeSpan.FromMilliseconds(50),
             });
 
         var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
@@ -100,15 +103,19 @@ public sealed class ChannelSessionIntegrationTests
 
         var subscriber = await session.AttachSubscriberAsync(context, CancellationToken.None);
 
+        // The blocked consumer keeps the queue full continuously, so once the grace window
+        // elapses the overflow is reported with a SlowClient disconnect reason and the
+        // subscriber is evicted.
         await WaitUntilAsync(
             () => fixture.DiagnosticsStore.Query(
                 sessionId: session.SessionId,
-                kind: StreamDiagnosticEventKind.SubscriberQueueFull).Count > 0,
+                kind: StreamDiagnosticEventKind.SubscriberQueueFull)
+                .Any(x => x.DisconnectReason == SubscriberDisconnectReason.SlowClient),
             TimeSpan.FromSeconds(5));
 
         var queueFull = fixture.DiagnosticsStore
             .Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.SubscriberQueueFull)
-            .First();
+            .First(x => x.DisconnectReason == SubscriberDisconnectReason.SlowClient);
         Assert.AreEqual(subscriber.ClientId, queueFull.ClientId);
         Assert.AreEqual(SubscriberDisconnectReason.SlowClient, queueFull.DisconnectReason);
         Assert.AreEqual(1, queueFull.QueueDepth);

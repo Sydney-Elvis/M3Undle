@@ -97,6 +97,26 @@ public sealed class PlaybackModeResolverTests
         Assert.IsTrue(PlaybackModeResolver.RequiresHls(context, forceTs: false));
     }
 
+    [TestMethod]
+    [DataRow("Roku/DVP-13.0 (13.0.0.4189-00)")]
+    [DataRow("smarters pro/1.0 (Linux;Android 12) SmartersPro")]
+    [DataRow("ExoPlayerLib/2.19.1 (Linux;Android 12) ExoPlayerLib/2.19.1")]
+    [DataRow("Media3ExoPlayer/1.3.1 (Linux;Android 13)")]
+    [DataRow("Dalvik/2.1.0 (Linux; U; Android 12; Hisense Build/STT1.211007.001)")]
+    [DataRow("TiviMate/4.7.0 (okhttp/4.12.0)")]
+    [DataRow("okhttp/4.12.0")]
+    public void IsBurstBufferingUserAgent_KnownBurstBufferers_True(string userAgent)
+        => Assert.IsTrue(PlaybackModeResolver.IsBurstBufferingUserAgent(userAgent));
+
+    [TestMethod]
+    [DataRow("VLC/3.0.20 LibVLC/3.0.20")]
+    [DataRow("Lavf/60.16.100")]
+    [DataRow("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")]
+    [DataRow("")]
+    [DataRow(null)]
+    public void IsBurstBufferingUserAgent_ContinuousReaders_False(string? userAgent)
+        => Assert.IsFalse(PlaybackModeResolver.IsBurstBufferingUserAgent(userAgent));
+
     private static DefaultHttpContext CreateContext(string path, string? query, string userAgent)
     {
         var context = new DefaultHttpContext();

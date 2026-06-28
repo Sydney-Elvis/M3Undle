@@ -11,12 +11,25 @@ public sealed record HdhrSubscriberDiagnostics(
     string StreamKey,
     string VirtualPath);
 
+public enum SubscriberQueueOverflowResult
+{
+    /// <summary>First overflow after the client was keeping up — the grace window just started.</summary>
+    EnteredGrace,
+
+    /// <summary>Still within the grace window — skip the overflowing chunk but keep the client.</summary>
+    WithinGrace,
+
+    /// <summary>Queue has stayed full past the grace window — evict as a slow client.</summary>
+    GraceExceeded,
+}
+
 public sealed class SubscriberConnection
 {
     private readonly HttpContext _context;
     private readonly PipeWriter _writer;
     private readonly Channel<BufferLease> _outbound;
     private readonly Func<SubscriberConnection, SubscriberDisconnectReason, Task> _onCompleted;
+    private readonly TimeSpan _writeStallTimeout;
     private readonly object _gate = new();
 
     private bool _started;
@@ -24,6 +37,10 @@ public sealed class SubscriberConnection
     private Task? _pumpTask;
     private long _bytesSent;
     private int _queueDepth;
+    private long _queueFullSinceTicks;
+    private readonly int _queueLowWaterMark;
+    private int _resyncPending;
+    private int _resyncLastDepth;
     private HdhrSubscriberDiagnostics? _hdhrDiagnostics;
 
     public SubscriberConnection(
@@ -31,6 +48,7 @@ public sealed class SubscriberConnection
         string requestedRoute,
         HttpContext context,
         int queueCapacity,
+        TimeSpan writeStallTimeout,
         Func<SubscriberConnection, SubscriberDisconnectReason, Task> onCompleted,
         bool isInternal = false)
     {
@@ -40,8 +58,11 @@ public sealed class SubscriberConnection
         _context = context;
         _writer = context.Response.BodyWriter;
         _onCompleted = onCompleted;
+        _writeStallTimeout = writeStallTimeout;
 
-        var options = new BoundedChannelOptions(Math.Max(1, queueCapacity))
+        var effectiveCapacity = Math.Max(1, queueCapacity);
+        _queueLowWaterMark = Math.Max(1, effectiveCapacity / 2);
+        var options = new BoundedChannelOptions(effectiveCapacity)
         {
             SingleReader = true,
             SingleWriter = false,
@@ -82,7 +103,11 @@ public sealed class SubscriberConnection
 
     public int QueueDepth => Math.Max(0, Volatile.Read(ref _queueDepth));
 
+    public int LowWaterMark => _queueLowWaterMark;
+
     public bool IsCompleted => Volatile.Read(ref _completed) == 1;
+
+    public bool IsResyncPending => Volatile.Read(ref _resyncPending) == 1;
 
     public Task Completion => _pumpTask ?? Task.CompletedTask;
 
@@ -117,8 +142,81 @@ public sealed class SubscriberConnection
         if (!_outbound.Writer.TryWrite(lease))
             return false;
 
-        Interlocked.Increment(ref _queueDepth);
+        var depth = Interlocked.Increment(ref _queueDepth);
+
+        // Once the client has drained back below the low-water mark it is keeping up
+        // again, so clear any slow-client grace timer. Requiring real headroom (not just
+        // a single accepted chunk) means a consumer that stays pinned near capacity keeps
+        // the timer running and is eventually evicted.
+        if (depth <= _queueLowWaterMark)
+            Volatile.Write(ref _queueFullSinceTicks, 0);
+
         return true;
+    }
+
+    /// <summary>
+    /// Records that a live chunk could not be enqueued because the outbound queue is full.
+    /// The queue stays bounded (the overflowing chunk is dropped by the caller); this only
+    /// decides whether a sustained backlog has lasted long enough to evict the subscriber.
+    /// </summary>
+    public SubscriberQueueOverflowResult RegisterQueueOverflow(TimeSpan grace)
+    {
+        var now = Environment.TickCount64;
+        var since = Volatile.Read(ref _queueFullSinceTicks);
+        if (since == 0)
+        {
+            // TickCount64 is 0 only in the first millisecond after boot; map it to 1 so 0
+            // stays a reliable "not currently backed up" sentinel.
+            Volatile.Write(ref _queueFullSinceTicks, now == 0 ? 1 : now);
+            return SubscriberQueueOverflowResult.EnteredGrace;
+        }
+
+        return now - since >= (long)grace.TotalMilliseconds
+            ? SubscriberQueueOverflowResult.GraceExceeded
+            : SubscriberQueueOverflowResult.WithinGrace;
+    }
+
+    /// <summary>
+    /// Resets the slow-client grace timer without clearing resync state. Used while a
+    /// subscriber is resyncing and still draining: it is keeping up and merely waiting for
+    /// the next clean TS boundary, so it must not accumulate grace it cannot influence.
+    /// </summary>
+    public void ResetSlowClientGrace()
+        => Volatile.Write(ref _queueFullSinceTicks, 0);
+
+    /// <summary>
+    /// Reports whether the outbound queue has drained since the previous resync tick. A
+    /// strictly smaller depth means the client is making progress (keep its grace timer
+    /// reset); a depth that holds steady or grows means it is genuinely stuck (let the grace
+    /// timer run). Single-threaded: only called from the session publish loop while resyncing.
+    /// </summary>
+    public bool RegisterResyncDrainProgress()
+    {
+        var depth = Volatile.Read(ref _queueDepth);
+        var previous = _resyncLastDepth;
+        _resyncLastDepth = depth;
+        return depth < previous;
+    }
+
+    /// <summary>
+    /// Marks this subscriber as needing a resync: no more chunks will be enqueued until
+    /// <see cref="ClearResyncPending"/> is called at a clean TS boundary. Captures the
+    /// current queue depth as the baseline for drain-progress tracking.
+    /// </summary>
+    public void SetResyncPending()
+    {
+        _resyncLastDepth = Volatile.Read(ref _queueDepth);
+        Volatile.Write(ref _resyncPending, 1);
+    }
+
+    /// <summary>
+    /// Clears the resync-pending flag and resets the slow-client grace timer so the
+    /// subscriber starts fresh after a successful boundary resync.
+    /// </summary>
+    public void ClearResyncPending()
+    {
+        Volatile.Write(ref _resyncPending, 0);
+        Volatile.Write(ref _queueFullSinceTicks, 0);
     }
 
     public Task CompleteAsync(SubscriberDisconnectReason reason)
@@ -143,11 +241,16 @@ public sealed class SubscriberConnection
             ConnectedUtc,
             BytesSent,
             QueueDepth,
-            IsInternal);
+            IsInternal,
+            Delivery: DeliveryMethod.RawTs,
+            DeliveryReason: "Direct MPEG-TS passthrough (no remux)");
 
     private async Task PumpAsync(BufferSnapshot initialSnapshot, CancellationToken ct)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _context.RequestAborted);
+        // One stall CTS per pump, linked to the outer token so it fires on disconnect too.
+        // TryReset() re-arms the timer before each write without allocating a new source.
+        using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
         var token = linkedCts.Token;
         var snapshotGeneration = initialSnapshot.Generation;
         var snapshotLastSequence = initialSnapshot.LastSequence;
@@ -158,7 +261,7 @@ public sealed class SubscriberConnection
             {
                 using (lease)
                 {
-                    await WriteLeaseAsync(lease, token);
+                    await WriteLeaseAsync(lease, stallCts, token);
                 }
             }
 
@@ -172,7 +275,7 @@ public sealed class SubscriberConnection
                         if (lease.Generation == snapshotGeneration && lease.Sequence <= snapshotLastSequence)
                             continue;
 
-                        await WriteLeaseAsync(lease, token);
+                        await WriteLeaseAsync(lease, stallCts, token);
                     }
                 }
             }
@@ -183,20 +286,41 @@ public sealed class SubscriberConnection
         {
             await CompleteAsync(SubscriberDisconnectReason.ClientAborted);
         }
+        catch (WriteStallException)
+        {
+            await CompleteAsync(SubscriberDisconnectReason.WriteStall);
+        }
         catch (IOException)
         {
             await CompleteAsync(SubscriberDisconnectReason.WriteFailure);
         }
     }
 
-    private async Task WriteLeaseAsync(BufferLease lease, CancellationToken ct)
+    private async Task WriteLeaseAsync(BufferLease lease, CancellationTokenSource stallCts, CancellationToken outerCt)
     {
         var bytes = lease.Memory;
         if (bytes.IsEmpty)
             return;
 
-        await _writer.WriteAsync(bytes, ct);
-        await _writer.FlushAsync(ct);
+        // Re-arm the shared stall CTS for this write. TryReset clears the previous
+        // timer on the hot path; if it returns false the outer token already fired and
+        // CancelAfter is a no-op — the next await will throw immediately, which is fine.
+        stallCts.TryReset();
+        stallCts.CancelAfter(_writeStallTimeout);
+
+        try
+        {
+            await _writer.WriteAsync(bytes, stallCts.Token);
+            await _writer.FlushAsync(stallCts.Token);
+        }
+        catch (OperationCanceledException) when (!outerCt.IsCancellationRequested && stallCts.IsCancellationRequested)
+        {
+            // The per-write stall timer fired; the client's socket is wedged.
+            throw new WriteStallException();
+        }
+
         Interlocked.Add(ref _bytesSent, bytes.Length);
     }
+
+    private sealed class WriteStallException : Exception;
 }
