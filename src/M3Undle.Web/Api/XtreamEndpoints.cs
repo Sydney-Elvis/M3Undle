@@ -530,13 +530,17 @@ public static class XtreamEndpoints
 
         var forceTs = resolved.SourceDescriptor?.ForceMpegTs ?? false;
 
+        // Use the server-side resolved access credentials (not the raw route values) so that
+        // the redirect path is built from trusted data and does not trigger open-redirect
+        // analysis on values sourced directly from the request.
+        var urlPass = access.UrlCredential?.Password;
         if (!forceTs && resolved.UseSharedSession && PlaybackModeResolver.IsBurstBufferingClient(context)
-            && TryGetEscapedXtreamPathCredentials(context, out var xUser, out var xPass))
+            && urlPass is not null)
         {
             var numericStreamId = streamId.Contains('.')
                 ? streamId[..streamId.LastIndexOf('.')]
                 : streamId;
-            var hlsPath = $"/hls/{xUser}/{xPass}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8";
+            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8";
             logger.LogInformation(
                 "Auto-HLS redirect (Xtream): channel={Channel} id={StreamId} client={Client}",
                 entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
