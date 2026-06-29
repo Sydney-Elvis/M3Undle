@@ -110,15 +110,20 @@ public static class XtreamEndpoints
         if (lineup is null)
             return Results.Json(Array.Empty<object>(), JsonOptions);
 
+        // Resolve the snapshot's bijective key→ID assignment once. The same assignment backs
+        // path-auth streaming (ID→key), so every ID advertised here resolves back to its channel.
+        var streamIds = streamIdCache.GetAssignment(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey)).KeyToId;
+
         return action switch
         {
             "get_live_categories"   => BuildCategoriesResult(lineup, "live"),
             "get_vod_categories"    => BuildCategoriesResult(lineup, "vod"),
             "get_series_categories" => BuildCategoriesResult(lineup, "series"),
-            "get_live_streams"      => BuildStreamsResult(context, form, lineup, "live"),
-            "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod"),
+            "get_live_streams"      => BuildStreamsResult(context, form, lineup, "live", streamIds),
+            "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod", streamIds),
             "get_series"            => BuildSeriesListResult(context, form, lineup),
-            "get_series_info"       => BuildSeriesInfoResult(context, form, lineup),
+            "get_series_info"       => BuildSeriesInfoResult(context, form, lineup, streamIds),
             // Return a valid envelope with an empty listing so clients that access
             // response.epg_listings don't throw on a bare array.
             "get_short_epg" or "get_epg_info" => Results.Json(new { epg_listings = Array.Empty<object>() }, JsonOptions),
@@ -189,7 +194,12 @@ public static class XtreamEndpoints
         return Results.Json(categories, JsonOptions);
     }
 
-    private static IResult BuildStreamsResult(HttpContext context, IFormCollection? form, RenderedLineup lineup, string contentType)
+    private static IResult BuildStreamsResult(
+        HttpContext context,
+        IFormCollection? form,
+        RenderedLineup lineup,
+        string contentType,
+        IReadOnlyDictionary<string, int> streamIds)
     {
         var access = context.GetResolvedClientAccess();
         var baseUrl = GetBaseUrl(context);
@@ -214,13 +224,17 @@ public static class XtreamEndpoints
         var streams = channels
             .Select((c, i) =>
             {
-                var streamId  = XtreamStreamIdCache.ToStreamId(c.StreamKey);
+                // Use the snapshot's bijective assignment (collision-free, always < 10,000,000)
+                // so the advertised ID resolves back to this exact channel and stays
+                // Brightscript-safe. Fall back to the preferred hash if a key is somehow absent.
+                var streamId  = streamIds.TryGetValue(c.StreamKey, out var assignedId)
+                    ? assignedId
+                    : XtreamStreamIdCache.ToStreamId(c.StreamKey);
                 var streamUrl = $"{baseUrl}/{segment}/{username}/{password}/{streamId}.{ext}";
                 var catId     = CategoryId(c.GroupTitle ?? "Uncategorized").ToString();
 
-                // Return stream_id as a string so Roku/Brightscript clients do not
-                // lose precision by converting the large int to a 32-bit float
-                // (e.g. 815011305 → "8.150113e+08") before embedding it in URLs.
+                // Emit stream_id as a string so Brightscript treats it verbatim rather than
+                // coercing through a 32-bit float. The ID is already < 10M, so this is plain digits.
                 var streamIdStr = streamId.ToString();
 
                 if (contentType == "live")
@@ -311,7 +325,11 @@ public static class XtreamEndpoints
     /// Returns full series info with episodes grouped by season for a given series_id,
     /// matching the standard Xtream Codes get_series_info response shape.
     /// </summary>
-    private static IResult BuildSeriesInfoResult(HttpContext context, IFormCollection? form, RenderedLineup lineup)
+    private static IResult BuildSeriesInfoResult(
+        HttpContext context,
+        IFormCollection? form,
+        RenderedLineup lineup,
+        IReadOnlyDictionary<string, int> streamIds)
     {
         var seriesIdParam = GetRequestValue(context.Request, form, "series_id");
         if (!int.TryParse(seriesIdParam, out var requestedSeriesId))
@@ -345,7 +363,9 @@ public static class XtreamEndpoints
                 episodesBySeason[seasonKey] = list;
             }
 
-            var streamId = XtreamStreamIdCache.ToStreamId(ep.StreamKey);
+            var streamId = streamIds.TryGetValue(ep.StreamKey, out var assignedId)
+                ? assignedId
+                : XtreamStreamIdCache.ToStreamId(ep.StreamKey);
             list.Add(new
             {
                 id                  = streamId.ToString(),
@@ -501,8 +521,8 @@ public static class XtreamEndpoints
             return;
         }
 
-        var streamKey = await streamIdCache.TryGetStreamKeyAsync(
-            lineup.SnapshotId, lineup.ChannelIndexPath, numericId, cancellationToken);
+        var streamKey = streamIdCache.TryGetStreamKey(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey), numericId);
 
         if (streamKey is null)
         {
@@ -868,8 +888,8 @@ public static class XtreamEndpoints
             return;
         }
 
-        var streamKey = await streamIdCache.TryGetStreamKeyAsync(
-            lineup.SnapshotId, lineup.ChannelIndexPath, numericId, cancellationToken);
+        var streamKey = streamIdCache.TryGetStreamKey(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey), numericId);
         if (streamKey is null)
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
