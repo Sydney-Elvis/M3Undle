@@ -459,6 +459,23 @@ app.Use(static async (ctx, next) =>
 });
 
 app.UseRouting();
+
+// Temporary: log every inbound request so we can see the exact URLs a Roku/unknown
+// client sends when tuning, including paths that 404 before reaching a handler.
+app.Use(static async (ctx, next) =>
+{
+    var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("M3Undle.RequestTrace");
+    var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "?";
+    logger.LogInformation("REQ {Method} {Path}{Query} from {IP} ua={UA}",
+        ctx.Request.Method,
+        ctx.Request.Path,
+        ctx.Request.QueryString,
+        ip,
+        ctx.Request.Headers.UserAgent.ToString());
+    await next(ctx);
+});
+
 app.UseRateLimiter();
 app.UseMiddleware<MetricsEndpointSecurityMiddleware>();
 app.UseOpenTelemetryPrometheusScrapingEndpoint(context =>

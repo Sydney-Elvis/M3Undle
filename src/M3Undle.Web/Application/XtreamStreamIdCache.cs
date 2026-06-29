@@ -5,7 +5,7 @@ namespace M3Undle.Web.Application;
 
 /// <summary>
 /// Singleton that maintains a per-snapshot mapping between Xtream numeric stream IDs
-/// (a stable 31-bit value derived from MD5(streamKey)) and the actual stream keys used by M3Undle's
+/// (a stable 23-bit value derived from MD5(streamKey)) and the actual stream keys used by M3Undle's
 /// channel index. Invalidated automatically when the active snapshot changes.
 /// </summary>
 public sealed class XtreamStreamIdCache(ILogger<XtreamStreamIdCache> logger)
@@ -15,15 +15,19 @@ public sealed class XtreamStreamIdCache(ILogger<XtreamStreamIdCache> logger)
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     /// <summary>
-    /// Computes a stable 31-bit numeric stream ID from a stream key using MD5.
-    /// The sign bit is masked off so the value is always a positive <see cref="int"/>.
+    /// Computes a stable 23-bit numeric stream ID from a stream key using MD5.
+    /// Capped at 23 bits (max 8,388,607, always below 10M) so Brightscript renders it
+    /// as plain digits rather than scientific notation when building stream URLs.
     /// </summary>
     public static int ToStreamId(string streamKey)
     {
         var bytes = Encoding.UTF8.GetBytes(streamKey);
         var hash = MD5.HashData(bytes);
         var value = BitConverter.ToUInt32(hash, 0);
-        return (int)(value & 0x7FFF_FFFF);
+        // Mask to 23 bits (max 8,388,607) so the ID is always below 10,000,000.
+        // Brightscript renders floats >= 1e7 as scientific notation (e.g. "1.618042e+07"),
+        // which breaks URL construction. Keeping IDs < 10M ensures plain-integer formatting.
+        return (int)(value & 0x007F_FFFF);
     }
 
     /// <summary>

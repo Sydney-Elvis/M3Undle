@@ -119,7 +119,10 @@ public static class XtreamEndpoints
             "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod"),
             "get_series"            => BuildSeriesListResult(context, form, lineup),
             "get_series_info"       => BuildSeriesInfoResult(context, form, lineup),
-            _                       => Results.Json(Array.Empty<object>(), JsonOptions),
+            // Return a valid envelope with an empty listing so clients that access
+            // response.epg_listings don't throw on a bare array.
+            "get_short_epg" or "get_epg_info" => Results.Json(new { epg_listings = Array.Empty<object>() }, JsonOptions),
+            _               => Results.Json(Array.Empty<object>(), JsonOptions),
         };
     }
 
@@ -215,6 +218,11 @@ public static class XtreamEndpoints
                 var streamUrl = $"{baseUrl}/{segment}/{username}/{password}/{streamId}.{ext}";
                 var catId     = CategoryId(c.GroupTitle ?? "Uncategorized").ToString();
 
+                // Return stream_id as a string so Roku/Brightscript clients do not
+                // lose precision by converting the large int to a 32-bit float
+                // (e.g. 815011305 → "8.150113e+08") before embedding it in URLs.
+                var streamIdStr = streamId.ToString();
+
                 if (contentType == "live")
                 {
                     return (object)new
@@ -222,7 +230,7 @@ public static class XtreamEndpoints
                         num              = i + 1,
                         name             = c.DisplayName,
                         stream_type      = streamType,
-                        stream_id        = streamId,
+                        stream_id        = streamIdStr,
                         stream_icon      = c.LogoUrl ?? string.Empty,
                         epg_channel_id   = c.TvgId   ?? string.Empty,
                         added,
@@ -239,7 +247,7 @@ public static class XtreamEndpoints
                     num                 = i + 1,
                     name                = c.DisplayName,
                     stream_type         = streamType,
-                    stream_id           = streamId,
+                    stream_id           = streamIdStr,
                     stream_icon         = c.LogoUrl ?? string.Empty,
                     added,
                     category_id         = catId,
@@ -278,7 +286,7 @@ public static class XtreamEndpoints
                 {
                     num              = i + 1,
                     name             = g.Key,
-                    series_id        = SeriesId(g.Key),
+                    series_id        = SeriesId(g.Key).ToString(),
                     cover            = first.LogoUrl ?? string.Empty,
                     plot             = string.Empty,
                     cast             = string.Empty,
@@ -546,9 +554,13 @@ public static class XtreamEndpoints
         var urlPass = access.UrlCredential?.Password;
         var clientRequestedHls = streamId.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
         var clientRequestedTs  = streamId.EndsWith(".ts",   StringComparison.OrdinalIgnoreCase);
-        // Don't redirect to HLS if the client explicitly requested TS — honour the extension.
-        if (!forceTs && resolved.UseSharedSession && !clientRequestedTs
-            && (clientRequestedHls || PlaybackModeResolver.IsBurstBufferingClient(context))
+        // Burst-buffering clients (Roku, ExoPlayer, okhttp) cannot play raw MPEG-TS over HTTP,
+        // so redirect them to generated HLS even when the URL explicitly ends in .ts.
+        // For all other clients, honour the explicit .ts extension.
+        var isBurstClient = PlaybackModeResolver.IsBurstBufferingClient(context);
+        if (!forceTs && resolved.UseSharedSession
+            && (clientRequestedHls || isBurstClient)
+            && (!clientRequestedTs || isBurstClient)
             && urlPass is not null)
         {
             var numericStreamId = streamId.Contains('.')
@@ -558,7 +570,10 @@ public static class XtreamEndpoints
             // with the app identity rather than whatever the media player sends on follow-up requests.
             var requestUa = context.Request.Headers.UserAgent.ToString();
             var uaHint    = string.IsNullOrEmpty(requestUa) ? string.Empty : $"?_ua={Uri.EscapeDataString(requestUa)}";
-            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8{uaHint}";
+            var fromHint  = (clientRequestedTs && isBurstClient)
+                ? (uaHint.Length > 0 ? "&_from=ts" : "?_from=ts")
+                : string.Empty;
+            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8{uaHint}{fromHint}";
             logger.LogInformation(
                 "Auto-HLS redirect (Xtream): channel={Channel} id={StreamId} client={Client}",
                 entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
