@@ -21,7 +21,8 @@ public sealed record GeneratedHlsSessionRequest(
     ChannelSessionKey? AdmissionKey = null,
     string? InternalRelaySecret = null,
     string? ParentStreamSessionId = null,
-    string? RequestedRoute = null);
+    string? RequestedRoute = null,
+    bool UpgradedFromTs = false);
 
 public sealed record GeneratedHlsSessionHandle(
     string SessionId,
@@ -120,7 +121,8 @@ public sealed class GeneratedHlsSessionManager(
             process,
             request.AdmissionKey,
             request.ParentStreamSessionId,
-            request.RequestedRoute);
+            request.RequestedRoute,
+            request.UpgradedFromTs);
 
         if (!_sessions.TryAdd(sessionId, session))
         {
@@ -269,7 +271,8 @@ public sealed class GeneratedHlsSessionManager(
                 record.RemoteIp, record.UserAgent, record.ConnectedUtc,
                 BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls,
                 Delivery: DeliveryMethod.Hls, DeliveryReason: "Generated HLS (segmented pull)",
-                DisplayName: session.DisplayName));
+                DisplayName: session.DisplayName,
+                UpgradedFromTs: session.UpgradedFromTs));
         }
 
         registry.UpsertSession(session.ToSnapshot());
@@ -1080,7 +1083,8 @@ public sealed class GeneratedHlsSessionManager(
         Process process,
         ChannelSessionKey? admissionKey = null,
         string? parentStreamSessionId = null,
-        string? requestedRoute = null)
+        string? requestedRoute = null,
+        bool upgradedFromTs = false)
     {
         private long _lastAccessUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private Task? _stderrPumpTask;
@@ -1106,6 +1110,10 @@ public sealed class GeneratedHlsSessionManager(
         public string? ParentStreamSessionId { get; } = parentStreamSessionId;
 
         public string? RequestedRoute { get; } = requestedRoute;
+
+        // True when this session was created because a burst-buffering client (e.g. Roku)
+        // requested an MPEG-TS URL and was auto-upgraded to generated HLS.
+        public bool UpgradedFromTs { get; } = upgradedFromTs;
 
         public DateTimeOffset StartedUtc { get; } = DateTimeOffset.UtcNow;
 

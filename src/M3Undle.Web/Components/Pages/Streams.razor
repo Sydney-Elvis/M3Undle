@@ -237,17 +237,9 @@ else
                 <MudTd DataLabel="Delivery">
                     <TooltipChip Label="@DeliveryLabel(context.Delivery)"
                                  TooltipText="@DeliveryTooltip(context)"
-                                 Color="Color.Info"
+                                 Color="@(context.UpgradedFromTs ? Color.Tertiary : Color.Info)"
                                  Variant="Variant.Outlined"
                                  Size="Size.Small" />
-                    @if (IsTsUpgradedToHls(context.RequestedRoute))
-                    {
-                        <TooltipChip Label="HLS"
-                                     TooltipText="Client requested MPEG-TS but was automatically upgraded to HLS for playback compatibility."
-                                     Color="Color.Tertiary"
-                                     Variant="Variant.Outlined"
-                                     Size="Size.Small" />
-                    }
                 </MudTd>
                 <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
@@ -684,13 +676,13 @@ else
     private static string DeliveryTooltip(StreamClientSnapshot client)
     {
         var label = DeliveryLabel(client.Delivery);
-        return string.IsNullOrWhiteSpace(client.DeliveryReason)
+        var baseText = string.IsNullOrWhiteSpace(client.DeliveryReason)
             ? $"Delivery method for this client: {label}."
             : $"Delivery method for this client: {label} — {client.DeliveryReason}.";
+        return client.UpgradedFromTs
+            ? $"{baseText} Client requested MPEG-TS but was automatically upgraded to HLS for playback compatibility."
+            : baseText;
     }
-
-    private static bool IsTsUpgradedToHls(string? route) =>
-        route is not null && route.Contains("_from=ts", StringComparison.Ordinal);
 
     private static string FormatRate(long? bytesPerSecond) => bytesPerSecond switch
     {

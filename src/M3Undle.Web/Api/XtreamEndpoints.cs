@@ -928,7 +928,10 @@ public static class XtreamEndpoints
                 AdmissionKey: source.SessionKey,
                 InternalRelaySecret: generatedRelaySecret,
                 ParentStreamSessionId: parentStreamSessionId,
-                RequestedRoute: context.Request.Path.Value ?? "/hls/xtream/manifest"),
+                RequestedRoute: context.Request.Path.Value ?? "/hls/xtream/manifest",
+                // The redirect seeds _from=ts when a burst client (Roku) asked for .ts
+                // and was auto-upgraded to HLS — surface that in the stream monitor.
+                UpgradedFromTs: string.Equals(context.Request.Query["_from"], "ts", StringComparison.Ordinal)),
             cancellationToken);
 
         if (generatedSession is null)

@@ -37,5 +37,6 @@ public sealed record StreamClientSnapshot(
     long? BytesPerSecond = null,
     DeliveryMethod Delivery = DeliveryMethod.RawTs,
     string? DeliveryReason = null,
-    string? DisplayName = null);
+    string? DisplayName = null,
+    bool UpgradedFromTs = false);
 
