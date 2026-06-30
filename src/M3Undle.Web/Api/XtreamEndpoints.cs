@@ -104,6 +104,10 @@ public static class XtreamEndpoints
             return BuildAccountInfoResult(context, access, minExpiry);
         }
 
+        // EPG actions always return an empty envelope — no lineup needed.
+        if (action is "get_short_epg" or "get_epg_info")
+            return Results.Json(new { epg_listings = Array.Empty<object>() }, JsonOptions);
+
         var lineup = await lineupRenderer.TryRenderActiveLineupAsync(
             access.Binding.ActiveProfileId, cancellationToken);
 
@@ -124,9 +128,6 @@ public static class XtreamEndpoints
             "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod", streamIds),
             "get_series"            => BuildSeriesListResult(context, form, lineup),
             "get_series_info"       => BuildSeriesInfoResult(context, form, lineup, streamIds),
-            // Return a valid envelope with an empty listing so clients that access
-            // response.epg_listings don't throw on a bare array.
-            "get_short_epg" or "get_epg_info" => Results.Json(new { epg_listings = Array.Empty<object>() }, JsonOptions),
             _               => Results.Json(Array.Empty<object>(), JsonOptions),
         };
     }
@@ -975,7 +976,8 @@ public static class XtreamEndpoints
             context.Connection.RemoteIpAddress?.ToString(),
             effectiveUa,
             context.Request.Path.Value ?? string.Empty,
-            GeneratedHlsSessionManager.ShouldCountAsViewer(effectiveUa));
+            GeneratedHlsSessionManager.ShouldCountAsViewer(effectiveUa),
+            upgradedFromTs: string.Equals(context.Request.Query["_from"], "ts", StringComparison.Ordinal));
 
         var manifest = await generatedHlsSessionManager.ReadManifestAsync(generatedSession.SessionId, cancellationToken);
         if (manifest is null)

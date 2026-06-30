@@ -257,7 +257,8 @@ public sealed class GeneratedHlsSessionManager(
         string? remoteIp,
         string? userAgent,
         string requestedRoute,
-        bool countAsViewer = true)
+        bool countAsViewer = true,
+        bool upgradedFromTs = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var session))
             return;
@@ -272,7 +273,7 @@ public sealed class GeneratedHlsSessionManager(
                 BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls,
                 Delivery: DeliveryMethod.Hls, DeliveryReason: "Generated HLS (segmented pull)",
                 DisplayName: session.DisplayName,
-                UpgradedFromTs: session.UpgradedFromTs));
+                UpgradedFromTs: upgradedFromTs));
         }
 
         registry.UpsertSession(session.ToSnapshot());
