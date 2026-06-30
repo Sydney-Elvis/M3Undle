@@ -4,6 +4,60 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.3] — 2026-06-30
+
+Beta 3 is a streaming compatibility release focused on modern burst-buffering clients. It moves Roku, Android TV, ExoPlayer/Media3, IPTV Smarters, and similar clients onto generated HLS when needed, makes direct MPEG-TS delivery less fragile for clients that still use it, and fixes several Xtream compatibility issues found during real device testing.
+
+### Client playback compatibility
+
+- Added automatic HLS delivery for burst-buffering clients, including Roku, IPTV Smarters, ExoPlayer, Media3, Dalvik, and okhttp-based Android apps
+- Added stable external HLS manifest routes for both M3U-style stream keys and Xtream path-auth stream IDs, backed by the existing generated-HLS session manager
+- Redirected compatible clients from raw MPEG-TS stream URLs to generated HLS while preserving endpoint credentials and shared session behavior
+- Honored explicit `.m3u8` Xtream stream requests even when endpoint security is disabled, so HLS requests no longer fall through to TS delivery
+- Fixed Roku Xtream playback by allowing TS requests from burst-buffering clients to be upgraded to HLS. Fixes #122
+
+### Direct MPEG-TS delivery
+
+- Reworked slow-client handling so transient backpressure no longer disconnects a subscriber on first queue overflow
+- Added bounded resync behavior for backed-up TS subscribers: M3Undle now waits for the next clean TS boundary instead of dropping arbitrary bytes that corrupt the stream
+- Added a write-stall timeout to detect dead or wedged client sockets separately from healthy buffering behavior
+- Started TS subscribers from a safe PAT/PMT plus IDR boundary when available, reducing startup and resync corruption risk
+- Increased default subscriber queue capacity and added explicit slow-client grace and write-stall settings
+
+### Xtream compatibility
+
+- Rebuilt Xtream stream ID assignment as a collision-free, Brightscript-safe mapping below 10,000,000 so Roku clients do not render stream IDs in scientific notation
+- Preserved backward-compatible resolution for older cached Xtream stream IDs so clients can keep playing until they refresh their channel list
+- Fixed Xtream account-info responses to echo the submitted URL credentials when appropriate, without exposing internal M3Undle account passwords
+- Fixed path-credential handling when endpoint security is disabled so route-embedded Xtream username and password remain available to downstream Xtream logic
+- Added empty EPG envelopes for Xtream short-EPG actions instead of requiring a rendered lineup
+
+### Stream monitor
+
+- Added per-client delivery method visibility, distinguishing Raw TS, Remux TS, and HLS delivery
+- Added connected client channel, source, and delivery chips so M3U, Xtream, HDHomeRun, generated HLS, and auto-upgraded clients are easier to identify
+- Improved client detection for Smarters Pro, Roku, ExoPlayer, Media3, Android TV, Android apps, and HLS segment fetchers
+- Marked clients that requested MPEG-TS but were automatically upgraded to HLS for compatibility
+
+### Generated HLS
+
+- Increased the default generated-HLS playlist window from 6 to 30 segments and retained more old segments to better match ExoPlayer's long buffer window
+- Improved generated-HLS client tracking so app-level user agents can replace generic Dalvik/okhttp segment-fetch agents in the stream monitor
+- Added FFmpeg `dump_extra` bitstream filtering to improve SPS/PPS header cadence for HLS output
+
+### Testing
+
+- Added coverage for burst-buffering user-agent detection, subscriber resync state, slow-client grace handling, Xtream authentication behavior, and Xtream stream ID assignment
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.3
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.2] — 2026-06-26
 
 Beta 2 is a focused compatibility and stream-recovery release. It improves HDHomeRun-style discovery behavior, adds the Xtream Codes XMLTV compatibility endpoint expected by more clients, and tightens the adaptive stream health policy around unstable MPEG-TS channels.
@@ -242,6 +296,7 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
+[v1.0.0-beta.3]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [v1.0.0-beta.2]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [v1.0.0-beta.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.7...v1.0.0-beta.1
 [v1.0.0-alpha.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.6...v1.0.0-alpha.7
