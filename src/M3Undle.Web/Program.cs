@@ -459,6 +459,7 @@ app.Use(static async (ctx, next) =>
 });
 
 app.UseRouting();
+
 app.UseRateLimiter();
 app.UseMiddleware<MetricsEndpointSecurityMiddleware>();
 app.UseOpenTelemetryPrometheusScrapingEndpoint(context =>

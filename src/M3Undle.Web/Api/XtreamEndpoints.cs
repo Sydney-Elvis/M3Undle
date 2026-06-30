@@ -104,22 +104,31 @@ public static class XtreamEndpoints
             return BuildAccountInfoResult(context, access, minExpiry);
         }
 
+        // EPG actions always return an empty envelope — no lineup needed.
+        if (action is "get_short_epg" or "get_epg_info")
+            return Results.Json(new { epg_listings = Array.Empty<object>() }, JsonOptions);
+
         var lineup = await lineupRenderer.TryRenderActiveLineupAsync(
             access.Binding.ActiveProfileId, cancellationToken);
 
         if (lineup is null)
             return Results.Json(Array.Empty<object>(), JsonOptions);
 
+        // Resolve the snapshot's bijective key→ID assignment once. The same assignment backs
+        // path-auth streaming (ID→key), so every ID advertised here resolves back to its channel.
+        var streamIds = streamIdCache.GetAssignment(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey)).KeyToId;
+
         return action switch
         {
             "get_live_categories"   => BuildCategoriesResult(lineup, "live"),
             "get_vod_categories"    => BuildCategoriesResult(lineup, "vod"),
             "get_series_categories" => BuildCategoriesResult(lineup, "series"),
-            "get_live_streams"      => BuildStreamsResult(context, form, lineup, "live"),
-            "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod"),
+            "get_live_streams"      => BuildStreamsResult(context, form, lineup, "live", streamIds),
+            "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod", streamIds),
             "get_series"            => BuildSeriesListResult(context, form, lineup),
-            "get_series_info"       => BuildSeriesInfoResult(context, form, lineup),
-            _                       => Results.Json(Array.Empty<object>(), JsonOptions),
+            "get_series_info"       => BuildSeriesInfoResult(context, form, lineup, streamIds),
+            _               => Results.Json(Array.Empty<object>(), JsonOptions),
         };
     }
 
@@ -186,7 +195,12 @@ public static class XtreamEndpoints
         return Results.Json(categories, JsonOptions);
     }
 
-    private static IResult BuildStreamsResult(HttpContext context, IFormCollection? form, RenderedLineup lineup, string contentType)
+    private static IResult BuildStreamsResult(
+        HttpContext context,
+        IFormCollection? form,
+        RenderedLineup lineup,
+        string contentType,
+        IReadOnlyDictionary<string, int> streamIds)
     {
         var access = context.GetResolvedClientAccess();
         var baseUrl = GetBaseUrl(context);
@@ -211,9 +225,18 @@ public static class XtreamEndpoints
         var streams = channels
             .Select((c, i) =>
             {
-                var streamId  = XtreamStreamIdCache.ToStreamId(c.StreamKey);
+                // Use the snapshot's bijective assignment (collision-free, always < 10,000,000)
+                // so the advertised ID resolves back to this exact channel and stays
+                // Brightscript-safe. Fall back to the preferred hash if a key is somehow absent.
+                var streamId  = streamIds.TryGetValue(c.StreamKey, out var assignedId)
+                    ? assignedId
+                    : XtreamStreamIdCache.ToStreamId(c.StreamKey);
                 var streamUrl = $"{baseUrl}/{segment}/{username}/{password}/{streamId}.{ext}";
                 var catId     = CategoryId(c.GroupTitle ?? "Uncategorized").ToString();
+
+                // Emit stream_id as a string so Brightscript treats it verbatim rather than
+                // coercing through a 32-bit float. The ID is already < 10M, so this is plain digits.
+                var streamIdStr = streamId.ToString();
 
                 if (contentType == "live")
                 {
@@ -222,7 +245,7 @@ public static class XtreamEndpoints
                         num              = i + 1,
                         name             = c.DisplayName,
                         stream_type      = streamType,
-                        stream_id        = streamId,
+                        stream_id        = streamIdStr,
                         stream_icon      = c.LogoUrl ?? string.Empty,
                         epg_channel_id   = c.TvgId   ?? string.Empty,
                         added,
@@ -239,7 +262,7 @@ public static class XtreamEndpoints
                     num                 = i + 1,
                     name                = c.DisplayName,
                     stream_type         = streamType,
-                    stream_id           = streamId,
+                    stream_id           = streamIdStr,
                     stream_icon         = c.LogoUrl ?? string.Empty,
                     added,
                     category_id         = catId,
@@ -278,7 +301,7 @@ public static class XtreamEndpoints
                 {
                     num              = i + 1,
                     name             = g.Key,
-                    series_id        = SeriesId(g.Key),
+                    series_id        = SeriesId(g.Key).ToString(),
                     cover            = first.LogoUrl ?? string.Empty,
                     plot             = string.Empty,
                     cast             = string.Empty,
@@ -303,7 +326,11 @@ public static class XtreamEndpoints
     /// Returns full series info with episodes grouped by season for a given series_id,
     /// matching the standard Xtream Codes get_series_info response shape.
     /// </summary>
-    private static IResult BuildSeriesInfoResult(HttpContext context, IFormCollection? form, RenderedLineup lineup)
+    private static IResult BuildSeriesInfoResult(
+        HttpContext context,
+        IFormCollection? form,
+        RenderedLineup lineup,
+        IReadOnlyDictionary<string, int> streamIds)
     {
         var seriesIdParam = GetRequestValue(context.Request, form, "series_id");
         if (!int.TryParse(seriesIdParam, out var requestedSeriesId))
@@ -337,7 +364,9 @@ public static class XtreamEndpoints
                 episodesBySeason[seasonKey] = list;
             }
 
-            var streamId = XtreamStreamIdCache.ToStreamId(ep.StreamKey);
+            var streamId = streamIds.TryGetValue(ep.StreamKey, out var assignedId)
+                ? assignedId
+                : XtreamStreamIdCache.ToStreamId(ep.StreamKey);
             list.Add(new
             {
                 id                  = streamId.ToString(),
@@ -493,8 +522,8 @@ public static class XtreamEndpoints
             return;
         }
 
-        var streamKey = await streamIdCache.TryGetStreamKeyAsync(
-            lineup.SnapshotId, lineup.ChannelIndexPath, numericId, cancellationToken);
+        var streamKey = streamIdCache.TryGetStreamKey(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey), numericId);
 
         if (streamKey is null)
         {
@@ -546,9 +575,13 @@ public static class XtreamEndpoints
         var urlPass = access.UrlCredential?.Password;
         var clientRequestedHls = streamId.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase);
         var clientRequestedTs  = streamId.EndsWith(".ts",   StringComparison.OrdinalIgnoreCase);
-        // Don't redirect to HLS if the client explicitly requested TS — honour the extension.
-        if (!forceTs && resolved.UseSharedSession && !clientRequestedTs
-            && (clientRequestedHls || PlaybackModeResolver.IsBurstBufferingClient(context))
+        // Burst-buffering clients (Roku, ExoPlayer, okhttp) cannot play raw MPEG-TS over HTTP,
+        // so redirect them to generated HLS even when the URL explicitly ends in .ts.
+        // For all other clients, honour the explicit .ts extension.
+        var isBurstClient = PlaybackModeResolver.IsBurstBufferingClient(context);
+        if (!forceTs && resolved.UseSharedSession
+            && (clientRequestedHls || isBurstClient)
+            && (!clientRequestedTs || isBurstClient)
             && urlPass is not null)
         {
             var numericStreamId = streamId.Contains('.')
@@ -558,7 +591,10 @@ public static class XtreamEndpoints
             // with the app identity rather than whatever the media player sends on follow-up requests.
             var requestUa = context.Request.Headers.UserAgent.ToString();
             var uaHint    = string.IsNullOrEmpty(requestUa) ? string.Empty : $"?_ua={Uri.EscapeDataString(requestUa)}";
-            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8{uaHint}";
+            var fromHint  = (clientRequestedTs && isBurstClient)
+                ? (uaHint.Length > 0 ? "&_from=ts" : "?_from=ts")
+                : string.Empty;
+            var hlsPath = $"/hls/{Uri.EscapeDataString(access.Credential.Username)}/{Uri.EscapeDataString(urlPass)}/{Uri.EscapeDataString(numericStreamId)}/index.m3u8{uaHint}{fromHint}";
             logger.LogInformation(
                 "Auto-HLS redirect (Xtream): channel={Channel} id={StreamId} client={Client}",
                 entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
@@ -853,8 +889,8 @@ public static class XtreamEndpoints
             return;
         }
 
-        var streamKey = await streamIdCache.TryGetStreamKeyAsync(
-            lineup.SnapshotId, lineup.ChannelIndexPath, numericId, cancellationToken);
+        var streamKey = streamIdCache.TryGetStreamKey(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey), numericId);
         if (streamKey is null)
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -913,7 +949,10 @@ public static class XtreamEndpoints
                 AdmissionKey: source.SessionKey,
                 InternalRelaySecret: generatedRelaySecret,
                 ParentStreamSessionId: parentStreamSessionId,
-                RequestedRoute: context.Request.Path.Value ?? "/hls/xtream/manifest"),
+                RequestedRoute: context.Request.Path.Value ?? "/hls/xtream/manifest",
+                // The redirect seeds _from=ts when a burst client (Roku) asked for .ts
+                // and was auto-upgraded to HLS — surface that in the stream monitor.
+                UpgradedFromTs: string.Equals(context.Request.Query["_from"], "ts", StringComparison.Ordinal)),
             cancellationToken);
 
         if (generatedSession is null)
@@ -937,7 +976,8 @@ public static class XtreamEndpoints
             context.Connection.RemoteIpAddress?.ToString(),
             effectiveUa,
             context.Request.Path.Value ?? string.Empty,
-            GeneratedHlsSessionManager.ShouldCountAsViewer(effectiveUa));
+            GeneratedHlsSessionManager.ShouldCountAsViewer(effectiveUa),
+            upgradedFromTs: string.Equals(context.Request.Query["_from"], "ts", StringComparison.Ordinal));
 
         var manifest = await generatedHlsSessionManager.ReadManifestAsync(generatedSession.SessionId, cancellationToken);
         if (manifest is null)
