@@ -219,14 +219,11 @@ public sealed class StreamChannelHealthProfileService(
                 recentProfile, comparisonProfile);
         }
 
-        var recentHasSevere = recentRows.Any(e => e.ForcedRetune || e.ClientAbortAfterRecovery);
+        var recentHasSevere = recentRows.Any(e => e.ForcedRetune);
         if (recentHasSevere)
         {
-            var severeReason = recentRows.Any(e => e.ForcedRetune)
-                ? "A forced retune occurred in the last hour."
-                : "A client abort after recovery occurred in the last hour.";
             return new StreamChannelHealthTrendResult(
-                StreamChannelHealthTrend.Worsening, severeReason,
+                StreamChannelHealthTrend.Worsening, "A forced retune occurred in the last hour.",
                 recentAdverse, comparisonAdverse, recentCleanWatch, comparisonCleanWatch,
                 cleanWatchSinceLastAdverse, recentProfile, comparisonProfile);
         }
@@ -304,7 +301,6 @@ public sealed class StreamChannelHealthProfileService(
 
     private static bool IsTrendAdverse(HealthEventRow row)
         => row.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure)
-        || row.ClientAbortAfterRecovery
         || row.ForcedRetune
         || row.TsSyncLoss
         || (row.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed)
@@ -320,16 +316,12 @@ public sealed class StreamChannelHealthProfileService(
                 Max(options.RecoveryOutputHoldLimit, UnstableHoldLimit),
                 Math.Max(options.RecoverySafeStartSearchLimitBytes, UnstableSearchLimitBytes),
                 AllowPacketBoundaryRecoveryFallback: false,
-                RequireDownstreamRetune: true,
-                DownstreamRetuneReason: BuildDownstreamRetuneReason(summary),
                 Reason: BuildReason(summary, profile)),
             _ => new StreamChannelRecoveryPolicy(
                 profile,
                 options.RecoveryOutputHoldLimit,
                 options.RecoverySafeStartSearchLimitBytes,
                 options.AllowPacketBoundaryRecoveryFallback,
-                RequireDownstreamRetune: false,
-                DownstreamRetuneReason: null,
                 BuildReason(summary, profile)),
         };
     }
@@ -374,9 +366,6 @@ public sealed class StreamChannelHealthProfileService(
                 ? $"Recent clean watch evidence relaxed channel health: cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}."
                 : "No recent recovery failures or post-recovery aborts were found.",
         };
-
-    private static string BuildDownstreamRetuneReason(HealthSummary summary)
-        => $"Channel health is Unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, idrRecoveries={summary.IdrRecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}.";
 
     private static TimeSpan Max(TimeSpan left, TimeSpan right) => left >= right ? left : right;
 
