@@ -357,7 +357,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         PublishSnapshots();
                     }
 
-                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, BuildEffectiveConnectPolicy(), _sessionCts.Token);
+                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, _currentRecoveryPolicy, _sessionCts.Token);
                     _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
@@ -1207,26 +1207,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private StreamChannelRecoveryPolicy ResolveRecoveryPolicy()
         => _currentRecoveryPolicy ?? StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
-
-    // Issue #96: in-session escalation. The persisted health profile lags within a
-    // session (events are written asynchronously and the profile is cached ~30s), so
-    // a channel that starts Stable would not reflect in-session failures until the
-    // database-derived policy catches up. Treat the channel as at least Cautious for
-    // this connect after a failure; Auto relay still remuxes only Unstable channels.
-    // Recovery behaviour (hold limits, retune) still follows the database-derived
-    // policy; only the relay-decision input is escalated.
-    private StreamChannelRecoveryPolicy? BuildEffectiveConnectPolicy()
-    {
-        var policy = _currentRecoveryPolicy;
-        if (policy is null || _reconnectAttempts == 0 || policy.Profile != StreamChannelHealthProfile.Stable)
-            return policy;
-
-        return policy with
-        {
-            Profile = StreamChannelHealthProfile.Cautious,
-            Reason = $"In-session escalation: {_reconnectAttempts} upstream failure(s) observed this session. {policy.Reason}",
-        };
-    }
 
     private bool IsFfmpegRelay()
         => !string.Equals(_relayMode, UpstreamRelayModes.Direct, StringComparison.Ordinal);
