@@ -290,15 +290,14 @@ public sealed class StreamChannelHealthProfileService(
         var fallbackResumes = rows.Count(e =>
             e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed)
             && e.SafeStartKind == "FallbackPacketBoundary");
-        var clientAborts = rows.Count(e => e.ClientAbortAfterRecovery);
         var forcedRetunes = rows.Count(e => e.ForcedRetune);
         var tsSyncLoss = rows.Count(e => e.TsSyncLoss);
         var upstreamFailures = rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure));
         var recoveryResumes = rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed));
 
-        if (forcedRetunes > 0 || clientAborts >= 2 || fallbackResumes >= 2 || tsSyncLoss >= 2)
+        if (forcedRetunes > 0 || fallbackResumes >= 2 || tsSyncLoss >= 2)
             return StreamChannelHealthProfile.Unstable;
-        if (clientAborts > 0 || fallbackResumes > 0 || upstreamFailures >= 2 || recoveryResumes >= 2 || tsSyncLoss > 0)
+        if (fallbackResumes > 0 || upstreamFailures >= 2 || recoveryResumes >= 2 || tsSyncLoss > 0)
             return StreamChannelHealthProfile.Cautious;
         return StreamChannelHealthProfile.Stable;
     }
@@ -339,14 +338,12 @@ public sealed class StreamChannelHealthProfileService(
     {
         StreamChannelHealthProfile profile;
         if (summary.ForcedRetunes > 0
-            || summary.ClientAbortAfterRecovery >= 2
             || summary.FallbackRecoveryResumes >= 2
             || summary.TsSyncLoss >= 2)
         {
             profile = StreamChannelHealthProfile.Unstable;
         }
-        else if (summary.ClientAbortAfterRecovery > 0
-            || summary.FallbackRecoveryResumes > 0
+        else if (summary.FallbackRecoveryResumes > 0
             || summary.UpstreamFailures >= 2
             || summary.RecoveryResumes >= 2
             || summary.TsSyncLoss > 0)

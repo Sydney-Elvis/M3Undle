@@ -15,12 +15,16 @@ namespace M3Undle.Web.Tests.Streaming;
 public sealed class StreamChannelHealthProfileServiceTests
 {
     [TestMethod]
-    public async Task GetRecoveryPolicyAsync_RepeatedAbortAfterRecovery_DerivesUnstablePolicy()
+    public async Task GetRecoveryPolicyAsync_RepeatedTsSyncLoss_DerivesUnstablePolicy()
     {
+        // Issue #128: ClientAbortAfterRecovery no longer drives Unstable — a benign
+        // viewer disconnect after a recovery isn't reliable evidence, and the real
+        // #96 incident was already fully explained by upstream-only signals. TsSyncLoss
+        // is one such upstream-only signal, so it stands in here.
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
             "provider-1",
@@ -138,13 +142,13 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
-    public async Task GetRecoveryPolicyAsync_TwoAbortsAfterRecovery_RequiresDownstreamRetune()
+    public async Task GetRecoveryPolicyAsync_TwoTsSyncLossAfterRecovery_RequiresDownstreamRetune()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("RecoveryOutputResumed", safeStartKind: "H264Idr"),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
             "provider-1",
@@ -157,14 +161,12 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
-    public async Task GetRecoveryPolicyAsync_ThreeAbortsAfterIdrRecovery_RequiresDownstreamRetune()
+    public async Task GetRecoveryPolicyAsync_ForcedRetune_RequiresDownstreamRetune()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("RecoveryOutputResumed", safeStartKind: "H264Idr"),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("RecoveryForcedRetune", forcedRetune: true));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
             "provider-1",
@@ -220,8 +222,8 @@ public sealed class StreamChannelHealthProfileServiceTests
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true, age: TimeSpan.FromHours(2)),
             CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(30).TotalMilliseconds));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
@@ -247,8 +249,8 @@ public sealed class StreamChannelHealthProfileServiceTests
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(60).TotalMilliseconds, age: TimeSpan.FromHours(2)),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true));
 
         var evidence = await fixture.Service.GetEvidenceAsync(
             "provider-1",
@@ -393,6 +395,7 @@ public sealed class StreamChannelHealthProfileServiceTests
         string eventKind,
         bool clientAbortAfterRecovery = false,
         bool forcedRetune = false,
+        bool tsSyncLoss = false,
         string? safeStartKind = null,
         double? cleanWatchDurationMs = null,
         TimeSpan? age = null)
@@ -406,6 +409,7 @@ public sealed class StreamChannelHealthProfileServiceTests
             EventUtc = DateTime.UtcNow - (age ?? TimeSpan.FromMinutes(5)),
             ClientAbortAfterRecovery = clientAbortAfterRecovery,
             ForcedRetune = forcedRetune,
+            TsSyncLoss = tsSyncLoss,
             SafeStartKind = safeStartKind,
             CleanWatchDurationMs = cleanWatchDurationMs,
         };

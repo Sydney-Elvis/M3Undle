@@ -23,15 +23,6 @@ public sealed class ReconnectOptions
     /// </summary>
     public TimeSpan FfmpegRelayStallTimeout { get; set; } = TimeSpan.FromSeconds(12);
 
-    /// <summary>
-    /// Only client aborts that occur within this window of a recovery resume are
-    /// counted as <c>ClientAbortAfterRecovery</c> health evidence. Aborts later
-    /// than this (channel changes, idle closes, unrelated disconnects minutes
-    /// after a clean recovery) are ordinary disconnects and must not poison the
-    /// channel health profile. See issue #96.
-    /// </summary>
-    public TimeSpan PostRecoveryAbortWindow { get; set; } = TimeSpan.FromSeconds(15);
-
     public TimeSpan OutageWindow { get; set; } = TimeSpan.FromSeconds(75);
 
     /// <summary>

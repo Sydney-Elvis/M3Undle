@@ -74,14 +74,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private bool _recoveryOutputHoldActive;
     private DateTimeOffset? _recoveryOutputHoldStartedUtc;
     private long _recoveryBytesSuppressed;
-    private bool _recoveryResumedSinceLastReconnect;
     private StreamChannelRecoveryPolicy? _currentRecoveryPolicy;
     private string? _relayPolicy;
     private string? _relayDecisionReason;
     private string? _lastSafeStartKind;
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
-    private DateTimeOffset? _lastRecoveryResumedUtc;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -244,63 +242,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             subscriber: subscriber,
             disconnectReason: reason,
             message: "Subscriber removed.");
-        if (_recoveryResumedSinceLastReconnect && reason == SubscriberDisconnectReason.ClientAborted)
-        {
-            var abortDelay = _lastRecoveryResumedUtc is { } resumedUtc
-                ? DateTimeOffset.UtcNow - resumedUtc
-                : (TimeSpan?)null;
-            // Issue #96: only aborts shortly after the resume are plausibly caused by
-            // the recovery splice. Later aborts (channel change, idle close, or an
-            // unrelated disconnect minutes after a clean recovery) are ordinary
-            // disconnects. Recording them as ClientAbortAfterRecovery is the false
-            // signal that previously drove channels to Unstable and triggered the
-            // forced-retune loop, so they must not poison channel health.
-            var withinPostRecoveryWindow = abortDelay is { } delay
-                && delay <= _reconnectOptions.PostRecoveryAbortWindow;
-            if (subscriber.IsInternal)
-            {
-                // Issue #125: the internal FFmpeg relay subscriber reconnecting to the
-                // ring buffer raises the same ClientAborted reason as a real viewer
-                // dropping. It isn't a viewer, so it must not poison channel health.
-                _logger.LogInformation(
-                    "Internal subscriber abort after recovery NOT counted as health evidence (relay reconnect, not a viewer): SessionId={SessionId} DisplayName={DisplayName} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent}",
-                    _sessionId,
-                    _source.DisplayName,
-                    abortDelay?.TotalMilliseconds,
-                    subscriber.BytesSent);
-            }
-            else if (withinPostRecoveryWindow)
-            {
-                RecordDiagnostic(
-                    StreamDiagnosticEventKind.ClientAbortAfterRecovery,
-                    subscriber: subscriber,
-                    disconnectReason: reason,
-                    clientAbortAfterRecoveryDelay: abortDelay,
-                    message: "Client aborted after MPEG-TS recovery resumed.");
-                _logger.LogWarning(
-                    "Client aborted after MPEG-TS recovery: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} LastOutputHeldMs={LastOutputHeldMs} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent} DisconnectReason={DisconnectReason}",
-                    _sessionId,
-                    _source.DisplayName,
-                    _source.ProviderId,
-                    _source.ProviderChannelId,
-                    _relayMode,
-                    _lastSafeStartKind,
-                    _lastRecoveryOutputHeldMs,
-                    abortDelay?.TotalMilliseconds,
-                    subscriber.BytesSent,
-                    reason);
-            }
-            else
-            {
-                _logger.LogInformation(
-                    "Client disconnect after recovery NOT counted as health evidence (outside post-recovery window): SessionId={SessionId} DisplayName={DisplayName} AbortDelayMs={AbortDelayMs} WindowMs={WindowMs} BytesSent={BytesSent}",
-                    _sessionId,
-                    _source.DisplayName,
-                    abortDelay?.TotalMilliseconds,
-                    _reconnectOptions.PostRecoveryAbortWindow.TotalMilliseconds,
-                    subscriber.BytesSent);
-            }
-        }
 
         lock (_gate)
         {
@@ -1093,7 +1034,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
         _lastRecoveryStartedUtc = _recoveryOutputHoldStartedUtc;
         _recoveryBytesSuppressed = 0;
-        _recoveryResumedSinceLastReconnect = false;
         _currentRecoveryPolicy ??= StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
         var policy = ResolveRecoveryPolicy();
         SetState(SessionState.HoldingOutput);
@@ -1164,10 +1104,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         _recoveryOutputHoldActive = false;
         _recoveryOutputHoldStartedUtc = null;
-        _recoveryResumedSinceLastReconnect = true;
         _lastSafeStartKind = safeStartKind;
         _lastRecoveryOutputHeldMs = heldDuration.TotalMilliseconds;
-        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
         SetState(SessionState.Live);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOutputResumed,
@@ -1847,7 +1785,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         string? safeStartKind = null,
         long? bytesSuppressed = null,
         TimeSpan? recoveryHoldLimit = null,
-        TimeSpan? clientAbortAfterRecoveryDelay = null,
         TimeSpan? cleanWatchDuration = null,
         string? message = null)
     {
@@ -1882,7 +1819,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             SafeStartKind: safeStartKind,
             BytesSuppressed: bytesSuppressed,
             RecoveryHoldLimitMs: recoveryHoldLimit?.TotalMilliseconds,
-            ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelay?.TotalMilliseconds,
             CleanWatchDurationMs: cleanWatchDuration?.TotalMilliseconds,
             RelayMode: _relayMode,
             Message: message);
