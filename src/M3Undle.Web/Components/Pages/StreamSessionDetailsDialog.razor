@@ -212,22 +212,9 @@
                         <td>Packet boundary fallback</td>
                         <td>@(ev.RecoveryPolicy.AllowPacketBoundaryRecoveryFallback ? "Allowed" : "Blocked")</td>
                     </tr>
-                    <tr>
-                        <td>Downstream retune</td>
-                        <td>@(ev.RecoveryPolicy.RequireDownstreamRetune ? "Required" : "Not required")</td>
-                    </tr>
                 </tbody>
             </MudSimpleTable>
-            @if (!string.IsNullOrWhiteSpace(ev.RecoveryPolicy.DownstreamRetuneReason))
-            {
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3" Style="display:block;">
-                    @ev.RecoveryPolicy.DownstreamRetuneReason
-                </MudText>
-            }
-            else
-            {
-                <div class="mb-3" />
-            }
+            <div class="mb-3" />
         }
 
         <MudText Typo="Typo.overline" Color="Color.Secondary">Relay</MudText>

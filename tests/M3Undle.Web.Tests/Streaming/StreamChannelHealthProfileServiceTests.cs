@@ -45,6 +45,36 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
+    public async Task GetRecoveryPolicyAsync_RepeatedClientAbortAfterRecovery_StaysStable()
+    {
+        // Regression guard for issue #128: ClientAbortAfterRecovery must never drive the
+        // profile off Stable again, no matter how many are seen. A benign viewer disconnect
+        // shortly after a recovery splice is not reliable evidence of channel instability —
+        // that false signal is what drove channels Unstable and triggered the forced-retune
+        // loop in issue #96. Upstream-only signals (TsSyncLoss, ForcedRetune, etc.) are the
+        // only remaining triggers; see GetRecoveryPolicyAsync_RepeatedTsSyncLoss_DerivesUnstablePolicy.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Stable, policy.Profile);
+        Assert.IsFalse(policy.RequireDownstreamRetune);
+        Assert.AreEqual(3, evidence.ClientAbortAfterRecovery,
+            "The raw count must still be tracked for observability even though it no longer drives the profile.");
+    }
+
+    [TestMethod]
     public async Task GetRecoveryPolicyAsync_NoHealthEvents_UsesConfiguredFallbackPolicy()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
