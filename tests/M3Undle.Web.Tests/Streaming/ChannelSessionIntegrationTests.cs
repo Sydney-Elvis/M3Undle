@@ -1158,8 +1158,14 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_UnstableChannel_RetunesInsteadOfPacketBoundaryFallback()
+    public async Task Session_MpegTsReconnect_UnstableChannelNoSafeStart_FailsRecoveryInsteadOfPacketBoundaryFallback()
     {
+        // Issue #127: the eager ControlledDownstreamRetune mechanism was removed — it fired
+        // unconditionally on Unstable classification alone, before any safe-start scan even
+        // ran, and was structurally dead anyway (Unstable always selects clean remux, which
+        // always has an internal subscriber, which always suppressed it). The reactive,
+        // evidence-based path (FailRecoveryOutputAsync) already covers this: packet-boundary
+        // fallback disallowed + no valid safe start ever found -> recovery genuinely fails.
         var handler = FakeStreamingHandler.StreamForever(FakeStreamingHandler.ValidTsPacket(0xDD));
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(FakeStreamingHandler.ValidTsPacket(0xA1), 3, ct));
 
@@ -1212,125 +1218,26 @@ public sealed class ChannelSessionIntegrationTests
         await WaitUntilAsync(
             () => fixture.DiagnosticsStore.Query(
                 sessionId: session.SessionId,
-                kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Count > 0,
+                kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Count > 0,
             TimeSpan.FromSeconds(8));
-        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.AreEqual(SessionState.Closed, session.State);
+        Assert.AreEqual(SessionState.Faulted, session.State);
         Assert.IsFalse(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
             kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Any(x =>
                 string.Equals(x.SafeStartKind, "FallbackPacketBoundary", StringComparison.Ordinal)));
         Assert.IsTrue(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
-            kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Any());
+            kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Any());
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_ControlledDownstreamRetune_ClosesSharedSessionWithoutResuming()
+    public async Task Session_MpegTsReconnect_UnstableChannelWithValidRecovery_ResumesWithoutDisconnectingSubscribers()
     {
-        var preReconnectPacket = FakeStreamingHandler.ValidTsPacket(0xA1);
-        var safeChunk = FakeStreamingHandler.ValidTsPacket(0xCC);
-        var recoveredSequence = MpegTsSafeStartupSequence();
-        var handler = FakeStreamingHandler.StreamForever(safeChunk);
-        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(preReconnectPacket, 3, ct));
-        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, safeChunk, ct));
-
-        await using var fixture = await SessionFixture.CreateAsync(
-            handler,
-            bufferOptions: new BufferOptions
-            {
-                ReadChunkSizeBytes = 188,
-                SubscriberQueueCapacity = 128,
-                MaxBytesPerSession = 64 * 188,
-                MaxBytesHardCap = 4 * 1024 * 1024,
-            },
-            reconnectOptions: new ReconnectOptions
-            {
-                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
-                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
-                RecoverySafeStartSearchLimitBytes = 64 * 188,
-                AllowPacketBoundaryRecoveryFallback = true,
-                OutageWindow = TimeSpan.FromSeconds(30),
-                ConnectTimeout = TimeSpan.FromSeconds(5),
-                FixedStepBackoffSeconds = [0],
-            });
-        await fixture.SeedHealthEventsAsync(
-            new StreamChannelHealthEvent
-            {
-                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
-                ProviderId = "provider-1",
-                ProviderChannelId = "channel-1",
-                DisplayName = "Test Channel",
-                EventKind = "RecoveryOutputResumed",
-                EventUtc = DateTime.UtcNow.AddMinutes(-15),
-                SafeStartKind = "H264Idr",
-            },
-            new StreamChannelHealthEvent
-            {
-                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
-                ProviderId = "provider-1",
-                ProviderChannelId = "channel-1",
-                DisplayName = "Test Channel",
-                EventKind = "MpegTsSyncLost",
-                EventUtc = DateTime.UtcNow.AddMinutes(-10),
-                TsSyncLoss = true,
-            },
-            new StreamChannelHealthEvent
-            {
-                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
-                ProviderId = "provider-1",
-                ProviderChannelId = "channel-1",
-                DisplayName = "Test Channel",
-                EventKind = "MpegTsSyncLost",
-                EventUtc = DateTime.UtcNow.AddMinutes(-5),
-                TsSyncLoss = true,
-            },
-            new StreamChannelHealthEvent
-            {
-                StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
-                ProviderId = "provider-1",
-                ProviderChannelId = "channel-1",
-                DisplayName = "Test Channel",
-                EventKind = "MpegTsSyncLost",
-                EventUtc = DateTime.UtcNow.AddMinutes(-3),
-                TsSyncLoss = true,
-            });
-
-        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
-        var capture = CreateResponseCaptureContext();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
-
-        await WaitUntilAsync(
-            () => fixture.DiagnosticsStore.Query(
-                sessionId: session.SessionId,
-                kind: StreamDiagnosticEventKind.ControlledDownstreamRetune).Count > 0,
-            TimeSpan.FromSeconds(8));
-        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-        await WaitUntilAsync(() => !fixture.Manager.TryGet(session.Key, out _), TimeSpan.FromSeconds(5));
-
-        Assert.AreEqual(SessionState.Closed, session.State);
-        Assert.IsTrue(fixture.DiagnosticsStore.Query(
-            sessionId: session.SessionId,
-            kind: StreamDiagnosticEventKind.SubscriberRemoved).Any(x =>
-                x.DisconnectReason == SubscriberDisconnectReason.Retuned));
-        Assert.IsFalse(fixture.DiagnosticsStore.Query(
-            sessionId: session.SessionId,
-            kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Any());
-        Assert.IsFalse(fixture.DiagnosticsStore.Query(
-            sessionId: session.SessionId,
-            kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery).Any());
-
-        var replacement = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
-        Assert.AreNotEqual(session.SessionId, replacement.SessionId);
-
-        await replacement.DisposeAsync();
-    }
-
-    [TestMethod]
-    public async Task Session_MpegTsReconnect_ControlledDownstreamRetune_InternalRelaySubscriberKeepsSessionAlive()
-    {
+        // Issue #127: an Unstable channel whose reconnect finds a genuine safe start must
+        // resume normally, not force every subscriber off. This holds regardless of whether
+        // an internal FFmpeg-relay subscriber is also attached — there is no suppression
+        // logic left to depend on, since the eager retune mechanism was removed entirely.
         var preReconnectPacket = FakeStreamingHandler.ValidTsPacket(0xA1);
         var safeChunk = FakeStreamingHandler.ValidTsPacket(0xCC);
         var recoveredSequence = MpegTsSafeStartupSequence();

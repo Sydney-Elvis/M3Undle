@@ -415,8 +415,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                                 _reconnectOptions,
                                 _sessionCts.Token);
                             BeginRecoveryOutputHold(recoveredAttempt);
-                            if (_currentRecoveryPolicy.RequireDownstreamRetune)
-                                await ExecuteControlledDownstreamRetuneAsync();
                         }
 
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
@@ -1299,65 +1297,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
     }
 
-    private async Task ExecuteControlledDownstreamRetuneAsync()
-    {
-        var policy = ResolveRecoveryPolicy();
-        var heldDuration = GetRecoveryHoldDuration();
-        var internalSubscriberCount = InternalSubscriberCount;
-        if (internalSubscriberCount > 0)
-        {
-            _logger.LogInformation(
-                "Controlled downstream retune suppressed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} InternalSubscriberCount={InternalSubscriberCount} ExternalSubscriberCount={ExternalSubscriberCount}",
-                _sessionId,
-                _source.DisplayName,
-                _source.ProviderId,
-                _source.ProviderChannelId,
-                policy.Profile,
-                policy.DownstreamRetuneReason,
-                heldDuration.TotalMilliseconds,
-                internalSubscriberCount,
-                ExternalSubscriberCount);
-            return;
-        }
-
-        _logger.LogInformation(
-            "Controlled downstream retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneRequired=true DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
-            _sessionId,
-            _source.DisplayName,
-            _source.ProviderId,
-            _source.ProviderChannelId,
-            policy.Profile,
-            policy.DownstreamRetuneReason,
-            heldDuration.TotalMilliseconds,
-            _recoveryBytesSuppressed);
-        RecordDiagnostic(
-            StreamDiagnosticEventKind.ControlledDownstreamRetune,
-            outputHeld: heldDuration,
-            bytesSuppressed: _recoveryBytesSuppressed,
-            recoveryHoldLimit: policy.RecoveryOutputHoldLimit,
-            stopTrigger: "controlled_downstream_retune",
-            message: $"Closing shared stream session for controlled downstream retune. Reason: {policy.DownstreamRetuneReason}");
-        Interlocked.Exchange(ref _stopRequested, 1);
-        MarkPendingStopTrigger("controlled_downstream_retune");
-        LogStopTrigger("controlled_downstream_retune", subscriberDisconnectReason: SubscriberDisconnectReason.Retuned.ToString());
-        _recoveryOutputHoldActive = false;
-        _recoveryOutputHoldStartedUtc = null;
-        SetState(SessionState.Closed);
-        foreach (var subscriber in _subscribers.Values)
-        {
-            if (!subscriber.IsInternal)
-                await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
-        }
-        foreach (var subscriber in _subscribers.Values)
-        {
-            if (subscriber.IsInternal)
-                await subscriber.CompleteAsync(SubscriberDisconnectReason.SessionClosed);
-        }
-
-        _sessionCts.Cancel();
-        throw new OperationCanceledException(_sessionCts.Token);
-    }
-
     private void BeginSubscriberAttach()
     {
         lock (_gate)
@@ -1704,9 +1643,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
             LastRecoveryStartedUtc: _lastRecoveryStartedUtc,
             HealthProfile: _currentRecoveryPolicy?.Profile,
-            HealthProfileReason: _currentRecoveryPolicy?.Reason,
-            RequiresDownstreamRetune: _currentRecoveryPolicy?.RequireDownstreamRetune ?? false,
-            DownstreamRetuneReason: _currentRecoveryPolicy?.DownstreamRetuneReason);
+            HealthProfileReason: _currentRecoveryPolicy?.Reason);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(
