@@ -80,6 +80,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private string? _lastSafeStartKind;
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
+    private DateTimeOffset? _lastRecoveryResumedUtc;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -242,6 +243,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             subscriber: subscriber,
             disconnectReason: reason,
             message: "Subscriber removed.");
+
+        double? abortAfterRecoveryDelayMs = null;
+        lock (_gate)
+        {
+            if (!subscriber.IsInternal
+                && reason == SubscriberDisconnectReason.ClientAborted
+                && _lastRecoveryResumedUtc is { } recoveredAtUtc)
+            {
+                abortAfterRecoveryDelayMs = Math.Max(0, (DateTimeOffset.UtcNow - recoveredAtUtc).TotalMilliseconds);
+            }
+        }
+
+        if (abortAfterRecoveryDelayMs.HasValue)
+        {
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.ClientAbortAfterRecovery,
+                subscriber: subscriber,
+                disconnectReason: reason,
+                clientAbortAfterRecoveryDelayMs: abortAfterRecoveryDelayMs,
+                message: "Client disconnected after stream recovery.");
+        }
 
         lock (_gate)
         {
@@ -409,12 +431,17 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             message: "Upstream stream recovered after reconnect.");
                         if (shouldHoldRecoveredOutput)
                         {
+                            _lastRecoveryResumedUtc = null;
                             _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
                                 _source.ProviderId,
                                 _source.ProviderChannelId,
                                 _reconnectOptions,
                                 _sessionCts.Token);
                             BeginRecoveryOutputHold(recoveredAttempt);
+                        }
+                        else
+                        {
+                            _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
                         }
 
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
@@ -1104,6 +1131,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldStartedUtc = null;
         _lastSafeStartKind = safeStartKind;
         _lastRecoveryOutputHeldMs = heldDuration.TotalMilliseconds;
+        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
         SetState(SessionState.Live);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOutputResumed,
@@ -1702,6 +1730,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         string? safeStartKind = null,
         long? bytesSuppressed = null,
         TimeSpan? recoveryHoldLimit = null,
+        double? clientAbortAfterRecoveryDelayMs = null,
         TimeSpan? cleanWatchDuration = null,
         string? message = null)
     {
@@ -1736,6 +1765,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             SafeStartKind: safeStartKind,
             BytesSuppressed: bytesSuppressed,
             RecoveryHoldLimitMs: recoveryHoldLimit?.TotalMilliseconds,
+            ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelayMs,
             CleanWatchDurationMs: cleanWatchDuration?.TotalMilliseconds,
             RelayMode: _relayMode,
             Message: message);

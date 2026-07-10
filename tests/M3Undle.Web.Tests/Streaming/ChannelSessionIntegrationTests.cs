@@ -188,10 +188,12 @@ public sealed class ChannelSessionIntegrationTests
 
         var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
         using var cts = new CancellationTokenSource();
-        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+        var subscriber = await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
 
         await WaitUntilAsync(
-            () => fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0,
+            () =>
+                fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0
+                && fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
             TimeSpan.FromSeconds(5));
 
         var failures = fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.UpstreamFailure);
@@ -201,6 +203,15 @@ public sealed class ChannelSessionIntegrationTests
         Assert.IsTrue(reconnects.Any(x => x.ReconnectAttempt >= 1));
 
         cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var abortAfterRecovery = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery);
+        Assert.IsTrue(abortAfterRecovery.Any(), "ClientAbortAfterRecovery should be emitted for client disconnects after reconnect recovery.");
+        Assert.IsTrue(abortAfterRecovery.All(x => x.ClientAbortAfterRecoveryDelayMs >= 0), "ClientAbortAfterRecovery delay must be non-negative.");
+
         await session.DisposeAsync();
     }
 
