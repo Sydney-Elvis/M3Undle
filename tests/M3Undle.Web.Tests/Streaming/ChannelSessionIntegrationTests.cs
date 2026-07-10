@@ -1166,6 +1166,43 @@ public sealed class ChannelSessionIntegrationTests
         await fixture.DisposeAsync();
     }
 
+    [TestMethod]
+    public async Task Session_InternalSubscriberAbortAfterRecovery_NotCountedAsClientAbortAfterRecovery()
+    {
+        // Issue #125: the internal FFmpeg relay subscriber reconnecting to the ring
+        // buffer raises SubscriberDisconnectReason.ClientAborted the same as a real
+        // viewer dropping. It isn't a viewer, so — even inside the post-recovery
+        // window — it must NOT be recorded as ClientAbortAfterRecovery health evidence.
+        // An external subscriber stays attached throughout (matching production, where
+        // the internal FFmpeg relay only exists alongside real viewer demand) so the
+        // session isn't torn down by idle-grace before the internal subscriber aborts.
+        var (session, _, fixture) = await StartSessionThroughRecoveryAsync(
+            postRecoveryAbortWindow: TimeSpan.FromMinutes(10));
+
+        var internalCapture = CreateResponseCaptureContext();
+        using var internalCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var internalSubscriber = await session.AttachSubscriberAsync(
+            internalCapture.Context, internalCts.Token, isInternal: true);
+
+        await internalSubscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.SubscriberRemoved).Any(x =>
+                    x.ClientId == internalSubscriber.ClientId
+                    && x.DisconnectReason == SubscriberDisconnectReason.ClientAborted),
+            TimeSpan.FromSeconds(5));
+
+        Assert.IsFalse(
+            fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery).Any(),
+            "An internal relay subscriber abort must not be recorded as ClientAbortAfterRecovery.");
+
+        await session.DisposeAsync();
+        await fixture.DisposeAsync();
+    }
+
     // Drives a session through one stall + safe-start recovery and returns it with an
     // attached subscriber that has received recovered output, ready for an abort test.
     private async Task<(ChannelStreamSession Session, SubscriberConnection Subscriber, SessionFixture Fixture)>

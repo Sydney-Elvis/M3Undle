@@ -257,7 +257,19 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             // forced-retune loop, so they must not poison channel health.
             var withinPostRecoveryWindow = abortDelay is { } delay
                 && delay <= _reconnectOptions.PostRecoveryAbortWindow;
-            if (withinPostRecoveryWindow)
+            if (subscriber.IsInternal)
+            {
+                // Issue #125: the internal FFmpeg relay subscriber reconnecting to the
+                // ring buffer raises the same ClientAborted reason as a real viewer
+                // dropping. It isn't a viewer, so it must not poison channel health.
+                _logger.LogInformation(
+                    "Internal subscriber abort after recovery NOT counted as health evidence (relay reconnect, not a viewer): SessionId={SessionId} DisplayName={DisplayName} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent}",
+                    _sessionId,
+                    _source.DisplayName,
+                    abortDelay?.TotalMilliseconds,
+                    subscriber.BytesSent);
+            }
+            else if (withinPostRecoveryWindow)
             {
                 RecordDiagnostic(
                     StreamDiagnosticEventKind.ClientAbortAfterRecovery,
