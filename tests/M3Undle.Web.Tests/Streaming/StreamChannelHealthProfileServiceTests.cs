@@ -199,6 +199,27 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
+    public async Task GetEvidenceAsync_SubscriberQueueFullDoesNotBlockCleanWatchDecay()
+    {
+        // Issue #130: SubscriberQueueFull is a downstream/client-side symptom (a slow
+        // viewer's connection), not upstream channel health evidence. Unlike a genuine
+        // adverse event, it must not reset the clean-watch cutoff.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(35).TotalMilliseconds, age: TimeSpan.FromMinutes(10)),
+            CreateHealthEvent("SubscriberQueueFull", age: TimeSpan.FromMinutes(5)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.IsNotNull(evidence.LastCleanWatchUtc,
+            "A SubscriberQueueFull event after the clean watch must not erase it from LastCleanWatchUtc.");
+        Assert.AreEqual(1, evidence.CleanWatchEvents);
+    }
+
+    [TestMethod]
     public async Task GetEvidenceAsync_NoCleanWatchAfterAdverseEvent_LastCleanWatchUtcIsNull()
     {
         await using var fixture = await ProfileFixture.CreateAsync();

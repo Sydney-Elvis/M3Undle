@@ -383,7 +383,8 @@ public sealed class StreamChannelHealthProfileService(
     private sealed record CacheEntry(DateTimeOffset CachedAt, HealthSummary Summary);
 
     private static bool IsAdverse(HealthEventRow row)
-        => !string.Equals(row.EventKind, nameof(StreamDiagnosticEventKind.CleanWatchCompleted), StringComparison.Ordinal);
+        => row.EventKind is not (nameof(StreamDiagnosticEventKind.CleanWatchCompleted)
+            or nameof(StreamDiagnosticEventKind.SubscriberQueueFull));
 
     private sealed record HealthEventRow(
         string EventKind,
