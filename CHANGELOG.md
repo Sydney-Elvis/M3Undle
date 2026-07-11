@@ -4,6 +4,33 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.4] — 2026-07-10
+
+Beta 4 is a focused adaptive stream health release. It removes false and dead signals from the channel health classifier that could push a channel to Unstable and force every viewer off on a benign disconnect, and it retires an eager forced-retune mechanism in favor of the existing evidence-based recovery path.
+
+### Adaptive stream health
+
+- Stopped counting a client disconnect shortly after a recovery as evidence of channel instability. A benign viewer disconnect (channel change, app backgrounding) is not reliable evidence, and it previously drove channels to Unstable and triggered a forced-retune loop
+- Stopped miscounting the internal FFmpeg relay's own reconnect-to-ring-buffer as a client abort, a second source of the same false signal
+- Removed the eager forced-downstream-retune mechanism that disconnected every viewer on an Unstable channel before a recovery was even attempted. Recovery failures are now handled entirely by the existing evidence-based safe-start path, so an Unstable channel that finds a valid recovery point resumes normally instead of forcing a reconnect
+- Removed a dead in-session health-escalation code path left over from the beta.2 Auto-relay change, which had no effect since Cautious and Stable channels have been treated identically
+- Added long-term persistence for subscriber slow-client and resync events, giving visibility into resync/slow-client behavior over time
+- Removed retune indicators from the stream monitor and session details dialog that no longer reflected real behavior now that the eager retune mechanism is gone
+
+### Testing
+
+- Added regression coverage locking in that client aborts, in any volume, never drive channel health off Stable
+- Added coverage for the internal relay subscriber carve-out, the evidence-based recovery-failure path, and persisted slow-client health events
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.4
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.3] — 2026-06-30
 
 Beta 3 is a streaming compatibility release focused on modern burst-buffering clients. It moves Roku, Android TV, ExoPlayer/Media3, IPTV Smarters, and similar clients onto generated HLS when needed, makes direct MPEG-TS delivery less fragile for clients that still use it, and fixes several Xtream compatibility issues found during real device testing.

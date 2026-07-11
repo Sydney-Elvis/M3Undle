@@ -64,6 +64,26 @@ public sealed class StreamChannelHealthEventRecorderTests
     }
 
     [TestMethod]
+    public async Task Record_PersistsSubscriberQueueFullHealthEvent()
+    {
+        // Issue #130: previously dropped before reaching the database, so there was no
+        // long-term data on resync/slow-client behavior.
+        await using var fixture = await RecorderFixture.CreateAsync();
+
+        await fixture.Recorder.StartAsync(CancellationToken.None);
+        fixture.Recorder.Record(CreateEvent(
+            StreamDiagnosticEventKind.SubscriberQueueFull,
+            disconnectReason: SubscriberDisconnectReason.SlowClient));
+        await fixture.Recorder.FlushAsync();
+        await fixture.Recorder.StopAsync(CancellationToken.None);
+
+        await using var db = fixture.CreateDbContext();
+        var healthEvent = await db.StreamChannelHealthEvents.SingleAsync();
+        Assert.AreEqual("SubscriberQueueFull", healthEvent.EventKind);
+        Assert.AreEqual("SlowClient", healthEvent.ClientDisconnectReason);
+    }
+
+    [TestMethod]
     public async Task Record_PersistsCleanWatchDuration()
     {
         await using var fixture = await RecorderFixture.CreateAsync();

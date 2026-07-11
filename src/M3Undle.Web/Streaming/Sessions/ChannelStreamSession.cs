@@ -74,7 +74,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private bool _recoveryOutputHoldActive;
     private DateTimeOffset? _recoveryOutputHoldStartedUtc;
     private long _recoveryBytesSuppressed;
-    private bool _recoveryResumedSinceLastReconnect;
     private StreamChannelRecoveryPolicy? _currentRecoveryPolicy;
     private string? _relayPolicy;
     private string? _relayDecisionReason;
@@ -244,50 +243,26 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             subscriber: subscriber,
             disconnectReason: reason,
             message: "Subscriber removed.");
-        if (_recoveryResumedSinceLastReconnect && reason == SubscriberDisconnectReason.ClientAborted)
+
+        double? abortAfterRecoveryDelayMs = null;
+        lock (_gate)
         {
-            var abortDelay = _lastRecoveryResumedUtc is { } resumedUtc
-                ? DateTimeOffset.UtcNow - resumedUtc
-                : (TimeSpan?)null;
-            // Issue #96: only aborts shortly after the resume are plausibly caused by
-            // the recovery splice. Later aborts (channel change, idle close, or an
-            // unrelated disconnect minutes after a clean recovery) are ordinary
-            // disconnects. Recording them as ClientAbortAfterRecovery is the false
-            // signal that previously drove channels to Unstable and triggered the
-            // forced-retune loop, so they must not poison channel health.
-            var withinPostRecoveryWindow = abortDelay is { } delay
-                && delay <= _reconnectOptions.PostRecoveryAbortWindow;
-            if (withinPostRecoveryWindow)
+            if (!subscriber.IsInternal
+                && reason == SubscriberDisconnectReason.ClientAborted
+                && _lastRecoveryResumedUtc is { } recoveredAtUtc)
             {
-                RecordDiagnostic(
-                    StreamDiagnosticEventKind.ClientAbortAfterRecovery,
-                    subscriber: subscriber,
-                    disconnectReason: reason,
-                    clientAbortAfterRecoveryDelay: abortDelay,
-                    message: "Client aborted after MPEG-TS recovery resumed.");
-                _logger.LogWarning(
-                    "Client aborted after MPEG-TS recovery: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} LastOutputHeldMs={LastOutputHeldMs} AbortDelayMs={AbortDelayMs} BytesSent={BytesSent} DisconnectReason={DisconnectReason}",
-                    _sessionId,
-                    _source.DisplayName,
-                    _source.ProviderId,
-                    _source.ProviderChannelId,
-                    _relayMode,
-                    _lastSafeStartKind,
-                    _lastRecoveryOutputHeldMs,
-                    abortDelay?.TotalMilliseconds,
-                    subscriber.BytesSent,
-                    reason);
+                abortAfterRecoveryDelayMs = (DateTimeOffset.UtcNow - recoveredAtUtc).TotalMilliseconds;
             }
-            else
-            {
-                _logger.LogInformation(
-                    "Client disconnect after recovery NOT counted as health evidence (outside post-recovery window): SessionId={SessionId} DisplayName={DisplayName} AbortDelayMs={AbortDelayMs} WindowMs={WindowMs} BytesSent={BytesSent}",
-                    _sessionId,
-                    _source.DisplayName,
-                    abortDelay?.TotalMilliseconds,
-                    _reconnectOptions.PostRecoveryAbortWindow.TotalMilliseconds,
-                    subscriber.BytesSent);
-            }
+        }
+
+        if (abortAfterRecoveryDelayMs.HasValue)
+        {
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.ClientAbortAfterRecovery,
+                subscriber: subscriber,
+                disconnectReason: reason,
+                clientAbortAfterRecoveryDelayMs: abortAfterRecoveryDelayMs,
+                message: "Client disconnected after stream recovery.");
         }
 
         lock (_gate)
@@ -404,7 +379,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         PublishSnapshots();
                     }
 
-                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, BuildEffectiveConnectPolicy(), _sessionCts.Token);
+                    await using var upstream = await _upstreamConnector.ConnectAsync(_source, _currentRecoveryPolicy, _sessionCts.Token);
                     _lastUpstreamStatusCode = upstream.StatusCode;
                     _contentType = upstream.ContentType;
                     _cacheControl = upstream.Response?.Headers.CacheControl?.ToString();
@@ -454,6 +429,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             httpStatusCode: upstream.StatusCode,
                             reconnectAttempt: recoveredAttempt,
                             message: "Upstream stream recovered after reconnect.");
+                        MarkRecoveryResumedNow();
                         if (shouldHoldRecoveredOutput)
                         {
                             _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
@@ -462,8 +438,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                                 _reconnectOptions,
                                 _sessionCts.Token);
                             BeginRecoveryOutputHold(recoveredAttempt);
-                            if (_currentRecoveryPolicy.RequireDownstreamRetune)
-                                await ExecuteControlledDownstreamRetuneAsync();
                         }
 
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
@@ -1081,7 +1055,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
         _lastRecoveryStartedUtc = _recoveryOutputHoldStartedUtc;
         _recoveryBytesSuppressed = 0;
-        _recoveryResumedSinceLastReconnect = false;
         _currentRecoveryPolicy ??= StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
         var policy = ResolveRecoveryPolicy();
         SetState(SessionState.HoldingOutput);
@@ -1152,10 +1125,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         _recoveryOutputHoldActive = false;
         _recoveryOutputHoldStartedUtc = null;
-        _recoveryResumedSinceLastReconnect = true;
         _lastSafeStartKind = safeStartKind;
         _lastRecoveryOutputHeldMs = heldDuration.TotalMilliseconds;
-        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
+        MarkRecoveryResumedNow();
         SetState(SessionState.Live);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOutputResumed,
@@ -1257,28 +1229,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             Math.Min(currentFallbackWindow, configuredSearchLimit));
     }
 
+    private void MarkRecoveryResumedNow()
+        => _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
+
     private StreamChannelRecoveryPolicy ResolveRecoveryPolicy()
         => _currentRecoveryPolicy ?? StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
-
-    // Issue #96: in-session escalation. The persisted health profile lags within a
-    // session (events are written asynchronously and the profile is cached ~30s), so
-    // a channel that starts Stable would not reflect in-session failures until the
-    // database-derived policy catches up. Treat the channel as at least Cautious for
-    // this connect after a failure; Auto relay still remuxes only Unstable channels.
-    // Recovery behaviour (hold limits, retune) still follows the database-derived
-    // policy; only the relay-decision input is escalated.
-    private StreamChannelRecoveryPolicy? BuildEffectiveConnectPolicy()
-    {
-        var policy = _currentRecoveryPolicy;
-        if (policy is null || _reconnectAttempts == 0 || policy.Profile != StreamChannelHealthProfile.Stable)
-            return policy;
-
-        return policy with
-        {
-            Profile = StreamChannelHealthProfile.Cautious,
-            Reason = $"In-session escalation: {_reconnectAttempts} upstream failure(s) observed this session. {policy.Reason}",
-        };
-    }
 
     private bool IsFfmpegRelay()
         => !string.Equals(_relayMode, UpstreamRelayModes.Direct, StringComparison.Ordinal);
@@ -1347,65 +1302,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         {
             await subscriber.CompleteAsync(SubscriberDisconnectReason.SessionClosed);
         }
-    }
-
-    private async Task ExecuteControlledDownstreamRetuneAsync()
-    {
-        var policy = ResolveRecoveryPolicy();
-        var heldDuration = GetRecoveryHoldDuration();
-        var internalSubscriberCount = InternalSubscriberCount;
-        if (internalSubscriberCount > 0)
-        {
-            _logger.LogInformation(
-                "Controlled downstream retune suppressed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} InternalSubscriberCount={InternalSubscriberCount} ExternalSubscriberCount={ExternalSubscriberCount}",
-                _sessionId,
-                _source.DisplayName,
-                _source.ProviderId,
-                _source.ProviderChannelId,
-                policy.Profile,
-                policy.DownstreamRetuneReason,
-                heldDuration.TotalMilliseconds,
-                internalSubscriberCount,
-                ExternalSubscriberCount);
-            return;
-        }
-
-        _logger.LogInformation(
-            "Controlled downstream retune: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} HealthProfile={HealthProfile} DownstreamRetuneRequired=true DownstreamRetuneReason={DownstreamRetuneReason} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
-            _sessionId,
-            _source.DisplayName,
-            _source.ProviderId,
-            _source.ProviderChannelId,
-            policy.Profile,
-            policy.DownstreamRetuneReason,
-            heldDuration.TotalMilliseconds,
-            _recoveryBytesSuppressed);
-        RecordDiagnostic(
-            StreamDiagnosticEventKind.ControlledDownstreamRetune,
-            outputHeld: heldDuration,
-            bytesSuppressed: _recoveryBytesSuppressed,
-            recoveryHoldLimit: policy.RecoveryOutputHoldLimit,
-            stopTrigger: "controlled_downstream_retune",
-            message: $"Closing shared stream session for controlled downstream retune. Reason: {policy.DownstreamRetuneReason}");
-        Interlocked.Exchange(ref _stopRequested, 1);
-        MarkPendingStopTrigger("controlled_downstream_retune");
-        LogStopTrigger("controlled_downstream_retune", subscriberDisconnectReason: SubscriberDisconnectReason.Retuned.ToString());
-        _recoveryOutputHoldActive = false;
-        _recoveryOutputHoldStartedUtc = null;
-        SetState(SessionState.Closed);
-        foreach (var subscriber in _subscribers.Values)
-        {
-            if (!subscriber.IsInternal)
-                await subscriber.CompleteAsync(SubscriberDisconnectReason.Retuned);
-        }
-        foreach (var subscriber in _subscribers.Values)
-        {
-            if (subscriber.IsInternal)
-                await subscriber.CompleteAsync(SubscriberDisconnectReason.SessionClosed);
-        }
-
-        _sessionCts.Cancel();
-        throw new OperationCanceledException(_sessionCts.Token);
     }
 
     private void BeginSubscriberAttach()
@@ -1754,9 +1650,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             LastRecoveryOutputHeldMs: _lastRecoveryOutputHeldMs,
             LastRecoveryStartedUtc: _lastRecoveryStartedUtc,
             HealthProfile: _currentRecoveryPolicy?.Profile,
-            HealthProfileReason: _currentRecoveryPolicy?.Reason,
-            RequiresDownstreamRetune: _currentRecoveryPolicy?.RequireDownstreamRetune ?? false,
-            DownstreamRetuneReason: _currentRecoveryPolicy?.DownstreamRetuneReason);
+            HealthProfileReason: _currentRecoveryPolicy?.Reason);
 
         _registry.UpsertSession(session);
         _registry.UpsertProvider(new StreamProviderSnapshot(
@@ -1835,7 +1729,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         string? safeStartKind = null,
         long? bytesSuppressed = null,
         TimeSpan? recoveryHoldLimit = null,
-        TimeSpan? clientAbortAfterRecoveryDelay = null,
+        double? clientAbortAfterRecoveryDelayMs = null,
         TimeSpan? cleanWatchDuration = null,
         string? message = null)
     {
@@ -1870,7 +1764,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             SafeStartKind: safeStartKind,
             BytesSuppressed: bytesSuppressed,
             RecoveryHoldLimitMs: recoveryHoldLimit?.TotalMilliseconds,
-            ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelay?.TotalMilliseconds,
+            ClientAbortAfterRecoveryDelayMs: clientAbortAfterRecoveryDelayMs,
             CleanWatchDurationMs: cleanWatchDuration?.TotalMilliseconds,
             RelayMode: _relayMode,
             Message: message);

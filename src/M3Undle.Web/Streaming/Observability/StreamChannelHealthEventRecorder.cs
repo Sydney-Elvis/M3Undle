@@ -172,5 +172,6 @@ public sealed class StreamChannelHealthEventRecorder(
             or StreamDiagnosticEventKind.ClientAbortAfterRecovery
             or StreamDiagnosticEventKind.MpegTsSyncLost
             or StreamDiagnosticEventKind.ControlledDownstreamRetune
-            or StreamDiagnosticEventKind.CleanWatchCompleted;
+            or StreamDiagnosticEventKind.CleanWatchCompleted
+            or StreamDiagnosticEventKind.SubscriberQueueFull;
 }

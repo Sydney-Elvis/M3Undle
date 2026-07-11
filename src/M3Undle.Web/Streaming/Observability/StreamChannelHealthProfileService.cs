@@ -219,14 +219,11 @@ public sealed class StreamChannelHealthProfileService(
                 recentProfile, comparisonProfile);
         }
 
-        var recentHasSevere = recentRows.Any(e => e.ForcedRetune || e.ClientAbortAfterRecovery);
+        var recentHasSevere = recentRows.Any(e => e.ForcedRetune);
         if (recentHasSevere)
         {
-            var severeReason = recentRows.Any(e => e.ForcedRetune)
-                ? "A forced retune occurred in the last hour."
-                : "A client abort after recovery occurred in the last hour.";
             return new StreamChannelHealthTrendResult(
-                StreamChannelHealthTrend.Worsening, severeReason,
+                StreamChannelHealthTrend.Worsening, "A forced retune occurred in the last hour.",
                 recentAdverse, comparisonAdverse, recentCleanWatch, comparisonCleanWatch,
                 cleanWatchSinceLastAdverse, recentProfile, comparisonProfile);
         }
@@ -290,22 +287,20 @@ public sealed class StreamChannelHealthProfileService(
         var fallbackResumes = rows.Count(e =>
             e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed)
             && e.SafeStartKind == "FallbackPacketBoundary");
-        var clientAborts = rows.Count(e => e.ClientAbortAfterRecovery);
         var forcedRetunes = rows.Count(e => e.ForcedRetune);
         var tsSyncLoss = rows.Count(e => e.TsSyncLoss);
         var upstreamFailures = rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure));
         var recoveryResumes = rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed));
 
-        if (forcedRetunes > 0 || clientAborts >= 2 || fallbackResumes >= 2 || tsSyncLoss >= 2)
+        if (forcedRetunes > 0 || fallbackResumes >= 2 || tsSyncLoss >= 2)
             return StreamChannelHealthProfile.Unstable;
-        if (clientAborts > 0 || fallbackResumes > 0 || upstreamFailures >= 2 || recoveryResumes >= 2 || tsSyncLoss > 0)
+        if (fallbackResumes > 0 || upstreamFailures >= 2 || recoveryResumes >= 2 || tsSyncLoss > 0)
             return StreamChannelHealthProfile.Cautious;
         return StreamChannelHealthProfile.Stable;
     }
 
     private static bool IsTrendAdverse(HealthEventRow row)
         => row.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure)
-        || row.ClientAbortAfterRecovery
         || row.ForcedRetune
         || row.TsSyncLoss
         || (row.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed)
@@ -321,16 +316,12 @@ public sealed class StreamChannelHealthProfileService(
                 Max(options.RecoveryOutputHoldLimit, UnstableHoldLimit),
                 Math.Max(options.RecoverySafeStartSearchLimitBytes, UnstableSearchLimitBytes),
                 AllowPacketBoundaryRecoveryFallback: false,
-                RequireDownstreamRetune: true,
-                DownstreamRetuneReason: BuildDownstreamRetuneReason(summary),
                 Reason: BuildReason(summary, profile)),
             _ => new StreamChannelRecoveryPolicy(
                 profile,
                 options.RecoveryOutputHoldLimit,
                 options.RecoverySafeStartSearchLimitBytes,
                 options.AllowPacketBoundaryRecoveryFallback,
-                RequireDownstreamRetune: false,
-                DownstreamRetuneReason: null,
                 BuildReason(summary, profile)),
         };
     }
@@ -339,14 +330,12 @@ public sealed class StreamChannelHealthProfileService(
     {
         StreamChannelHealthProfile profile;
         if (summary.ForcedRetunes > 0
-            || summary.ClientAbortAfterRecovery >= 2
             || summary.FallbackRecoveryResumes >= 2
             || summary.TsSyncLoss >= 2)
         {
             profile = StreamChannelHealthProfile.Unstable;
         }
-        else if (summary.ClientAbortAfterRecovery > 0
-            || summary.FallbackRecoveryResumes > 0
+        else if (summary.FallbackRecoveryResumes > 0
             || summary.UpstreamFailures >= 2
             || summary.RecoveryResumes >= 2
             || summary.TsSyncLoss > 0)
@@ -378,15 +367,13 @@ public sealed class StreamChannelHealthProfileService(
                 : "No recent recovery failures or post-recovery aborts were found.",
         };
 
-    private static string BuildDownstreamRetuneReason(HealthSummary summary)
-        => $"Channel health is Unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, idrRecoveries={summary.IdrRecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}.";
-
     private static TimeSpan Max(TimeSpan left, TimeSpan right) => left >= right ? left : right;
 
     private sealed record CacheEntry(DateTimeOffset CachedAt, HealthSummary Summary);
 
     private static bool IsAdverse(HealthEventRow row)
-        => !string.Equals(row.EventKind, nameof(StreamDiagnosticEventKind.CleanWatchCompleted), StringComparison.Ordinal);
+        => row.EventKind is not (nameof(StreamDiagnosticEventKind.CleanWatchCompleted)
+            or nameof(StreamDiagnosticEventKind.SubscriberQueueFull));
 
     private sealed record HealthEventRow(
         string EventKind,

@@ -15,12 +15,16 @@ namespace M3Undle.Web.Tests.Streaming;
 public sealed class StreamChannelHealthProfileServiceTests
 {
     [TestMethod]
-    public async Task GetRecoveryPolicyAsync_RepeatedAbortAfterRecovery_DerivesUnstablePolicy()
+    public async Task GetRecoveryPolicyAsync_RepeatedTsSyncLoss_DerivesUnstablePolicy()
     {
+        // Issue #128: ClientAbortAfterRecovery no longer drives Unstable — a benign
+        // viewer disconnect after a recovery isn't reliable evidence, and the real
+        // #96 incident was already fully explained by upstream-only signals. TsSyncLoss
+        // is one such upstream-only signal, so it stands in here.
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
             "provider-1",
@@ -34,10 +38,37 @@ public sealed class StreamChannelHealthProfileServiceTests
 
         Assert.AreEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
         Assert.IsFalse(policy.AllowPacketBoundaryRecoveryFallback);
-        Assert.IsTrue(policy.RequireDownstreamRetune);
-        Assert.IsFalse(string.IsNullOrWhiteSpace(policy.DownstreamRetuneReason));
         Assert.IsTrue(policy.RecoveryOutputHoldLimit >= TimeSpan.FromSeconds(5));
         Assert.IsTrue(policy.RecoverySafeStartSearchLimitBytes >= 2 * 1024 * 1024);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_RepeatedClientAbortAfterRecovery_StaysStable()
+    {
+        // Regression guard for issue #128: ClientAbortAfterRecovery must never drive the
+        // profile off Stable again, no matter how many are seen. A benign viewer disconnect
+        // shortly after a recovery splice is not reliable evidence of channel instability —
+        // that false signal is what drove channels Unstable and triggered the forced-retune
+        // loop in issue #96. Upstream-only signals (TsSyncLoss, ForcedRetune, etc.) are the
+        // only remaining triggers; see GetRecoveryPolicyAsync_RepeatedTsSyncLoss_DerivesUnstablePolicy.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
+            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Stable, policy.Profile);
+        Assert.AreEqual(3, evidence.ClientAbortAfterRecovery,
+            "The raw count must still be tracked for observability even though it no longer drives the profile.");
     }
 
     [TestMethod]
@@ -70,8 +101,6 @@ public sealed class StreamChannelHealthProfileServiceTests
             TimeSpan.FromSeconds(5),
             2 * 1024 * 1024,
             AllowPacketBoundaryRecoveryFallback: false,
-            RequireDownstreamRetune: true,
-            DownstreamRetuneReason: "test",
             Reason: "unstable test profile");
 
         var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
@@ -90,8 +119,6 @@ public sealed class StreamChannelHealthProfileServiceTests
             TimeSpan.FromSeconds(5),
             2 * 1024 * 1024,
             AllowPacketBoundaryRecoveryFallback: false,
-            RequireDownstreamRetune: true,
-            DownstreamRetuneReason: "test",
             Reason: "unstable test profile");
 
         var decision = fixture.Service.GetRelayPolicyDecision("off", policy);
@@ -109,8 +136,6 @@ public sealed class StreamChannelHealthProfileServiceTests
             TimeSpan.FromSeconds(3),
             512 * 1024,
             AllowPacketBoundaryRecoveryFallback: true,
-            RequireDownstreamRetune: false,
-            DownstreamRetuneReason: null,
             Reason: "cautious test profile");
 
         var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
@@ -128,8 +153,6 @@ public sealed class StreamChannelHealthProfileServiceTests
             TimeSpan.FromSeconds(3),
             512 * 1024,
             AllowPacketBoundaryRecoveryFallback: true,
-            RequireDownstreamRetune: false,
-            DownstreamRetuneReason: null,
             Reason: "stable test profile");
 
         var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
@@ -138,13 +161,13 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
-    public async Task GetRecoveryPolicyAsync_TwoAbortsAfterRecovery_RequiresDownstreamRetune()
+    public async Task GetRecoveryPolicyAsync_TwoTsSyncLossAfterRecovery_DerivesUnstablePolicy()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("RecoveryOutputResumed", safeStartKind: "H264Idr"),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
             "provider-1",
@@ -152,19 +175,15 @@ public sealed class StreamChannelHealthProfileServiceTests
             new ReconnectOptions());
 
         Assert.AreEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
-        Assert.IsTrue(policy.RequireDownstreamRetune);
-        Assert.IsFalse(string.IsNullOrWhiteSpace(policy.DownstreamRetuneReason));
     }
 
     [TestMethod]
-    public async Task GetRecoveryPolicyAsync_ThreeAbortsAfterIdrRecovery_RequiresDownstreamRetune()
+    public async Task GetRecoveryPolicyAsync_ForcedRetune_DerivesUnstablePolicy()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("RecoveryOutputResumed", safeStartKind: "H264Idr"),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("RecoveryForcedRetune", forcedRetune: true));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
             "provider-1",
@@ -172,7 +191,6 @@ public sealed class StreamChannelHealthProfileServiceTests
             new ReconnectOptions());
 
         Assert.AreEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
-        Assert.IsTrue(policy.RequireDownstreamRetune);
     }
 
     [TestMethod]
@@ -193,6 +211,27 @@ public sealed class StreamChannelHealthProfileServiceTests
         Assert.IsNotNull(evidence.LastAdverseEventUtc);
         Assert.IsTrue(evidence.LastCleanWatchUtc > evidence.LastAdverseEventUtc,
             "LastCleanWatchUtc should be more recent than LastAdverseEventUtc");
+        Assert.AreEqual(1, evidence.CleanWatchEvents);
+    }
+
+    [TestMethod]
+    public async Task GetEvidenceAsync_SubscriberQueueFullDoesNotBlockCleanWatchDecay()
+    {
+        // Issue #130: SubscriberQueueFull is a downstream/client-side symptom (a slow
+        // viewer's connection), not upstream channel health evidence. Unlike a genuine
+        // adverse event, it must not reset the clean-watch cutoff.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(35).TotalMilliseconds, age: TimeSpan.FromMinutes(10)),
+            CreateHealthEvent("SubscriberQueueFull", age: TimeSpan.FromMinutes(5)));
+
+        var evidence = await fixture.Service.GetEvidenceAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.IsNotNull(evidence.LastCleanWatchUtc,
+            "A SubscriberQueueFull event after the clean watch must not erase it from LastCleanWatchUtc.");
         Assert.AreEqual(1, evidence.CleanWatchEvents);
     }
 
@@ -220,8 +259,8 @@ public sealed class StreamChannelHealthProfileServiceTests
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true, age: TimeSpan.FromHours(2)),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true, age: TimeSpan.FromHours(2)),
             CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(30).TotalMilliseconds));
 
         var policy = await fixture.Service.GetRecoveryPolicyAsync(
@@ -234,7 +273,6 @@ public sealed class StreamChannelHealthProfileServiceTests
             new ReconnectOptions());
 
         Assert.AreEqual(StreamChannelHealthProfile.Cautious, policy.Profile);
-        Assert.IsFalse(policy.RequireDownstreamRetune);
         Assert.AreEqual(1, evidence.CleanWatchEvents);
         Assert.AreEqual(TimeSpan.FromMinutes(30), evidence.CleanWatchDuration);
         Assert.AreEqual(StreamChannelHealthProfile.Cautious, evidence.RecoveryPolicy.Profile);
@@ -247,8 +285,8 @@ public sealed class StreamChannelHealthProfileServiceTests
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("CleanWatchCompleted", cleanWatchDurationMs: TimeSpan.FromMinutes(60).TotalMilliseconds, age: TimeSpan.FromHours(2)),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true),
-            CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true));
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true),
+            CreateHealthEvent("MpegTsSyncLost", tsSyncLoss: true));
 
         var evidence = await fixture.Service.GetEvidenceAsync(
             "provider-1",
@@ -296,15 +334,18 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
-    public async Task GetEvidenceAsync_ClientAbortInRecentWindow_TrendIsWorsening()
+    public async Task GetEvidenceAsync_ClientAbortInRecentWindow_TrendStaysStable()
     {
+        // Regression guard: ClientAbortAfterRecovery must not drive the "Worsening" trend
+        // either, mirroring the profile-classifier guard above. It can no longer be emitted
+        // by live code (see #128), so it must not read as an active severity signal anywhere.
         await using var fixture = await ProfileFixture.CreateAsync();
         await fixture.SeedAsync(
             CreateHealthEvent("ClientAbortAfterRecovery", clientAbortAfterRecovery: true, age: TimeSpan.FromMinutes(10)));
 
         var evidence = await fixture.Service.GetEvidenceAsync("provider-1", "channel-1", new ReconnectOptions());
 
-        Assert.AreEqual(StreamChannelHealthTrend.Worsening, evidence.Trend.Trend);
+        Assert.AreEqual(StreamChannelHealthTrend.Stable, evidence.Trend.Trend);
     }
 
     [TestMethod]
@@ -393,6 +434,7 @@ public sealed class StreamChannelHealthProfileServiceTests
         string eventKind,
         bool clientAbortAfterRecovery = false,
         bool forcedRetune = false,
+        bool tsSyncLoss = false,
         string? safeStartKind = null,
         double? cleanWatchDurationMs = null,
         TimeSpan? age = null)
@@ -406,6 +448,7 @@ public sealed class StreamChannelHealthProfileServiceTests
             EventUtc = DateTime.UtcNow - (age ?? TimeSpan.FromMinutes(5)),
             ClientAbortAfterRecovery = clientAbortAfterRecovery,
             ForcedRetune = forcedRetune,
+            TsSyncLoss = tsSyncLoss,
             SafeStartKind = safeStartKind,
             CleanWatchDurationMs = cleanWatchDurationMs,
         };
