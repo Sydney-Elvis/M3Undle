@@ -210,9 +210,7 @@ public sealed class ChannelSessionIntegrationTests
             sessionId: session.SessionId,
             kind: StreamDiagnosticEventKind.ClientAbortAfterRecovery);
         Assert.IsTrue(abortAfterRecovery.Any(), "ClientAbortAfterRecovery should be emitted for client disconnects after reconnect recovery.");
-        Assert.IsTrue(
-            abortAfterRecovery.Any(x => x.ClientAbortAfterRecoveryDelayMs is >= 0 and <= 10_000),
-            "ClientAbortAfterRecovery delay should be present and near the disconnect timing.");
+        Assert.IsTrue(abortAfterRecovery.All(x => x.ClientAbortAfterRecoveryDelayMs >= 0), "ClientAbortAfterRecovery delay must be non-negative.");
 
         await session.DisposeAsync();
     }

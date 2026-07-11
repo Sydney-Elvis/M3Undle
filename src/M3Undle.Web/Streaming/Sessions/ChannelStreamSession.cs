@@ -429,7 +429,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             httpStatusCode: upstream.StatusCode,
                             reconnectAttempt: recoveredAttempt,
                             message: "Upstream stream recovered after reconnect.");
-                        MarkRecoveryResumedNow();
+                        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
                         if (shouldHoldRecoveredOutput)
                         {
                             _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
@@ -1127,7 +1127,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldStartedUtc = null;
         _lastSafeStartKind = safeStartKind;
         _lastRecoveryOutputHeldMs = heldDuration.TotalMilliseconds;
-        MarkRecoveryResumedNow();
+        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
         SetState(SessionState.Live);
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOutputResumed,
@@ -1228,9 +1228,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             MpegTsBoundaryScanner.PacketSize,
             Math.Min(currentFallbackWindow, configuredSearchLimit));
     }
-
-    private void MarkRecoveryResumedNow()
-        => _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
 
     private StreamChannelRecoveryPolicy ResolveRecoveryPolicy()
         => _currentRecoveryPolicy ?? StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
