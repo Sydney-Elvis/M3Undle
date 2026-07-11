@@ -251,7 +251,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 && reason == SubscriberDisconnectReason.ClientAborted
                 && _lastRecoveryResumedUtc is { } recoveredAtUtc)
             {
-                abortAfterRecoveryDelayMs = (DateTimeOffset.UtcNow - recoveredAtUtc).TotalMilliseconds;
+                abortAfterRecoveryDelayMs = Math.Max(0, (DateTimeOffset.UtcNow - recoveredAtUtc).TotalMilliseconds);
             }
         }
 
@@ -429,15 +429,19 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                             httpStatusCode: upstream.StatusCode,
                             reconnectAttempt: recoveredAttempt,
                             message: "Upstream stream recovered after reconnect.");
-                        _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
                         if (shouldHoldRecoveredOutput)
                         {
+                            _lastRecoveryResumedUtc = null;
                             _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
                                 _source.ProviderId,
                                 _source.ProviderChannelId,
                                 _reconnectOptions,
                                 _sessionCts.Token);
                             BeginRecoveryOutputHold(recoveredAttempt);
+                        }
+                        else
+                        {
+                            _lastRecoveryResumedUtc = DateTimeOffset.UtcNow;
                         }
 
                         await PublishRecoveredProviderEventIfNeededAsync(CancellationToken.None);
