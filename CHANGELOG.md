@@ -22,6 +22,10 @@ Beta 4 is a focused adaptive stream health release. It removes false and dead si
 - Added regression coverage locking in that client aborts, in any volume, never drive channel health off Stable
 - Added coverage for the internal relay subscriber carve-out, the evidence-based recovery-failure path, and persisted slow-client health events
 
+### Build and dependencies
+
+- Updated `Microsoft.OpenApi`, `MSTest`, `MudBlazor`, `Scalar.AspNetCore`, `SQLitePCLRaw.lib.e_sqlite3`, and `YamlDotNet` to their latest minor/patch versions
+
 **Container images**
 
 ```text
