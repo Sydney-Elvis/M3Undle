@@ -594,7 +594,7 @@ public static class CompatibilityEndpoints
             logger.LogInformation(
                 "Auto-HLS redirect: channel={Channel} key={StreamKey} client={Client}",
                 entry.DisplayName, streamKey, context.Connection.RemoteIpAddress);
-            context.Response.Redirect(hlsUrl, permanent: false);
+            await context.RedirectLocalAsync(hlsUrl);
             return;
         }
 
@@ -718,7 +718,7 @@ public static class CompatibilityEndpoints
                 streamKey,
                 generatedSession.SessionId);
 
-            context.Response.Redirect(generatedManifestUrl, permanent: false);
+            await context.RedirectLocalAsync(generatedManifestUrl);
             return;
         }
 

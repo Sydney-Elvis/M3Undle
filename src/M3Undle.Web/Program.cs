@@ -149,6 +149,8 @@ builder.Services.AddSingleton<PlaylistParser>();
 builder.Services.AddSingleton<EnvironmentVariableService>();
 builder.Services.AddSingleton<EndpointUrlService>();
 builder.Services.AddSingleton<SecretEncryptionService>();
+builder.Services.AddScoped<SqliteBackupService>();
+builder.Services.AddScoped<EncryptionRotationService>();
 builder.Services.AddScoped<ConfigYamlService>();
 
 // Named HttpClient for stream relay — no body timeout (live streams run indefinitely)
@@ -498,6 +500,7 @@ app.MapEpgApiEndpoints();
 app.MapDashboardApiEndpoints();
 app.MapDownstreamApiEndpoints();
 app.MapDiagnosticsApiEndpoints();
+app.MapEncryptionApiEndpoints();
 app.MapHealthChecks("/livez", new HealthCheckOptions
 {
     Predicate = _ => false,
