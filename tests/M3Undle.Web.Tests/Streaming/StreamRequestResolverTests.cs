@@ -48,6 +48,40 @@ public sealed class StreamRequestResolverTests
     }
 
     [TestMethod]
+    public async Task ResolveAsync_VodRoute_StaysDirectRelay_AndStillProvidesSourceDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/vod/key-live", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsFalse(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+        Assert.IsNotNull(result.Entry);
+    }
+
+    [TestMethod]
+    public async Task ResolveAsync_SeriesRoute_StaysDirectRelay_AndStillProvidesSourceDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync();
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/series/key-live", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-live", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess);
+        Assert.IsFalse(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("provider-channel-1", result.SourceDescriptor.ProviderChannelId);
+        Assert.IsNotNull(result.Entry);
+    }
+
+    [TestMethod]
     public async Task ResolveAsync_NativeHdhrTunerRoute_ReturnsSharedSessionDescriptor()
     {
         await using var fixture = await TestFixture.CreateAsync();
