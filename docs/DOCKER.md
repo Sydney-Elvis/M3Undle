@@ -195,7 +195,8 @@ Treat the HDHR environment variables below as advanced startup overrides. They a
 | Variable | Default | Description |
 |---|---|---|
 | `TZ` | host timezone | Timezone for log timestamps (e.g. `America/New_York`, `Europe/London`, `UTC`) |
-| `M3UNDLE_ENCRYPTION_KEY` | *(none)* | **Required for Xtream Codes providers.** Base64-encoded 32-byte AES key used to encrypt passwords at rest. Generate with `openssl rand -base64 32`. Keep this secret — treat it like a master password. |
+| `M3UNDLE_ENCRYPTION_KEY` | *(none)* | **Required for Xtream Codes providers** unless `M3UNDLE_ENCRYPTION_KEYS` is set. Base64-encoded 32-byte AES key used to encrypt passwords at rest. Generate with `openssl rand -base64 32`. Keep this secret — treat it like a master password. |
+| `M3UNDLE_ENCRYPTION_KEYS` | *(none)* | Rotatable alternative to `M3UNDLE_ENCRYPTION_KEY` — a comma-separated `keyId:base64key` list. The **first** entry is the active key used for new encryption; every entry is usable for decryption. Takes precedence over `M3UNDLE_ENCRYPTION_KEY` if both are set. See [Rotating the encryption key](#rotating-the-encryption-key) below. |
 
 ### Optional — Authentication
 
@@ -347,6 +348,57 @@ environment:
 
 > [!WARNING]
 > If you lose the encryption key, stored Xtream passwords cannot be decrypted. You will need to re-enter passwords for all Xtream providers. Back up your key.
+
+#### Rotating the encryption key
+
+If a key is compromised (or as routine hygiene), M3Undle supports rotating it with no data loss and minimal downtime, using `M3UNDLE_ENCRYPTION_KEYS` instead of the single-value `M3UNDLE_ENCRYPTION_KEY`:
+
+```
+M3UNDLE_ENCRYPTION_KEYS=<keyId>:<base64key>[,<keyId>:<base64key>...]
+```
+
+The **first** entry is the active key, used to encrypt everything from now on. Every entry in the list can still decrypt existing data — this is what lets old and new keys coexist during a rotation. Setting `M3UNDLE_ENCRYPTION_KEYS` takes precedence over `M3UNDLE_ENCRYPTION_KEY` if both are present.
+
+**Rotation workflow** (fully scriptable — this is exactly what an automation job would run):
+
+1. **Generate a new key and add it to the ring, ahead of the old one:**
+
+   ```bash
+   openssl rand -base64 32
+   ```
+
+   ```yaml
+   # compose.yaml — old key stays present (decrypt-only) during the transition
+   environment:
+     M3UNDLE_ENCRYPTION_KEYS: "2026-07:NEW_KEY_HERE,2026-01:OLD_KEY_HERE"
+   ```
+
+   Restart the container. This is a normal, brief restart — not a maintenance window; nothing is re-encrypted yet.
+
+2. **Trigger the bulk re-encryption** (authenticated; requires login if `M3UNDLE_AUTH_ENABLED` is set):
+
+   ```bash
+   curl -X POST http://<host>:8080/api/v1/encryption/rotate
+   ```
+
+   This takes a database backup (`VACUUM INTO`, saved under `/data/backups/`) and re-encrypts every stored Xtream password and downstream integration API key under the new active key, inside a single transaction — it either fully succeeds or changes nothing. Calling it again once everything is migrated is a cheap no-op.
+
+3. **Confirm nothing is left on the old key:**
+
+   ```bash
+   curl http://<host>:8080/api/v1/encryption/status
+   ```
+
+   Look for `providersOnOtherKey` and `downstreamIntegrationsOnOtherKey` to both read `0`.
+
+4. **After a rollback window you're comfortable with**, drop the old key from `M3UNDLE_ENCRYPTION_KEYS` and restart once more:
+
+   ```yaml
+   environment:
+     M3UNDLE_ENCRYPTION_KEYS: "2026-07:NEW_KEY_HERE"
+   ```
+
+Backups written to `/data/backups/` are not automatically pruned — clean up old ones periodically.
 
 ### Import from config.yaml
 

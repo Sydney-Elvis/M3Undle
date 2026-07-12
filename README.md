@@ -183,7 +183,7 @@ Most settings can be changed later from the web UI. For a first run, only a few 
 | Setting | Required | Default | Purpose |
 |---|---:|---|---|
 | `TZ` | No | Host/default timezone | Sets timestamps for logs and scheduled refresh behavior. |
-| `M3UNDLE_ENCRYPTION_KEY` | Required for Xtream providers | None | Encrypts stored Xtream provider passwords. Keep this value backed up. |
+| `M3UNDLE_ENCRYPTION_KEY` | Required for Xtream providers | None | Encrypts stored Xtream provider passwords. Keep this value backed up. Rotatable via `M3UNDLE_ENCRYPTION_KEYS` — see [docs/DOCKER.md](docs/DOCKER.md#rotating-the-encryption-key). |
 | `/config` | Yes | None | Human-readable configuration files and optional provider credential placeholders. |
 | `/data` | Yes | None | Database, snapshots, logs, runtime state, and temporary browser playback files. |
 | `5004` | Recommended | `5004` | HDHomeRun-compatible tuning endpoint. |
@@ -244,7 +244,7 @@ Common first checks:
 | No channels appear in a client | Publish a lineup first, then check the M3U endpoint directly. |
 | XMLTV guide is missing | Confirm an EPG source is configured and the guide has been published. |
 | HDHomeRun client cannot find M3Undle | Add the tuner manually with `http://<host>:5004`. Auto-discovery depends on Docker networking and multicast. |
-| Xtream provider fails to save | Confirm `M3UNDLE_ENCRYPTION_KEY` is set and has not changed since the provider was added. |
+| Xtream provider fails to save | Confirm `M3UNDLE_ENCRYPTION_KEY` (or `M3UNDLE_ENCRYPTION_KEYS`) is set and has not changed since the provider was added. If it changed, check `GET /api/v1/encryption/status` and see the rotation guide in [docs/DOCKER.md](docs/DOCKER.md#rotating-the-encryption-key). |
 | Browser playback fails | Check stream status in the web UI and confirm the `/data` volume is writable. |
 | Streams stop or fail to start | Check provider limits, active stream sessions, and container logs. |
 | Monitoring scrape fails | Check the metrics access mode in Settings and see [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md). |
