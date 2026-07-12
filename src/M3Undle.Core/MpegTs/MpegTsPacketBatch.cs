@@ -5,4 +5,6 @@ public sealed record MpegTsPacketBatch(
     MpegTsStartupKind StartupKind,
     int DroppedByteCount,
     bool SyncLost,
-    bool HasKnownH264VideoStream = false);
+    bool HasKnownH264VideoStream = false,
+    long? LatestVideoDts90k = null,
+    long? IdrDts90k = null);

@@ -31,4 +31,6 @@ public enum StreamDiagnosticEventKind
     ClientAbortAfterRecovery = 26,
     ControlledDownstreamRetune = 27,
     CleanWatchCompleted = 28,
+    RecoveryOverlapTrimmed = 29,
+    RecoveryOverlapTrimAbandoned = 30,
 }

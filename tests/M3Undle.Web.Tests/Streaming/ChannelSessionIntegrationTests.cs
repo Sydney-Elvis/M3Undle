@@ -946,6 +946,360 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_MpegTsReconnect_RewoundReplay_TrimsToPreFailurePosition()
+    {
+        // Provider behavior observed on toontown-tv-srv1: a reconnected upstream fast-bursts
+        // ~60 s of content from before the failure point. The overlap trim must suppress the
+        // replayed span and resume at the first IDR at/after the last DTS relayed pre-failure.
+        const long preFailureDts = 102L * 90000;
+        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xA5], 42L * 90000);
+        var caughtUpIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC5], 104L * 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x94], 101L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x95], preFailureDts),
+        };
+
+        // Rewound burst: 14 packets (> the 8-packet safe-start search limit below) before the
+        // caught-up IDR — regression guard that an active trim bypasses the forced-retune limits.
+        var recoveredSequence = new List<byte[]>
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            rewoundIdr,
+        };
+        for (var i = 0; i < 6; i++)
+            recoveredSequence.Add(TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, (byte)(0xA6 + i)], (43 + i) * 90000L));
+        recoveredSequence.Add(TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xB5], 72L * 90000));
+        recoveredSequence.Add(PatPacket(100));
+        recoveredSequence.Add(PmtPacket(100, 256));
+        recoveredSequence.Add(caughtUpIdr);
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), caughtUpIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(-1, IndexOf(data, rewoundIdr), "Replayed pre-failure content must be trimmed, not relayed.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, caughtUpIdr), "Output must resume at the caught-up IDR.");
+
+        Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+
+        var trimmed = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed).First();
+        Assert.IsGreaterThan(0, trimmed.BytesSuppressed.GetValueOrDefault());
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedWithoutForcedRetune()
+    {
+        // A provider that replays rewound content at 1x would never catch up to the
+        // pre-failure DTS; the trim must give up at its hold limit and fall back to the
+        // standard first-IDR resume instead of forcing a retune.
+        const long preFailureDts = 102L * 90000;
+        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], 43L * 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+        };
+
+        var recoveredOnce = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+        };
+
+        var handler = FakeStreamingHandler.StreamForever(rewoundIdr);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredOnce, rewoundIdr, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), rewoundIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_ForwardJump_ResumesAtFirstIdrWithoutTrim()
+    {
+        // Reconnected stream continues ahead of the pre-failure position (no replay):
+        // the standard first-IDR resume applies and no trim events are recorded.
+        var forwardIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xE5], 107L * 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], 102L * 90000),
+        };
+
+        var recoveredSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 107L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 107L * 90000),
+            forwardIdr,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), forwardIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(capture.Body.ToArray(), forwardIdr));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_UnrelatedTimeline_ResumesAtFirstIdrWithoutTrim()
+    {
+        // A rewind beyond RecoveryOverlapTrimMaxRewindSeconds means the provider restarted
+        // its timestamp timeline; treat it like today's recovery (first-IDR resume).
+        const long preFailureDts = 1000L * 90000;
+        var unrelatedIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF5], 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], preFailureDts),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], preFailureDts),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+        };
+
+        var recoveredSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 90000),
+            unrelatedIdr,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), unrelatedIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(capture.Body.ToArray(), unrelatedIdr),
+            "An unrelated timeline must resume at the first IDR like today's recovery.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_AudioOnlyRecoveredStream_ResumesWithoutTrim()
+    {
+        // A recovered stream with no H.264 video cannot be DTS-compared; the PAT/PMT
+        // safe-start path applies untouched.
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], 102L * 90000),
+        };
+
+        var recoveredSequence = new[]
+        {
+            PatPacket(100),
+            AudioOnlyPmtPacket(100),
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredSequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_ZeroSubscribersAfterFirstSafeStart_SessionSurvivesAndEmitsSecondSafeStart()
     {
         // Reproduces the exact Bug 1 / TS-SAFE-02 trigger:
@@ -3020,6 +3374,25 @@ public sealed class ChannelSessionIntegrationTests
     private static byte[] VideoPacket(int videoPid, byte[] annexB)
         => Packet(videoPid, payloadUnitStart: true,
             [0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x80, 0x00, .. annexB]);
+
+    private static byte[] TimestampedVideoPacket(int videoPid, byte[] annexB, long dts90k)
+        => Packet(videoPid, payloadUnitStart: true,
+        [
+            0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0xC0, 0x0A,
+            .. EncodePesTimestamp(0x03, dts90k),
+            .. EncodePesTimestamp(0x01, dts90k),
+            .. annexB,
+        ]);
+
+    private static byte[] EncodePesTimestamp(int prefix, long value)
+        =>
+        [
+            (byte)((prefix << 4) | (int)(((value >> 30) & 0x07) << 1) | 0x01),
+            (byte)((value >> 22) & 0xFF),
+            (byte)((((value >> 15) & 0x7F) << 1) | 0x01),
+            (byte)((value >> 7) & 0xFF),
+            (byte)(((value & 0x7F) << 1) | 0x01),
+        ];
 
     private static byte[] AudioOnlyPmtPacket(int pmtPid)
         => Packet(pmtPid, payloadUnitStart: true,

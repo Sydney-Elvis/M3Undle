@@ -47,5 +47,29 @@ public sealed class ReconnectOptions
 
     public bool AllowPacketBoundaryRecoveryFallback { get; set; } = true;
 
+    /// <summary>
+    /// When a reconnected upstream replays content from before the failure point
+    /// (providers commonly serve ~60-70 s of ring buffer on a fresh connection),
+    /// keep holding output through the replayed span and resume at the first IDR
+    /// at/after the last video DTS relayed before the failure. The replay then
+    /// backfills the outage instead of flooding downstream with stale content.
+    /// </summary>
+    public bool EnableRecoveryOverlapTrim { get; set; } = true;
+
+    /// <summary>
+    /// Wall-clock budget for an active overlap trim. Rewind bursts arrive far faster
+    /// than real time; a provider replaying at 1x would never catch up, so on expiry
+    /// the trim is abandoned and recovery falls back to the standard first-IDR resume.
+    /// </summary>
+    public TimeSpan RecoveryOverlapTrimHoldLimit { get; set; } = TimeSpan.FromSeconds(6);
+
+    public int RecoveryOverlapTrimMaxBytes { get; set; } = 64 * 1024 * 1024;
+
+    /// <summary>
+    /// Rewinds larger than this are treated as an unrelated timestamp timeline
+    /// (e.g. the provider restarted its encoder) rather than a replay to trim.
+    /// </summary>
+    public int RecoveryOverlapTrimMaxRewindSeconds { get; set; } = 180;
+
     public int[] FixedStepBackoffSeconds { get; set; } = [0, 1, 2, 5, 10, 15, 30];
 }

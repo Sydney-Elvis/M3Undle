@@ -173,6 +173,121 @@ public sealed class MpegTsBoundaryScannerTests
         Assert.AreEqual(MpegTsStartupKind.PatPmt, batch.StartupKind);
     }
 
+    [TestMethod]
+    public void Process_VideoPesWithPtsAndDts_ReportsDts()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        const long pts = 5_400_000;
+        const long dts = 5_396_400;
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], pts, dts))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.AreEqual(dts, batch.LatestVideoDts90k);
+        Assert.IsNull(batch.IdrDts90k);
+    }
+
+    [TestMethod]
+    public void Process_VideoPesWithPtsOnly_ReportsPtsAsDts()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        const long pts = 7_200_000;
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], pts, dts: null))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.AreEqual(pts, batch.LatestVideoDts90k);
+    }
+
+    [TestMethod]
+    public void Process_VideoPesWithoutParseableTimestamp_StillDetectsIdrWithNullDts()
+    {
+        // The plain VideoPacket helper writes a PES header that claims PTS presence but
+        // has a zero header-data length; the parser must return null rather than guess.
+        var scanner = new MpegTsBoundaryScanner();
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x01, 0x02]))
+            .Concat(VideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x03, 0x04]))
+            .Concat(VideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x05, 0x06]))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.AreEqual(MpegTsStartupKind.H264Idr, batch.StartupKind);
+        Assert.IsNull(batch.LatestVideoDts90k);
+        Assert.IsNull(batch.IdrDts90k);
+    }
+
+    [TestMethod]
+    public void Process_IdrWithTimestamp_ReportsIdrDts()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        const long idrDts = 9_000_000;
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x67, 0x01], idrDts - 7200, idrDts - 7200))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x68, 0x02], idrDts - 3600, idrDts - 3600))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x65, 0x03], idrDts, idrDts))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.AreEqual(MpegTsStartupKind.H264Idr, batch.StartupKind);
+        Assert.AreEqual(idrDts, batch.IdrDts90k);
+        Assert.AreEqual(idrDts, batch.LatestVideoDts90k);
+    }
+
+    [TestMethod]
+    public void Process_PacketAfterIdr_DoesNotReReportStaleIdr()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        const long idrDts = 9_000_000;
+        var idrSequence = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x67, 0x01], idrDts, idrDts))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x68, 0x02], idrDts, idrDts))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x65, 0x03], idrDts, idrDts))
+            .ToArray();
+
+        var idrBatch = scanner.Process(idrSequence);
+        Assert.AreEqual(MpegTsStartupKind.H264Idr, idrBatch?.StartupKind);
+
+        // A continuation packet with no start codes must not re-report the consumed IDR.
+        var followUp = scanner.Process(Packet(256));
+
+        Assert.IsNotNull(followUp);
+        Assert.AreEqual(MpegTsStartupKind.PacketBoundary, followUp.StartupKind);
+        Assert.IsNull(followUp.IdrDts90k);
+    }
+
+    [TestMethod]
+    public void Reset_ClearsTimestampState()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], 90000, 90000))
+            .ToArray();
+        Assert.AreEqual(90000, scanner.Process(input)?.LatestVideoDts90k);
+
+        scanner.Reset();
+
+        var afterReset = scanner.Process(PatPacket(100));
+        Assert.IsNull(afterReset?.LatestVideoDts90k);
+        Assert.IsNull(afterReset?.IdrDts90k);
+    }
+
     private static byte[] PatPacket(int pmtPid)
         => Packet(0, payloadUnitStart: true,
         [
@@ -207,6 +322,33 @@ public sealed class MpegTsBoundaryScannerTests
     private static byte[] VideoPacket(int videoPid, byte[] annexB)
         => Packet(videoPid, payloadUnitStart: true,
             [0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x80, 0x00, .. annexB]);
+
+    private static byte[] VideoPacketWithTimestamps(int videoPid, byte[] annexB, long pts, long? dts)
+    {
+        byte[] header = dts is { } dtsValue
+            ?
+            [
+                0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0xC0, 0x0A,
+                .. EncodePesTimestamp(0x03, pts),
+                .. EncodePesTimestamp(0x01, dtsValue),
+            ]
+            :
+            [
+                0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x80, 0x05,
+                .. EncodePesTimestamp(0x02, pts),
+            ];
+        return Packet(videoPid, payloadUnitStart: true, [.. header, .. annexB]);
+    }
+
+    private static byte[] EncodePesTimestamp(int prefix, long value)
+        =>
+        [
+            (byte)((prefix << 4) | (int)(((value >> 30) & 0x07) << 1) | 0x01),
+            (byte)((value >> 22) & 0xFF),
+            (byte)((((value >> 15) & 0x7F) << 1) | 0x01),
+            (byte)((value >> 7) & 0xFF),
+            (byte)(((value & 0x7F) << 1) | 0x01),
+        ];
 
     private static byte[] AudioOnlyPmtPacket(int pmtPid)
         => Packet(pmtPid, payloadUnitStart: true,
