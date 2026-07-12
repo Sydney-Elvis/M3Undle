@@ -10,7 +10,6 @@ using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Models;
 using M3Undle.Web.Streaming.Observability;
-using M3Undle.Web.Streaming.Relay;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
 using M3Undle.Web.Streaming.Subscribers;
@@ -654,6 +653,7 @@ public static class CompatibilityEndpoints
 
                     if (manifest is not null)
                     {
+                        hlsSlotReservation?.Dispose();
                         logger.LogInformation(
                             "Native upstream HLS delivery: channel={Channel} key={StreamKey}",
                             entry.DisplayName,
@@ -883,39 +883,14 @@ public static class CompatibilityEndpoints
             }
         }
 
-        ChannelSessionManager.RelaySlotReservation? relaySlotReservation = null;
-        if (resolved.SourceDescriptor is not null)
-        {
-            try
-            {
-                relaySlotReservation = channelSessionManager.ReserveRelaySlot(resolved.SourceDescriptor);
-            }
-            catch (StreamAdmissionException ex)
-            {
-                logger.LogWarning(
-                    "Direct relay admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
-                    resolved.SourceDescriptor.ProviderId,
-                    resolved.SourceDescriptor.ProviderChannelId,
-                    ex.Message);
-                if (ex.RetryAfterSeconds is { } retry)
-                    context.Response.Headers["Retry-After"] = retry.ToString();
-                context.Response.StatusCode = ex.StatusCode;
-                return;
-            }
-        }
-
-        using (relaySlotReservation)
-        {
-            await ServeDirectRelayAsync(
-                context,
-                db,
-                httpClientFactory,
-                logger,
-                entry.StreamUrl,
-                entry.DisplayName,
-                relaySlotReservation,
-                cancellationToken);
-        }
+        await ServeDirectRelayAsync(
+            context,
+            db,
+            httpClientFactory,
+            logger,
+            entry.StreamUrl,
+            entry.DisplayName,
+            cancellationToken);
     }
 
     private static async Task ServeHlsProxyAsync(
@@ -1004,11 +979,7 @@ public static class CompatibilityEndpoints
             }
         }
 
-        await hlsProxyService.ProxyAsync(
-            context, upstreamUrl, segmentProxyBase, providerId, cancellationToken,
-            !useSharedSession && sourceDescriptor is not null
-                ? bytes => channelSessionManager.AddHlsSlotBytes(sourceDescriptor.SessionKey, bytes)
-                : null);
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }
 
     private static async Task ServeExternalHlsManifestAsync(
@@ -1224,7 +1195,6 @@ public static class CompatibilityEndpoints
         ILogger logger,
         string streamUrl,
         string displayName,
-        ChannelSessionManager.RelaySlotReservation? relaySlotReservation,
         CancellationToken cancellationToken)
     {
         var provider = await ResolveProviderForDirectRelayAsync(db, context, cancellationToken);
@@ -1262,11 +1232,7 @@ public static class CompatibilityEndpoints
                 context.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
 
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
-            if (relaySlotReservation is not null)
-                await RelayByteCopier.CopyWithByteReportingAsync(
-                    upstreamStream, context.Response.Body, relaySlotReservation.ReportBytes, cancellationToken);
-            else
-                await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
+            await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
 
             logger.LogInformation("Stream ended: channel={Channel} client={Client}",
                 displayName,

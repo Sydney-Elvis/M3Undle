@@ -31,7 +31,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     private readonly object _admissionGate = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, ChannelStreamSession> _sessions = new();
     private readonly ConcurrentDictionary<ChannelSessionKey, HlsAdmissionSlot> _hlsSlots = new();
-    private readonly ConcurrentDictionary<string, RelayAdmissionSlot> _relaySlots = new(StringComparer.Ordinal);
     private readonly Dictionary<ChannelSessionKey, Task> _pendingIdlePreemptions = [];
     private CancellationTokenSource? _hlsSweepCts;
     private Task? _hlsSweepTask;
@@ -164,7 +163,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
                 EvictExpiredHlsSlotsLocked();
                 var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
-                var activeUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked() + _relaySlots.Count;
+                var activeUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked();
                 if (activeUpstreams >= maxSessions)
                 {
                     throw CreateAdmissionException(
@@ -176,15 +175,14 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                         maxSessions);
                 }
 
-                var trackedUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked() + _relaySlots.Count;
+                var trackedUpstreams = _sessions.Count + CountUniqueHlsUpstreamsLocked();
                 var shouldPreemptTrackedCapacity = trackedUpstreams >= maxSessions;
 
                 var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
                 if (effectiveProviderCap is { } providerCap and > 0)
                 {
                     var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
-                        + CountProviderHlsUpstreamsLocked(key.ProviderId)
-                        + CountProviderRelaySlotsLocked(key.ProviderId);
+                        + CountProviderHlsUpstreamsLocked(key.ProviderId);
                     if (providerUpstreams >= providerCap)
                     {
                         _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
@@ -198,8 +196,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                     }
 
                     var trackedProviderUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: true)
-                        + CountProviderHlsUpstreamsLocked(key.ProviderId)
-                        + CountProviderRelaySlotsLocked(key.ProviderId);
+                        + CountProviderHlsUpstreamsLocked(key.ProviderId);
                     if (trackedProviderUpstreams >= providerCap)
                         preemptionTask = TryBeginProviderIdleCapacityPreemptionLocked(source);
                 }
@@ -251,7 +248,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
                 return;
 
             EvictExpiredHlsSlotsLocked();
-            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked() + _relaySlots.Count;
+            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked();
 
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
             if (totalUpstreams >= maxSessions)
@@ -267,8 +264,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             if (effectiveProviderCap is { } providerCap and > 0)
             {
                 var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
-                    + CountProviderHlsUpstreamsLocked(key.ProviderId)
-                    + CountProviderRelaySlotsLocked(key.ProviderId);
+                    + CountProviderHlsUpstreamsLocked(key.ProviderId);
                 if (providerUpstreams >= providerCap)
                 {
                     _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
@@ -323,7 +319,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             }
 
             EvictExpiredHlsSlotsLocked();
-            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked() + _relaySlots.Count;
+            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked();
 
             var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
             if (totalUpstreams >= maxSessions)
@@ -339,8 +335,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             if (effectiveProviderCap is { } providerCap and > 0)
             {
                 var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
-                    + CountProviderHlsUpstreamsLocked(key.ProviderId)
-                    + CountProviderRelaySlotsLocked(key.ProviderId);
+                    + CountProviderHlsUpstreamsLocked(key.ProviderId);
                 if (providerUpstreams >= providerCap)
                     throw CreateAdmissionException(
                         key,
@@ -389,92 +384,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             _registry.RemoveClient(slot.SessionId);
             _registry.RemoveSession(slot.SessionId);
             _logger.LogInformation("Released HLS admission slot for {Key}.", key);
-        }
-    }
-
-    public void AddHlsSlotBytes(ChannelSessionKey key, long bytes)
-    {
-        if (bytes > 0 && _hlsSlots.TryGetValue(key, out var slot))
-        {
-            slot.AddBytes(bytes);
-            PublishHlsSlotSnapshot(slot);
-        }
-    }
-
-    public RelaySlotReservation ReserveRelaySlot(StreamSourceDescriptor source)
-    {
-        var key = source.SessionKey;
-
-        lock (_admissionGate)
-        {
-            ThrowIfCoolingDown(key, source.DisplayName, logWarning: false);
-
-            EvictExpiredHlsSlotsLocked();
-            var totalUpstreams = CountActiveSessionUpstreamsLocked() + CountUniqueHlsUpstreamsLocked() + _relaySlots.Count;
-
-            var maxSessions = Math.Max(1, _proxyOptions.MaxConcurrentSessions);
-            if (totalUpstreams >= maxSessions)
-                throw CreateAdmissionException(
-                    key,
-                    source.DisplayName,
-                    StreamAdmissionFailureKind.MaxConcurrentSessions,
-                    $"Max concurrent sessions ({maxSessions}) reached.",
-                    "server is at the maximum of {Limit} concurrent stream(s).",
-                    maxSessions);
-
-            var effectiveProviderCap = source.TunerLimit ?? _proxyOptions.ProviderMaxConcurrentUpstreams;
-            if (effectiveProviderCap is { } providerCap and > 0)
-            {
-                var providerUpstreams = CountProviderSessionsLocked(key.ProviderId, includeIdleGrace: false)
-                    + CountProviderHlsUpstreamsLocked(key.ProviderId)
-                    + CountProviderRelaySlotsLocked(key.ProviderId);
-                if (providerUpstreams >= providerCap)
-                {
-                    _metrics?.RecordProviderStreamLimitReached(key.ProviderId);
-                    throw CreateAdmissionException(
-                        key,
-                        source.DisplayName,
-                        StreamAdmissionFailureKind.ProviderLimit,
-                        $"Provider upstream limit ({providerCap}) reached.",
-                        "provider has reached its upstream limit of {Limit} stream(s).",
-                        providerCap);
-                }
-            }
-
-            var slot = new RelayAdmissionSlot(
-                key,
-                source.DisplayName,
-                source.RequestedRoute,
-                source.RemoteIp,
-                source.UserAgent,
-                _timeProvider);
-            _relaySlots[slot.SessionId] = slot;
-            _logger.LogInformation(
-                "Reserved direct-relay slot for '{DisplayName}' ({TotalUpstreams} upstream(s) now tracked).",
-                source.DisplayName,
-                totalUpstreams + 1);
-            PublishRelaySlotSnapshot(slot);
-
-            return new RelaySlotReservation(this, slot.SessionId);
-        }
-    }
-
-    public void ReportRelaySlotBytes(string slotId, long totalBytes)
-    {
-        if (_relaySlots.TryGetValue(slotId, out var slot))
-        {
-            slot.SetTotalBytes(totalBytes);
-            PublishRelaySlotSnapshot(slot);
-        }
-    }
-
-    public void ReleaseRelaySlot(string slotId)
-    {
-        if (_relaySlots.TryRemove(slotId, out var slot))
-        {
-            _registry.RemoveClient(slot.SessionId);
-            _registry.RemoveSession(slot.SessionId);
-            _logger.LogInformation("Released direct-relay slot for {Key}.", slot.Key);
         }
     }
 
@@ -621,8 +530,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             StartedUtc: slot.StartedUtc,
             LastUpstreamByteUtc: slot.LastUpstreamByteUtc,
             ReconnectAttempts: 0,
-            LastFailureKind: null,
-            TotalBytesRelayed: slot.TotalBytes));
+            LastFailureKind: null));
 
         _registry.UpsertClient(new StreamClientSnapshot(
             ClientId: slot.SessionId,
@@ -631,7 +539,7 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             RemoteIp: slot.RemoteIp,
             UserAgent: slot.UserAgent,
             ConnectedUtc: slot.StartedUtc,
-            BytesSent: slot.TotalBytes,
+            BytesSent: 0,
             QueueDepth: 0,
             Delivery: DeliveryMethod.Hls,
             DeliveryReason: "Native HLS passthrough (upstream serves HLS)",
@@ -648,48 +556,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             ContentType: "application/vnd.apple.mpegurl"));
     }
 
-    private void PublishRelaySlotSnapshot(RelayAdmissionSlot slot)
-    {
-        _registry.UpsertSession(new StreamSessionSnapshot(
-            SessionId: slot.SessionId,
-            ProviderId: slot.Key.ProviderId,
-            ProviderChannelId: slot.Key.ProviderChannelId,
-            DisplayName: slot.DisplayName,
-            State: SessionState.Live,
-            SubscriberCount: 1,
-            IsShared: false,
-            BufferUsedBytes: 0,
-            BufferMaxBytes: 0,
-            StartedUtc: slot.StartedUtc,
-            LastUpstreamByteUtc: slot.LastUpstreamByteUtc,
-            ReconnectAttempts: 0,
-            LastFailureKind: null,
-            TotalBytesRelayed: slot.TotalBytes));
-
-        _registry.UpsertClient(new StreamClientSnapshot(
-            ClientId: slot.SessionId,
-            SessionId: slot.SessionId,
-            RequestedRoute: slot.RequestedRoute,
-            RemoteIp: slot.RemoteIp,
-            UserAgent: slot.UserAgent,
-            ConnectedUtc: slot.StartedUtc,
-            BytesSent: slot.TotalBytes,
-            QueueDepth: 0,
-            Delivery: DeliveryMethod.RawTs,
-            DeliveryReason: "Direct relay (VOD/series)",
-            DisplayName: slot.DisplayName));
-
-        _registry.UpsertProvider(new StreamProviderSnapshot(
-            SessionId: slot.SessionId,
-            ProviderId: slot.Key.ProviderId,
-            ProviderChannelId: slot.Key.ProviderChannelId,
-            State: SessionState.Live,
-            LastUpstreamByteUtc: slot.LastUpstreamByteUtc,
-            ReconnectAttempts: 0,
-            LastFailureKind: null,
-            ContentType: null));
-    }
-
     private int CountActiveSessionUpstreamsLocked()
         => _sessions.Values.Count(s => !s.IsIdleGraceWithNoConsumers);
 
@@ -700,9 +566,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
     private int CountProviderHlsUpstreamsLocked(string providerId)
         => _hlsSlots.Keys.Count(x => x.ProviderId == providerId && !_sessions.ContainsKey(x));
-
-    private int CountProviderRelaySlotsLocked(string providerId)
-        => _relaySlots.Values.Count(x => x.Key.ProviderId == providerId);
 
     private Task? TryBeginIdleCapacityPreemptionLocked(StreamSourceDescriptor source)
     {
@@ -844,7 +707,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         private readonly TimeProvider _timeProvider = timeProvider;
         private long _expiresUnixMs = timeProvider.GetUtcNow().Add(ttl).ToUnixTimeMilliseconds();
         private long _lastUpstreamByteUnixMs;
-        private long _totalBytes;
 
         public string SessionId { get; } = Guid.NewGuid().ToString("N");
         public ChannelSessionKey Key { get; } = key;
@@ -856,8 +718,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
         public DateTimeOffset ExpiresUtc
             => DateTimeOffset.FromUnixTimeMilliseconds(Interlocked.Read(ref _expiresUnixMs));
-
-        public long TotalBytes => Interlocked.Read(ref _totalBytes);
 
         public DateTimeOffset? LastUpstreamByteUtc
         {
@@ -874,50 +734,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
             Interlocked.Exchange(ref _expiresUnixMs, now.Add(newTtl).ToUnixTimeMilliseconds());
             Interlocked.Exchange(ref _lastUpstreamByteUnixMs, now.ToUnixTimeMilliseconds());
         }
-
-        public void AddBytes(long bytes)
-        {
-            Interlocked.Add(ref _totalBytes, bytes);
-            Interlocked.Exchange(ref _lastUpstreamByteUnixMs, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-        }
-    }
-
-    internal sealed class RelayAdmissionSlot(
-        ChannelSessionKey key,
-        string displayName,
-        string requestedRoute,
-        string? remoteIp,
-        string? userAgent,
-        TimeProvider timeProvider)
-    {
-        private readonly TimeProvider _timeProvider = timeProvider;
-        private long _lastUpstreamByteUnixMs;
-        private long _totalBytes;
-
-        public string SessionId { get; } = Guid.NewGuid().ToString("N");
-        public ChannelSessionKey Key { get; } = key;
-        public string DisplayName { get; } = displayName;
-        public string RequestedRoute { get; } = requestedRoute;
-        public string? RemoteIp { get; } = remoteIp;
-        public string? UserAgent { get; } = userAgent;
-        public DateTimeOffset StartedUtc { get; } = timeProvider.GetUtcNow();
-
-        public long TotalBytes => Interlocked.Read(ref _totalBytes);
-
-        public DateTimeOffset? LastUpstreamByteUtc
-        {
-            get
-            {
-                var ms = Interlocked.Read(ref _lastUpstreamByteUnixMs);
-                return ms == 0 ? null : DateTimeOffset.FromUnixTimeMilliseconds(ms);
-            }
-        }
-
-        public void SetTotalBytes(long totalBytes)
-        {
-            Interlocked.Exchange(ref _totalBytes, totalBytes);
-            Interlocked.Exchange(ref _lastUpstreamByteUnixMs, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-        }
     }
 
     public sealed class HlsSlotReservation(ChannelSessionManager manager, ChannelSessionKey key) : IDisposable
@@ -932,21 +748,6 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
         {
             if (Interlocked.Exchange(ref _disposed, 1) == 0)
                 manager.ReleaseHlsSlot(Key);
-        }
-    }
-
-    public sealed class RelaySlotReservation(ChannelSessionManager manager, string slotId) : IDisposable
-    {
-        private int _disposed;
-
-        public string SlotId { get; } = slotId;
-
-        public void ReportBytes(long totalBytes) => manager.ReportRelaySlotBytes(SlotId, totalBytes);
-
-        public void Dispose()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0)
-                manager.ReleaseRelaySlot(SlotId);
         }
     }
 }

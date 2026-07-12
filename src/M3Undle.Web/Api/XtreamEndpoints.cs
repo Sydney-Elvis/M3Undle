@@ -9,7 +9,6 @@ using M3Undle.Web.Streaming.Compatibility;
 using M3Undle.Web.Streaming.Configuration;
 using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Models;
-using M3Undle.Web.Streaming.Relay;
 using M3Undle.Web.Streaming.Resolution;
 using M3Undle.Web.Streaming.Sessions;
 using M3Undle.Web.Streaming.Subscribers;
@@ -655,6 +654,7 @@ public static class XtreamEndpoints
 
                     if (manifest is not null)
                     {
+                        hlsSlotReservation?.Dispose();
                         logger.LogInformation(
                             "Xtream native upstream HLS delivery: channel={Channel} id={StreamId} streamKey={StreamKey}",
                             entry.DisplayName, streamId, streamKey);
@@ -763,33 +763,7 @@ public static class XtreamEndpoints
             }
         }
 
-        ChannelSessionManager.RelaySlotReservation? relaySlotReservation = null;
-        if (resolved.SourceDescriptor is not null)
-        {
-            try
-            {
-                relaySlotReservation = channelSessionManager.ReserveRelaySlot(resolved.SourceDescriptor);
-            }
-            catch (StreamAdmissionException ex)
-            {
-                logger.LogWarning(
-                    "Xtream direct relay admission rejected for {ProviderId}/{ProviderChannelId}: {Reason}",
-                    resolved.SourceDescriptor.ProviderId,
-                    resolved.SourceDescriptor.ProviderChannelId,
-                    ex.Message);
-                if (ex.RetryAfterSeconds is { } retry)
-                    context.Response.Headers["Retry-After"] = retry.ToString();
-                context.Response.StatusCode = ex.StatusCode;
-                return;
-            }
-        }
-
-        using (relaySlotReservation)
-        {
-            await ServeDirectRelayAsync(
-                context, db, httpClientFactory, logger, entry.StreamUrl, entry.DisplayName,
-                relaySlotReservation, cancellationToken);
-        }
+        await ServeDirectRelayAsync(context, db, httpClientFactory, logger, entry.StreamUrl, entry.DisplayName, cancellationToken);
     }
 
     private static async Task ServeXtreamHlsProxyAsync(
@@ -837,7 +811,6 @@ public static class XtreamEndpoints
 
         string providerId;
         var useSharedSession = false;
-        ChannelSessionKey? admissionKey = null;
         try
         {
             var resolved = await streamRequestResolver.ResolveAsync(streamKey, context, cancellationToken);
@@ -855,7 +828,6 @@ public static class XtreamEndpoints
             {
                 _ = channelSessionManager.ReserveHlsSlot(resolved.SourceDescriptor);
                 channelSessionManager.TouchHlsSlot(resolved.SourceDescriptor.SessionKey);
-                admissionKey = resolved.SourceDescriptor.SessionKey;
             }
         }
         catch (StreamAdmissionException ex)
@@ -879,11 +851,7 @@ public static class XtreamEndpoints
             return;
         }
 
-        await hlsProxyService.ProxyAsync(
-            context, upstreamUrl, segmentProxyBase, providerId, cancellationToken,
-            admissionKey is { } slotKey
-                ? bytes => channelSessionManager.AddHlsSlotBytes(slotKey, bytes)
-                : null);
+        await hlsProxyService.ProxyAsync(context, upstreamUrl, segmentProxyBase, providerId, cancellationToken);
     }
 
     private static async Task ServeXtreamExternalHlsManifestAsync(
@@ -1152,7 +1120,6 @@ public static class XtreamEndpoints
         ILogger logger,
         string streamUrl,
         string displayName,
-        ChannelSessionManager.RelaySlotReservation? relaySlotReservation,
         CancellationToken cancellationToken)
     {
         var access = context.GetResolvedClientAccess();
@@ -1193,11 +1160,7 @@ public static class XtreamEndpoints
                 context.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
 
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
-            if (relaySlotReservation is not null)
-                await RelayByteCopier.CopyWithByteReportingAsync(
-                    upstreamStream, context.Response.Body, relaySlotReservation.ReportBytes, cancellationToken);
-            else
-                await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
+            await upstreamStream.CopyToAsync(context.Response.Body, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
