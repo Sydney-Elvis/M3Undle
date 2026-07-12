@@ -64,7 +64,14 @@ public sealed class EncryptionRotationService(
     public async Task<RotateResult> RotateAsync(CancellationToken cancellationToken)
     {
         if (!encryption.IsAvailable)
-            return new RotateResult(Success: false, ErrorMessage: "No encryption key is configured.", ActiveKeyId: null, BackupFilePath: null, 0, 0, 0);
+            return new RotateResult(
+                Success: false,
+                ErrorMessage: "No encryption key is configured.",
+                ActiveKeyId: null,
+                BackupFilePath: null,
+                ProvidersMigrated: 0,
+                DownstreamIntegrationsMigrated: 0,
+                RowsAlreadyCurrent: 0);
 
         var activeKeyId = encryption.ActiveKeyId!;
 

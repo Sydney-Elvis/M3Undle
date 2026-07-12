@@ -46,7 +46,7 @@ public static class EncryptionApiEndpoints
         return TypedResults.Ok(new RotateEncryptionResponse
         {
             ActiveKeyId = result.ActiveKeyId,
-            BackupFilePath = result.BackupFilePath,
+            BackupFileName = result.BackupFilePath is null ? null : Path.GetFileName(result.BackupFilePath),
             ProvidersMigrated = result.ProvidersMigrated,
             DownstreamIntegrationsMigrated = result.DownstreamIntegrationsMigrated,
             RowsAlreadyCurrent = result.RowsAlreadyCurrent,

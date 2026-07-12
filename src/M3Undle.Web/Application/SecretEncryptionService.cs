@@ -184,8 +184,14 @@ public sealed class SecretEncryptionService
             if (separator <= 0 || separator == rawEntry.Length - 1)
                 continue;
 
-            var keyId = rawEntry[..separator];
-            var base64Key = rawEntry[(separator + 1)..];
+            // Trim each side of the colon independently — operators commonly write
+            // "keyId: base64key" (with a space after the colon) when hand-editing env files,
+            // and a stray space must not silently turn into a distinct/mismatched key id.
+            var keyId = rawEntry[..separator].Trim();
+            var base64Key = rawEntry[(separator + 1)..].Trim();
+
+            if (keyId.Length == 0)
+                continue;
 
             if (!seenIds.Add(keyId))
                 continue;

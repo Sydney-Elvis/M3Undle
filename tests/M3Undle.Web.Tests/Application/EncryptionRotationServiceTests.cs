@@ -31,7 +31,8 @@ public sealed class EncryptionRotationServiceTests
         }
 
         using var env = new EnvScope(keys: $"new:{RandomKey()},old:{oldKey}");
-        var rotation = CreateRotationService(fixture, out _);
+        var rotation = CreateRotationService(fixture, out _, out var db);
+        await using var dbGuard = db;
 
         var status = await rotation.GetStatusAsync(CancellationToken.None);
 
@@ -56,7 +57,7 @@ public sealed class EncryptionRotationServiceTests
         }
 
         using var env = new EnvScope(keys: $"new:{RandomKey()},old:{oldKey}");
-        var rotation = CreateRotationService(fixture, out var tempDataDir);
+        var rotation = CreateRotationService(fixture, out var tempDataDir, out var db);
 
         try
         {
@@ -82,6 +83,7 @@ public sealed class EncryptionRotationServiceTests
         }
         finally
         {
+            await db.DisposeAsync();
             Directory.Delete(tempDataDir, recursive: true);
         }
     }
@@ -99,7 +101,7 @@ public sealed class EncryptionRotationServiceTests
         }
 
         using var env = new EnvScope(keys: $"new:{RandomKey()},old:{oldKey}");
-        var rotation = CreateRotationService(fixture, out var tempDataDir);
+        var rotation = CreateRotationService(fixture, out var tempDataDir, out var db);
 
         try
         {
@@ -117,6 +119,7 @@ public sealed class EncryptionRotationServiceTests
         }
         finally
         {
+            await db.DisposeAsync();
             Directory.Delete(tempDataDir, recursive: true);
         }
     }
@@ -138,7 +141,7 @@ public sealed class EncryptionRotationServiceTests
         }
 
         using var env = new EnvScope(keys: $"new:{RandomKey()},old:{oldKey}");
-        var rotation = CreateRotationService(fixture, out var tempDataDir);
+        var rotation = CreateRotationService(fixture, out var tempDataDir, out var db);
 
         try
         {
@@ -155,6 +158,7 @@ public sealed class EncryptionRotationServiceTests
         }
         finally
         {
+            await db.DisposeAsync();
             Directory.Delete(tempDataDir, recursive: true);
         }
     }
@@ -171,7 +175,7 @@ public sealed class EncryptionRotationServiceTests
         }
 
         using var env = new EnvScope(keys: null, key: null);
-        var rotation = CreateRotationService(fixture, out var tempDataDir);
+        var rotation = CreateRotationService(fixture, out var tempDataDir, out var db);
 
         try
         {
@@ -188,6 +192,7 @@ public sealed class EncryptionRotationServiceTests
         }
         finally
         {
+            await db.DisposeAsync();
             if (Directory.Exists(tempDataDir))
                 Directory.Delete(tempDataDir, recursive: true);
         }
@@ -205,7 +210,8 @@ public sealed class EncryptionRotationServiceTests
         }
 
         using var env = new EnvScope(keys: null, key: null);
-        var rotation = CreateRotationService(fixture, out _);
+        var rotation = CreateRotationService(fixture, out _, out var db);
+        await using var dbGuard = db;
 
         var status = await rotation.GetStatusAsync(CancellationToken.None);
 
@@ -217,7 +223,10 @@ public sealed class EncryptionRotationServiceTests
         Assert.AreEqual(1, status.ProvidersOnOtherKey);
     }
 
-    private static EncryptionRotationService CreateRotationService(TestFixture fixture, out string tempDataDir)
+    // Caller owns the returned DbContext and must dispose it — see call sites below. Disposing
+    // it before deleting any temp data directory matters most on Windows, where an open SQLite
+    // file handle can block deletion.
+    private static EncryptionRotationService CreateRotationService(TestFixture fixture, out string tempDataDir, out ApplicationDbContext db)
     {
         tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-encryption-test-{Guid.NewGuid():N}");
         var runtimePaths = new RuntimePaths(
@@ -227,7 +236,7 @@ public sealed class EncryptionRotationServiceTests
             LogDirectory: string.Empty,
             SnapshotDirectory: string.Empty);
 
-        var db = fixture.CreateDbContext();
+        db = fixture.CreateDbContext();
         var encryption = CreateService();
         var backup = new SqliteBackupService(db, runtimePaths, NullLogger<SqliteBackupService>.Instance);
         return new EncryptionRotationService(db, encryption, backup, NullLogger<EncryptionRotationService>.Instance);

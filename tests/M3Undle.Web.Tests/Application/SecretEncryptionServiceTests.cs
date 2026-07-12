@@ -188,6 +188,26 @@ public sealed class SecretEncryptionServiceTests
     }
 
     [TestMethod]
+    public void RingWithWhitespaceAroundEntries_TrimsKeyIdAndKeyMaterial()
+    {
+        // Operators commonly hand-edit env files as "keyId: base64key, keyId2: base64key2" —
+        // a stray space on either side of the colon must not turn into a distinct/mismatched
+        // key id, nor break Base64 decoding (Convert.FromBase64String already tolerates
+        // surrounding whitespace in the key material itself; the key id needs its own trim).
+        var key1 = RandomKey();
+        var key2 = RandomKey();
+        using var env = new EnvScope(keys: $" k1 : {key1} , k2: {key2}");
+        var encryption = CreateService();
+
+        CollectionAssert.AreEqual(new[] { "k1", "k2" }, encryption.KnownKeyIds.ToArray());
+        Assert.AreEqual("k1", encryption.ActiveKeyId);
+
+        var ciphertext = encryption.Encrypt("hunter2");
+        Assert.IsTrue(ciphertext.StartsWith("m3e:v2:k1:", StringComparison.Ordinal),
+            "keyId must be exactly 'k1' with no trailing space from the ring entry.");
+    }
+
+    [TestMethod]
     public void RingWithDuplicateKeyId_KeepsOnlyFirstOccurrence()
     {
         var firstK1 = RandomKey();

@@ -14,7 +14,12 @@ public sealed class EncryptionStatusResponse
 public sealed class RotateEncryptionResponse
 {
     public string? ActiveKeyId { get; set; }
-    public string? BackupFilePath { get; set; }
+
+    /// <summary>
+    /// File name only (not a full path) of the pre-rotation backup, under the server's
+    /// configured backups directory — avoids exposing internal filesystem layout over the API.
+    /// </summary>
+    public string? BackupFileName { get; set; }
     public int ProvidersMigrated { get; set; }
     public int DownstreamIntegrationsMigrated { get; set; }
     public int RowsAlreadyCurrent { get; set; }

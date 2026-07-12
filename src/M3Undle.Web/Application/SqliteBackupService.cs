@@ -13,7 +13,10 @@ public sealed class SqliteBackupService(ApplicationDbContext db, RuntimePaths ru
     {
         var backupDir = Path.Combine(runtimePaths.DataDirectory, "backups");
         Directory.CreateDirectory(backupDir);
-        var backupPath = Path.Combine(backupDir, $"m3undle-{DateTime.UtcNow:yyyyMMddHHmmss}.db");
+        // Millisecond precision plus a short random suffix — two rotate calls landing in the
+        // same second (or even the same millisecond) must not collide on the backup filename.
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+        var backupPath = Path.Combine(backupDir, $"m3undle-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{uniqueSuffix}.db");
 
         await db.Database.OpenConnectionAsync(cancellationToken);
         try
