@@ -2703,6 +2703,27 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task ResetAllAsync_ClearsRelaySlotsFromRegistryAndFreesCapacity()
+    {
+        await using var fixture = await SessionFixture.CreateAsync(FakeStreamingHandler.StreamForever());
+
+        var source = fixture.Source with { TunerLimit = 1 };
+        fixture.Manager.ReserveRelaySlot(source);
+        Assert.HasCount(1, fixture.Registry.GetActiveSessions());
+        Assert.HasCount(1, fixture.Registry.GetActiveClients());
+
+        await fixture.Manager.ResetAllAsync();
+
+        Assert.IsEmpty(fixture.Registry.GetActiveSessions());
+        Assert.IsEmpty(fixture.Registry.GetActiveClients());
+
+        // Capacity should be freed — a leaked/un-disposed relay slot must not
+        // permanently occupy the provider cap after a reset.
+        using var slot = fixture.Manager.ReserveRelaySlot(source);
+        Assert.IsNotNull(slot);
+    }
+
+    [TestMethod]
     public async Task SweepExpiredHlsSlots_RemovesExpiredReservationFromRegistry()
     {
         var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 04, 19, 18, 00, 00, TimeSpan.Zero));

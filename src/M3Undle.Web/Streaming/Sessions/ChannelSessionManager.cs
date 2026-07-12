@@ -510,18 +510,27 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
     {
         ChannelStreamSession[] sessions;
         HlsAdmissionSlot[] hlsSlots;
+        RelayAdmissionSlot[] relaySlots;
         lock (_admissionGate)
         {
             sessions = _sessions.Values.ToArray();
             hlsSlots = _hlsSlots.Values.ToArray();
+            relaySlots = _relaySlots.Values.ToArray();
             _sessions.Clear();
             _hlsSlots.Clear();
+            _relaySlots.Clear();
         }
 
         if (sessions.Length > 0)
             _logger.LogInformation("Resetting all {Count} active stream session(s).", sessions.Length);
 
         foreach (var slot in hlsSlots)
+        {
+            _registry.RemoveClient(slot.SessionId);
+            _registry.RemoveSession(slot.SessionId);
+        }
+
+        foreach (var slot in relaySlots)
         {
             _registry.RemoveClient(slot.SessionId);
             _registry.RemoveSession(slot.SessionId);
