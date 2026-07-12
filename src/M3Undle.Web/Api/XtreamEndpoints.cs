@@ -598,7 +598,7 @@ public static class XtreamEndpoints
             logger.LogInformation(
                 "Auto-HLS redirect (Xtream): channel={Channel} id={StreamId} client={Client}",
                 entry.DisplayName, streamId, context.Connection.RemoteIpAddress);
-            context.Response.Redirect(hlsPath, permanent: false);
+            await context.RedirectLocalAsync(hlsPath);
             return;
         }
 
@@ -705,7 +705,7 @@ public static class XtreamEndpoints
             var generatedManifestUrl = BuildGeneratedXtreamHlsManifestRedirectUrl(
                 context,
                 generatedSession.SessionId);
-            context.Response.Redirect(generatedManifestUrl, permanent: false);
+            await context.RedirectLocalAsync(generatedManifestUrl);
             return;
         }
 

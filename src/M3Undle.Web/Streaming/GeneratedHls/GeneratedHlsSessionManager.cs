@@ -263,6 +263,11 @@ public sealed class GeneratedHlsSessionManager(
         if (!_sessions.TryGetValue(sessionId, out var session))
             return;
 
+        // userAgent and requestedRoute are request-derived and end up in log output;
+        // strip line endings here so every downstream log of the record is forge-safe.
+        userAgent = userAgent?.ReplaceLineEndings(" ");
+        requestedRoute = requestedRoute.ReplaceLineEndings(" ");
+
         var trackedClient = session.TrackClient(remoteIp, userAgent, requestedRoute, countAsViewer);
         var record = trackedClient.Record;
         if (record.CountAsViewer)
