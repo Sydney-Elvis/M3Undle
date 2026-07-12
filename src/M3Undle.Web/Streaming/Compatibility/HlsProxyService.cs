@@ -2,6 +2,7 @@ using System.Text;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Relay;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 
@@ -111,7 +112,8 @@ public sealed class HlsProxyService(
         string upstreamUrl,
         string segmentProxyBaseUrl,
         string? providerId,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action<long>? reportRelayedBytes = null)
     {
         using var client = httpClientFactory.CreateClient("stream-relay");
         await ApplyProviderHeadersAsync(client, providerId, ct);
@@ -157,7 +159,23 @@ public sealed class HlsProxyService(
                 context.Response.ContentLength = response.Content.Headers.ContentLength.Value;
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
-            await stream.CopyToAsync(context.Response.Body, ct);
+            if (reportRelayedBytes is null)
+            {
+                await stream.CopyToAsync(context.Response.Body, ct);
+            }
+            else
+            {
+                long total = 0;
+                try
+                {
+                    await RelayByteCopier.CopyWithByteReportingAsync(
+                        stream, context.Response.Body, t => total = t, ct);
+                }
+                finally
+                {
+                    reportRelayedBytes(total);
+                }
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
