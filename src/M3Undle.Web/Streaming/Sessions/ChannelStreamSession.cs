@@ -80,6 +80,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private string? _lastSafeStartKind;
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
+    private long? _lastRelayedVideoDts90k;
+    private long? _recoveryTrimTargetDts90k;
+    private bool _recoveryTrimEvaluated;
+    private bool _recoveryTrimActive;
+    private long _recoveryTrimmedBytes;
+    private string _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.NotApplicable;
+    private double? _lastRecoveryTrimRewindSeconds;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -689,17 +696,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             resetStallTimer = HasNonNullTsContent(batch.Data);
             Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
             using var published = _buffer.Write(batch.Data);
+            var suppressForOverlapTrim = ShouldSuppressSafeStartForOverlapTrim(batch);
             var safeStart = MarkMpegTsSafeStartIfReady(
                 published,
                 batch.StartupKind,
                 batch.Data.Length,
-                batch.HasKnownH264VideoStream);
+                batch.HasKnownH264VideoStream,
+                suppressForOverlapTrim);
             if (_recoveryOutputHoldActive)
             {
                 _recoveryBytesSuppressed += batch.Data.Length;
                 if (safeStart.Selected)
                 {
                     await ResumeRecoveryOutputAsync(safeStart.Kind);
+                    UpdateLastRelayedVideoDts(batch);
                 }
                 else if (IsRecoveryHoldLimitExceeded())
                 {
@@ -710,6 +720,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             }
 
             await PublishToSubscribersAsync(published, isAtSafeBoundary: safeStart.Selected);
+            UpdateLastRelayedVideoDts(batch);
         }
         else
         {
@@ -978,7 +989,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         BufferLease lease,
         MpegTsStartupKind kind,
         int batchLength,
-        bool hasKnownH264VideoStream)
+        bool hasKnownH264VideoStream,
+        bool suppressSelection = false)
     {
         var fallbackBytes = ResolveRecoverySafeStartSearchLimitBytes();
 
@@ -989,6 +1001,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 ? Math.Max(0, lease.Sequence - 1)
                 : lease.Sequence;
         }
+
+        // An active overlap trim keeps holding through replayed pre-failure content;
+        // the PAT/PMT candidate above must keep rolling forward, but neither an IDR
+        // from the replayed span nor the byte-count fallback may resume output.
+        if (suppressSelection)
+            return SafeStartDecision.NotSelected;
 
         var selected = kind == MpegTsStartupKind.H264Idr
             || (kind == MpegTsStartupKind.PatPmt && !hasKnownH264VideoStream);
@@ -1032,6 +1050,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
         _lastRecoveryStartedUtc = _recoveryOutputHoldStartedUtc;
         _recoveryBytesSuppressed = 0;
+        _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim
+            ? _lastRelayedVideoDts90k
+            : null;
+        _recoveryTrimEvaluated = false;
+        _recoveryTrimActive = false;
+        _recoveryTrimmedBytes = 0;
+        _lastRecoveryTrimOutcome = _recoveryTrimTargetDts90k is null
+            ? RecoveryTrimOutcomes.NotApplicable
+            : RecoveryTrimOutcomes.None;
+        _lastRecoveryTrimRewindSeconds = null;
         _currentRecoveryPolicy ??= StreamChannelRecoveryPolicy.FromOptions(_reconnectOptions);
         var policy = ResolveRecoveryPolicy();
         SetState(SessionState.HoldingOutput);
@@ -1114,7 +1142,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             recoveryHoldLimit: ResolveRecoveryPolicy().RecoveryOutputHoldLimit,
             message: "Downstream output resumed from recovered MPEG-TS safe start.");
         _logger.LogInformation(
-            "Recovery resumed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed}",
+            "Recovery resumed: SessionId={SessionId} DisplayName={DisplayName} ProviderId={ProviderId} ProviderChannelId={ProviderChannelId} RelayMode={RelayMode} SafeStartKind={SafeStartKind} OutputHeldMs={OutputHeldMs} BytesSuppressed={BytesSuppressed} TrimOutcome={TrimOutcome} TrimRewindSeconds={TrimRewindSeconds} TrimmedBytes={TrimmedBytes}",
             _sessionId,
             _source.DisplayName,
             _source.ProviderId,
@@ -1122,7 +1150,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _relayMode,
             safeStartKind,
             heldDuration.TotalMilliseconds,
-            _recoveryBytesSuppressed);
+            _recoveryBytesSuppressed,
+            _lastRecoveryTrimOutcome,
+            _lastRecoveryTrimRewindSeconds,
+            _recoveryTrimmedBytes);
         PublishSnapshots();
     }
 
@@ -1182,6 +1213,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (!_recoveryOutputHoldActive)
             return false;
 
+        // An active overlap trim intentionally suppresses far more than the standard
+        // safe-start budgets allow; it enforces its own limits and abandoning it resets
+        // the standard budgets, so the forced-retune path must not fire here.
+        if (_recoveryTrimActive)
+            return false;
+
         return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
     }
@@ -1190,6 +1227,115 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         => _recoveryOutputHoldStartedUtc is { } started
             ? DateTimeOffset.UtcNow - started
             : TimeSpan.Zero;
+
+    private void UpdateLastRelayedVideoDts(MpegTsPacketBatch batch)
+    {
+        if (batch.LatestVideoDts90k is { } dts)
+            _lastRelayedVideoDts90k = dts;
+    }
+
+    private bool ShouldSuppressSafeStartForOverlapTrim(MpegTsPacketBatch batch)
+    {
+        if (!_recoveryOutputHoldActive || _recoveryTrimTargetDts90k is not { } target)
+            return false;
+
+        if (!_recoveryTrimEvaluated)
+        {
+            if (!batch.HasKnownH264VideoStream || batch.LatestVideoDts90k is not { } firstDts)
+                return false;
+
+            _recoveryTrimEvaluated = true;
+            var deltaSeconds = MpegTsTimestamp.DeltaSeconds(target, firstDts);
+            if (deltaSeconds >= 0)
+            {
+                _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.None;
+                return false;
+            }
+
+            if (deltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+            {
+                _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.NotApplicable;
+                _logger.LogInformation(
+                    "Recovery overlap trim skipped: SessionId={SessionId} DisplayName={DisplayName} reconnected stream is {RewindSeconds:F1}s behind the pre-failure position, beyond the {MaxRewindSeconds}s trim window; treating as an unrelated timeline.",
+                    _sessionId,
+                    _source.DisplayName,
+                    -deltaSeconds,
+                    _reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds);
+                return false;
+            }
+
+            _recoveryTrimActive = true;
+            _lastRecoveryTrimRewindSeconds = -deltaSeconds;
+            _logger.LogInformation(
+                "Recovery overlap detected: SessionId={SessionId} DisplayName={DisplayName} reconnected stream is {RewindSeconds:F1}s behind the pre-failure position; holding output through the replayed span.",
+                _sessionId,
+                _source.DisplayName,
+                -deltaSeconds);
+        }
+
+        if (!_recoveryTrimActive)
+            return false;
+
+        if (GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOverlapTrimHoldLimit
+            || _recoveryTrimmedBytes >= _reconnectOptions.RecoveryOverlapTrimMaxBytes)
+        {
+            AbandonRecoveryOverlapTrim();
+            return false;
+        }
+
+        if (batch.IdrDts90k is { } idrDts && MpegTsTimestamp.Delta(target, idrDts) >= 0)
+        {
+            CompleteRecoveryOverlapTrim(target, idrDts);
+            return false;
+        }
+
+        _recoveryTrimmedBytes += batch.Data.Length;
+        return true;
+    }
+
+    private void CompleteRecoveryOverlapTrim(long targetDts90k, long resumeIdrDts90k)
+    {
+        _recoveryTrimActive = false;
+        _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.Trimmed;
+        var overshootSeconds = MpegTsTimestamp.DeltaSeconds(targetDts90k, resumeIdrDts90k);
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoveryOverlapTrimmed,
+            outputHeld: GetRecoveryHoldDuration(),
+            bytesSuppressed: _recoveryTrimmedBytes,
+            message: $"Recovery overlap trimmed: {_lastRecoveryTrimRewindSeconds:F1}s of replayed content ({_recoveryTrimmedBytes} byte(s)) suppressed; resuming at IDR {overshootSeconds:F1}s past the pre-failure position.");
+        _logger.LogInformation(
+            "Recovery overlap trimmed: SessionId={SessionId} DisplayName={DisplayName} RewindSeconds={RewindSeconds:F1} TrimmedBytes={TrimmedBytes} ResumeOvershootSeconds={ResumeOvershootSeconds:F1}",
+            _sessionId,
+            _source.DisplayName,
+            _lastRecoveryTrimRewindSeconds,
+            _recoveryTrimmedBytes,
+            overshootSeconds);
+    }
+
+    private void AbandonRecoveryOverlapTrim()
+    {
+        _recoveryTrimActive = false;
+        _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.Abandoned;
+        var heldDuration = GetRecoveryHoldDuration();
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned,
+            outputHeld: heldDuration,
+            bytesSuppressed: _recoveryTrimmedBytes,
+            message: $"Recovery overlap trim abandoned after {heldDuration.TotalMilliseconds:F0} ms / {_recoveryTrimmedBytes} byte(s) without reaching the pre-failure position; falling back to the standard safe-start resume.");
+        _logger.LogWarning(
+            "Recovery overlap trim abandoned: SessionId={SessionId} DisplayName={DisplayName} RewindSeconds={RewindSeconds:F1} TrimmedBytes={TrimmedBytes} HeldMs={HeldMs:F0}",
+            _sessionId,
+            _source.DisplayName,
+            _lastRecoveryTrimRewindSeconds,
+            _recoveryTrimmedBytes,
+            heldDuration.TotalMilliseconds);
+
+        // Restart the standard hold budgets so the fallback resume gets its normal
+        // window instead of tripping the forced-retune limits the trim already spent.
+        _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
+        _recoveryBytesSuppressed = 0;
+        Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
+    }
 
     private int ResolveRecoverySafeStartSearchLimitBytes()
     {
@@ -1816,5 +1962,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private readonly record struct SafeStartDecision(bool Selected, string Kind)
     {
         public static SafeStartDecision NotSelected => new(false, string.Empty);
+    }
+
+    private static class RecoveryTrimOutcomes
+    {
+        public const string NotApplicable = "NotApplicable";
+        public const string None = "None";
+        public const string Trimmed = "Trimmed";
+        public const string Abandoned = "Abandoned";
     }
 }

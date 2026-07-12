@@ -15,6 +15,9 @@ public sealed class MpegTsBoundaryScanner
     private bool _pmtSeen;
     private bool _spsSeen;
     private bool _ppsSeen;
+    private long? _currentVideoPesDts90k;
+    private long? _batchLatestVideoDts90k;
+    private long? _batchIdrDts90k;
 
     public MpegTsPacketBatch? Process(ReadOnlySpan<byte> input)
     {
@@ -23,6 +26,8 @@ public sealed class MpegTsBoundaryScanner
 
         var dropped = 0;
         var syncLost = false;
+        _batchLatestVideoDts90k = null;
+        _batchIdrDts90k = null;
         _pending.AddRange(input);
 
         var output = new List<byte>(_pending.Count - (_pending.Count % PacketSize));
@@ -73,7 +78,14 @@ public sealed class MpegTsBoundaryScanner
         if (startupKind == MpegTsStartupKind.None)
             startupKind = MpegTsStartupKind.PacketBoundary;
 
-        return new MpegTsPacketBatch([.. output], startupKind, dropped, syncLost, _videoPid is not null);
+        return new MpegTsPacketBatch(
+            [.. output],
+            startupKind,
+            dropped,
+            syncLost,
+            _videoPid is not null,
+            _batchLatestVideoDts90k,
+            _batchIdrDts90k);
     }
 
     public void Reset()
@@ -86,6 +98,9 @@ public sealed class MpegTsBoundaryScanner
         _pmtSeen = false;
         _spsSeen = false;
         _ppsSeen = false;
+        _currentVideoPesDts90k = null;
+        _batchLatestVideoDts90k = null;
+        _batchIdrDts90k = null;
     }
 
     private bool LooksLikePacketStart(int index)
@@ -220,6 +235,10 @@ public sealed class MpegTsBoundaryScanner
     {
         if (payloadUnitStart && payload.Length >= 9 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1)
         {
+            _currentVideoPesDts90k = ParsePesTimestamp(payload);
+            if (_currentVideoPesDts90k is { } dts)
+                _batchLatestVideoDts90k = dts;
+
             var pesHeaderLength = payload[8];
             var offset = 9 + pesHeaderLength;
             payload = offset <= payload.Length ? payload[offset..] : [];
@@ -227,8 +246,66 @@ public sealed class MpegTsBoundaryScanner
 
         AppendVideoPayload(payload);
         var parsedIdr = ScanH264NalUnits(CollectionsMarshal.AsSpan(_videoTail));
-        TrimVideoTail();
+        if (parsedIdr)
+        {
+            if (_currentVideoPesDts90k is { } idrDts)
+                _batchIdrDts90k = idrDts;
+
+            // The IDR signal has been consumed; clear the tail so packets that merely
+            // still contain these bytes do not re-report a stale IDR boundary.
+            _videoTail.Clear();
+        }
+        else
+        {
+            TrimVideoTail();
+        }
+
         return parsedIdr;
+    }
+
+    /// <summary>
+    /// Extracts the PES DTS (or PTS when no DTS is present) from a PES header at a
+    /// payload unit start, as a 33-bit 90 kHz value. Returns null for malformed or
+    /// timestamp-less headers rather than guessing.
+    /// </summary>
+    private static long? ParsePesTimestamp(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length < 14)
+            return null;
+
+        var streamId = payload[3];
+        if (streamId < 0xE0 || streamId > 0xEF)
+            return null;
+
+        var ptsDtsFlags = (payload[7] >> 6) & 0x03;
+        var pesHeaderDataLength = payload[8];
+        if (ptsDtsFlags == 0x02)
+        {
+            return pesHeaderDataLength >= 5
+                ? DecodeTimestamp(payload[9..14])
+                : null;
+        }
+
+        if (ptsDtsFlags == 0x03)
+        {
+            return pesHeaderDataLength >= 10 && payload.Length >= 19
+                ? DecodeTimestamp(payload[14..19])
+                : null;
+        }
+
+        return null;
+    }
+
+    private static long? DecodeTimestamp(ReadOnlySpan<byte> bytes)
+    {
+        if ((bytes[0] & 0x01) != 0x01 || (bytes[2] & 0x01) != 0x01 || (bytes[4] & 0x01) != 0x01)
+            return null;
+
+        return ((long)((bytes[0] >> 1) & 0x07) << 30)
+            | ((long)bytes[1] << 22)
+            | ((long)(bytes[2] >> 1) << 15)
+            | ((long)bytes[3] << 7)
+            | ((long)(bytes[4] >> 1));
     }
 
     private void AppendVideoPayload(ReadOnlySpan<byte> payload)

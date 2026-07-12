@@ -92,6 +92,15 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
         if (options.RecoverySafeStartSearchLimitBytes < 188)
             errors.Add("Streaming:Reconnect:RecoverySafeStartSearchLimitBytes must be greater than or equal to one MPEG-TS packet.");
 
+        if (options.RecoveryOverlapTrimHoldLimit < TimeSpan.FromMilliseconds(1) || options.RecoveryOverlapTrimHoldLimit > TimeSpan.FromSeconds(30))
+            errors.Add("Streaming:Reconnect:RecoveryOverlapTrimHoldLimit must be between 1 millisecond and 30 seconds.");
+
+        if (options.RecoveryOverlapTrimMaxBytes < 1024 * 1024)
+            errors.Add("Streaming:Reconnect:RecoveryOverlapTrimMaxBytes must be at least 1 MiB.");
+
+        if (options.RecoveryOverlapTrimMaxRewindSeconds < 10 || options.RecoveryOverlapTrimMaxRewindSeconds > 600)
+            errors.Add("Streaming:Reconnect:RecoveryOverlapTrimMaxRewindSeconds must be between 10 and 600 seconds.");
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);
