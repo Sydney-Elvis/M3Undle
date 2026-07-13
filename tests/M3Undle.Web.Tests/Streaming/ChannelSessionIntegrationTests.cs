@@ -1107,6 +1107,195 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_MpegTsReconnect_UpstreamFailsDuringTrim_AbandonsTrimAndResumesOnNextRecovery()
+    {
+        // Wedge shape observed on toontown-int-srv1 (CLEAN-RELAY-02 / XTR-WEB-01): the
+        // upstream fails again while a trim is still holding output, so the batch-driven
+        // trim budgets never fire. The failure path must resolve the trim as abandoned and
+        // the next recovery must resume plainly instead of re-entering a fresh trim.
+        const long preFailureDts = 102L * 90000;
+        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xE1], 43L * 90000);
+        var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xE2], 200L * 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+        };
+
+        // Rewound replay that stalls before ever reaching the pre-failure position.
+        var rewoundThenStallSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            rewoundIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], 44L * 90000),
+        };
+
+        var secondRecoverySequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xC1], 200L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xC2], 200L * 90000),
+            freshIdr,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(rewoundThenStallSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(secondRecoverySequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), freshIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(-1, IndexOf(data, rewoundIdr), "Content suppressed by the wedged trim must not be relayed.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "The recovery after the abandoned trim must resume output.");
+
+        Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_FlappingSourceAfterAbandonedTrim_SkipsTrimDuringCooldown()
+    {
+        // After a trim is abandoned because the upstream failed mid-replay, a source that
+        // keeps flapping with a rewound-looking timeline (an FFmpeg relay restart produces
+        // one on every reconnect) must not re-arm the trim during the retry cooldown:
+        // recovery degrades to the plain first-IDR resume so output keeps flowing.
+        const long preFailureDts = 102L * 90000;
+        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF1], 43L * 90000);
+        var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF2], 200L * 90000);
+        var secondRewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF3], 150L * 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+        };
+
+        var rewoundThenStallSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            rewoundIdr,
+        };
+
+        var secondRecoverySequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xC1], 200L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xC2], 200L * 90000),
+            freshIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], 201L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], 202L * 90000),
+        };
+
+        // Third recovery rewinds again (50 s behind the fresh position) — within the trim
+        // window, but the cooldown from the abandoned trim must keep the trim disarmed.
+        var thirdRecoverySequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xC3], 150L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xC4], 150L * 90000),
+            secondRewoundIdr,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(rewoundThenStallSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(secondRecoverySequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(thirdRecoverySequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), secondRewoundIdr) >= 0, TimeSpan.FromSeconds(10));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "The recovery after the abandoned trim must resume output.");
+        Assert.IsGreaterThanOrEqualTo(
+            0,
+            IndexOf(data, secondRewoundIdr),
+            "A rewound recovery during the trim cooldown must resume plainly and relay its content.");
+
+        Assert.HasCount(1, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_ForwardJump_ResumesAtFirstIdrWithoutTrim()
     {
         // Reconnected stream continues ahead of the pre-failure position (no replay):
