@@ -788,7 +788,7 @@ public static class XtreamEndpoints
         {
             await ServeDirectRelayAsync(
                 context, db, httpClientFactory, logger, entry.StreamUrl, entry.DisplayName,
-                relaySlotReservation, cancellationToken);
+                resolved.SourceDescriptor?.ProviderId, relaySlotReservation, cancellationToken);
         }
     }
 
@@ -1152,13 +1152,16 @@ public static class XtreamEndpoints
         ILogger logger,
         string streamUrl,
         string displayName,
+        string? providerId,
         ChannelSessionManager.RelaySlotReservation? relaySlotReservation,
         CancellationToken cancellationToken)
     {
         var access = context.GetResolvedClientAccess();
         var profileProvider = await db.ProfileProviders
             .AsNoTracking()
-            .Where(x => x.ProfileId == access.Binding.ActiveProfileId && x.Enabled)
+            .Where(x => x.ProfileId == access.Binding.ActiveProfileId
+                        && x.Enabled
+                        && (providerId == null || x.ProviderId == providerId))
             .OrderBy(x => x.Priority)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -1178,19 +1181,12 @@ public static class XtreamEndpoints
                     client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
             }
 
-            if (context.Request.Headers.TryGetValue("Range", out var rangeValue))
-                client.DefaultRequestHeaders.TryAddWithoutValidation("Range", rangeValue.ToArray());
+            using var upstreamRequest = new HttpRequestMessage(HttpMethod.Get, streamUrl);
+            DirectRelayHttpHeaders.ApplyRequestHeaders(context.Request, upstreamRequest);
+            using var upstreamResponse = await client.SendAsync(
+                upstreamRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-            using var upstreamResponse = await client.GetAsync(
-                streamUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-
-            context.Response.StatusCode = (int)upstreamResponse.StatusCode;
-
-            if (upstreamResponse.Content.Headers.ContentType is not null)
-                context.Response.ContentType = upstreamResponse.Content.Headers.ContentType.ToString();
-
-            if (upstreamResponse.Content.Headers.ContentLength.HasValue)
-                context.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
+            DirectRelayHttpHeaders.ApplyResponseHeaders(context.Response, upstreamResponse);
 
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
             if (relaySlotReservation is not null)

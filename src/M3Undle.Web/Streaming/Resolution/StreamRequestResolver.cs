@@ -47,7 +47,11 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
         }
 
         var providerChannel = await ResolveProviderChannelAsync(entry, ct);
-        if (providerChannel is null)
+        var providerId = providerChannel?.ProviderId ?? entry.ProviderId;
+        var providerChannelId = providerChannel?.ProviderChannelId;
+        var streamUrl = providerChannel?.StreamUrl ?? entry.StreamUrl;
+
+        if (string.IsNullOrWhiteSpace(providerId))
         {
             // Legacy snapshot fallback: no provider-channel identity available yet.
             logger.LogWarning(
@@ -56,17 +60,35 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             return StreamResolveResult.SuccessDirect(entry);
         }
 
+        var providerIsBound = await db.ProfileProviders
+            .AsNoTracking()
+            .AnyAsync(x => x.ProfileId == access.Binding.ActiveProfileId
+                           && x.ProviderId == providerId
+                           && x.Enabled
+                           && x.Provider.Enabled, ct);
+        if (!providerIsBound)
+        {
+            logger.LogWarning(
+                "Falling back to direct relay for stream key {StreamKey}: snapshot provider is not enabled for the active profile.",
+                streamKey);
+            return StreamResolveResult.SuccessDirect(entry);
+        }
+
+        providerChannelId = string.IsNullOrWhiteSpace(providerChannelId)
+            ? $"snapshot:{entry.StreamKey}"
+            : providerChannelId;
+
         var providerMeta = await db.Providers
             .AsNoTracking()
-            .Where(x => x.ProviderId == providerChannel.ProviderId)
+            .Where(x => x.ProviderId == providerId)
             .Select(x => new { x.MaxConcurrentStreams, x.ForceMpegTs })
             .FirstOrDefaultAsync(ct);
 
         var descriptor = new StreamSourceDescriptor(
             ProfileId: access.Binding.ActiveProfileId,
-            ProviderId: providerChannel.ProviderId,
-            ProviderChannelId: providerChannel.ProviderChannelId,
-            StreamUrl: providerChannel.StreamUrl,
+            ProviderId: providerId,
+            ProviderChannelId: providerChannelId,
+            StreamUrl: streamUrl,
             DisplayName: entry.DisplayName,
             RequestedRoute: context.Request.Path.Value ?? "/stream",
             UserAgent: context.Request.Headers.UserAgent.ToString(),
@@ -180,4 +202,3 @@ public sealed record StreamResolveResult(
     public static StreamResolveResult SuccessShared(ChannelIndexEntry entry, StreamSourceDescriptor descriptor)
         => new(true, true, null, null, entry, descriptor);
 }
-

@@ -735,7 +735,8 @@ public sealed class SnapshotBuilder(
             includedGroups,
             channelOverridesByFilterId,
             provider.IncludeVod,
-            provider.IncludeSeries);
+            provider.IncludeSeries,
+            provider.ProviderId);
 
         // Write snapshot files
         var snapshotId = Guid.NewGuid().ToString();
@@ -839,7 +840,8 @@ public sealed class SnapshotBuilder(
         IReadOnlyDictionary<string, GroupFilterConfig> includedGroups,
         IReadOnlyDictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId,
         bool includeVod,
-        bool includeSeries)
+        bool includeSeries,
+        string? providerId = null)
     {
         // No included live groups and no VOD/series passthrough enabled.
         if (includedGroups.Count == 0 && !includeVod && !includeSeries)
@@ -946,7 +948,7 @@ public sealed class SnapshotBuilder(
                 .ToList();
 
             foreach (var (_, channel, num, tvgIdOverride, displayNameOverride) in withNum)
-                result.Add(BuildEntry(channel, outputName, num, profileId, tvgIdOverride, displayNameOverride));
+                result.Add(BuildEntry(channel, outputName, num, profileId, providerId, tvgIdOverride, displayNameOverride));
 
             int? nextNum = parentFilter?.AutoNumStart;
             int? maxNum = parentFilter?.AutoNumEnd;
@@ -990,7 +992,7 @@ public sealed class SnapshotBuilder(
                     nextOverflow++;
                 }
 
-                result.Add(BuildEntry(channel, outputName, assignedNum, profileId, tvgIdOverride, displayNameOverride));
+                result.Add(BuildEntry(channel, outputName, assignedNum, profileId, providerId, tvgIdOverride, displayNameOverride));
             }
         }
 
@@ -1066,6 +1068,7 @@ public sealed class SnapshotBuilder(
         string? groupTitle,
         int? tvgChno,
         string profileId,
+        string? providerId,
         string? tvgIdOverride = null,
         string? displayNameOverride = null)
     {
@@ -1084,7 +1087,8 @@ public sealed class SnapshotBuilder(
             GroupTitle: groupTitle,
             TvgChno: tvgChno,
             ProviderChannelId: channel.ProviderChannelId,
-            StreamUrl: channel.StreamUrl!);
+            StreamUrl: channel.StreamUrl!,
+            ProviderId: providerId);
     }
 
     // -------------------------------------------------------------------------

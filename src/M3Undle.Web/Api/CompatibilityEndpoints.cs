@@ -913,6 +913,7 @@ public static class CompatibilityEndpoints
                 logger,
                 entry.StreamUrl,
                 entry.DisplayName,
+                resolved.SourceDescriptor?.ProviderId,
                 relaySlotReservation,
                 cancellationToken);
         }
@@ -1224,10 +1225,11 @@ public static class CompatibilityEndpoints
         ILogger logger,
         string streamUrl,
         string displayName,
+        string? providerId,
         ChannelSessionManager.RelaySlotReservation? relaySlotReservation,
         CancellationToken cancellationToken)
     {
-        var provider = await ResolveProviderForDirectRelayAsync(db, context, cancellationToken);
+        var provider = await ResolveProviderForDirectRelayAsync(db, context, providerId, cancellationToken);
 
         try
         {
@@ -1240,26 +1242,17 @@ public static class CompatibilityEndpoints
                     client.DefaultRequestHeaders.UserAgent.ParseAdd(provider.UserAgent);
             }
 
-            if (context.Request.Headers.TryGetValue("Range", out var rangeValue))
-                client.DefaultRequestHeaders.TryAddWithoutValidation("Range", rangeValue.ToArray());
-
-            using var upstreamResponse = await client.GetAsync(
-                streamUrl,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+            using var upstreamRequest = new HttpRequestMessage(HttpMethod.Get, streamUrl);
+            DirectRelayHttpHeaders.ApplyRequestHeaders(context.Request, upstreamRequest);
+            using var upstreamResponse = await client.SendAsync(
+                upstreamRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
             logger.LogInformation("Stream upstream: channel={Channel} status={Status} contentType={ContentType}",
                 displayName,
                 (int)upstreamResponse.StatusCode,
                 upstreamResponse.Content.Headers.ContentType?.ToString() ?? "none");
 
-            context.Response.StatusCode = (int)upstreamResponse.StatusCode;
-
-            if (upstreamResponse.Content.Headers.ContentType is not null)
-                context.Response.ContentType = upstreamResponse.Content.Headers.ContentType.ToString();
-
-            if (upstreamResponse.Content.Headers.ContentLength.HasValue)
-                context.Response.ContentLength = upstreamResponse.Content.Headers.ContentLength.Value;
+            DirectRelayHttpHeaders.ApplyResponseHeaders(context.Response, upstreamResponse);
 
             await using var upstreamStream = await upstreamResponse.Content.ReadAsStreamAsync(cancellationToken);
             if (relaySlotReservation is not null)
@@ -1291,12 +1284,15 @@ public static class CompatibilityEndpoints
     private static async Task<Provider?> ResolveProviderForDirectRelayAsync(
         ApplicationDbContext db,
         HttpContext context,
+        string? providerId,
         CancellationToken cancellationToken)
     {
         var access = context.GetResolvedClientAccess();
         var profileProvider = await db.ProfileProviders
             .AsNoTracking()
-            .Where(x => x.ProfileId == access.Binding.ActiveProfileId && x.Enabled)
+            .Where(x => x.ProfileId == access.Binding.ActiveProfileId
+                        && x.Enabled
+                        && (providerId == null || x.ProviderId == providerId))
             .OrderBy(x => x.Priority)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -1308,7 +1304,9 @@ public static class CompatibilityEndpoints
                 .FirstOrDefaultAsync(cancellationToken);
             if (activeProfileId is null) return null;
             profileProvider = await db.ProfileProviders.AsNoTracking()
-                .Where(x => x.ProfileId == activeProfileId && x.Enabled)
+                .Where(x => x.ProfileId == activeProfileId
+                            && x.Enabled
+                            && (providerId == null || x.ProviderId == providerId))
                 .OrderBy(x => x.Priority)
                 .FirstOrDefaultAsync(cancellationToken);
             if (profileProvider is null) return null;

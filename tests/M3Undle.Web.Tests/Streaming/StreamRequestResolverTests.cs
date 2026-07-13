@@ -82,6 +82,49 @@ public sealed class StreamRequestResolverTests
     }
 
     [TestMethod]
+    public async Task ResolveAsync_SeriesFromInMemorySnapshot_UsesSnapshotProviderForTrackingDescriptor()
+    {
+        await using var fixture = await TestFixture.CreateAsync($"snapshot-series-{Guid.NewGuid():N}");
+        var providerChannel = await fixture.Db.ProviderChannels.SingleAsync();
+        fixture.Db.ProviderChannels.Remove(providerChannel);
+        await fixture.Db.SaveChangesAsync();
+
+        var channelIndexPath = Path.Combine(fixture.TempDirectory, "series_channel_index.ndjson");
+        await ChannelIndexStore.WriteAsync(
+            channelIndexPath,
+            ChannelIndexStore.GetIdxPath(channelIndexPath),
+            [
+                new ChannelIndexEntry(
+                    StreamKey: "key-series",
+                    DisplayName: "Test Show — S01E01",
+                    TvgId: null,
+                    TvgName: null,
+                    LogoUrl: null,
+                    GroupTitle: "Series",
+                    TvgChno: null,
+                    ProviderChannelId: string.Empty,
+                    StreamUrl: "http://provider.test/series/user/pass/1001.mkv",
+                    ProviderId: "provider-1"),
+            ],
+            CancellationToken.None);
+        var snapshot = await fixture.Db.Snapshots.SingleAsync();
+        snapshot.ChannelIndexPath = channelIndexPath;
+        await fixture.Db.SaveChangesAsync();
+
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/series/key-series", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-series", context, CancellationToken.None);
+
+        Assert.IsTrue(result.IsSuccess, $"{result.FailureStatusCode}: {result.FailureMessage}");
+        Assert.IsFalse(result.UseSharedSession);
+        Assert.IsNotNull(result.SourceDescriptor);
+        Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
+        Assert.AreEqual("snapshot:key-series", result.SourceDescriptor.ProviderChannelId);
+        Assert.AreEqual("http://provider.test/series/user/pass/1001.mkv", result.SourceDescriptor.StreamUrl);
+    }
+
+    [TestMethod]
     public async Task ResolveAsync_NativeHdhrTunerRoute_ReturnsSharedSessionDescriptor()
     {
         await using var fixture = await TestFixture.CreateAsync();
@@ -192,7 +235,7 @@ public sealed class StreamRequestResolverTests
 
         public string TempDirectory { get; } = tempDirectory;
 
-        public static async Task<TestFixture> CreateAsync()
+        public static async Task<TestFixture> CreateAsync(string snapshotId = "snapshot-1")
         {
             var tempDirectory = Path.Combine(Path.GetTempPath(), "m3undle-stream-resolver-tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempDirectory);
@@ -283,7 +326,7 @@ public sealed class StreamRequestResolverTests
 
             var snapshot = new Snapshot
             {
-                SnapshotId = "snapshot-1",
+                SnapshotId = snapshotId,
                 ProfileId = profile.ProfileId,
                 CreatedUtc = DateTime.UtcNow,
                 Status = "active",
@@ -317,4 +360,3 @@ public sealed class StreamRequestResolverTests
         }
     }
 }
-
