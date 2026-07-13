@@ -4,50 +4,6 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
-## [v1.0.0-beta.5] — 2026-07-12
-
-Beta 5 adds DTS-aware overlap trimming to provider reconnects, encryption key rotation, and VOD/series visibility on the stream monitor.
-
-### Adaptive recovery overlap trim
-
-- Added wrap-aware 33-bit MPEG-TS timestamp math and video PES DTS extraction to the boundary scanner, giving the recovery path a reliable measure of how far a reconnected stream has rewound
-- Added DTS-aware overlap trimming: when a provider reconnect replays 0–180s of already-delivered video (a common behavior on reconnect, e.g. AMC), M3Undle now holds through the replay and resumes at the first IDR at or after the pre-failure position instead of splicing the replayed IDR into the live HLS window and evicting viewer playback position
-- Gated the two existing forced-retune fallbacks so they can't fire while a trim is active or mid-replay; abandoning a trim on budget expiry falls back to the standard first-IDR resume, never a retune
-- Added `EnableRecoveryOverlapTrim` (on by default), plus configurable trim hold, byte budget, and max rewind limits under `ReconnectOptions`
-- Added `RecoveryOverlapTrimmed` and `RecoveryOverlapTrimAbandoned` diagnostic events, and extended the "Recovery resumed" log with trim outcome, rewind seconds, and trimmed byte count
-- Fixed a latent boundary-scanner issue where packets still containing old IDR bytes after a positive IDR detection could re-report a stale safe boundary
-
-### Encryption key rotation
-
-- Added the ability to rotate the secret encryption key used to protect stored Xtream and provider credentials, without requiring re-entry of existing secrets
-- Added a SQLite backup step ahead of rotation so a rotation can be safely rolled back
-- Documented the rotation workflow and previously undocumented Xtream fields in the Docker and database schema docs
-
-### VOD and series stream visibility
-
-- Added tracking of VOD and series streams against subscriber cap limits, alongside existing live-channel tracking
-- Fixed VOD and series streams not appearing on the stream monitor page (fixes #134)
-
-### Fixes
-
-- Fixed a validation message mismatch in `StreamingOptionsValidator`: the check allowed any value down to 1 tick through despite the message claiming a 1ms minimum; the check now matches the documented constraint
-
-### Testing
-
-- Added 7 new Core tests covering wrap-aware timestamp math, DTS extraction, PTS-only fallback, malformed-header handling, IDR/DTS association, and the stale-IDR regression
-- Added 5 new integration scenarios covering trimmed rewind replay, slow 1× replay abandonment, forward jumps, unrelated timelines, and audio-only streams
-- Added regression coverage for encryption rotation, secret encryption, and SQLite backup
-- Added regression coverage for VOD/series cap tracking and stream monitor visibility
-
-**Container images**
-
-```text
-ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.5
-ghcr.io/sydney-elvis/m3undle:beta
-```
-
----
-
 ## [v1.0.0-beta.4] — 2026-07-10
 
 Beta 4 is a focused adaptive stream health release. It removes false and dead signals from the channel health classifier that could push a channel to Unstable and force every viewer off on a benign disconnect, and it retires an eager forced-retune mechanism in favor of the existing evidence-based recovery path.
