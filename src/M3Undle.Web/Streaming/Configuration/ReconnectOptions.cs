@@ -71,5 +71,15 @@ public sealed class ReconnectOptions
     /// </summary>
     public int RecoveryOverlapTrimMaxRewindSeconds { get; set; } = 180;
 
+    /// <summary>
+    /// After a trim is abandoned, no new trim is armed for this long. A source that
+    /// fails faster than its replay can catch up (FFmpeg relay restarts produce a
+    /// rewound-looking timeline on every reconnect) would otherwise re-enter a fresh
+    /// trim with a fresh budget on every failure, suppressing output indefinitely;
+    /// the cooldown degrades such sources to the plain first-IDR resume instead.
+    /// Zero disables the cooldown.
+    /// </summary>
+    public TimeSpan RecoveryOverlapTrimRetryCooldown { get; set; } = TimeSpan.FromSeconds(60);
+
     public int[] FixedStepBackoffSeconds { get; set; } = [0, 1, 2, 5, 10, 15, 30];
 }

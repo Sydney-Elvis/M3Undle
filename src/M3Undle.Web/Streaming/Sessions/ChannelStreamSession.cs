@@ -87,6 +87,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long _recoveryTrimmedBytes;
     private string _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.NotApplicable;
     private double? _lastRecoveryTrimRewindSeconds;
+    private DateTimeOffset? _lastRecoveryTrimAbandonedUtc;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -1046,13 +1047,32 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private void BeginRecoveryOutputHold(int reconnectAttempt)
     {
+        // A trim still active here means the upstream failed again before the replay
+        // reached the pre-failure position — the batch-driven trim budgets never got a
+        // chance to fire. Resolve it as abandoned so the outcome is recorded and the
+        // retry cooldown below stops a flapping source from re-entering a fresh trim
+        // (with a fresh budget) on every reconnect, which would suppress output forever.
+        if (_recoveryTrimActive)
+            AbandonRecoveryOverlapTrim("because the upstream failed again during the replayed span");
+
+        var holdStartedUtc = DateTimeOffset.UtcNow;
         _recoveryOutputHoldActive = true;
-        _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
-        _lastRecoveryStartedUtc = _recoveryOutputHoldStartedUtc;
+        _recoveryOutputHoldStartedUtc = holdStartedUtc;
+        _lastRecoveryStartedUtc = holdStartedUtc;
         _recoveryBytesSuppressed = 0;
-        _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim
+        var trimOnRetryCooldown = _lastRecoveryTrimAbandonedUtc is { } lastAbandonedUtc
+            && holdStartedUtc - lastAbandonedUtc < _reconnectOptions.RecoveryOverlapTrimRetryCooldown;
+        _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim && !trimOnRetryCooldown
             ? _lastRelayedVideoDts90k
             : null;
+        if (trimOnRetryCooldown && _reconnectOptions.EnableRecoveryOverlapTrim && _lastRelayedVideoDts90k is not null)
+        {
+            _logger.LogInformation(
+                "Recovery overlap trim on retry cooldown: SessionId={SessionId} DisplayName={DisplayName} a trim was abandoned {SecondsSinceAbandoned:F1}s ago; using the standard safe-start resume for this recovery.",
+                _sessionId,
+                _source.DisplayName,
+                (holdStartedUtc - _lastRecoveryTrimAbandonedUtc!.Value).TotalSeconds);
+        }
         _recoveryTrimEvaluated = false;
         _recoveryTrimActive = false;
         _recoveryTrimmedBytes = 0;
@@ -1279,7 +1299,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOverlapTrimHoldLimit
             || _recoveryTrimmedBytes >= _reconnectOptions.RecoveryOverlapTrimMaxBytes)
         {
-            AbandonRecoveryOverlapTrim();
+            AbandonRecoveryOverlapTrim("without reaching the pre-failure position within the trim budget");
             return false;
         }
 
@@ -1312,23 +1332,25 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             overshootSeconds);
     }
 
-    private void AbandonRecoveryOverlapTrim()
+    private void AbandonRecoveryOverlapTrim(string reason)
     {
         _recoveryTrimActive = false;
         _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.Abandoned;
+        _lastRecoveryTrimAbandonedUtc = DateTimeOffset.UtcNow;
         var heldDuration = GetRecoveryHoldDuration();
         RecordDiagnostic(
             StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned,
             outputHeld: heldDuration,
             bytesSuppressed: _recoveryTrimmedBytes,
-            message: $"Recovery overlap trim abandoned after {heldDuration.TotalMilliseconds:F0} ms / {_recoveryTrimmedBytes} byte(s) without reaching the pre-failure position; falling back to the standard safe-start resume.");
+            message: $"Recovery overlap trim abandoned after {heldDuration.TotalMilliseconds:F0} ms / {_recoveryTrimmedBytes} byte(s) {reason}; falling back to the standard safe-start resume.");
         _logger.LogWarning(
-            "Recovery overlap trim abandoned: SessionId={SessionId} DisplayName={DisplayName} RewindSeconds={RewindSeconds:F1} TrimmedBytes={TrimmedBytes} HeldMs={HeldMs:F0}",
+            "Recovery overlap trim abandoned: SessionId={SessionId} DisplayName={DisplayName} RewindSeconds={RewindSeconds:F1} TrimmedBytes={TrimmedBytes} HeldMs={HeldMs:F0} Reason={Reason}",
             _sessionId,
             _source.DisplayName,
             _lastRecoveryTrimRewindSeconds,
             _recoveryTrimmedBytes,
-            heldDuration.TotalMilliseconds);
+            heldDuration.TotalMilliseconds,
+            reason);
 
         // Restart the standard hold budgets so the fallback resume gets its normal
         // window instead of tripping the forced-retune limits the trim already spent.

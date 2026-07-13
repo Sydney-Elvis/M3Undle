@@ -101,6 +101,9 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
         if (options.RecoveryOverlapTrimMaxRewindSeconds < 10 || options.RecoveryOverlapTrimMaxRewindSeconds > 600)
             errors.Add("Streaming:Reconnect:RecoveryOverlapTrimMaxRewindSeconds must be between 10 and 600 seconds.");
 
+        if (options.RecoveryOverlapTrimRetryCooldown < TimeSpan.Zero || options.RecoveryOverlapTrimRetryCooldown > TimeSpan.FromMinutes(30))
+            errors.Add("Streaming:Reconnect:RecoveryOverlapTrimRetryCooldown must be between 0 seconds and 30 minutes.");
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);
