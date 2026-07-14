@@ -297,6 +297,32 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task TrackClient_NormalizesIpv4MappedIpv6Address()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Mapped IP Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "::ffff:192.168.1.100", "Smarters Pro", "/hls/generated/test/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(1, clients);
+        Assert.AreEqual("192.168.1.100", clients[0].RemoteIp);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task TrackClient_SameClientUpdatesRatherThanDuplicates()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);

@@ -267,6 +267,7 @@ public sealed class GeneratedHlsSessionManager(
         // strip line endings here so every downstream log of the record is forge-safe.
         userAgent = userAgent?.ReplaceLineEndings(" ");
         requestedRoute = requestedRoute.ReplaceLineEndings(" ");
+        remoteIp = RemoteIpAddressFormatter.Format(remoteIp);
 
         var trackedClient = session.TrackClient(remoteIp, userAgent, requestedRoute, countAsViewer);
         var record = trackedClient.Record;
