@@ -1185,16 +1185,7 @@ public sealed class GeneratedHlsSessionManager(
 
         // Higher score = more identifiable. Named app UAs beat generic platform UAs.
         private static int GetUaSpecificity(string? ua)
-        {
-            if (string.IsNullOrEmpty(ua)) return 0;
-            if (ua.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.Contains("Smarters", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.StartsWith("Dalvik/", StringComparison.OrdinalIgnoreCase)) return 1;
-            if (ua.StartsWith("okhttp/", StringComparison.OrdinalIgnoreCase)) return 1;
-            return 2;
-        }
+            => ClientUserAgentResolver.Resolve(ua).Specificity;
 
         public static bool HasClientFingerprint(string? remoteIp, string? userAgent)
             => !string.IsNullOrWhiteSpace(remoteIp) || !string.IsNullOrWhiteSpace(userAgent);
