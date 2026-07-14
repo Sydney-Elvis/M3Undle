@@ -32,6 +32,14 @@ Please do **not publicly disclose** the issue until:
 
 ---
 
+## Insiders Edition
+
+M3Undle Insiders gives contributors and early adopters access to work intended for the public release before it is fully stable and vetted. It is not a permanent separate tier — features move to the public edition once ready.
+
+Security fixes are never held for Insiders. They ship to the public edition on the same release as any other fix, subject to the disclosure policy above.
+
+---
+
 ## Scope
 
 This project includes:

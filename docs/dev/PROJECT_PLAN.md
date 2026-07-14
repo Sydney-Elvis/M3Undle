@@ -193,7 +193,7 @@ Status: Complete. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
 > `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`
 
 ### Alpha 6 — Per-Provider Gateway Support, Xtream Auto-Detection & System Events
-Goal: Per-provider gateway/VPN routing with Block and Fallback modes. Xtream Codes auto-detection at provider add time with explicit user mode selection. System event infrastructure with nav bar badge for diagnostic visibility. Gateway documentation and companion gateway project remain insiders features.
+Goal: Per-provider gateway/VPN routing with Block and Fallback modes. Xtream Codes auto-detection at provider add time with explicit user mode selection. System event infrastructure with nav bar badge for diagnostic visibility. Gateway documentation and the companion gateway project are currently Insiders-only while they stabilize, ahead of moving to the public edition.
 
 Status: Complete.
 
@@ -233,11 +233,12 @@ Status: Complete.
 ---
 
 ### Beta — Hardening & Release Prep
-Goal: No major feature additions. Stabilize, validate, and document.
+Goal: No major feature additions beyond gaps identified during alpha — functionality an existing v1 feature needs in order to work safely or as documented. Stabilize, validate, and document.
 
 Status: In progress.
 
 - [ ] Security review
+- [ ] Backup / restore (alpha gap — see #141)
 - [ ] Performance validation for large providers
 - [ ] Bug fixes and polish
 - [ ] Documentation complete and accurate

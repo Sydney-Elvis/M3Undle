@@ -259,7 +259,7 @@ Release path:
 
 1. Alpha 6 — released.
 2. Alpha 7 — released. Adaptive stream recovery, relay policy, stream health tracking, interface polish, and HDHomeRun improvements.
-3. **Beta — current.** Broader DVR client validation, documentation, and final hardening.
+3. **Beta — current.** No new features beyond gaps identified during testing. Focus is on broader DVR client validation, documentation, and final hardening.
 4. Release candidate — final validation and packaging.
 5. v1.0.0 — stable release.
 
@@ -281,7 +281,7 @@ You can also [sponsor M3Undle on GitHub](https://github.com/sponsors/Sydney-Elvi
 
 ## Development and contributing
 
-M3Undle is built with .NET and the web UI is server-side Blazor.
+M3Undle is built with .NET and the web UI is server-side Blazor. AI-assisted tools are used for implementation, testing, and documentation, but every change is still human-reviewed and has to build cleanly and pass the full automated test suite with zero warnings before it merges.
 
 For now, contribution work is expected to be issue-driven. If you want to help, start with an open issue or file a new one describing the problem before opening a larger pull request.
 

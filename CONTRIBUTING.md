@@ -21,3 +21,5 @@ Thanks for your interest in contributing to M3Undle.
 ## Notes
 
 This project is currently evolving quickly. Not all contributions may be accepted, especially large or architectural changes.
+
+M3Undle is currently in beta, which is scoped to bug fixes, security and stability hardening, documentation, and gaps identified during alpha — functionality an existing v1 feature needs in order to work safely or as documented (for example, backup/restore) — rather than new capabilities. Open an issue first if you want to propose something larger.
