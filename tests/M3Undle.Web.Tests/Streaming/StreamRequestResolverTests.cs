@@ -94,7 +94,7 @@ public sealed class StreamRequestResolverTests
             channelIndexPath,
             ChannelIndexStore.GetIdxPath(channelIndexPath),
             [
-                CreateSnapshotEntryWithOptionalProvider(
+                CreateSnapshotEntry(
                     "key-series",
                     "Test Show — S01E01",
                     "http://provider.test/series/user/pass/1001.mkv",
@@ -118,21 +118,57 @@ public sealed class StreamRequestResolverTests
         Assert.AreEqual("http://provider.test/series/user/pass/1001.mkv", result.SourceDescriptor.StreamUrl);
     }
 
-    private static ChannelIndexEntry CreateSnapshotEntryWithOptionalProvider(
+    [TestMethod]
+    public async Task ResolveAsync_SnapshotProviderNotEnabledForProfile_FailsWith503()
+    {
+        await using var fixture = await TestFixture.CreateAsync($"snapshot-unbound-{Guid.NewGuid():N}");
+        var providerChannel = await fixture.Db.ProviderChannels.SingleAsync();
+        fixture.Db.ProviderChannels.Remove(providerChannel);
+        var profileProvider = await fixture.Db.ProfileProviders.SingleAsync();
+        profileProvider.Enabled = false;
+        await fixture.Db.SaveChangesAsync();
+
+        var channelIndexPath = Path.Combine(fixture.TempDirectory, "unbound_channel_index.ndjson");
+        await ChannelIndexStore.WriteAsync(
+            channelIndexPath,
+            ChannelIndexStore.GetIdxPath(channelIndexPath),
+            [
+                CreateSnapshotEntry(
+                    "key-series",
+                    "Test Show — S01E01",
+                    "http://provider.test/series/user/pass/1001.mkv",
+                    "provider-1"),
+            ],
+            CancellationToken.None);
+        var snapshot = await fixture.Db.Snapshots.SingleAsync();
+        snapshot.ChannelIndexPath = channelIndexPath;
+        await fixture.Db.SaveChangesAsync();
+
+        var resolver = new StreamRequestResolver(fixture.Db, NullLogger<StreamRequestResolver>.Instance);
+        var context = CreateHttpContext("/series/key-series", "profile-1");
+
+        var result = await resolver.ResolveAsync("key-series", context, CancellationToken.None);
+
+        Assert.IsFalse(result.IsSuccess);
+        Assert.AreEqual(StatusCodes.Status503ServiceUnavailable, result.FailureStatusCode);
+    }
+
+    private static ChannelIndexEntry CreateSnapshotEntry(
         string streamKey,
         string displayName,
         string streamUrl,
         string providerId)
-    {
-        var values = new List<object?>
-        {
-            streamKey, displayName, null, null, null, "Series", null, string.Empty, streamUrl,
-        };
-        var constructor = typeof(ChannelIndexEntry).GetConstructors().Single();
-        if (constructor.GetParameters().Length == 10)
-            values.Add(providerId);
-        return (ChannelIndexEntry)constructor.Invoke(values.ToArray());
-    }
+        => new(
+            StreamKey: streamKey,
+            DisplayName: displayName,
+            TvgId: null,
+            TvgName: null,
+            LogoUrl: null,
+            GroupTitle: "Series",
+            TvgChno: null,
+            ProviderChannelId: string.Empty,
+            StreamUrl: streamUrl,
+            ProviderId: providerId);
 
     [TestMethod]
     public async Task ResolveAsync_NativeHdhrTunerRoute_ReturnsSharedSessionDescriptor()

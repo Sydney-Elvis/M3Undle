@@ -8,6 +8,10 @@ internal static class DirectRelayHttpHeaders
     {
         CopyRequestHeader(request, upstreamRequest, "Range");
         CopyRequestHeader(request, upstreamRequest, "If-Range");
+        CopyRequestHeader(request, upstreamRequest, "If-Match");
+        CopyRequestHeader(request, upstreamRequest, "If-None-Match");
+        CopyRequestHeader(request, upstreamRequest, "If-Modified-Since");
+        CopyRequestHeader(request, upstreamRequest, "If-Unmodified-Since");
     }
 
     public static void ApplyResponseHeaders(HttpResponse response, HttpResponseMessage upstreamResponse)

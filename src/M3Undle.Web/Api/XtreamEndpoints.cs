@@ -787,7 +787,8 @@ public static class XtreamEndpoints
         using (relaySlotReservation)
         {
             await ServeDirectRelayAsync(
-                context, db, httpClientFactory, logger, entry.StreamUrl, entry.DisplayName,
+                context, db, httpClientFactory, logger,
+                resolved.SourceDescriptor?.StreamUrl ?? entry.StreamUrl, entry.DisplayName,
                 resolved.SourceDescriptor?.ProviderId, relaySlotReservation, cancellationToken);
         }
     }

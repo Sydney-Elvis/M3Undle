@@ -10,17 +10,25 @@ namespace M3Undle.Web.Tests.Streaming;
 public sealed class DirectRelayHttpHeadersTests
 {
     [TestMethod]
-    public void ApplyRequestHeaders_ForwardsRangeAndIfRange()
+    public void ApplyRequestHeaders_ForwardsRangeAndConditionalHeaders()
     {
         var context = new DefaultHttpContext();
         context.Request.Headers.Range = "bytes=100-199";
         context.Request.Headers.IfRange = "\"version-1\"";
+        context.Request.Headers.IfMatch = "\"version-1\"";
+        context.Request.Headers.IfNoneMatch = "\"version-0\"";
+        context.Request.Headers.IfModifiedSince = "Sun, 12 Jul 2026 00:00:00 GMT";
+        context.Request.Headers.IfUnmodifiedSince = "Mon, 13 Jul 2026 12:00:00 GMT";
         using var upstreamRequest = new HttpRequestMessage(HttpMethod.Get, "http://provider.test/movie.mkv");
 
         DirectRelayHttpHeaders.ApplyRequestHeaders(context.Request, upstreamRequest);
 
         Assert.AreEqual("bytes=100-199", upstreamRequest.Headers.Range?.ToString());
         Assert.AreEqual("\"version-1\"", upstreamRequest.Headers.IfRange?.ToString());
+        Assert.AreEqual("\"version-1\"", upstreamRequest.Headers.IfMatch.ToString());
+        Assert.AreEqual("\"version-0\"", upstreamRequest.Headers.IfNoneMatch.ToString());
+        Assert.AreEqual("Sun, 12 Jul 2026 00:00:00 GMT", upstreamRequest.Headers.IfModifiedSince?.ToString("r"));
+        Assert.AreEqual("Mon, 13 Jul 2026 12:00:00 GMT", upstreamRequest.Headers.IfUnmodifiedSince?.ToString("r"));
     }
 
     [TestMethod]

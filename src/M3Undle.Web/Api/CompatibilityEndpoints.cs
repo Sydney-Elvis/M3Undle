@@ -911,7 +911,7 @@ public static class CompatibilityEndpoints
                 db,
                 httpClientFactory,
                 logger,
-                entry.StreamUrl,
+                resolved.SourceDescriptor?.StreamUrl ?? entry.StreamUrl,
                 entry.DisplayName,
                 resolved.SourceDescriptor?.ProviderId,
                 relaySlotReservation,

@@ -31,6 +31,32 @@ public sealed class VodSeriesMonitorEndpointTests
         string displayName,
         string upstreamUrl)
     {
+        var streamId = XtreamStreamIdCache.BuildAssignment([MonitorFactory.MovieKey, MonitorFactory.SeriesKey])
+            .KeyToId[streamKey];
+        await AssertDirectRelayLifecycleAsync(
+            $"/{route}/test-user/secret/{streamId}.mkv", route, streamKey, displayName, upstreamUrl);
+    }
+
+    [TestMethod]
+    [DataRow("movie", "movie-key", "Movie One", "http://upstream.test/movie/1001.mkv")]
+    [DataRow("series", "series-key", "Test Show — S01E01", "http://upstream.test/series/2001.mkv")]
+    public async Task CompatibilityDirectRelay_AppearsInMonitorWhilePlaying_ThenMovesToRecentlyEnded(
+        string route,
+        string streamKey,
+        string displayName,
+        string upstreamUrl)
+    {
+        await AssertDirectRelayLifecycleAsync(
+            $"/{route}/{streamKey}", route, streamKey, displayName, upstreamUrl);
+    }
+
+    private static async Task AssertDirectRelayLifecycleAsync(
+        string requestPath,
+        string route,
+        string streamKey,
+        string displayName,
+        string upstreamUrl)
+    {
         await using var factory = new MonitorFactory();
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -38,12 +64,8 @@ public sealed class VodSeriesMonitorEndpointTests
         });
         await factory.SeedAsync();
 
-        var streamId = XtreamStreamIdCache.BuildAssignment([MonitorFactory.MovieKey, MonitorFactory.SeriesKey])
-            .KeyToId[streamKey];
         using var requestCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"/{route}/test-user/secret/{streamId}.mkv");
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestPath);
         request.Headers.UserAgent.ParseAdd("IPTVnator-monitor-test");
         request.Headers.Range = new RangeHeaderValue(128, 255);
         request.Headers.IfRange = new RangeConditionHeaderValue(new EntityTagHeaderValue("\"fixture-v1\""));
@@ -54,6 +76,9 @@ public sealed class VodSeriesMonitorEndpointTests
             requestCancellation.Token);
         Assert.AreEqual("bytes=128-255", factory.UpstreamHandler.LastRange);
         Assert.AreEqual("\"fixture-v1\"", factory.UpstreamHandler.LastIfRange);
+        // The entry's own provider must be pinned for upstream identity — not the
+        // higher-priority decoy provider also bound to the profile.
+        StringAssert.Contains(factory.UpstreamHandler.LastUserAgent, "MonitorProviderUA");
         Assert.AreEqual(HttpStatusCode.PartialContent, response.StatusCode);
         Assert.AreEqual("bytes", string.Join(",", response.Headers.AcceptRanges));
         Assert.AreEqual("bytes 128-255/4096", response.Content.Headers.ContentRange?.ToString());
@@ -74,7 +99,7 @@ public sealed class VodSeriesMonitorEndpointTests
         Assert.AreEqual("Direct", session.RelayMode);
 
         var monitorClient = registry.GetActiveClients().Single(x => x.SessionId == session.SessionId);
-        Assert.AreEqual($"/{route}/test-user/secret/{streamId}.mkv", monitorClient.RequestedRoute);
+        Assert.AreEqual(requestPath, monitorClient.RequestedRoute);
         StringAssert.Contains(monitorClient.UserAgent!, "IPTVnator-monitor-test");
 
         var provider = registry.GetActiveProviderStreams().Single(x => x.SessionId == session.SessionId);
@@ -149,6 +174,7 @@ public sealed class VodSeriesMonitorEndpointTests
     private sealed class MonitorFactory : WebApplicationFactory<Program>, IAsyncDisposable
     {
         public const string ProviderId = "provider-monitor";
+        public const string DecoyProviderId = "provider-decoy";
         public const string MovieKey = "movie-key";
         public const string SeriesKey = "series-key";
 
@@ -223,9 +249,23 @@ public sealed class VodSeriesMonitorEndpointTests
                 Name = "Monitor Provider",
                 Enabled = true,
                 PlaylistUrl = "http://upstream.test/playlist.m3u",
+                UserAgent = "MonitorProviderUA/1.0",
                 TimeoutSeconds = 30,
                 IncludeVod = true,
                 IncludeSeries = true,
+                CreatedUtc = DateTime.UtcNow,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+            // A second, higher-priority provider on the same profile. Direct relays must
+            // pin the entry's own provider, so this one's identity must never reach upstream.
+            db.Providers.Add(new Provider
+            {
+                ProviderId = DecoyProviderId,
+                Name = "Decoy Provider",
+                Enabled = true,
+                PlaylistUrl = "http://decoy.test/playlist.m3u",
+                UserAgent = "DecoyProviderUA/9.9",
+                TimeoutSeconds = 30,
                 CreatedUtc = DateTime.UtcNow,
                 UpdatedUtc = DateTime.UtcNow,
             });
@@ -233,6 +273,13 @@ public sealed class VodSeriesMonitorEndpointTests
             {
                 ProfileId = ProfileId,
                 ProviderId = ProviderId,
+                Priority = 1,
+                Enabled = true,
+            });
+            db.ProfileProviders.Add(new ProfileProvider
+            {
+                ProfileId = ProfileId,
+                ProviderId = DecoyProviderId,
                 Priority = 0,
                 Enabled = true,
             });
@@ -261,16 +308,17 @@ public sealed class VodSeriesMonitorEndpointTests
         }
 
         private static ChannelIndexEntry Entry(string key, string name, string group, string url)
-        {
-            var values = new List<object?>
-            {
-                key, name, null, name, null, group, null, string.Empty, url,
-            };
-            var constructor = typeof(ChannelIndexEntry).GetConstructors().Single();
-            if (constructor.GetParameters().Length == 10)
-                values.Add(ProviderId);
-            return (ChannelIndexEntry)constructor.Invoke(values.ToArray());
-        }
+            => new(
+                StreamKey: key,
+                DisplayName: name,
+                TvgId: null,
+                TvgName: name,
+                LogoUrl: null,
+                GroupTitle: group,
+                TvgChno: null,
+                ProviderChannelId: string.Empty,
+                StreamUrl: url,
+                ProviderId: ProviderId);
     }
 
     private sealed class MonitorAccessResolver : IAccessResolver
@@ -339,6 +387,7 @@ public sealed class VodSeriesMonitorEndpointTests
         private readonly List<string> _requestedUrls = [];
         private string? _lastRange;
         private string? _lastIfRange;
+        private string? _lastUserAgent;
 
         public IReadOnlyList<string> RequestedUrls
         {
@@ -367,6 +416,15 @@ public sealed class VodSeriesMonitorEndpointTests
             }
         }
 
+        public string? LastUserAgent
+        {
+            get
+            {
+                lock (_gate)
+                    return _lastUserAgent;
+            }
+        }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -376,6 +434,7 @@ public sealed class VodSeriesMonitorEndpointTests
                 _requestedUrls.Add(request.RequestUri!.ToString());
                 _lastRange = request.Headers.Range?.ToString();
                 _lastIfRange = request.Headers.IfRange?.ToString();
+                _lastUserAgent = request.Headers.UserAgent.ToString();
             }
 
             var content = new StreamContent(new HoldingReadStream());

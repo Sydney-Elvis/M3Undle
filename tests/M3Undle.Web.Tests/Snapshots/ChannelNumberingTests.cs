@@ -81,26 +81,17 @@ public sealed class ChannelNumberingTests
             null,
             null);
 
-        var method = typeof(SnapshotBuilder).GetMethods(
-                System.Reflection.BindingFlags.Static
-                | System.Reflection.BindingFlags.Public
-                | System.Reflection.BindingFlags.NonPublic)
-            .Single(x => x.Name == "BuildChannelIndex" && x.GetParameters().Length >= 6);
-        var arguments = new List<object?>
-        {
-            new[] { vod },
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [vod],
             "profile-1",
             new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(),
             new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(),
-            true,
-            false,
-        };
-        if (method.GetParameters().Length == 7)
-            arguments.Add("provider-1");
-        var result = (IReadOnlyList<ChannelIndexEntry>)method.Invoke(null, arguments.ToArray())!;
+            includeVod: true,
+            includeSeries: false,
+            providerId: "provider-1");
 
         Assert.HasCount(1, result);
-        Assert.AreEqual("provider-1", typeof(ChannelIndexEntry).GetProperty("ProviderId")?.GetValue(result[0]));
+        Assert.AreEqual("provider-1", result[0].ProviderId);
         Assert.AreEqual(string.Empty, result[0].ProviderChannelId);
     }
 

@@ -68,10 +68,15 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
                            && x.Provider.Enabled, ct);
         if (!providerIsBound)
         {
+            // A known-but-disabled provider must not degrade to an unmonitored, uncapped
+            // direct relay: reject so admission and monitoring guarantees stay intact.
             logger.LogWarning(
-                "Falling back to direct relay for stream key {StreamKey}: snapshot provider is not enabled for the active profile.",
-                streamKey);
-            return StreamResolveResult.SuccessDirect(entry);
+                "Rejecting stream key {StreamKey}: provider {ProviderId} is not enabled for the active profile.",
+                streamKey,
+                providerId);
+            return StreamResolveResult.Fail(
+                StatusCodes.Status503ServiceUnavailable,
+                "The provider for this stream is not enabled for the active profile.");
         }
 
         providerChannelId = string.IsNullOrWhiteSpace(providerChannelId)
