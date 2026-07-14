@@ -45,12 +45,20 @@ public sealed class VodSeriesMonitorEndpointTests
             HttpMethod.Get,
             $"/{route}/test-user/secret/{streamId}.mkv");
         request.Headers.UserAgent.ParseAdd("IPTVnator-monitor-test");
+        request.Headers.Range = new RangeHeaderValue(128, 255);
+        request.Headers.IfRange = new RangeConditionHeaderValue(new EntityTagHeaderValue("\"fixture-v1\""));
 
         using var response = await client.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             requestCancellation.Token);
-        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        Assert.AreEqual("bytes=128-255", factory.UpstreamHandler.LastRange);
+        Assert.AreEqual("\"fixture-v1\"", factory.UpstreamHandler.LastIfRange);
+        Assert.AreEqual(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.AreEqual("bytes", string.Join(",", response.Headers.AcceptRanges));
+        Assert.AreEqual("bytes 128-255/4096", response.Content.Headers.ContentRange?.ToString());
+        Assert.AreEqual(128, response.Content.Headers.ContentLength);
+        Assert.AreEqual("\"fixture-v1\"", response.Headers.ETag?.ToString());
 
         await using var responseStream = await response.Content.ReadAsStreamAsync(requestCancellation.Token);
         var consumeTask = ConsumeAsync(responseStream, requestCancellation.Token);
@@ -253,17 +261,16 @@ public sealed class VodSeriesMonitorEndpointTests
         }
 
         private static ChannelIndexEntry Entry(string key, string name, string group, string url)
-            => new(
-                StreamKey: key,
-                DisplayName: name,
-                TvgId: null,
-                TvgName: name,
-                LogoUrl: null,
-                GroupTitle: group,
-                TvgChno: null,
-                ProviderChannelId: string.Empty,
-                StreamUrl: url,
-                ProviderId: ProviderId);
+        {
+            var values = new List<object?>
+            {
+                key, name, null, name, null, group, null, string.Empty, url,
+            };
+            var constructor = typeof(ChannelIndexEntry).GetConstructors().Single();
+            if (constructor.GetParameters().Length == 10)
+                values.Add(ProviderId);
+            return (ChannelIndexEntry)constructor.Invoke(values.ToArray());
+        }
     }
 
     private sealed class MonitorAccessResolver : IAccessResolver
@@ -330,6 +337,8 @@ public sealed class VodSeriesMonitorEndpointTests
     {
         private readonly object _gate = new();
         private readonly List<string> _requestedUrls = [];
+        private string? _lastRange;
+        private string? _lastIfRange;
 
         public IReadOnlyList<string> RequestedUrls
         {
@@ -340,20 +349,47 @@ public sealed class VodSeriesMonitorEndpointTests
             }
         }
 
+        public string? LastRange
+        {
+            get
+            {
+                lock (_gate)
+                    return _lastRange;
+            }
+        }
+
+        public string? LastIfRange
+        {
+            get
+            {
+                lock (_gate)
+                    return _lastIfRange;
+            }
+        }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             lock (_gate)
+            {
                 _requestedUrls.Add(request.RequestUri!.ToString());
+                _lastRange = request.Headers.Range?.ToString();
+                _lastIfRange = request.Headers.IfRange?.ToString();
+            }
 
             var content = new StreamContent(new HoldingReadStream());
             content.Headers.ContentType = new MediaTypeHeaderValue("video/x-matroska");
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            content.Headers.ContentRange = new ContentRangeHeaderValue(128, 255, 4096);
+            content.Headers.ContentLength = 128;
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
                 Content = content,
                 RequestMessage = request,
-            });
+            };
+            response.Headers.AcceptRanges.Add("bytes");
+            response.Headers.ETag = new EntityTagHeaderValue("\"fixture-v1\"");
+            return Task.FromResult(response);
         }
     }
 

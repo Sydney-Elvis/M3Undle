@@ -94,17 +94,11 @@ public sealed class StreamRequestResolverTests
             channelIndexPath,
             ChannelIndexStore.GetIdxPath(channelIndexPath),
             [
-                new ChannelIndexEntry(
-                    StreamKey: "key-series",
-                    DisplayName: "Test Show — S01E01",
-                    TvgId: null,
-                    TvgName: null,
-                    LogoUrl: null,
-                    GroupTitle: "Series",
-                    TvgChno: null,
-                    ProviderChannelId: string.Empty,
-                    StreamUrl: "http://provider.test/series/user/pass/1001.mkv",
-                    ProviderId: "provider-1"),
+                CreateSnapshotEntryWithOptionalProvider(
+                    "key-series",
+                    "Test Show — S01E01",
+                    "http://provider.test/series/user/pass/1001.mkv",
+                    "provider-1"),
             ],
             CancellationToken.None);
         var snapshot = await fixture.Db.Snapshots.SingleAsync();
@@ -122,6 +116,22 @@ public sealed class StreamRequestResolverTests
         Assert.AreEqual("provider-1", result.SourceDescriptor.ProviderId);
         Assert.AreEqual("snapshot:key-series", result.SourceDescriptor.ProviderChannelId);
         Assert.AreEqual("http://provider.test/series/user/pass/1001.mkv", result.SourceDescriptor.StreamUrl);
+    }
+
+    private static ChannelIndexEntry CreateSnapshotEntryWithOptionalProvider(
+        string streamKey,
+        string displayName,
+        string streamUrl,
+        string providerId)
+    {
+        var values = new List<object?>
+        {
+            streamKey, displayName, null, null, null, "Series", null, string.Empty, streamUrl,
+        };
+        var constructor = typeof(ChannelIndexEntry).GetConstructors().Single();
+        if (constructor.GetParameters().Length == 10)
+            values.Add(providerId);
+        return (ChannelIndexEntry)constructor.Invoke(values.ToArray());
     }
 
     [TestMethod]
