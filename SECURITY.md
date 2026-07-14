@@ -2,10 +2,9 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in M3Undle, please report it privately.
+If you discover a security vulnerability in M3Undle, please report it privately using GitHub's **private vulnerability reporting**:
 
-* Open a **private vulnerability report** via GitHub (preferred), or
-* Email: <your-email-here>
+<https://github.com/Sydney-Elvis/M3Undle/security/advisories/new>
 
 Please include:
 
