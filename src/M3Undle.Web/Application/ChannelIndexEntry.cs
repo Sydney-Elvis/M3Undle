@@ -13,5 +13,5 @@ public sealed record ChannelIndexEntry(
     string? GroupTitle,
     int? TvgChno,
     string ProviderChannelId,
-    string StreamUrl);
-
+    string StreamUrl,
+    string? ProviderId = null);

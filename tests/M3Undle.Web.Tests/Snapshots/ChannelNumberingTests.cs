@@ -68,6 +68,34 @@ public sealed class ChannelNumberingTests
     // -------------------------------------------------------------------------
 
     [TestMethod]
+    public void BuildChannelIndex_RecordsProviderIdentityForInMemoryVod()
+    {
+        var vod = new SnapshotBuilder.ChannelBuildData(
+            string.Empty,
+            "vod-key",
+            "Movie One",
+            "http://provider.test/movie/user/pass/1001.mkv",
+            "vod",
+            "Movies",
+            null,
+            null,
+            null);
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            [vod],
+            "profile-1",
+            new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(),
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(),
+            includeVod: true,
+            includeSeries: false,
+            providerId: "provider-1");
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual("provider-1", result[0].ProviderId);
+        Assert.AreEqual(string.Empty, result[0].ProviderChannelId);
+    }
+
+    [TestMethod]
     public void AutoNumbering_AssignsSequentialNumbers()
     {
         var groups = OneGroup("News", "News", autoStart: 100, autoEnd: 110);
