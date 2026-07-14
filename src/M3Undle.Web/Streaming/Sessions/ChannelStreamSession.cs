@@ -199,7 +199,19 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 onCompleted: (s, reason) => RemoveSubscriberAsync(s, reason),
                 isInternal: isInternal);
 
-            _subscribers[subscriber.ClientId] = subscriber;
+            SubscriberConnection[] supersededSubscribers;
+            lock (_gate)
+            {
+                supersededSubscribers = _state == SessionState.Reconnecting && !isInternal
+                    ? _subscribers.Values
+                        .Where(existing => existing.HasSameClientFingerprint(subscriber))
+                        .ToArray()
+                    : [];
+                _subscribers[subscriber.ClientId] = subscriber;
+            }
+
+            foreach (var superseded in supersededSubscribers)
+                await superseded.CompleteFromServerAsync(SubscriberDisconnectReason.Superseded);
 
             subscriber.InitializeResponse(_contentType, _cacheControl);
             _ = subscriber.StartAsync(CreateSubscriberStartupSnapshot(subscriber.IsInternal), _sessionCts.Token);
@@ -484,6 +496,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         _sessionId,
                         kind,
                         reconnectAttempt);
+                    SetState(SessionState.Reconnecting);
                     PublishSnapshots();
 
                     if (ShouldCooldownImmediately(kind))
@@ -582,7 +595,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         reconnectDelay: delay,
                         message: "Upstream reconnect scheduled.");
                     if (delay > TimeSpan.Zero)
-                        await Task.Delay(delay, _sessionCts.Token);
+                    {
+                        try
+                        {
+                            await Task.Delay(delay, _sessionCts.Token);
+                        }
+                        catch (OperationCanceledException) when (_sessionCts.IsCancellationRequested)
+                        {
+                            break;
+                        }
+                    }
                 }
             }
         }

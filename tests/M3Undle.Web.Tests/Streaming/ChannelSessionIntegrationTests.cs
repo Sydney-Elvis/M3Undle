@@ -170,6 +170,86 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_Reconnecting_NewMatchingSubscriberSupersedesOlderRequest()
+    {
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [1],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var firstContext = CreateClientContext("192.168.1.190", "SparkleTV/2.3.1", "/live/user/pass/123.ts");
+        var first = await session.AttachSubscriberAsync(firstContext, CancellationToken.None);
+
+        await WaitUntilAsync(() => session.State == SessionState.Reconnecting, TimeSpan.FromSeconds(5));
+        Assert.AreEqual(SessionState.Reconnecting, session.State);
+
+        var replacementContext = CreateClientContext("192.168.1.190", "SparkleTV/2.3.1", "/live/user/pass/123.ts");
+        var replacement = await session.AttachSubscriberAsync(replacementContext, CancellationToken.None);
+
+        await WaitUntilAsync(() => first.IsCompleted, TimeSpan.FromSeconds(2));
+        Assert.IsTrue(first.IsCompleted);
+        Assert.IsFalse(replacement.IsCompleted);
+        Assert.AreEqual(1, session.ExternalSubscriberCount);
+
+        var removed = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.SubscriberRemoved);
+        Assert.IsTrue(removed.Any(x =>
+            x.ClientId == first.ClientId
+            && x.DisconnectReason == SubscriberDisconnectReason.Superseded));
+
+        await WaitUntilAsync(() => session.State == SessionState.Live, TimeSpan.FromSeconds(5));
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_Reconnecting_DifferentUserAgentDoesNotSupersedeExistingSubscriber()
+    {
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [1],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var first = await session.AttachSubscriberAsync(
+            CreateClientContext("192.168.1.190", "SparkleTV/2.3.1", "/live/user/pass/123.ts"),
+            CancellationToken.None);
+
+        await WaitUntilAsync(() => session.State == SessionState.Reconnecting, TimeSpan.FromSeconds(5));
+        Assert.AreEqual(SessionState.Reconnecting, session.State);
+
+        var second = await session.AttachSubscriberAsync(
+            CreateClientContext("192.168.1.190", "OtherPlayer/1.0", "/live/user/pass/123.ts"),
+            CancellationToken.None);
+
+        Assert.IsFalse(first.IsCompleted);
+        Assert.IsFalse(second.IsCompleted);
+        Assert.AreEqual(2, session.ExternalSubscriberCount);
+
+        await WaitUntilAsync(() => session.State == SessionState.Live, TimeSpan.FromSeconds(5));
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_UpstreamStall_EmitsFailureAndReconnectDiagnostics()
     {
         var chunk = FakeStreamingHandler.ValidTsPacket();
@@ -3476,6 +3556,14 @@ public sealed class ChannelSessionIntegrationTests
         if (!string.IsNullOrWhiteSpace(remoteIp))
             context.Connection.RemoteIpAddress = IPAddress.Parse(remoteIp);
 
+        return context;
+    }
+
+    private static DefaultHttpContext CreateClientContext(string remoteIp, string userAgent, string requestPath)
+    {
+        var context = CreateHttpContext(remoteIp);
+        context.Request.Headers.UserAgent = userAgent;
+        context.Request.Path = requestPath;
         return context;
     }
 

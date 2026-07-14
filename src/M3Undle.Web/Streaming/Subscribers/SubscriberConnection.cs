@@ -30,6 +30,7 @@ public sealed class SubscriberConnection
     private readonly Channel<BufferLease> _outbound;
     private readonly Func<SubscriberConnection, SubscriberDisconnectReason, Task> _onCompleted;
     private readonly TimeSpan _writeStallTimeout;
+    private readonly CancellationTokenSource _serverCompletionCts = new();
     private readonly object _gate = new();
 
     private bool _started;
@@ -220,11 +221,28 @@ public sealed class SubscriberConnection
     }
 
     public Task CompleteAsync(SubscriberDisconnectReason reason)
+        => CompleteCoreAsync(reason, cancelPump: false);
+
+    public Task CompleteFromServerAsync(SubscriberDisconnectReason reason)
+        => CompleteCoreAsync(reason, cancelPump: true);
+
+    public bool HasSameClientFingerprint(SubscriberConnection other)
+        => !IsInternal
+           && !other.IsInternal
+           && !string.IsNullOrWhiteSpace(RemoteIp)
+           && !string.IsNullOrWhiteSpace(UserAgent)
+           && string.Equals(RemoteIp, other.RemoteIp, StringComparison.OrdinalIgnoreCase)
+           && string.Equals(UserAgent, other.UserAgent, StringComparison.Ordinal)
+           && string.Equals(RequestPath, other.RequestPath, StringComparison.OrdinalIgnoreCase);
+
+    private Task CompleteCoreAsync(SubscriberDisconnectReason reason, bool cancelPump)
     {
         if (Interlocked.Exchange(ref _completed, 1) == 1)
             return Task.CompletedTask;
 
         _outbound.Writer.TryComplete();
+        if (cancelPump)
+            _serverCompletionCts.Cancel();
         return _onCompleted(this, reason);
     }
 
@@ -247,7 +265,10 @@ public sealed class SubscriberConnection
 
     private async Task PumpAsync(BufferSnapshot initialSnapshot, CancellationToken ct)
     {
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _context.RequestAborted);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            _context.RequestAborted,
+            _serverCompletionCts.Token);
         // One stall CTS per pump, linked to the outer token so it fires on disconnect too.
         // TryReset() re-arms the timer before each write without allocating a new source.
         using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
