@@ -4,6 +4,45 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.6] — 2026-07-15
+
+Beta 6 hardens VOD/series direct-relay playback against stale provider state and improves per-client visibility with liveness health chips, better client-type identification, and a cleaner subscriber reconnect/supersede model.
+
+### VOD and series direct-relay hardening
+
+- Hardened stream resolution to reject a request with 503 when a cached snapshot's provider is known but disabled for the active profile, instead of silently degrading to an unmonitored, uncapped direct relay
+- Direct relays now use the resolved descriptor's stream URL, so the relayed URL always matches what was used for admission and monitor reporting
+- Forwarded the full set of conditional request headers (`If-Match`, `If-None-Match`, `If-Modified-Since`, `If-Unmodified-Since`) upstream on direct relays, alongside the existing `If-Range`/`Content-Range`/`Accept-Ranges`/`ETag` byte-range handling
+- Added provider identity propagation and snapshot fallback tracking so VOD and series playback appears correctly in active sessions, provider streams, and Recently Ended
+
+### Client status and reconnect handling
+
+- Added per-client liveness (Live/Slow/Stalled) driven by media-segment activity, surfaced as health chips on the Streams page
+- Added VOD/series info (`get_vod_info` plus episode metadata) and a configurable Roku AAC-LC audio transcode option for HE-AAC channels
+- Added an HLS session restart button to the Streams page
+- Fixed client-type detection so fewer clients are reported as "unknown"
+- Fixed client IP addresses displaying as IPv4-mapped IPv6 instead of plain IPv4
+- Changed subscriber supersession during reconnect to require route, IP, and user agent to all match, so different clients behind the same IP (e.g. NAT/CGNAT) no longer supersede each other; added `Superseded` disconnect diagnostics, extended reconnect state to cover the backoff period, and fixed reconnect-delay cancellation to shut down cleanly
+- Fixed `SubscriberConnection` to implement `IDisposable` and release `_serverCompletionCts` on removal, closing a cancellation-token-source handle leak on every subscriber disconnect
+
+### Documentation
+
+- Simplified vulnerability reporting in `SECURITY.md` to go through GitHub
+
+### Testing
+
+- Added 27 new tests covering VOD/series direct-relay range and conditional-header handling, provider-disabled resolution, subscriber supersession and reconnect-backoff diagnostics, client-type resolution, IPv4 display formatting, and per-client liveness health
+- Added an integration smoke test covering Xtream VOD/series endpoints
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.6
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.5] — 2026-07-12
 
 Beta 5 adds DTS-aware overlap trimming to provider reconnects, encryption key rotation, and VOD/series visibility on the stream monitor.
