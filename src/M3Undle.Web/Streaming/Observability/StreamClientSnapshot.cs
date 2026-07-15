@@ -38,5 +38,6 @@ public sealed record StreamClientSnapshot(
     DeliveryMethod Delivery = DeliveryMethod.RawTs,
     string? DeliveryReason = null,
     string? DisplayName = null,
-    bool UpgradedFromTs = false);
-
+    bool UpgradedFromTs = false,
+    DateTimeOffset? LastActivityUtc = null,
+    DateTimeOffset? LastMediaActivityUtc = null);

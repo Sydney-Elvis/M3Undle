@@ -90,6 +90,58 @@ public sealed class XtreamEndpointTests
     }
 
     [TestMethod]
+    public async Task PlayerApi_GetVodInfo_ReturnsMatchingMetadataAndActualContainer()
+    {
+        await using var factory = new XtreamApiFactory();
+        using var client = factory.CreateClient();
+
+        using var streamsResponse = await client.GetAsync(
+            "/player_api.php?username=test-user&password=secret&action=get_vod_streams");
+        using var streamsJson = JsonDocument.Parse(await streamsResponse.Content.ReadAsStringAsync());
+        var vodId = streamsJson.RootElement[0].GetProperty("stream_id").GetString();
+
+        using var response = await client.GetAsync(
+            $"/player_api.php?username=test-user&password=secret&action=get_vod_info&vod_id={vodId}");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.AreEqual("Movie One", json.RootElement.GetProperty("movie_data").GetProperty("name").GetString());
+        Assert.AreEqual(vodId, json.RootElement.GetProperty("movie_data").GetProperty("stream_id").GetString());
+        Assert.AreEqual("mkv", json.RootElement.GetProperty("movie_data").GetProperty("container_extension").GetString());
+        Assert.AreEqual("Movies", json.RootElement.GetProperty("info").GetProperty("genre").GetString());
+    }
+
+    [TestMethod]
+    public async Task PlayerApi_GetSeriesInfo_EmitsEpisodeInfoAndActualContainer()
+    {
+        await using var factory = new XtreamApiFactory();
+        using var client = factory.CreateClient();
+
+        using var seriesResponse = await client.GetAsync(
+            "/player_api.php?username=test-user&password=secret&action=get_series");
+        using var seriesJson = JsonDocument.Parse(await seriesResponse.Content.ReadAsStringAsync());
+        var seriesId = seriesJson.RootElement[0].GetProperty("series_id").GetString();
+
+        using var response = await client.GetAsync(
+            $"/player_api.php?username=test-user&password=secret&action=get_series_info&series_id={seriesId}");
+
+        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var episode = json.RootElement.GetProperty("episodes").GetProperty("1")[0];
+        Assert.AreEqual("mp4", episode.GetProperty("container_extension").GetString());
+        Assert.IsTrue(episode.TryGetProperty("info", out _));
+        Assert.IsTrue(episode.TryGetProperty("custom_sid", out _));
+        StringAssert.EndsWith(episode.GetProperty("direct_source").GetString()!, ".mp4");
+    }
+
+    [TestMethod]
+    public void ResolveContainerExtension_IgnoresQueryAndFragmentAndUsesFallback()
+    {
+        Assert.AreEqual("mkv", XtreamEndpoints.ResolveContainerExtension("https://provider/movie.mkv?token=x#part", "mp4"));
+        Assert.AreEqual("mp4", XtreamEndpoints.ResolveContainerExtension("https://provider/play?id=1", "mp4"));
+    }
+
+    [TestMethod]
     public async Task GetPhp_PostFormCredentials_ReturnsM3uPlaylist()
     {
         await using var factory = new XtreamApiFactory();
@@ -327,6 +379,7 @@ public sealed class XtreamEndpointTests
                 [
                     new RenderedLineupChannel("live-1", "Alpha", "alpha.tv", "Alpha", null, "News", 11, "http://example.com/live/alpha.ts", "live"),
                     new RenderedLineupChannel("vod-1", "Movie One", "movie.one", "Movie One", null, "Movies", null, "http://example.com/movie/one.mkv", "vod"),
+                    new RenderedLineupChannel("series-1", "Show One S01E01", "show.one", "Show One S01E01", null, "Series", null, "http://example.com/series/one.mp4?token=secret", "series"),
                     new RenderedLineupChannel("live-2", "Bravo", "bravo.tv", "Bravo HD", null, "News", null, "http://example.com/live/bravo.ts", "live"),
                 ]));
         }

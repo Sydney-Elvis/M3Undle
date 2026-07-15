@@ -3,6 +3,7 @@ using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Configuration;
+using M3Undle.Web.Streaming.GeneratedHls;
 using M3Undle.Web.Streaming.Observability;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -21,10 +22,21 @@ public static class DiagnosticsApiEndpoints
         group.MapGet("/streams", GetStreams).WithSummary("Get stream diagnostics");
         group.MapGet("/streams/{sessionId}/health-evidence", GetStreamHealthEvidenceAsync)
             .WithSummary("Get stream channel health evidence for a session");
+        group.MapPost("/sessions/{sessionId}/terminate-hls", TerminateHlsSessionAsync)
+            .WithSummary("Terminate a generated HLS session");
         group.MapGet("/lineup", GetLineupAsync).WithSummary("Get lineup diagnostics");
         group.MapGet("/epg", GetEpgAsync).WithSummary("Get EPG diagnostics");
 
         return app;
+    }
+
+    private static async Task<IResult> TerminateHlsSessionAsync(
+        string sessionId,
+        GeneratedHlsSessionManager generatedHlsSessionManager)
+    {
+        return await generatedHlsSessionManager.TryTerminateAsync(sessionId)
+            ? TypedResults.Ok()
+            : TypedResults.NotFound();
     }
 
     private static async Task<IResult> GetStreamHealthEvidenceAsync(

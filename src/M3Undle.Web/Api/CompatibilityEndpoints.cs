@@ -1160,13 +1160,6 @@ public static class CompatibilityEndpoints
             return;
         }
 
-        generatedHlsSessionManager.TrackClient(
-            sessionId,
-            context.Connection.RemoteIpAddress?.ToString(),
-            context.Request.Headers.UserAgent.ToString(),
-            context.Request.Path.Value ?? string.Empty,
-            GeneratedHlsSessionManager.ShouldCountAsViewer(context.Request.Headers.UserAgent.ToString()));
-
         if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
         {
             string manifest;
@@ -1199,12 +1192,15 @@ public static class CompatibilityEndpoints
             context.Response.ContentType = contentType;
             context.Response.Headers.CacheControl = "no-cache";
             await context.Response.WriteAsync(rewritten, cancellationToken);
+            GeneratedHlsAssetClientTracker.Track(generatedHlsSessionManager, sessionId, context, false, 0);
             return;
         }
 
+        var assetLength = GeneratedHlsAssetClientTracker.GetAssetLength(filePath, contentType);
         context.Response.ContentType = contentType;
         context.Response.Headers.CacheControl = "no-cache";
         await context.Response.SendFileAsync(filePath, cancellationToken);
+        GeneratedHlsAssetClientTracker.Track(generatedHlsSessionManager, sessionId, context, true, assetLength);
     }
 
     private static string GetBaseUrl(HttpContext context)

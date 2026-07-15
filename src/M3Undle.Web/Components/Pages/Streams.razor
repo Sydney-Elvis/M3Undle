@@ -1,8 +1,13 @@
 @page "/streams"
 @using M3Undle.Web.Streaming.Observability
 @using M3Undle.Web.Streaming.Models
+@using M3Undle.Web.Streaming.Configuration
+@using M3Undle.Web.Streaming.GeneratedHls
+@using Microsoft.Extensions.Options
 @inject StreamingRegistry Registry
 @inject IDialogService DialogService
+@inject IOptions<GeneratedHlsOptions> GeneratedHlsOptions
+@inject GeneratedHlsSessionManager GeneratedHlsSessionManager
 @implements IDisposable
 
 <PageTitle>Streams — M3Undle</PageTitle>
@@ -148,13 +153,25 @@ else
                     }
                 </MudTd>
                 <MudTd DataLabel="">
-                    <MudTooltip Text="Channel health and relay details" Placement="Placement.Left">
-                        <MudIconButton Icon="@Icons.Material.Outlined.Info"
-                                       Size="Size.Small"
-                                       Color="Color.Default"
-                                       OnClick="@(() => OpenDetailsAsync(context))"
-                                       Style="padding:2px;" />
-                    </MudTooltip>
+                    <MudStack Row="true" Spacing="0">
+                        <MudTooltip Text="Channel health and relay details" Placement="Placement.Left">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                           Size="Size.Small"
+                                           Color="Color.Default"
+                                           OnClick="@(() => OpenDetailsAsync(context))"
+                                           Style="padding:2px;" />
+                        </MudTooltip>
+                        @if (context.IsGeneratedHls)
+                        {
+                            <MudTooltip Text="Restart this generated HLS session and disconnect its current viewers." Placement="Placement.Left">
+                                <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => RestartHlsSessionAsync(context))"
+                                               Style="padding:2px;" />
+                            </MudTooltip>
+                        }
+                    </MudStack>
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -178,6 +195,7 @@ else
                 <MudTh>IP</MudTh>
                 <MudTh>Source</MudTh>
                 <MudTh>Delivery</MudTh>
+                <MudTh>Status</MudTh>
                 <MudTh>Transfer</MudTh>
                 <MudTh>Backlog</MudTh>
                 <MudTh>Connected</MudTh>
@@ -235,10 +253,28 @@ else
                                  Variant="Variant.Outlined"
                                  Size="Size.Small" />
                 </MudTd>
+                <MudTd DataLabel="Status">
+                    @{
+                        var health = EvaluateClientHealth(context);
+                    }
+                    <TooltipChip Label="@ClientHealthLabel(health)"
+                                 TooltipText="@ClientHealthTooltip(context, health)"
+                                 Color="@ClientHealthColor(health)"
+                                 Variant="Variant.Outlined"
+                                 Size="Size.Small" />
+                </MudTd>
                 <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        var mediaAge = context.LastMediaActivityUtc is { } lastMedia
+                            ? DateTimeOffset.UtcNow - lastMedia
+                            : (TimeSpan?)null;
+                        <MudTooltip Text="@HlsTransferTooltip(context, mediaAge)" Placement="Placement.Top">
+                            <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @(mediaAge is null ? "waiting for media" : $"{FormatElapsed(mediaAge.Value)} ago")
+                            </MudText>
+                        </MudTooltip>
                     }
                     else
                     {
@@ -356,6 +392,20 @@ else
         await DialogService.ShowAsync<StreamSessionDetailsDialog>(session.DisplayName, parameters, options);
     }
 
+    private async Task RestartHlsSessionAsync(StreamSessionSnapshot session)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Restart generated HLS session",
+            $"Restart HLS for {session.DisplayName}? This disconnects all current viewers. The next request will create a fresh FFmpeg session.",
+            yesText: "Restart",
+            cancelText: "Cancel");
+        if (confirmed != true)
+            return;
+
+        await GeneratedHlsSessionManager.TryTerminateAsync(session.SessionId);
+        RefreshAndRender();
+    }
+
     private PeriodicTimer? _timer;
     private readonly CancellationTokenSource _cts = new();
     private int _lastFingerprint;
@@ -382,6 +432,7 @@ else
         {
             hc.Add(c.ClientId); hc.Add(c.BytesPerSecond); hc.Add(c.QueueDepth); hc.Add(c.BytesSent);
             hc.Add(c.Delivery);
+            hc.Add(EvaluateClientHealth(c));
         }
         hc.Add(_recentEnded.Count);
         return hc.ToHashCode();
@@ -622,6 +673,66 @@ else
             ? $"{baseText} Client requested MPEG-TS but was automatically upgraded to HLS for playback compatibility."
             : baseText;
     }
+
+    private ClientHealthStatus EvaluateClientHealth(StreamClientSnapshot client)
+    {
+        var upstream = _sessions.FirstOrDefault(s => s.SessionId == client.SessionId)?.UpstreamBytesPerSecond;
+        var options = GeneratedHlsOptions.Value;
+        return StreamClientHealth.Evaluate(
+            client,
+            upstream,
+            options.SegmentDurationSeconds,
+            options.InactivityTimeoutSeconds,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static string ClientHealthLabel(ClientHealthStatus status) => status switch
+    {
+        ClientHealthStatus.Live => "Live",
+        ClientHealthStatus.Slow => "Slow",
+        ClientHealthStatus.Stalled => "Stalled",
+        _ => "Waiting",
+    };
+
+    private static Color ClientHealthColor(ClientHealthStatus status) => status switch
+    {
+        ClientHealthStatus.Live => Color.Success,
+        ClientHealthStatus.Slow => Color.Warning,
+        ClientHealthStatus.Stalled => Color.Error,
+        _ => Color.Default,
+    };
+
+    private string ClientHealthTooltip(StreamClientSnapshot client, ClientHealthStatus status)
+    {
+        if (client.Transport != ClientTransport.GeneratedHls)
+        {
+            var upstream = _sessions.FirstOrDefault(s => s.SessionId == client.SessionId)?.UpstreamBytesPerSecond;
+            return status switch
+            {
+                ClientHealthStatus.Live => $"Client is receiving the stream at {FormatBitrate(client.BytesPerSecond)}.",
+                ClientHealthStatus.Slow => $"Client is receiving {FormatBitrate(client.BytesPerSecond)} versus {FormatBitrate(upstream)} with a {client.QueueDepth}-chunk backlog.",
+                ClientHealthStatus.Stalled => $"Client has no measured throughput and a {client.QueueDepth}-chunk backlog.",
+                _ => "Waiting for client throughput data.",
+            };
+        }
+
+        var options = GeneratedHlsOptions.Value;
+        var lastAccess = client.LastActivityUtc ?? client.ConnectedUtc;
+        var accessIdle = DateTimeOffset.UtcNow - lastAccess;
+        return status switch
+        {
+            ClientHealthStatus.Live => $"Client fetched a media segment {FormatElapsed(DateTimeOffset.UtcNow - client.LastMediaActivityUtc!.Value)} ago.",
+            ClientHealthStatus.Slow when client.LastMediaActivityUtc is null => $"The client is polling HLS but has not fetched a media segment. It will be removed after {options.InactivityTimeoutSeconds}s without any request.",
+            ClientHealthStatus.Slow => $"No media segment fetched for {FormatElapsed(DateTimeOffset.UtcNow - client.LastMediaActivityUtc!.Value)}; the client last contacted HLS {FormatElapsed(accessIdle)} ago.",
+            ClientHealthStatus.Stalled => $"No HLS request for {FormatElapsed(accessIdle)}. The {options.InactivityTimeoutSeconds}s inactivity threshold has passed; removal occurs on the next cleanup sweep (every {options.CleanupIntervalSeconds}s).",
+            _ => "Waiting for the client's first media segment request.",
+        };
+    }
+
+    private static string HlsTransferTooltip(StreamClientSnapshot client, TimeSpan? mediaAge)
+        => mediaAge is null
+            ? $"{FormatBytes(client.BytesSent)} delivered in media segments; no media segment request has been observed yet."
+            : $"{FormatBytes(client.BytesSent)} delivered in media segments. Last media segment fetched {FormatElapsed(mediaAge.Value)} ago.";
 
     private static string FormatRate(long? bytesPerSecond) => bytesPerSecond switch
     {
