@@ -258,7 +258,9 @@ public sealed class GeneratedHlsSessionManager(
         string? userAgent,
         string requestedRoute,
         bool countAsViewer = true,
-        bool upgradedFromTs = false)
+        bool upgradedFromTs = false,
+        bool mediaSegmentFetched = false,
+        long mediaBytesServed = 0)
     {
         if (!_sessions.TryGetValue(sessionId, out var session))
             return;
@@ -267,18 +269,22 @@ public sealed class GeneratedHlsSessionManager(
         // strip line endings here so every downstream log of the record is forge-safe.
         userAgent = userAgent?.ReplaceLineEndings(" ");
         requestedRoute = requestedRoute.ReplaceLineEndings(" ");
+        remoteIp = RemoteIpAddressFormatter.Format(remoteIp);
 
-        var trackedClient = session.TrackClient(remoteIp, userAgent, requestedRoute, countAsViewer);
+        var trackedClient = session.TrackClient(
+            remoteIp, userAgent, requestedRoute, countAsViewer, mediaSegmentFetched, mediaBytesServed);
         var record = trackedClient.Record;
         if (record.CountAsViewer)
         {
             registry.UpsertClient(new StreamClientSnapshot(
                 record.ClientId, record.SessionId, record.RequestedRoute,
                 record.RemoteIp, record.UserAgent, record.ConnectedUtc,
-                BytesSent: 0, QueueDepth: 0, Transport: ClientTransport.GeneratedHls,
+                BytesSent: record.MediaBytesServed, QueueDepth: 0, Transport: ClientTransport.GeneratedHls,
                 Delivery: DeliveryMethod.Hls, DeliveryReason: "Generated HLS (segmented pull)",
                 DisplayName: session.DisplayName,
-                UpgradedFromTs: upgradedFromTs));
+                UpgradedFromTs: upgradedFromTs || session.UpgradedFromTs,
+                LastActivityUtc: record.LastAccessUtc,
+                LastMediaActivityUtc: record.LastMediaAccessUtc));
         }
 
         registry.UpsertSession(session.ToSnapshot());
@@ -384,6 +390,15 @@ public sealed class GeneratedHlsSessionManager(
         logger.LogInformation("Generated HLS enabled. FFmpeg found at '{FfmpegPath}'.", _options.FfmpegPath);
         CleanupStaleDirectories();
         _sweepTask = Task.Run(() => SweepLoopAsync(_lifetimeCts.Token), CancellationToken.None);
+    }
+
+    public async Task<bool> TryTerminateAsync(string sessionId)
+    {
+        if (!_sessions.ContainsKey(sessionId))
+            return false;
+
+        await RemoveSessionAsync(sessionId, "admin_terminated");
+        return true;
     }
 
     private bool TryPrepareWorkDirectory()
@@ -530,8 +545,24 @@ public sealed class GeneratedHlsSessionManager(
         info.ArgumentList.Add("0:v?");
         info.ArgumentList.Add("-map");
         info.ArgumentList.Add("0:a?");
-        info.ArgumentList.Add("-c");
+        info.ArgumentList.Add("-c:v");
         info.ArgumentList.Add("copy");
+        if (_options.TranscodeAudioToAac)
+        {
+            info.ArgumentList.Add("-c:a");
+            info.ArgumentList.Add("aac");
+            info.ArgumentList.Add("-profile:a");
+            info.ArgumentList.Add("aac_low");
+            info.ArgumentList.Add("-b:a");
+            info.ArgumentList.Add("128k");
+            info.ArgumentList.Add("-ac");
+            info.ArgumentList.Add("2");
+        }
+        else
+        {
+            info.ArgumentList.Add("-c:a");
+            info.ArgumentList.Add("copy");
+        }
         info.ArgumentList.Add("-bsf:v");
         info.ArgumentList.Add("dump_extra");
         info.ArgumentList.Add("-f");
@@ -1078,7 +1109,9 @@ public sealed class GeneratedHlsSessionManager(
         string? UserAgent,
         DateTimeOffset ConnectedUtc,
         DateTimeOffset LastAccessUtc,
-        bool CountAsViewer);
+        DateTimeOffset? LastMediaAccessUtc,
+        bool CountAsViewer,
+        long MediaBytesServed);
 
     private sealed class GeneratedHlsSession(
         string sessionId,
@@ -1185,21 +1218,18 @@ public sealed class GeneratedHlsSessionManager(
 
         // Higher score = more identifiable. Named app UAs beat generic platform UAs.
         private static int GetUaSpecificity(string? ua)
-        {
-            if (string.IsNullOrEmpty(ua)) return 0;
-            if (ua.Contains("SmartersPro", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.Contains("Smarters", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return 3;
-            if (ua.StartsWith("Dalvik/", StringComparison.OrdinalIgnoreCase)) return 1;
-            if (ua.StartsWith("okhttp/", StringComparison.OrdinalIgnoreCase)) return 1;
-            return 2;
-        }
+            => ClientUserAgentResolver.Resolve(ua).Specificity;
 
         public static bool HasClientFingerprint(string? remoteIp, string? userAgent)
             => !string.IsNullOrWhiteSpace(remoteIp) || !string.IsNullOrWhiteSpace(userAgent);
 
-        public TrackedHlsClient TrackClient(string? remoteIp, string? userAgent, string requestedRoute, bool countAsViewer)
+        public TrackedHlsClient TrackClient(
+            string? remoteIp,
+            string? userAgent,
+            string requestedRoute,
+            bool countAsViewer,
+            bool mediaSegmentFetched,
+            long mediaBytesServed)
         {
             var clientKey = CreateClientKey(remoteIp, userAgent);
             var now = DateTimeOffset.UtcNow;
@@ -1219,6 +1249,8 @@ public sealed class GeneratedHlsSessionManager(
                         RequestedRoute = requestedRoute,
                         CountAsViewer = existing.CountAsViewer || countAsViewer,
                         UserAgent = preferredUa,
+                        LastMediaAccessUtc = mediaSegmentFetched ? now : existing.LastMediaAccessUtc,
+                        MediaBytesServed = existing.MediaBytesServed + Math.Max(0, mediaBytesServed),
                     };
                     _hlsClients[clientKey] = updated;
                     return new TrackedHlsClient(updated, IsNewClient: false);
@@ -1232,7 +1264,9 @@ public sealed class GeneratedHlsSessionManager(
                     userAgent,
                     now,
                     now,
-                    countAsViewer);
+                    mediaSegmentFetched ? now : null,
+                    countAsViewer,
+                    Math.Max(0, mediaBytesServed));
 
                 _hlsClients[clientKey] = created;
                 return new TrackedHlsClient(created, IsNewClient: true);
@@ -1310,6 +1344,7 @@ public sealed class GeneratedHlsSessionManager(
             ReconnectAttempts: 0,
             LastFailureKind: null,
             IsInternal: ParentStreamSessionId is not null,
-            ParentStreamSessionId: ParentStreamSessionId);
+            ParentStreamSessionId: ParentStreamSessionId,
+            IsGeneratedHls: true);
     }
 }

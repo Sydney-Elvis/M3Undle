@@ -35,4 +35,5 @@ public sealed record StreamSessionSnapshot(
     long TotalBytesRelayed = 0,
     long? UpstreamBytesPerSecond = null,
     StreamChannelHealthProfile? HealthProfile = null,
-    string? HealthProfileReason = null);
+    string? HealthProfileReason = null,
+    bool IsGeneratedHls = false);

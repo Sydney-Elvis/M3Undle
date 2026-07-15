@@ -9,4 +9,5 @@ public enum SubscriberDisconnectReason
     SessionClosed = 4,
     Retuned = 5,
     WriteStall = 6,
+    Superseded = 7,
 }

@@ -117,8 +117,9 @@ public static class XtreamEndpoints
 
         // Resolve the snapshot's bijective key→ID assignment once. The same assignment backs
         // path-auth streaming (ID→key), so every ID advertised here resolves back to its channel.
-        var streamIds = streamIdCache.GetAssignment(
-            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey)).KeyToId;
+        var streamIdAssignment = streamIdCache.GetAssignment(
+            lineup.SnapshotId, lineup.Channels.Select(c => c.StreamKey));
+        var streamIds = streamIdAssignment.KeyToId;
 
         return action switch
         {
@@ -127,10 +128,73 @@ public static class XtreamEndpoints
             "get_series_categories" => BuildCategoriesResult(lineup, "series"),
             "get_live_streams"      => BuildStreamsResult(context, form, lineup, "live", streamIds),
             "get_vod_streams"       => BuildStreamsResult(context, form, lineup, "vod", streamIds),
+            "get_vod_info"          => BuildVodInfoResult(context, form, lineup, streamIdAssignment),
             "get_series"            => BuildSeriesListResult(context, form, lineup),
             "get_series_info"       => BuildSeriesInfoResult(context, form, lineup, streamIds),
             _               => Results.Json(Array.Empty<object>(), JsonOptions),
         };
+    }
+
+    private static IResult BuildVodInfoResult(
+        HttpContext context,
+        IFormCollection? form,
+        RenderedLineup lineup,
+        StreamIdAssignment streamIds)
+    {
+        var vodIdParam = GetRequestValue(context.Request, form, "vod_id");
+        if (!int.TryParse(vodIdParam, out var vodId))
+            return TypedResults.Json(new { }, JsonOptions);
+
+        var streamKey = streamIds.IdToKey.GetValueOrDefault(vodId)
+            ?? streamIds.LegacyIdToKey.GetValueOrDefault(vodId);
+        var channel = streamKey is null
+            ? null
+            : lineup.Channels.FirstOrDefault(c => c.ContentType == "vod" && c.StreamKey == streamKey);
+
+        if (channel is null)
+            return TypedResults.Json(new { }, JsonOptions);
+
+        var added = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
+        var extension = ResolveContainerExtension(channel.StreamUrl, "mp4");
+        return TypedResults.Json(new
+        {
+            info = new
+            {
+                movie_image = channel.LogoUrl ?? string.Empty,
+                plot = string.Empty,
+                cast = string.Empty,
+                director = string.Empty,
+                genre = channel.GroupTitle ?? string.Empty,
+                releasedate = string.Empty,
+                rating = string.Empty,
+                rating_5based = 0,
+                duration_secs = 0,
+                duration = string.Empty,
+                youtube_trailer = string.Empty,
+                backdrop_path = Array.Empty<string>(),
+            },
+            movie_data = new
+            {
+                stream_id = vodId.ToString(),
+                name = channel.DisplayName,
+                added,
+                category_id = CategoryId(channel.GroupTitle ?? "Uncategorized").ToString(),
+                container_extension = extension,
+                custom_sid = string.Empty,
+                direct_source = string.Empty,
+            },
+        }, JsonOptions);
+    }
+
+    internal static string ResolveContainerExtension(string streamUrl, string fallback)
+    {
+        var path = Uri.TryCreate(streamUrl, UriKind.Absolute, out var uri)
+            ? uri.AbsolutePath
+            : streamUrl.Split('?', '#')[0];
+        var extension = Path.GetExtension(path).TrimStart('.');
+        return string.IsNullOrWhiteSpace(extension)
+            ? fallback
+            : extension.ToLowerInvariant();
     }
 
     private static IResult BuildAccountInfoResult(HttpContext context, ResolvedClientAccess access, DateTime? minProviderExpiry)
@@ -216,7 +280,7 @@ public static class XtreamEndpoints
         if (!string.IsNullOrEmpty(categoryFilter))
             channels = channels.Where(c => CategoryId(c.GroupTitle ?? "Uncategorized").ToString() == categoryFilter);
 
-        var (segment, ext, streamType) = contentType switch
+        var (segment, defaultExt, streamType) = contentType switch
         {
             "vod"    => ("movie",  "mp4",  "movie"),
             "series" => ("series", "mkv",  "series"),
@@ -232,7 +296,10 @@ public static class XtreamEndpoints
                 var streamId  = streamIds.TryGetValue(c.StreamKey, out var assignedId)
                     ? assignedId
                     : XtreamStreamIdCache.ToStreamId(c.StreamKey);
-                var streamUrl = $"{baseUrl}/{segment}/{username}/{password}/{streamId}.{ext}";
+                var extension = contentType == "live"
+                    ? defaultExt
+                    : ResolveContainerExtension(c.StreamUrl, defaultExt);
+                var streamUrl = $"{baseUrl}/{segment}/{username}/{password}/{streamId}.{extension}";
                 var catId     = CategoryId(c.GroupTitle ?? "Uncategorized").ToString();
 
                 // Emit stream_id as a string so Brightscript treats it verbatim rather than
@@ -267,7 +334,7 @@ public static class XtreamEndpoints
                     stream_icon         = c.LogoUrl ?? string.Empty,
                     added,
                     category_id         = catId,
-                    container_extension = ext,
+                    container_extension = extension,
                     custom_sid          = string.Empty,
                     direct_source       = string.Empty,
                 };
@@ -368,15 +435,24 @@ public static class XtreamEndpoints
             var streamId = streamIds.TryGetValue(ep.StreamKey, out var assignedId)
                 ? assignedId
                 : XtreamStreamIdCache.ToStreamId(ep.StreamKey);
+            var extension = ResolveContainerExtension(ep.StreamUrl, "mkv");
             list.Add(new
             {
                 id                  = streamId.ToString(),
                 episode_num         = epNum,
                 title               = ep.DisplayName,
-                container_extension = "mkv",
+                container_extension = extension,
+                info = new
+                {
+                    movie_image = ep.LogoUrl ?? string.Empty,
+                    plot = string.Empty,
+                    duration_secs = 0,
+                    duration = string.Empty,
+                },
+                custom_sid = string.Empty,
                 added,
                 season,
-                direct_source       = $"{baseUrl}/series/{username}/{password}/{streamId}.mkv",
+                direct_source       = $"{baseUrl}/series/{username}/{password}/{streamId}.{extension}",
             });
         }
 
@@ -1058,13 +1134,6 @@ public static class XtreamEndpoints
             return;
         }
 
-        generatedHlsSessionManager.TrackClient(
-            sessionId,
-            context.Connection.RemoteIpAddress?.ToString(),
-            context.Request.Headers.UserAgent.ToString(),
-            context.Request.Path.Value ?? string.Empty,
-            GeneratedHlsSessionManager.ShouldCountAsViewer(context.Request.Headers.UserAgent.ToString()));
-
         if (contentType.Equals("application/vnd.apple.mpegurl", StringComparison.OrdinalIgnoreCase))
         {
             string manifest;
@@ -1095,12 +1164,15 @@ public static class XtreamEndpoints
             context.Response.ContentType = contentType;
             context.Response.Headers.CacheControl = "no-cache";
             await context.Response.WriteAsync(rewritten, cancellationToken);
+            GeneratedHlsAssetClientTracker.Track(generatedHlsSessionManager, sessionId, context, false, 0);
             return;
         }
 
+        var assetLength = GeneratedHlsAssetClientTracker.GetAssetLength(filePath, contentType);
         context.Response.ContentType = contentType;
         context.Response.Headers.CacheControl = "no-cache";
         await context.Response.SendFileAsync(filePath, cancellationToken);
+        GeneratedHlsAssetClientTracker.Track(generatedHlsSessionManager, sessionId, context, true, assetLength);
     }
 
     internal static string BuildGeneratedXtreamHlsManifestRedirectUrl(HttpContext context, string sessionId)

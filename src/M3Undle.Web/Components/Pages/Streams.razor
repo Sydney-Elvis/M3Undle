@@ -1,8 +1,13 @@
 @page "/streams"
 @using M3Undle.Web.Streaming.Observability
 @using M3Undle.Web.Streaming.Models
+@using M3Undle.Web.Streaming.Configuration
+@using M3Undle.Web.Streaming.GeneratedHls
+@using Microsoft.Extensions.Options
 @inject StreamingRegistry Registry
 @inject IDialogService DialogService
+@inject IOptions<GeneratedHlsOptions> GeneratedHlsOptions
+@inject GeneratedHlsSessionManager GeneratedHlsSessionManager
 @implements IDisposable
 
 <PageTitle>Streams — M3Undle</PageTitle>
@@ -148,13 +153,25 @@ else
                     }
                 </MudTd>
                 <MudTd DataLabel="">
-                    <MudTooltip Text="Channel health and relay details" Placement="Placement.Left">
-                        <MudIconButton Icon="@Icons.Material.Outlined.Info"
-                                       Size="Size.Small"
-                                       Color="Color.Default"
-                                       OnClick="@(() => OpenDetailsAsync(context))"
-                                       Style="padding:2px;" />
-                    </MudTooltip>
+                    <MudStack Row="true" Spacing="0">
+                        <MudTooltip Text="Channel health and relay details" Placement="Placement.Left">
+                            <MudIconButton Icon="@Icons.Material.Outlined.Info"
+                                           Size="Size.Small"
+                                           Color="Color.Default"
+                                           OnClick="@(() => OpenDetailsAsync(context))"
+                                           Style="padding:2px;" />
+                        </MudTooltip>
+                        @if (context.IsGeneratedHls)
+                        {
+                            <MudTooltip Text="Restart this generated HLS session and disconnect its current viewers." Placement="Placement.Left">
+                                <MudIconButton Icon="@Icons.Material.Outlined.RestartAlt"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => RestartHlsSessionAsync(context))"
+                                               Style="padding:2px;" />
+                            </MudTooltip>
+                        }
+                    </MudStack>
                 </MudTd>
             </RowTemplate>
         </MudTable>
@@ -178,6 +195,7 @@ else
                 <MudTh>IP</MudTh>
                 <MudTh>Source</MudTh>
                 <MudTh>Delivery</MudTh>
+                <MudTh>Status</MudTh>
                 <MudTh>Transfer</MudTh>
                 <MudTh>Backlog</MudTh>
                 <MudTh>Connected</MudTh>
@@ -190,7 +208,7 @@ else
                 }
                 <MudTd DataLabel="Client">
                     <MudTooltip Text="@ClientTypeTooltip(context.UserAgent, context.RequestedRoute)" Placement="Placement.Right">
-                        <MudText Typo="Typo.body2">@DetectClientType(context.UserAgent)</MudText>
+                        <MudText Typo="Typo.body2">@ClientUserAgentResolver.Resolve(context.UserAgent).DisplayName</MudText>
                     </MudTooltip>
                 </MudTd>
                 <MudTd DataLabel="Channel">
@@ -235,10 +253,28 @@ else
                                  Variant="Variant.Outlined"
                                  Size="Size.Small" />
                 </MudTd>
+                <MudTd DataLabel="Status">
+                    @{
+                        var health = EvaluateClientHealth(context);
+                    }
+                    <TooltipChip Label="@ClientHealthLabel(health)"
+                                 TooltipText="@ClientHealthTooltip(context, health)"
+                                 Color="@ClientHealthColor(health)"
+                                 Variant="Variant.Outlined"
+                                 Size="Size.Small" />
+                </MudTd>
                 <MudTd DataLabel="Transfer">
                     @if (context.Transport == ClientTransport.GeneratedHls)
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary">—</MudText>
+                        var mediaAge = context.LastMediaActivityUtc is { } lastMedia
+                            ? DateTimeOffset.UtcNow - lastMedia
+                            : (TimeSpan?)null;
+                        <MudTooltip Text="@HlsTransferTooltip(context, mediaAge)" Placement="Placement.Top">
+                            <MudText Typo="Typo.body2">@FormatBytes(context.BytesSent)</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @(mediaAge is null ? "waiting for media" : $"{FormatElapsed(mediaAge.Value)} ago")
+                            </MudText>
+                        </MudTooltip>
                     }
                     else
                     {
@@ -356,6 +392,20 @@ else
         await DialogService.ShowAsync<StreamSessionDetailsDialog>(session.DisplayName, parameters, options);
     }
 
+    private async Task RestartHlsSessionAsync(StreamSessionSnapshot session)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Restart generated HLS session",
+            $"Restart HLS for {session.DisplayName}? This disconnects all current viewers. The next request will create a fresh FFmpeg session.",
+            yesText: "Restart",
+            cancelText: "Cancel");
+        if (confirmed != true)
+            return;
+
+        await GeneratedHlsSessionManager.TryTerminateAsync(session.SessionId);
+        RefreshAndRender();
+    }
+
     private PeriodicTimer? _timer;
     private readonly CancellationTokenSource _cts = new();
     private int _lastFingerprint;
@@ -382,6 +432,7 @@ else
         {
             hc.Add(c.ClientId); hc.Add(c.BytesPerSecond); hc.Add(c.QueueDepth); hc.Add(c.BytesSent);
             hc.Add(c.Delivery);
+            hc.Add(EvaluateClientHealth(c));
         }
         hc.Add(_recentEnded.Count);
         return hc.ToHashCode();
@@ -498,7 +549,7 @@ else
         var uaPart = string.IsNullOrWhiteSpace(userAgent)
             ? "No User-Agent header — client type unknown."
             : $"User-Agent: {userAgent}";
-        var type = DetectClientType(userAgent);
+        var type = ClientUserAgentResolver.Resolve(userAgent).DisplayName;
         var note = type is "VLC" or "FFmpeg"
             ? "\nNote: media servers (Jellyfin, Emby, Plex) use VLC or FFmpeg internally to fetch streams. This may be a server-side connection, not a direct player."
             : string.Empty;
@@ -605,61 +656,6 @@ else
         return "M3U";
     }
 
-    private static string DetectClientType(string? userAgent)
-    {
-        if (string.IsNullOrWhiteSpace(userAgent)) return "Unknown";
-
-        // Named apps — check before generic components they may use internally.
-        if (userAgent.Contains("TiviMate", StringComparison.OrdinalIgnoreCase)) return "TiviMate";
-        // IPTV Smarters sends several UA spellings across its request types: "SmartersPro"
-        // (no space) on segment pulls, "Smarters Pro" (with space) on the manifest/TS request,
-        // plus "IPTV Smarters" / "Smarters Player" on older builds. Match "Smarters" generically
-        // so no variant slips through to "Unknown", then distinguish the Pro tier.
-        if (userAgent.Contains("Smarters", StringComparison.OrdinalIgnoreCase))
-            return userAgent.Contains("Pro", StringComparison.OrdinalIgnoreCase) ? "Smarters Pro" : "Smarters";
-        if (userAgent.Contains("Jellyfin", StringComparison.OrdinalIgnoreCase)) return "Jellyfin";
-        if (userAgent.Contains("Emby", StringComparison.OrdinalIgnoreCase)) return "Emby";
-        if (userAgent.Contains("Plex", StringComparison.OrdinalIgnoreCase)) return "Plex";
-        if (userAgent.Contains("Kodi", StringComparison.OrdinalIgnoreCase)) return "Kodi";
-        if (userAgent.Contains("NextPVR", StringComparison.OrdinalIgnoreCase)) return "NextPVR";
-        if (userAgent.Contains("Infuse", StringComparison.OrdinalIgnoreCase)) return "Infuse";
-        if (userAgent.Contains("IPTVnator", StringComparison.OrdinalIgnoreCase)) return "IPTVnator";
-        if (userAgent.Contains("Televizo", StringComparison.OrdinalIgnoreCase)) return "Televizo";
-        if (userAgent.Contains("OTTNavigator", StringComparison.OrdinalIgnoreCase)) return "OTT Navigator";
-        if (userAgent.Contains("Perfect Player", StringComparison.OrdinalIgnoreCase)) return "Perfect Player";
-        if (userAgent.Contains("GSE", StringComparison.OrdinalIgnoreCase)) return "GSE Player";
-        if (userAgent.Contains("MrMC", StringComparison.OrdinalIgnoreCase)) return "MrMC";
-        if (userAgent.Contains("Roku", StringComparison.OrdinalIgnoreCase)) return "Roku";
-
-        // Generic media components — likely a media server's internal fetcher.
-        if (userAgent.Contains("VLC", StringComparison.OrdinalIgnoreCase)) return "VLC";
-        // Lavf is the ffmpeg libavformat UA prefix used by Jellyfin/Emby LiveTV transcoder.
-        if (userAgent.StartsWith("Lavf", StringComparison.OrdinalIgnoreCase)) return "FFmpeg";
-        if (userAgent.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase)) return "FFmpeg";
-        if (userAgent.Contains("mpv", StringComparison.OrdinalIgnoreCase)) return "mpv";
-        if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
-            userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
-            userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase)) return "Browser";
-
-        // ExoPlayer/Media3 — Google's Android media playback engine. Apps that delegate HLS
-        // playback to ExoPlayer (e.g. Smarters via Xtream) will appear with this UA instead
-        // of their own app UA. Check before Dalvik since ExoPlayer UAs may also contain Dalvik.
-        if (userAgent.Contains("ExoPlayer", StringComparison.OrdinalIgnoreCase) ||
-            userAgent.Contains("Media3", StringComparison.OrdinalIgnoreCase))
-            return "ExoPlayer";
-
-        // Dalvik is the Android runtime UA, seen when an IPTV app makes its initial
-        // connection before switching to its own UA. The full string includes device info.
-        if (userAgent.StartsWith("Dalvik", StringComparison.OrdinalIgnoreCase))
-            return userAgent.Contains("TV", StringComparison.OrdinalIgnoreCase) ? "Android TV" : "Android";
-
-        // okhttp is a common Android HTTP client; if an IPTV app doesn't set a custom UA
-        // this is what appears. Hover to see the full User-Agent for context.
-        if (userAgent.StartsWith("okhttp", StringComparison.OrdinalIgnoreCase)) return "Android App";
-
-        return "Unknown";
-    }
-
     private static string DeliveryLabel(DeliveryMethod method) => method switch
     {
         DeliveryMethod.Hls => "HLS",
@@ -677,6 +673,66 @@ else
             ? $"{baseText} Client requested MPEG-TS but was automatically upgraded to HLS for playback compatibility."
             : baseText;
     }
+
+    private ClientHealthStatus EvaluateClientHealth(StreamClientSnapshot client)
+    {
+        var upstream = _sessions.FirstOrDefault(s => s.SessionId == client.SessionId)?.UpstreamBytesPerSecond;
+        var options = GeneratedHlsOptions.Value;
+        return StreamClientHealth.Evaluate(
+            client,
+            upstream,
+            options.SegmentDurationSeconds,
+            options.InactivityTimeoutSeconds,
+            DateTimeOffset.UtcNow);
+    }
+
+    private static string ClientHealthLabel(ClientHealthStatus status) => status switch
+    {
+        ClientHealthStatus.Live => "Live",
+        ClientHealthStatus.Slow => "Slow",
+        ClientHealthStatus.Stalled => "Stalled",
+        _ => "Waiting",
+    };
+
+    private static Color ClientHealthColor(ClientHealthStatus status) => status switch
+    {
+        ClientHealthStatus.Live => Color.Success,
+        ClientHealthStatus.Slow => Color.Warning,
+        ClientHealthStatus.Stalled => Color.Error,
+        _ => Color.Default,
+    };
+
+    private string ClientHealthTooltip(StreamClientSnapshot client, ClientHealthStatus status)
+    {
+        if (client.Transport != ClientTransport.GeneratedHls)
+        {
+            var upstream = _sessions.FirstOrDefault(s => s.SessionId == client.SessionId)?.UpstreamBytesPerSecond;
+            return status switch
+            {
+                ClientHealthStatus.Live => $"Client is receiving the stream at {FormatBitrate(client.BytesPerSecond)}.",
+                ClientHealthStatus.Slow => $"Client is receiving {FormatBitrate(client.BytesPerSecond)} versus {FormatBitrate(upstream)} with a {client.QueueDepth}-chunk backlog.",
+                ClientHealthStatus.Stalled => $"Client has no measured throughput and a {client.QueueDepth}-chunk backlog.",
+                _ => "Waiting for client throughput data.",
+            };
+        }
+
+        var options = GeneratedHlsOptions.Value;
+        var lastAccess = client.LastActivityUtc ?? client.ConnectedUtc;
+        var accessIdle = DateTimeOffset.UtcNow - lastAccess;
+        return status switch
+        {
+            ClientHealthStatus.Live => $"Client fetched a media segment {FormatElapsed(DateTimeOffset.UtcNow - client.LastMediaActivityUtc!.Value)} ago.",
+            ClientHealthStatus.Slow when client.LastMediaActivityUtc is null => $"The client is polling HLS but has not fetched a media segment. It will be removed after {options.InactivityTimeoutSeconds}s without any request.",
+            ClientHealthStatus.Slow => $"No media segment fetched for {FormatElapsed(DateTimeOffset.UtcNow - client.LastMediaActivityUtc!.Value)}; the client last contacted HLS {FormatElapsed(accessIdle)} ago.",
+            ClientHealthStatus.Stalled => $"No HLS request for {FormatElapsed(accessIdle)}. The {options.InactivityTimeoutSeconds}s inactivity threshold has passed; removal occurs on the next cleanup sweep (every {options.CleanupIntervalSeconds}s).",
+            _ => "Waiting for the client's first media segment request.",
+        };
+    }
+
+    private static string HlsTransferTooltip(StreamClientSnapshot client, TimeSpan? mediaAge)
+        => mediaAge is null
+            ? $"{FormatBytes(client.BytesSent)} delivered in media segments; no media segment request has been observed yet."
+            : $"{FormatBytes(client.BytesSent)} delivered in media segments. Last media segment fetched {FormatElapsed(mediaAge.Value)} ago.";
 
     private static string FormatRate(long? bytesPerSecond) => bytesPerSecond switch
     {

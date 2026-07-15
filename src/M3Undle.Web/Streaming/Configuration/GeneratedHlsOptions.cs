@@ -8,6 +8,8 @@ public sealed class GeneratedHlsOptions
 
     public string FfmpegPath { get; set; } = "ffmpeg";
 
+    public bool TranscodeAudioToAac { get; set; } = true;
+
     public int SegmentDurationSeconds { get; set; } = 2;
 
     public int PlaylistSize { get; set; } = 6;

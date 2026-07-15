@@ -84,6 +84,18 @@ public sealed class XtreamStreamIdCache(ILogger<XtreamStreamIdCache> logger)
     /// Only legacy IDs above the cap are bridged — they can never collide with a current ID, so the
     /// bridge is unambiguous — while current IDs always take precedence.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Stability note:</b> a key that lands on its preferred slot keeps the same ID across every
+    /// snapshot and restart (the assignment is deterministic — no persisted state). A key that had
+    /// to be <i>relocated</i> by probing, however, can shift to a different slot when the lineup
+    /// changes, because a newly added key sharing its preferred slot with an earlier ordinal can
+    /// claim that slot first. When that happens the relocated channel's advertised ID moves, and a
+    /// client still requesting the old ID resolves to whichever key now occupies it (not a 404).
+    /// This affects only the handful of keys that actually collide (rare for realistic lineups) and
+    /// self-heals on the client's next lineup pull; it is the one guarantee the retired persistent
+    /// stream-ID map provided that this scheme trades away for having no schema/migration footprint.
+    /// </para>
     /// </summary>
     public static StreamIdAssignment BuildAssignment(IEnumerable<string> streamKeys)
     {

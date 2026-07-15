@@ -2,6 +2,7 @@ using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Security;
 using M3Undle.Web.Streaming.Models;
+using M3Undle.Web.Streaming.Observability;
 using Microsoft.EntityFrameworkCore;
 
 namespace M3Undle.Web.Streaming.Resolution;
@@ -97,7 +98,7 @@ public sealed class StreamRequestResolver(ApplicationDbContext db, ILogger<Strea
             DisplayName: entry.DisplayName,
             RequestedRoute: context.Request.Path.Value ?? "/stream",
             UserAgent: context.Request.Headers.UserAgent.ToString(),
-            RemoteIp: context.Connection.RemoteIpAddress?.ToString(),
+            RemoteIp: RemoteIpAddressFormatter.Format(context.Connection.RemoteIpAddress),
             TunerLimit: providerMeta?.MaxConcurrentStreams is > 0 ? providerMeta.MaxConcurrentStreams : null,
             ForceMpegTs: providerMeta?.ForceMpegTs ?? false);
 

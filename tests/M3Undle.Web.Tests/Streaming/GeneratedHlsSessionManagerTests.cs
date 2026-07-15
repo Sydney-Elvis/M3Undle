@@ -228,6 +228,51 @@ public sealed class GeneratedHlsSessionManagerTests
     }
 
     [TestMethod]
+    public async Task CreateSessionAsync_DefaultAudioCompatibility_TranscodesAudioToAacLow()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, 3);
+        var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
+
+        await manager.StartAsync(CancellationToken.None);
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                $"https://provider.test/live/channel.ts?argsOut={Uri.EscapeDataString(argsFile)}",
+                "AAC compatibility"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+        var args = await File.ReadAllLinesAsync(argsFile);
+        AssertArgumentPair(args, "-c:v", "copy");
+        AssertArgumentPair(args, "-c:a", "aac");
+        AssertArgumentPair(args, "-profile:a", "aac_low");
+        AssertArgumentPair(args, "-ac", "2");
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task CreateSessionAsync_WhenAudioCompatibilityDisabled_CopiesAudio()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, 3, transcodeAudioToAac: false);
+        var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
+
+        await manager.StartAsync(CancellationToken.None);
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                $"https://provider.test/live/channel.ts?argsOut={Uri.EscapeDataString(argsFile)}",
+                "Audio copy"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+        var args = await File.ReadAllLinesAsync(argsFile);
+        AssertArgumentPair(args, "-c:v", "copy");
+        AssertArgumentPair(args, "-c:a", "copy");
+        Assert.IsFalse(args.Contains("aac_low"));
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
     public async Task TrackClient_WhenKnownProbeUserAgent_DoesNotCountSubscriber()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
@@ -292,6 +337,79 @@ public sealed class GeneratedHlsSessionManagerTests
         var session = registry.TryGetSession(handle.SessionId);
         Assert.IsNotNull(session);
         Assert.AreEqual(1, session.SubscriberCount);
+
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TrackClient_ManifestPollingDoesNotCountAsMediaDelivery()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, 3, registry);
+        await manager.StartAsync(CancellationToken.None);
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest("https://provider.test/live/stream.ts", "Tracking"),
+            CancellationToken.None);
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "192.0.2.10", "Roku", "/index.m3u8");
+        var manifestOnly = registry.GetActiveClients().Single();
+        Assert.AreEqual(0, manifestOnly.BytesSent);
+        Assert.IsNull(manifestOnly.LastMediaActivityUtc);
+        Assert.IsNotNull(manifestOnly.LastActivityUtc);
+
+        manager.TrackClient(
+            handle.SessionId, "192.0.2.10", "Roku", "/segment_000001.ts",
+            mediaSegmentFetched: true, mediaBytesServed: 4096);
+        var withMedia = registry.GetActiveClients().Single();
+        Assert.AreEqual(4096, withMedia.BytesSent);
+        Assert.IsNotNull(withMedia.LastMediaActivityUtc);
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TryTerminateAsync_RemovesSessionAndTrackedClients()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, 3, registry);
+        await manager.StartAsync(CancellationToken.None);
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest("https://provider.test/live/stream.ts", "Restart"),
+            CancellationToken.None);
+        Assert.IsNotNull(handle);
+        manager.TrackClient(handle.SessionId, "192.0.2.10", "Roku", "/index.m3u8");
+
+        Assert.IsTrue(await manager.TryTerminateAsync(handle.SessionId));
+        Assert.IsNull(registry.TryGetSession(handle.SessionId));
+        Assert.IsEmpty(registry.GetActiveClients());
+        Assert.IsFalse(await manager.TryTerminateAsync(handle.SessionId));
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [TestMethod]
+    public async Task TrackClient_NormalizesIpv4MappedIpv6Address()
+    {
+        await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
+        var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+
+        await manager.StartAsync(CancellationToken.None);
+
+        var handle = await manager.CreateSessionAsync(
+            new GeneratedHlsSessionRequest(
+                StreamUrl: "https://provider.test/live/stream.ts",
+                DisplayName: "Mapped IP Test"),
+            CancellationToken.None);
+
+        Assert.IsNotNull(handle);
+
+        manager.TrackClient(handle.SessionId, "::ffff:192.168.1.100", "Smarters Pro", "/hls/generated/test/index.m3u8");
+
+        var clients = registry.GetActiveClients();
+        Assert.HasCount(1, clients);
+        Assert.AreEqual("192.168.1.100", clients[0].RemoteIp);
 
         await manager.StopAsync(CancellationToken.None);
     }
@@ -533,13 +651,15 @@ public sealed class GeneratedHlsSessionManagerTests
         string ffmpegPath,
         int startupTimeoutSeconds,
         StreamingRegistry? registry = null,
-        string? workDirectory = null)
+        string? workDirectory = null,
+        bool transcodeAudioToAac = true)
     {
         var options = Options.Create(new GeneratedHlsOptions
         {
             Enabled = true,
             Directory = workDirectory ?? Path.Combine(root, "generated-hls"),
             FfmpegPath = ffmpegPath,
+            TranscodeAudioToAac = transcodeAudioToAac,
             SegmentDurationSeconds = 1,
             PlaylistSize = 2,
             DeleteThreshold = 1,
@@ -556,6 +676,14 @@ public sealed class GeneratedHlsSessionManagerTests
             channelSessionManager: null!,
             registry,
             NullLogger<GeneratedHlsSessionManager>.Instance);
+    }
+
+    private static void AssertArgumentPair(string[] args, string name, string value)
+    {
+        var index = Array.IndexOf(args, name);
+        Assert.IsTrue(index >= 0, $"Expected FFmpeg argument {name}.");
+        Assert.IsTrue(index + 1 < args.Length, $"Expected a value after FFmpeg argument {name}.");
+        Assert.AreEqual(value, args[index + 1]);
     }
 
     // -------------------------------------------------------------------------
