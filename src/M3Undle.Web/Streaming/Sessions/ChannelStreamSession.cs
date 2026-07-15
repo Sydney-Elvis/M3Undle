@@ -278,6 +278,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         PublishSnapshots();
+        subscriber.Dispose();
         return Task.CompletedTask;
     }
 

@@ -23,7 +23,7 @@ public enum SubscriberQueueOverflowResult
     GraceExceeded,
 }
 
-public sealed class SubscriberConnection
+public sealed class SubscriberConnection : IDisposable
 {
     private readonly HttpContext _context;
     private readonly PipeWriter _writer;
@@ -245,6 +245,9 @@ public sealed class SubscriberConnection
 
     public void AttachHdhrDiagnostics(HdhrSubscriberDiagnostics diagnostics)
         => Volatile.Write(ref _hdhrDiagnostics, diagnostics);
+
+    public void Dispose()
+        => _serverCompletionCts.Dispose();
 
     public StreamClientSnapshot Snapshot()
         => new(
