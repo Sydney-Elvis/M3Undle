@@ -105,6 +105,15 @@ builder.Services.AddAuthentication(options =>
         options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
     })
     .AddIdentityCookies();
+// Security stamps are validated on every authenticated request (interval zero) so that
+// rotating them — which a portable-backup restore does for all users, see
+// PortableRestoreService.RotateSecurityStampsAsync — signs existing sessions out immediately
+// rather than at the default 30-minute revalidation. Cost is one user lookup per authenticated
+// request; the admin UI is the only authenticated surface (streaming endpoints are anonymous).
+builder.Services.AddScoped<Microsoft.AspNetCore.Identity.ISecurityStampValidator,
+    Microsoft.AspNetCore.Identity.SecurityStampValidator<ApplicationUser>>();
+builder.Services.Configure<Microsoft.AspNetCore.Identity.SecurityStampValidatorOptions>(
+    options => options.ValidationInterval = TimeSpan.Zero);
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.LoginPath = "/Account/Login";
@@ -130,7 +139,10 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks()
-    .AddCheck<M3UndleReadinessHealthCheck>("m3undle_ready", tags: ["ready"]);
+    .AddCheck<M3UndleReadinessHealthCheck>("m3undle_ready", tags: ["ready"])
+    // Degraded when the last restore attempt failed or rolled back — makes a failed
+    // M3UNDLE_RESTORE_FILE restore on a headless container visible to external monitors.
+    .AddCheck<M3Undle.Web.Application.Backup.RestoreStateHealthCheck>("restore_state");
 builder.Services.AddM3UndleOpenApi();
 builder.Services.AddValidation();
 builder.Services.AddMemoryCache();
@@ -204,6 +216,21 @@ builder.Services.Configure<ObservabilityOptions>(builder.Configuration.GetSectio
 var metricsScrapePath = NormalizeObservabilityPath(builder.Configuration["M3Undle:Observability:Metrics:Path"], "/metrics");
 builder.Services.AddRateLimiter(options =>
 {
+    // Backup/restore initiation endpoints (create, upload, validate, stage, confirm) — each is
+    // expensive (VACUUM, extraction, integrity checks) and admin-only, so a low fixed window
+    // per client is plenty. Plan §10.
+    options.AddPolicy(M3Undle.Web.Api.BackupApiEndpoints.RateLimitPolicyName, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"backup-restore:{GetRateLimitClientKey(context)}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                AutoReplenishment = true,
+            }));
+
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = static async (context, cancellationToken) =>
     {

@@ -150,6 +150,118 @@ public sealed class PortableBackupServiceTests
     }
 
     [TestMethod]
+    public async Task CreateAsync_RestoreIsStaged_FailsWithoutCreatingAnArchive()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture, out var tempDataDir, out var db, out var stateStore);
+
+        try
+        {
+            stateStore.Write(new RestoreStateMarker
+            {
+                State = RestoreState.Requested,
+                BackupId = "staged-backup",
+                ArchiveFileName = "some-backup.m3undle-backup",
+                UpdatedUtc = DateTime.UtcNow,
+            });
+
+            var result = await service.CreateAsync(CancellationToken.None);
+
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.ErrorMessage!.Contains("staged", StringComparison.OrdinalIgnoreCase), result.ErrorMessage);
+            Assert.AreEqual(0, service.List().Count);
+
+            stateStore.Clear();
+            var afterCancel = await service.CreateAsync(CancellationToken.None);
+            Assert.IsTrue(afterCancel.Success, "Backups must work again once the staged restore is cleared.");
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Retention_UploadedArchives_DoNotEvictCreatedBackups()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+
+        try
+        {
+            var backups = new List<string>();
+            for (var i = 0; i < 5; i++)
+            {
+                var result = await service.CreateAsync(CancellationToken.None);
+                Assert.IsTrue(result.Success, result.ErrorMessage);
+                backups.Add(Path.GetFileName(result.FilePath!));
+                await Task.Delay(30);
+            }
+
+            var uploads = new List<string>();
+            for (var i = 0; i < 4; i++)
+            {
+                using var content = new MemoryStream([1, 2, 3]);
+                uploads.Add(await service.SaveUploadedArchiveAsync(content, CancellationToken.None));
+                await Task.Delay(30);
+            }
+
+            var remaining = service.List().Select(s => s.FileName).ToHashSet(StringComparer.Ordinal);
+
+            foreach (var backup in backups)
+                Assert.IsTrue(remaining.Contains(backup), $"Created backup '{backup}' must not be evicted by uploads.");
+
+            Assert.IsFalse(remaining.Contains(uploads[0]), "The oldest upload beyond the upload budget must be removed.");
+            foreach (var upload in uploads.Skip(1))
+                Assert.IsTrue(remaining.Contains(upload), $"Upload '{upload}' is within the upload retention budget and must survive.");
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Retention_NeverDeletesTheArchiveAStagedRestoreReferences()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture, out var tempDataDir, out var db, out var stateStore);
+
+        try
+        {
+            string stagedUpload;
+            using (var content = new MemoryStream([1, 2, 3]))
+                stagedUpload = await service.SaveUploadedArchiveAsync(content, CancellationToken.None);
+
+            stateStore.Write(new RestoreStateMarker
+            {
+                State = RestoreState.Requested,
+                BackupId = "staged",
+                ArchiveFileName = stagedUpload,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+
+            for (var i = 0; i < 4; i++)
+            {
+                await Task.Delay(30);
+                using var content = new MemoryStream([1, 2, 3]);
+                await service.SaveUploadedArchiveAsync(content, CancellationToken.None);
+            }
+
+            Assert.IsTrue(
+                service.List().Any(s => s.FileName == stagedUpload),
+                "The archive a staged restore references must survive retention even when it falls outside the upload budget.");
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task ResolvePath_RejectsPathTraversalAndNonExistentNames()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -198,7 +310,8 @@ public sealed class PortableBackupServiceTests
     }
 
     private static PortableBackupService CreateService(
-        TestFixture fixture, out string tempDataDir, out ApplicationDbContext db, DestructiveOperationLock? destructiveOperationLock = null)
+        TestFixture fixture, out string tempDataDir, out ApplicationDbContext db,
+        out RestoreStateStore restoreStateStore, DestructiveOperationLock? destructiveOperationLock = null)
     {
         tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-portable-backup-test-{Guid.NewGuid():N}");
         var runtimePaths = new RuntimePaths(
@@ -212,6 +325,7 @@ public sealed class PortableBackupServiceTests
         var sqliteBackup = new SqliteBackupService(db, runtimePaths, NullLogger<SqliteBackupService>.Instance);
         var encryption = new SecretEncryptionService(new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance));
         var buildInfo = new AppBuildInfo("1.2.3-test", null, null, null);
+        restoreStateStore = new RestoreStateStore(runtimePaths);
 
         return new PortableBackupService(
             db,
@@ -220,8 +334,13 @@ public sealed class PortableBackupServiceTests
             encryption,
             buildInfo,
             destructiveOperationLock ?? new DestructiveOperationLock(),
+            restoreStateStore,
             NullLogger<PortableBackupService>.Instance);
     }
+
+    private static PortableBackupService CreateService(
+        TestFixture fixture, out string tempDataDir, out ApplicationDbContext db, DestructiveOperationLock? destructiveOperationLock = null)
+        => CreateService(fixture, out tempDataDir, out db, out _, destructiveOperationLock);
 
     private static async Task<int> CountRowsAsync(string databasePath, string table)
     {

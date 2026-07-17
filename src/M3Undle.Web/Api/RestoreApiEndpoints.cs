@@ -14,12 +14,20 @@ public static class RestoreApiEndpoints
         restore.RequireAuthorization(UiAccessPolicy.Name);
         restore.WithTags("Restore");
 
-        restore.MapPost("/stage", StageAsync).WithSummary("Validate a backup and stage it for restore on next restart");
-        restore.MapPost("/confirm", ConfirmAsync).WithSummary("Restart the application to apply the staged restore");
+        restore.MapPost("/stage", StageAsync).WithSummary("Validate a backup and stage it for restore on next restart")
+            .RequireRateLimiting(BackupApiEndpoints.RateLimitPolicyName);
+        restore.MapPost("/confirm", ConfirmAsync).WithSummary("Restart the application to apply the staged restore")
+            .RequireRateLimiting(BackupApiEndpoints.RateLimitPolicyName);
+        restore.MapDelete("/stage", CancelStaged).WithSummary("Cancel a staged restore so it will not apply on the next restart");
         restore.MapGet("/status", Status).WithSummary("Get the current/last restore status");
 
         return app;
     }
+
+    private static Results<NoContent, Conflict<string>> CancelStaged(PortableRestoreService restoreService)
+        => restoreService.CancelStagedRestore()
+            ? TypedResults.NoContent()
+            : TypedResults.Conflict("No restore is currently staged.");
 
     private static async Task<Results<Ok<ValidateBackupResponse>, BadRequest<ValidateBackupResponse>>> StageAsync(
         StageRestoreRequest request, PortableRestoreService restoreService, CancellationToken cancellationToken)

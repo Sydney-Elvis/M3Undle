@@ -4,6 +4,35 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [Unreleased]
+
+### Backup and restore
+
+- Added portable configuration backups: a single checksummed `.m3undle-backup` archive containing all configuration, mappings, users, and credentials (still encrypted under the host's key ring), excluding regenerable history/cache tables
+- Added staged restore with automatic rollback: preflight validation (checksum, format/schema version, encryption key ID + fingerprint match), a validated rollback checkpoint before the database is touched, an atomic swap at startup before migrations run, and automatic rollback to the checkpoint if anything fails after that point
+- Added a Backup & Restore section under Settings (create, list, download, upload, delete, restore), a `/api/v1/backups` and `/api/v1/restore` admin API, an optional weekly backup schedule with count-based retention, and a headless `M3UNDLE_RESTORE_FILE` recovery path for containers that can't reach the UI
+- Added a shared destructive-operation lock so backup, restore, and encryption key rotation can never run concurrently
+- Staged restores can be cancelled (UI button and `DELETE /api/v1/restore/stage`) and expire automatically if not confirmed within 15 minutes, so an abandoned staged restore can never fire on an unrelated restart
+- Restoring signs all users out immediately: every security stamp is rotated in the restored database and stamps are now validated on every authenticated request
+- Hardened archive handling: entry-count and size caps with hard byte limits during extraction (zip-bomb defense), a free-disk-space preflight check covering staging plus the rollback checkpoint, and a per-upload size ceiling enforced at the service, endpoint, and UI layers
+- Uploaded archives are validated immediately on upload, retained separately from created backups (uploads can no longer evict real backups), and the archive a staged restore references is always protected from retention cleanup
+- Creating a backup is blocked while a restore is staged; backup/restore initiation endpoints are rate limited; the upload endpoint requires an `X-Requested-With` header as CSRF protection
+- A failed or rolled-back restore is surfaced as Degraded through the health endpoints, so a failed headless `M3UNDLE_RESTORE_FILE` restore is visible to Docker healthchecks and external monitors
+- Stale snapshot and HLS work artifacts from the pre-restore timeline are cleared after a successful restore
+- Backups in the Settings list gained Validate and View Report actions
+
+### Database migration strategy
+
+- **Breaking with prior convention:** the `Alpha_Schema` migration baseline is now frozen as shipped in v1.0.0-beta.1, and all schema changes from now on are additive EF Core migrations — starting with `AddBackupSchedule` in this release. Editing the shipped baseline in place silently stranded existing databases (migrations would no-op and the app would fail on missing columns); with this change, in-place container upgrades from beta.1–beta.6 databases now work and are covered by tests
+- Alpha-era databases (v1.0.0-alpha.7 and earlier) remain unsupported: back up your configuration details, wipe the data directory, and reconfigure
+- Restore now structurally verifies a backup's schema (tables and columns) against the running binary's own migrations after migrating it forward, and refuses the restore before anything is modified if they diverge
+
+### Testing
+
+- Added 46 new tests covering backup pruning/exclusions, manifest checksums, archive tampering, encryption key fingerprint validation, restore rollback via fault injection, environment-driven restore one-shot semantics, the destructive-operation lock, the weekly schedule, the frozen-baseline tripwire, the beta.6-style in-place upgrade path, staged-restore cancel/expiry, archive entry-count limits, security-stamp rotation, retention isolation between uploads and created backups, and the restore health check
+
+---
+
 ## [v1.0.0-beta.6] — 2026-07-15
 
 Beta 6 hardens VOD/series direct-relay playback against stale provider state and improves per-client visibility with liveness health chips, better client-type identification, and a cleaner subscriber reconnect/supersede model.

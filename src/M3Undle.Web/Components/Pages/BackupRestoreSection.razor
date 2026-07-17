@@ -25,11 +25,17 @@
     <MudAlert Severity="Severity.Warning" Class="mb-3">
         <MudText Class="mb-2">
             A restore of <b>@_pendingRestoreMarker.ArchiveFileName</b> is staged. Confirming restarts the
-            application and replaces the current database.
+            application and replaces the current database. If it is not confirmed within 15 minutes,
+            it expires and will not apply.
         </MudText>
-        <MudButton Variant="Variant.Filled" Color="Color.Warning" Disabled="_restoreInProgress" OnClick="ConfirmStagedRestoreAsync">
-            Confirm &amp; Restart Now
-        </MudButton>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Warning" Disabled="_restoreInProgress" OnClick="ConfirmStagedRestoreAsync">
+                Confirm &amp; Restart Now
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Disabled="_restoreInProgress" OnClick="CancelStagedRestore">
+                Cancel Staged Restore
+            </MudButton>
+        </MudStack>
     </MudAlert>
 }
 else if (_pendingRestoreMarker is { State: RestoreState.Completed or RestoreState.Failed or RestoreState.RolledBack } marker)
@@ -96,6 +102,12 @@ else
                 <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
                     <MudButton Size="Size.Small" Href="@($"/api/v1/backups/{context.FileName}/download")" Target="_blank">
                         Download
+                    </MudButton>
+                    <MudButton Size="Size.Small" OnClick="@(() => ValidateBackupAsync(context.FileName))">
+                        Validate
+                    </MudButton>
+                    <MudButton Size="Size.Small" OnClick="@(() => ShowReportAsync(context.FileName))">
+                        Report
                     </MudButton>
                     <MudButton Size="Size.Small" Disabled="_restoreInProgress" OnClick="@(() => RestoreAsync(context.FileName))">
                         Restore
@@ -198,9 +210,19 @@ else
         _backupSuccess = null;
         try
         {
-            await using var stream = e.File.OpenReadStream(maxAllowedSize: 50 * 1024 * 1024);
-            await BackupService.SaveUploadedArchiveAsync(stream, CancellationToken.None);
-            _backupSuccess = "Archive uploaded.";
+            string savedFileName;
+            await using (var stream = e.File.OpenReadStream(maxAllowedSize: PortableBackupFormat.MaxArchiveSizeBytes))
+            {
+                savedFileName = await BackupService.SaveUploadedArchiveAsync(stream, CancellationToken.None);
+            }
+
+            // Validate immediately so a bad archive is flagged now, not at restore time.
+            var preflight = await RestoreService.PreflightAsync(BackupService.ResolvePath(savedFileName)!, CancellationToken.None);
+            if (preflight.Success)
+                _backupSuccess = "Archive uploaded and validated.";
+            else
+                _backupError = $"Archive uploaded, but it failed validation and cannot be restored: {string.Join(" ", preflight.Errors)}";
+
             LoadBackups();
         }
         catch (Exception ex)
@@ -211,6 +233,59 @@ else
         {
             _uploading = false;
         }
+    }
+
+    private void CancelStagedRestore()
+    {
+        RestoreService.CancelStagedRestore();
+        _pendingRestoreMarker = RestoreService.GetCurrentStatus();
+        _backupSuccess = "Staged restore cancelled.";
+    }
+
+    private async Task ValidateBackupAsync(string fileName)
+    {
+        var path = BackupService.ResolvePath(fileName);
+        if (path is null)
+            return;
+
+        var preflight = await RestoreService.PreflightAsync(path, CancellationToken.None);
+        await DialogService.ShowMessageBoxAsync(
+            preflight.Success ? "Backup Is Valid" : "Backup Failed Validation",
+            preflight.Success
+                ? $"'{fileName}' passed all preflight checks and can be restored on this host."
+                : string.Join("\n", preflight.Errors));
+    }
+
+    private async Task ShowReportAsync(string fileName)
+    {
+        var (manifest, report) = BackupService.ReadArchiveInfo(fileName);
+        if (manifest is null && report is null)
+        {
+            await DialogService.ShowMessageBoxAsync("No Report", $"'{fileName}' does not contain a readable manifest or report.");
+            return;
+        }
+
+        var lines = new List<string>();
+        if (manifest is not null)
+        {
+            lines.Add($"Created: {manifest.CreatedUtc.ToLocalTime():d MMM yyyy h:mm tt}");
+            lines.Add($"App version: {manifest.AppVersion ?? "unknown"}");
+            lines.Add($"Schema version: {manifest.SchemaVersion ?? "unknown"}");
+            lines.Add($"Encryption key: {manifest.EncryptionKeyId ?? "none"}");
+        }
+        if (report is not null)
+        {
+            lines.Add($"Database size: {FormatSize(report.DatabaseSizeBytes)}");
+            lines.Add($"Duration: {report.DurationSeconds:0.0}s");
+            var excludedRows = report.RowsRemovedByTable.Where(kvp => kvp.Value > 0).ToList();
+            lines.Add(excludedRows.Count == 0
+                ? "Excluded history/cache tables were already empty."
+                : "Excluded rows: " + string.Join(", ", excludedRows.Select(kvp => $"{kvp.Key}={kvp.Value}")));
+            foreach (var warning in report.Warnings)
+                lines.Add($"Warning: {warning}");
+        }
+
+        await DialogService.ShowMessageBoxAsync($"Backup Report — {fileName}", string.Join("\n", lines));
     }
 
     private async Task DeleteBackupAsync(string fileName)

@@ -231,6 +231,110 @@ public sealed class PortableRestoreServiceTests
     }
 
     [TestMethod]
+    public async Task CancelStagedRestore_ClearsTheMarker_SoNoRestoreAppliesOnRestart()
+    {
+        await using var ctx = await CreateContextAsync();
+        await ctx.SeedLiveAsync(db => db.Providers.Add(SimpleProvider("live-original")));
+        var fileName = await ctx.StageSourceBackupAsync(db => db.Providers.Add(SimpleProvider("src-restored")));
+
+        Assert.AreEqual(RestoreState.Requested, ctx.StateStore.Read()!.State);
+        Assert.IsTrue(ctx.Restore.CancelStagedRestore());
+        Assert.IsNull(ctx.StateStore.Read());
+        Assert.IsFalse(ctx.Restore.CancelStagedRestore(), "Cancelling twice must report nothing staged.");
+
+        var applied = await ctx.Restore.ApplyPendingRestoreIfAnyAsync(CancellationToken.None);
+
+        Assert.IsFalse(applied);
+        Assert.AreEqual(1, await CountRowsAsync(ctx.RuntimePaths.DatabasePath, "providers", "provider_id = 'live-original'"));
+    }
+
+    [TestMethod]
+    public async Task ApplyPendingRestoreIfAnyAsync_StagedMarkerOlderThanValidityWindow_ExpiresInsteadOfApplying()
+    {
+        await using var ctx = await CreateContextAsync();
+        await ctx.SeedLiveAsync(db => db.Providers.Add(SimpleProvider("live-original")));
+        await ctx.StageSourceBackupAsync(db => db.Providers.Add(SimpleProvider("src-restored")));
+
+        var marker = ctx.StateStore.Read()!;
+        ctx.StateStore.Write(marker with
+        {
+            UpdatedUtc = DateTime.UtcNow - PortableRestoreService.StagedRestoreValidity - TimeSpan.FromMinutes(1),
+        });
+
+        var applied = await ctx.Restore.ApplyPendingRestoreIfAnyAsync(CancellationToken.None);
+
+        Assert.IsTrue(applied, "An expired staged restore is still a recorded attempt.");
+        var outcome = ctx.StateStore.Read()!;
+        Assert.AreEqual(RestoreState.Failed, outcome.State);
+        Assert.IsTrue(outcome.ErrorMessage!.Contains("expired", StringComparison.OrdinalIgnoreCase), outcome.ErrorMessage);
+        Assert.AreEqual(1, await CountRowsAsync(ctx.RuntimePaths.DatabasePath, "providers", "provider_id = 'live-original'"), "The live database must be untouched.");
+        Assert.AreEqual(0, await CountRowsAsync(ctx.RuntimePaths.DatabasePath, "providers", "provider_id = 'src-restored'"));
+    }
+
+    [TestMethod]
+    public async Task PreflightAsync_TooManyArchiveEntries_Fails()
+    {
+        await using var ctx = await CreateContextAsync();
+        var archivePath = await ctx.CreateSourceBackupAsync(db => db.Providers.Add(SimpleProvider("src")));
+
+        using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update))
+        {
+            for (var i = 0; i < PortableBackupFormat.MaxEntryCount; i++)
+            {
+                var entry = archive.CreateEntry($"padding-{i}.txt");
+                await using var stream = entry.Open();
+                stream.WriteByte(0);
+            }
+        }
+
+        var result = await ctx.Restore.PreflightAsync(archivePath, CancellationToken.None);
+
+        Assert.IsFalse(result.Success);
+        Assert.IsTrue(result.Errors.Any(e => e.Contains("too many entries", StringComparison.OrdinalIgnoreCase)), string.Join(" ", result.Errors));
+    }
+
+    [TestMethod]
+    public async Task ApplyAsync_RotatesSecurityStamps_SoPreRestoreSessionsStopValidating()
+    {
+        await using var ctx = await CreateContextAsync();
+        var archivePath = await ctx.CreateSourceBackupAsync(db => db.Users.Add(new ApplicationUser
+        {
+            Id = "user-1",
+            UserName = "admin",
+            NormalizedUserName = "ADMIN",
+            SecurityStamp = "ORIGINAL-STAMP",
+            ConcurrencyStamp = Guid.NewGuid().ToString(),
+        }));
+
+        var result = await ctx.Restore.ApplyAsync(archivePath, CancellationToken.None);
+
+        Assert.IsTrue(result.Success, result.ErrorMessage);
+        Assert.AreEqual(1, await CountRowsAsync(ctx.RuntimePaths.DatabasePath, "AspNetUsers", "\"Id\" = 'user-1'"), "The user itself must survive the restore.");
+        Assert.AreEqual(0, await CountRowsAsync(ctx.RuntimePaths.DatabasePath, "AspNetUsers", "\"SecurityStamp\" = 'ORIGINAL-STAMP'"),
+            "Every security stamp must be rotated so cookies from before the restore stop validating.");
+    }
+
+    [TestMethod]
+    public async Task ApplyAsync_ClearsStaleSnapshotAndHlsArtifacts()
+    {
+        await using var ctx = await CreateContextAsync();
+        var archivePath = await ctx.CreateSourceBackupAsync(db => db.Providers.Add(SimpleProvider("src-restored")));
+
+        var snapshotDir = Path.Combine(ctx.RuntimePaths.SnapshotDirectory, "m3undle", "stale-snapshot");
+        Directory.CreateDirectory(snapshotDir);
+        await File.WriteAllTextAsync(Path.Combine(snapshotDir, "playlist.m3u"), "#EXTM3U");
+        var hlsWorkDir = Path.Combine(ctx.TempDataDir, "hls-work");
+        Directory.CreateDirectory(hlsWorkDir);
+        await File.WriteAllTextAsync(Path.Combine(hlsWorkDir, "segment-0.ts"), "stale");
+
+        var result = await ctx.Restore.ApplyAsync(archivePath, CancellationToken.None);
+
+        Assert.IsTrue(result.Success, result.ErrorMessage);
+        Assert.AreEqual(0, Directory.EnumerateFileSystemEntries(ctx.RuntimePaths.SnapshotDirectory).Count(), "Stale snapshot artifacts must be cleared.");
+        Assert.AreEqual(0, Directory.EnumerateFileSystemEntries(hlsWorkDir).Count(), "Stale HLS work files must be cleared.");
+    }
+
+    [TestMethod]
     public async Task ApplyEnvironmentRestoreIfRequestedAsync_NoVariableSet_ReturnsFalseAndTouchesNothing()
     {
         await using var ctx = await CreateContextAsync();
@@ -312,7 +416,7 @@ public sealed class PortableRestoreServiceTests
             DatabasePath: livePath,
             DatabaseConnectionString: liveConnectionString,
             LogDirectory: string.Empty,
-            SnapshotDirectory: string.Empty);
+            SnapshotDirectory: Path.Combine(tempDataDir, "snapshots"));
 
         var ctx = new TestContext(tempDataDir, runtimePaths, liveConnectionString);
         await ctx.InitializeAsync();
@@ -450,7 +554,7 @@ public sealed class PortableRestoreServiceTests
             _liveDb = liveDb;
             var sqliteBackup = new SqliteBackupService(liveDb, RuntimePaths, NullLogger<SqliteBackupService>.Instance);
             var buildInfo = new AppBuildInfo("1.2.3-test", null, null, null);
-            var backupService = new PortableBackupService(liveDb, sqliteBackup, RuntimePaths, encryption, buildInfo, new DestructiveOperationLock(), NullLogger<PortableBackupService>.Instance);
+            var backupService = new PortableBackupService(liveDb, sqliteBackup, RuntimePaths, encryption, buildInfo, new DestructiveOperationLock(), StateStore, NullLogger<PortableBackupService>.Instance);
 
             var environmentVariableService = new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance);
             return new PortableRestoreService(
@@ -463,6 +567,22 @@ public sealed class PortableRestoreServiceTests
             await using var db = new ApplicationDbContext(CreateOptions(liveConnectionString));
             seed(db);
             await db.SaveChangesAsync();
+        }
+
+        /// <summary>Creates a source backup, copies it under the live backups directory, and stages it.</summary>
+        public async Task<string> StageSourceBackupAsync(Action<ApplicationDbContext> seed)
+        {
+            var archivePath = await CreateSourceBackupAsync(seed);
+            var liveBackupsDir = Path.Combine(TempDataDir, "backups");
+            Directory.CreateDirectory(liveBackupsDir);
+            var fileName = Path.GetFileName(archivePath);
+            File.Copy(archivePath, Path.Combine(liveBackupsDir, fileName));
+
+            var stageResult = await Restore.StageAsync(fileName, CancellationToken.None);
+            if (!stageResult.Success)
+                throw new InvalidOperationException("Failed to stage backup for test: " + string.Join(" ", stageResult.Errors));
+
+            return fileName;
         }
 
         public async Task<string> CreateSourceBackupAsync(Action<ApplicationDbContext> seed, SecretEncryptionService? encryption = null)
@@ -485,7 +605,8 @@ public sealed class PortableRestoreServiceTests
             var sourceEncryption = encryption ?? new SecretEncryptionService(new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance));
             var buildInfo = new AppBuildInfo("1.2.3-test", null, null, null);
             var sourceBackupService = new PortableBackupService(
-                sourceDb, sourceSqliteBackup, sourceRuntimePaths, sourceEncryption, buildInfo, new DestructiveOperationLock(), NullLogger<PortableBackupService>.Instance);
+                sourceDb, sourceSqliteBackup, sourceRuntimePaths, sourceEncryption, buildInfo, new DestructiveOperationLock(),
+                new RestoreStateStore(sourceRuntimePaths), NullLogger<PortableBackupService>.Instance);
 
             var result = await sourceBackupService.CreateAsync(CancellationToken.None);
             if (!result.Success)

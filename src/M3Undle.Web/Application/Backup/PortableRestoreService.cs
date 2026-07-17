@@ -30,6 +30,17 @@ public sealed class PortableRestoreService(
 
     private const int RetainedCheckpointCount = 2;
 
+    /// <summary>
+    /// How long a staged (Requested) restore stays valid. Staging is supposed to be followed
+    /// immediately by a confirm/restart; without an expiry, an abandoned staged restore would
+    /// silently replace the database on whatever restart happens next — a host reboot or an
+    /// image upgrade weeks later.
+    /// </summary>
+    internal static readonly TimeSpan StagedRestoreValidity = TimeSpan.FromMinutes(15);
+
+    /// <summary>Free space to demand beyond the calculated staging + checkpoint requirement.</summary>
+    private const long DiskSpaceSlackBytes = 64L * 1024 * 1024;
+
     /// <summary>Test-only fault injection hook — see the call site in <see cref="ApplyAsync"/>.</summary>
     internal Action? SimulateFailureAfterCheckpointForTests { get; set; }
 
@@ -62,6 +73,10 @@ public sealed class PortableRestoreService(
         if (!File.Exists(archivePath))
             return PortableRestorePreflightResult.Failed(["Archive file not found."]);
 
+        if (new FileInfo(archivePath).Length > PortableBackupFormat.MaxArchiveSizeBytes)
+            return PortableRestorePreflightResult.Failed(
+                [$"Archive exceeds the {PortableBackupFormat.MaxArchiveSizeBytes / (1024 * 1024)} MB size limit."]);
+
         var workDir = Path.Combine(runtimePaths.DataDirectory, "restore-work", $"preflight-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workDir);
 
@@ -79,6 +94,9 @@ public sealed class PortableRestoreService(
 
             using (archive)
             {
+                if (archive.Entries.Count > PortableBackupFormat.MaxEntryCount)
+                    return PortableRestorePreflightResult.Failed([$"Archive contains too many entries ({archive.Entries.Count})."]);
+
                 foreach (var entry in archive.Entries)
                 {
                     if (entry.FullName.Contains("..", StringComparison.Ordinal) || Path.IsPathRooted(entry.FullName))
@@ -92,8 +110,24 @@ public sealed class PortableRestoreService(
                     return PortableRestorePreflightResult.Failed(["Archive is missing a required entry."]);
 
                 PortableBackupManifest? manifest;
-                await using (var manifestStream = manifestEntry.Open())
-                    manifest = await JsonSerializer.DeserializeAsync<PortableBackupManifest>(manifestStream, JsonOptions, cancellationToken);
+                try
+                {
+                    // Read through a hard byte cap rather than trusting the entry's declared
+                    // length — a crafted central directory can understate it.
+                    using var manifestBuffer = new MemoryStream();
+                    await using (var manifestStream = manifestEntry.Open())
+                        await CopyWithLimitAsync(manifestStream, manifestBuffer, PortableBackupFormat.MaxMetadataEntrySizeBytes, "manifest.json", cancellationToken);
+                    manifestBuffer.Position = 0;
+                    manifest = await JsonSerializer.DeserializeAsync<PortableBackupManifest>(manifestBuffer, JsonOptions, cancellationToken);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return PortableRestorePreflightResult.Failed([ex.Message]);
+                }
+                catch (JsonException)
+                {
+                    manifest = null;
+                }
 
                 if (manifest is null)
                     return PortableRestorePreflightResult.Failed(["manifest.json could not be parsed."]);
@@ -109,7 +143,18 @@ public sealed class PortableRestoreService(
                     return PortableRestorePreflightResult.Failed(errors, manifest);
 
                 var extractedDbPath = Path.Combine(workDir, "configuration.db");
-                databaseEntry.ExtractToFile(extractedDbPath);
+                try
+                {
+                    await ExtractEntryWithLimitAsync(databaseEntry, extractedDbPath, PortableBackupFormat.MaxDatabaseSizeBytes, cancellationToken);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return PortableRestorePreflightResult.Failed([ex.Message], manifest);
+                }
+
+                var diskSpaceError = CheckDiskSpace(new FileInfo(extractedDbPath).Length);
+                if (diskSpaceError is not null)
+                    return PortableRestorePreflightResult.Failed([diskSpaceError], manifest);
 
                 var actualHash = await ComputeSha256Async(extractedDbPath, cancellationToken);
                 if (!string.Equals(actualHash, manifest.DatabaseSha256, StringComparison.Ordinal))
@@ -157,6 +202,21 @@ public sealed class PortableRestoreService(
 
     /// <summary>Clears a completed/failed/rolled-back status once the operator has seen it.</summary>
     public void ClearStatus() => stateStore.Clear();
+
+    /// <summary>
+    /// Cancels a staged (Requested) restore so it can no longer fire on a future restart.
+    /// Returns false if nothing was staged.
+    /// </summary>
+    public bool CancelStagedRestore()
+    {
+        var marker = stateStore.Read();
+        if (marker is null || marker.State != RestoreState.Requested)
+            return false;
+
+        stateStore.Clear();
+        logger.LogInformation("Staged restore of backup {BackupId} was cancelled.", marker.BackupId);
+        return true;
+    }
 
     /// <summary>
     /// Runs preflight against an existing server-side backup and, if it passes, records a
@@ -246,6 +306,21 @@ public sealed class PortableRestoreService(
         if (marker is null || marker.State != RestoreState.Requested)
             return false;
 
+        // A staged restore is a destructive commitment; if the confirm/restart never happened
+        // (abandoned browser session, failed restart), it must not fire on some unrelated
+        // restart days later.
+        if (DateTime.UtcNow - marker.UpdatedUtc > StagedRestoreValidity)
+        {
+            stateStore.Write(marker with
+            {
+                State = RestoreState.Failed,
+                ErrorMessage = $"Staged restore expired: it was staged at {marker.UpdatedUtc:u} but not confirmed within {StagedRestoreValidity.TotalMinutes:0} minutes. Stage it again to restore.",
+                UpdatedUtc = DateTime.UtcNow,
+            });
+            logger.LogWarning("Staged restore of backup {BackupId} expired without confirmation and was not applied.", marker.BackupId);
+            return true;
+        }
+
         var archivePath = backupService.ResolvePath(marker.ArchiveFileName);
         if (archivePath is null)
         {
@@ -288,12 +363,12 @@ public sealed class PortableRestoreService(
 
         try
         {
+            var extractedDbPath = Path.Combine(workDir, "configuration.db");
             using (var archive = ZipFile.OpenRead(archivePath))
             {
-                archive.GetEntry("configuration.db")!.ExtractToFile(Path.Combine(workDir, "configuration.db"));
+                await ExtractEntryWithLimitAsync(
+                    archive.GetEntry("configuration.db")!, extractedDbPath, PortableBackupFormat.MaxDatabaseSizeBytes, cancellationToken);
             }
-
-            var extractedDbPath = Path.Combine(workDir, "configuration.db");
 
             // Bring the extracted database fully up to date with this app's migrations before it
             // ever becomes the live database — the shared migration call in Program.cs that runs
@@ -342,6 +417,13 @@ public sealed class PortableRestoreService(
                 throw new InvalidOperationException(
                     $"Migrated backup database does not match the schema this version produces: {string.Join(" ", schemaDifferences)}");
 
+            // Rotate every user's security stamp in the database that is about to go live, so
+            // cookies issued on the pre-restore timeline (or on whatever host created the
+            // backup) stop validating and everyone signs in again — see plan §7.8. Requires the
+            // security-stamp validation interval configured in Program.cs to take effect
+            // immediately rather than at the default 30-minute revalidation.
+            await RotateSecurityStampsAsync(extractedDbPath, cancellationToken);
+
             // --- Point of no return: everything past here touches the live database file. ---
             checkpointPath = await CreateRollbackCheckpointAsync(cancellationToken);
             stateStore.Write(new RestoreStateMarker
@@ -364,6 +446,11 @@ public sealed class PortableRestoreService(
             var postSwapCheck = await RunQuickCheckAsync(runtimePaths.DatabasePath, cancellationToken);
             if (postSwapCheck is not null)
                 throw new InvalidOperationException($"Live database failed integrity check immediately after restore: {postSwapCheck}");
+
+            // The restored database's snapshots table is empty (excluded from backup), so any
+            // artifact files on disk belong to the discarded timeline and nothing references
+            // them. Best-effort cleanup; the post-restore refresh regenerates everything.
+            ClearStaleWorkDirectories();
 
             stateStore.Write(new RestoreStateMarker
             {
@@ -435,6 +522,52 @@ public sealed class PortableRestoreService(
         {
             if (Directory.Exists(workDir))
                 Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    private static async Task RotateSecurityStampsAsync(string databasePath, CancellationToken cancellationToken)
+    {
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
+        var connection = new SqliteConnection(connectionString);
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            // randomblob is evaluated per row, so every user gets a distinct new stamp.
+            command.CommandText = "UPDATE \"AspNetUsers\" SET \"SecurityStamp\" = upper(hex(randomblob(16)))";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+            SqliteConnection.ClearPool(connection);
+        }
+    }
+
+    private void ClearStaleWorkDirectories()
+    {
+        // hls-work is the default GeneratedHlsOptions directory under the data dir; a custom
+        // configured path isn't cleaned here (best-effort — stale HLS segments are harmless,
+        // they're only reachable through sessions that died with the restart).
+        foreach (var dir in new[] { runtimePaths.SnapshotDirectory, Path.Combine(runtimePaths.DataDirectory, "hls-work") })
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                continue;
+
+            try
+            {
+                foreach (var child in Directory.EnumerateFileSystemEntries(dir))
+                {
+                    if (Directory.Exists(child))
+                        Directory.Delete(child, recursive: true);
+                    else
+                        File.Delete(child);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "Could not fully clear stale work directory {Directory} after restore; the next refresh will overwrite it.", dir);
+            }
         }
     }
 
@@ -517,6 +650,60 @@ public sealed class PortableRestoreService(
 
         using var connection = new SqliteConnection(connectionString);
         SqliteConnection.ClearPool(connection);
+    }
+
+    /// <summary>
+    /// Enough free space for the extracted database during staging plus a rollback checkpoint of
+    /// the live database, with slack. Best-effort: if free space can't be determined (unusual
+    /// mounts), the restore proceeds rather than being blocked on a probe failure.
+    /// </summary>
+    private string? CheckDiskSpace(long extractedDatabaseBytes)
+    {
+        long liveDatabaseBytes = 0;
+        if (!string.IsNullOrEmpty(runtimePaths.DatabasePath) && File.Exists(runtimePaths.DatabasePath))
+            liveDatabaseBytes = new FileInfo(runtimePaths.DatabasePath).Length;
+
+        var required = extractedDatabaseBytes + liveDatabaseBytes + DiskSpaceSlackBytes;
+        long availableBytes;
+        try
+        {
+            var probePath = OperatingSystem.IsWindows()
+                ? Path.GetPathRoot(Path.GetFullPath(runtimePaths.DataDirectory))!
+                : runtimePaths.DataDirectory;
+            availableBytes = new DriveInfo(probePath).AvailableFreeSpace;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return availableBytes >= required
+            ? null
+            : $"Not enough free disk space for the restore: {required / (1024 * 1024)} MB required (staging plus rollback checkpoint), {availableBytes / (1024 * 1024)} MB available.";
+    }
+
+    private static async Task ExtractEntryWithLimitAsync(
+        ZipArchiveEntry entry, string destinationPath, long maxBytes, CancellationToken cancellationToken)
+    {
+        await using var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write);
+        await using var source = entry.Open();
+        await CopyWithLimitAsync(source, destination, maxBytes, entry.FullName, cancellationToken);
+    }
+
+    private static async Task CopyWithLimitAsync(
+        Stream source, Stream destination, long maxBytes, string entryName, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            total += read;
+            if (total > maxBytes)
+                throw new InvalidOperationException($"Archive entry '{entryName}' expands beyond the {maxBytes / (1024 * 1024)} MB limit.");
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
     }
 
     private static bool IsSqliteHeaderValid(string path)

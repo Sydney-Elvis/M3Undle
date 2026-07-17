@@ -24,14 +24,23 @@ public sealed class PortableBackupService(
     SecretEncryptionService encryption,
     AppBuildInfo buildInfo,
     DestructiveOperationLock destructiveOperationLock,
+    RestoreStateStore restoreStateStore,
     ILogger<PortableBackupService> logger)
 {
     private const int RetainedBackupCount = 5;
+    private const int RetainedUploadCount = 3;
+    private const string UploadedFileNamePrefix = "uploaded-";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     public async Task<PortableBackupResult> CreateAsync(CancellationToken cancellationToken)
     {
+        // A staged restore references a specific backup state; creating (and retention-pruning)
+        // backups while one is armed invites confusion at best — plan §6 requires the block.
+        if (restoreStateStore.Read() is { State: RestoreState.Requested })
+            return PortableBackupResult.Failed(
+                "A restore is staged and waiting for a restart. Confirm or cancel it before creating a backup.");
+
         if (!destructiveOperationLock.TryAcquire("portable-backup", out var lockHandle))
             return PortableBackupResult.Failed(
                 $"Another destructive operation ({destructiveOperationLock.CurrentOperation}) is already in progress. Try again once it completes.");
@@ -171,16 +180,80 @@ public sealed class PortableBackupService(
         var backupsDir = Path.Combine(runtimePaths.DataDirectory, "backups");
         Directory.CreateDirectory(backupsDir);
 
-        var fileName = $"uploaded-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}{PortableBackupFormat.ArchiveExtension}";
+        var fileName = $"{UploadedFileNamePrefix}{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..8]}{PortableBackupFormat.ArchiveExtension}";
         var destinationPath = Path.Combine(backupsDir, fileName);
 
-        await using (var fileStream = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write))
+        try
         {
-            await content.CopyToAsync(fileStream, cancellationToken);
+            await using (var fileStream = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write))
+            {
+                // Transport-level limits exist too (endpoint body-size cap, InputFile max size),
+                // but the service enforces its own ceiling so no caller can bypass it.
+                var buffer = new byte[81920];
+                long total = 0;
+                int read;
+                while ((read = await content.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    total += read;
+                    if (total > PortableBackupFormat.MaxArchiveSizeBytes)
+                        throw new InvalidOperationException(
+                            $"Uploaded archive exceeds the {PortableBackupFormat.MaxArchiveSizeBytes / (1024 * 1024)} MB size limit.");
+
+                    await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                }
+            }
+        }
+        catch
+        {
+            if (File.Exists(destinationPath))
+                File.Delete(destinationPath);
+            throw;
         }
 
         SetOwnerOnlyPermissions(destinationPath);
+        EnforceRetention(backupsDir);
         return fileName;
+    }
+
+    /// <summary>
+    /// Reads the manifest and report out of a stored archive for display. Returns nulls (never
+    /// throws) for corrupt or non-archive files — display code treats that as "no data", while
+    /// real validation stays preflight's job.
+    /// </summary>
+    public (PortableBackupManifest? Manifest, PortableBackupReport? Report) ReadArchiveInfo(string fileName)
+    {
+        var path = ResolvePath(fileName);
+        if (path is null)
+            return (null, null);
+
+        try
+        {
+            using var archive = ZipFile.OpenRead(path);
+            return (
+                ReadJsonEntry<PortableBackupManifest>(archive, "manifest.json"),
+                ReadJsonEntry<PortableBackupReport>(archive, "backup-report.json"));
+        }
+        catch (InvalidDataException)
+        {
+            return (null, null);
+        }
+    }
+
+    private static T? ReadJsonEntry<T>(ZipArchive archive, string entryName) where T : class
+    {
+        var entry = archive.GetEntry(entryName);
+        if (entry is null || entry.Length > PortableBackupFormat.MaxMetadataEntrySizeBytes)
+            return null;
+
+        try
+        {
+            using var stream = entry.Open();
+            return JsonSerializer.Deserialize<T>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async Task<Dictionary<string, int>> PruneExcludedTablesAsync(string databasePath, CancellationToken cancellationToken)
@@ -234,11 +307,26 @@ public sealed class PortableBackupService(
 
     private int EnforceRetention(string backupsDir)
     {
-        var stale = Directory.EnumerateFiles(backupsDir, $"*{PortableBackupFormat.ArchiveExtension}")
+        // Uploaded archives are retained separately: they share the directory and extension,
+        // but counting them against the created-backup budget would let a handful of uploads
+        // silently evict every real backup. Neither pool ever deletes the archive a staged
+        // (Requested) restore is waiting to apply.
+        var stagedFileName = restoreStateStore.Read() is { State: RestoreState.Requested } marker
+            ? marker.ArchiveFileName
+            : null;
+
+        var allArchives = Directory.EnumerateFiles(backupsDir, $"*{PortableBackupFormat.ArchiveExtension}")
             .Select(path => new FileInfo(path))
+            .Where(f => !string.Equals(f.Name, stagedFileName, StringComparison.Ordinal))
             .OrderByDescending(f => f.LastWriteTimeUtc)
-            .Skip(RetainedBackupCount)
             .ToList();
+
+        var stale = allArchives
+            .Where(f => !f.Name.StartsWith(UploadedFileNamePrefix, StringComparison.Ordinal))
+            .Skip(RetainedBackupCount)
+            .Concat(allArchives
+                .Where(f => f.Name.StartsWith(UploadedFileNamePrefix, StringComparison.Ordinal))
+                .Skip(RetainedUploadCount));
 
         var removed = 0;
         foreach (var file in stale)

@@ -27,6 +27,15 @@ public sealed class ValidateBackupResponse
     public DateTime? CreatedUtc { get; set; }
 }
 
+public sealed class UploadBackupResponse
+{
+    public string FileName { get; set; } = string.Empty;
+    public long SizeBytes { get; set; }
+    public DateTime CreatedUtc { get; set; }
+    public bool Valid { get; set; }
+    public IReadOnlyList<string> ValidationErrors { get; set; } = [];
+}
+
 public sealed class BackupScheduleResponse
 {
     public bool Enabled { get; set; }

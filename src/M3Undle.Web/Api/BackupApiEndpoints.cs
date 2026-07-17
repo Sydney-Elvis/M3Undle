@@ -2,13 +2,13 @@ using M3Undle.Web.Application.Backup;
 using M3Undle.Web.Contracts;
 using M3Undle.Web.Security;
 using Microsoft.AspNetCore.Http.HttpResults;
-using Microsoft.AspNetCore.Mvc;
 
 namespace M3Undle.Web.Api;
 
 public static class BackupApiEndpoints
 {
-    private const long MaxUploadBytes = 500L * 1024 * 1024;
+    /// <summary>Rate-limit policy applied to backup/restore initiation endpoints — defined in Program.cs.</summary>
+    public const string RateLimitPolicyName = "backup-restore";
 
     public static IEndpointRouteBuilder MapBackupApiEndpoints(this IEndpointRouteBuilder app)
     {
@@ -17,15 +17,16 @@ public static class BackupApiEndpoints
         backups.WithTags("Backups");
 
         backups.MapGet("/", ListAsync).WithSummary("List portable backups");
-        backups.MapPost("/", CreateAsync).WithSummary("Create a portable backup now");
+        backups.MapPost("/", CreateAsync).WithSummary("Create a portable backup now")
+            .RequireRateLimiting(RateLimitPolicyName);
         backups.MapGet("/{fileName}/download", DownloadAsync).WithSummary("Download a portable backup archive");
-        backups.MapPost("/{fileName}/validate", ValidateAsync).WithSummary("Validate a portable backup archive");
+        backups.MapPost("/{fileName}/validate", ValidateAsync).WithSummary("Validate a portable backup archive")
+            .RequireRateLimiting(RateLimitPolicyName);
         backups.MapDelete("/{fileName}", Delete).WithSummary("Delete a portable backup");
 
         backups.MapPost("/upload", UploadAsync)
-            .WithSummary("Upload a portable backup archive for later restore")
-            .DisableAntiforgery()
-            .WithMetadata(new RequestFormLimitsAttribute { MultipartBodyLengthLimit = MaxUploadBytes });
+            .WithSummary("Upload a portable backup archive for later restore. Requires an X-Requested-With header.")
+            .RequireRateLimiting(RateLimitPolicyName);
 
         backups.MapGet("/schedule", GetScheduleAsync).WithSummary("Get the weekly backup schedule");
         backups.MapPut("/schedule", SetScheduleAsync).WithSummary("Enable or disable the weekly backup schedule");
@@ -91,17 +92,55 @@ public static class BackupApiEndpoints
     private static Results<NoContent, NotFound> Delete(string fileName, PortableBackupService backupService)
         => backupService.Delete(fileName) ? TypedResults.NoContent() : TypedResults.NotFound();
 
-    private static async Task<Results<Ok<BackupSummaryResponse>, BadRequest<string>>> UploadAsync(
-        IFormFile file, PortableBackupService backupService, CancellationToken cancellationToken)
+    // Binds HttpContext instead of IFormFile: form binding would read the body before the
+    // per-request size limit could be raised (Kestrel's ~30 MB default is below the archive
+    // cap), and would also require antiforgery tokens that non-browser API clients can't
+    // produce. CSRF is covered by requiring a custom header instead — cross-site form posts
+    // can't set one, while curl/scripts trivially can.
+    private static async Task<Results<Ok<UploadBackupResponse>, BadRequest<string>>> UploadAsync(
+        HttpContext context, PortableBackupService backupService, PortableRestoreService restoreService, CancellationToken cancellationToken)
     {
-        if (file.Length == 0)
-            return TypedResults.BadRequest("Uploaded file is empty.");
+        if (!context.Request.Headers.ContainsKey("X-Requested-With"))
+            return TypedResults.BadRequest("Missing required X-Requested-With header.");
 
-        await using var stream = file.OpenReadStream();
-        var savedFileName = await backupService.SaveUploadedArchiveAsync(stream, cancellationToken);
+        var sizeLimitFeature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+        if (sizeLimitFeature is { IsReadOnly: false })
+            sizeLimitFeature.MaxRequestBodySize = PortableBackupFormat.MaxArchiveSizeBytes + 1024 * 1024;
+
+        if (!context.Request.HasFormContentType)
+            return TypedResults.BadRequest("Expected a multipart form upload.");
+
+        var form = await context.Request.ReadFormAsync(cancellationToken);
+        var file = form.Files.Count == 1 ? form.Files[0] : null;
+        if (file is null || file.Length == 0)
+            return TypedResults.BadRequest("Expected exactly one non-empty file.");
+
+        string savedFileName;
+        await using (var stream = file.OpenReadStream())
+        {
+            try
+            {
+                savedFileName = await backupService.SaveUploadedArchiveAsync(stream, cancellationToken);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return TypedResults.BadRequest(ex.Message);
+            }
+        }
+
+        // Validate immediately so a corrupt or incompatible upload is flagged now, not at
+        // restore time. The file is kept either way — the caller decides whether to delete it.
+        var preflight = await restoreService.PreflightAsync(backupService.ResolvePath(savedFileName)!, cancellationToken);
         var summary = backupService.List().First(s => s.FileName == savedFileName);
 
-        return TypedResults.Ok(new BackupSummaryResponse { FileName = summary.FileName, SizeBytes = summary.SizeBytes, CreatedUtc = summary.CreatedUtc });
+        return TypedResults.Ok(new UploadBackupResponse
+        {
+            FileName = summary.FileName,
+            SizeBytes = summary.SizeBytes,
+            CreatedUtc = summary.CreatedUtc,
+            Valid = preflight.Success,
+            ValidationErrors = preflight.Errors,
+        });
     }
 
     private static async Task<Ok<BackupScheduleResponse>> GetScheduleAsync(IBackupScheduleService scheduleService, CancellationToken cancellationToken)
