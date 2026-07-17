@@ -320,6 +320,28 @@ public sealed class PortableRestoreService(
             if (fkViolations.Count > 0)
                 throw new InvalidOperationException($"Migrated backup database has foreign key violations: {string.Join("; ", fkViolations)}");
 
+            // The migration-name check in preflight can't detect a backup whose schema silently
+            // diverged from what its recorded migration produces (the failure mode of editing an
+            // already-shipped migration in place). Compare the migrated database structurally
+            // against a pristine database built from this binary's own migrations, and refuse to
+            // swap in anything that doesn't match — before the checkpoint, so nothing is touched.
+            var pristineDbPath = Path.Combine(workDir, "pristine.db");
+            var pristineConnectionString = new SqliteConnectionStringBuilder { DataSource = pristineDbPath }.ToString();
+            await using (var pristineContext = new ApplicationDbContext(
+                new DbContextOptionsBuilder<ApplicationDbContext>()
+                    .UseSqlite(pristineConnectionString)
+                    .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning))
+                    .Options))
+            {
+                await pristineContext.Database.MigrateAsync(cancellationToken);
+            }
+            ClearPoolFor(pristineConnectionString);
+
+            var schemaDifferences = await SqliteSchemaComparer.CompareAsync(pristineDbPath, extractedDbPath, cancellationToken);
+            if (schemaDifferences.Count > 0)
+                throw new InvalidOperationException(
+                    $"Migrated backup database does not match the schema this version produces: {string.Join(" ", schemaDifferences)}");
+
             // --- Point of no return: everything past here touches the live database file. ---
             checkpointPath = await CreateRollbackCheckpointAsync(cancellationToken);
             stateStore.Write(new RestoreStateMarker

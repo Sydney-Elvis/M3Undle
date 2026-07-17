@@ -15,7 +15,7 @@ namespace M3Undle.Web.Data.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.7");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.9");
 
             modelBuilder.Entity("M3Undle.Web.Data.ApplicationUser", b =>
                 {
@@ -1964,30 +1964,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("snapshots", (string)null);
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.XtreamSeriesCache", b =>
-                {
-                    b.Property<string>("ProviderId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_id");
-
-                    b.Property<int>("SeriesId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("series_id");
-
-                    b.Property<long>("LastModifiedEpoch")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("last_modified_epoch");
-
-                    b.Property<string>("EpisodesJson")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("episodes_json");
-
-                    b.HasKey("ProviderId", "SeriesId");
-
-                    b.ToTable("xtream_series_cache", (string)null);
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.StreamChannelHealthEvent", b =>
                 {
                     b.Property<string>("StreamChannelHealthEventId")
@@ -2199,6 +2175,30 @@ namespace M3Undle.Web.Data.Migrations
                         .HasFilter("\"provider_id\" IS NOT NULL");
 
                     b.ToTable("system_events", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.XtreamSeriesCache", b =>
+                {
+                    b.Property<string>("ProviderId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_id");
+
+                    b.Property<int>("SeriesId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("series_id");
+
+                    b.Property<string>("EpisodesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("episodes_json");
+
+                    b.Property<long>("LastModifiedEpoch")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_modified_epoch");
+
+                    b.HasKey("ProviderId", "SeriesId");
+
+                    b.ToTable("xtream_series_cache", (string)null);
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
@@ -2698,17 +2698,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Provider");
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.XtreamSeriesCache", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
-                        .WithMany()
-                        .HasForeignKey("ProviderId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Provider");
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Snapshot", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.Profile", "Profile")
@@ -2737,6 +2726,17 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Channel");
 
                     b.Navigation("Profile");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.XtreamSeriesCache", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
+                        .WithMany()
+                        .HasForeignKey("ProviderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Provider");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

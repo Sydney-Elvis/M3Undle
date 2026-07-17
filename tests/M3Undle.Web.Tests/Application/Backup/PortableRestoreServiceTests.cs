@@ -167,6 +167,30 @@ public sealed class PortableRestoreServiceTests
     }
 
     [TestMethod]
+    public async Task ApplyAsync_BackupSchemaDivergesFromMigrations_BlocksBeforeCheckpoint()
+    {
+        await using var ctx = await CreateContextAsync();
+        await ctx.SeedLiveAsync(db => db.Providers.Add(SimpleProvider("live-original")));
+        var archivePath = await ctx.CreateSourceBackupAsync(db => db.Providers.Add(SimpleProvider("src-restored")));
+
+        // Simulate the in-place-migration-edit failure mode: the backup's migration history
+        // claims a known schema version, but its physical schema differs from what this
+        // binary's migrations actually produce.
+        AddRogueColumnToArchivedDatabase(archivePath, table: "providers", column: "rogue_col");
+
+        var result = await ctx.Restore.ApplyAsync(archivePath, CancellationToken.None);
+
+        Assert.IsFalse(result.Success);
+        Assert.IsFalse(result.RolledBack, "Schema mismatch must be detected before the checkpoint, so nothing rolls back.");
+        Assert.IsTrue(result.ErrorMessage!.Contains("rogue_col", StringComparison.Ordinal), result.ErrorMessage);
+
+        Assert.AreEqual(1, await CountRowsAsync(ctx.RuntimePaths.DatabasePath, "providers", "provider_id = 'live-original'"));
+
+        var checkpointsDir = Path.Combine(ctx.TempDataDir, "backups", "checkpoints");
+        Assert.IsFalse(Directory.Exists(checkpointsDir) && Directory.EnumerateFiles(checkpointsDir, "rollback-*.db").Any());
+    }
+
+    [TestMethod]
     public async Task StageAsync_ThenApplyPendingRestoreIfAny_AppliesTheRestoreAndTriggersRefresh()
     {
         await using var ctx = await CreateContextAsync();
@@ -332,6 +356,43 @@ public sealed class PortableRestoreServiceTests
         var newEntry = archive.CreateEntry("manifest.json");
         using var writeStream = newEntry.Open();
         JsonSerializer.Serialize(writeStream, mutated, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    /// <summary>
+    /// Alters the archived configuration.db (adding a column the app's migrations never
+    /// created) and rewrites the manifest checksum so the tampering isn't what preflight
+    /// catches — only the schema comparison can.
+    /// </summary>
+    private static void AddRogueColumnToArchivedDatabase(string archivePath, string table, string column)
+    {
+        var tempDbPath = Path.Combine(Path.GetTempPath(), $"m3undle-rogue-{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Update))
+            {
+                archive.GetEntry("configuration.db")!.ExtractToFile(tempDbPath);
+
+                using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = tempDbPath }.ToString()))
+                {
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = $"ALTER TABLE \"{table}\" ADD COLUMN \"{column}\" TEXT";
+                    command.ExecuteNonQuery();
+                }
+                SqliteConnection.ClearAllPools();
+
+                archive.GetEntry("configuration.db")!.Delete();
+                archive.CreateEntryFromFile(tempDbPath, "configuration.db");
+            }
+
+            var newHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(tempDbPath))).ToLowerInvariant();
+            RewriteManifest(archivePath, m => m with { DatabaseSha256 = newHash });
+        }
+        finally
+        {
+            if (File.Exists(tempDbPath))
+                File.Delete(tempDbPath);
+        }
     }
 
     private static string RandomKey() => Convert.ToBase64String(RandomBytes(32));
