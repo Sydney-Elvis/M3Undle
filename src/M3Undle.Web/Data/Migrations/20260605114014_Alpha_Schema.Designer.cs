@@ -1663,6 +1663,16 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("authentication_enabled");
 
+                    b.Property<DateTime?>("BackupLastRunUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("backup_last_run_utc");
+
+                    b.Property<bool>("BackupScheduleEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false)
+                        .HasColumnName("backup_schedule_enabled");
+
                     b.Property<bool>("EndpointSecurityEnabled")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
@@ -1854,6 +1864,7 @@ namespace M3Undle.Web.Data.Migrations
                         {
                             Id = 1,
                             AuthenticationEnabled = false,
+                            BackupScheduleEnabled = false,
                             EndpointSecurityEnabled = false,
                             EventRetentionDays = 7,
                             GeneratedHlsEnabled = true,

@@ -199,6 +199,47 @@ public sealed class EncryptionRotationServiceTests
     }
 
     [TestMethod]
+    public async Task RotateAsync_AnotherDestructiveOperationHoldsTheLock_FailsWithoutTouchingRowsOrTakingBackup()
+    {
+        var oldKey = RandomKey();
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Providers.Add(SimpleProvider("p1", EncryptLegacyFormat("pw1", oldKey)));
+            await setup.SaveChangesAsync();
+        }
+
+        using var env = new EnvScope(keys: $"new:{RandomKey()},old:{oldKey}");
+        var sharedLock = new DestructiveOperationLock();
+        var rotation = CreateRotationService(fixture, out var tempDataDir, out var db, sharedLock);
+
+        try
+        {
+            Assert.IsTrue(sharedLock.TryAcquire("restore", out var heldByOther));
+
+            var result = await rotation.RotateAsync(CancellationToken.None);
+
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.ErrorMessage!.Contains("restore"), "Failure message should name the operation currently holding the lock.");
+            Assert.AreEqual(0, result.ProvidersMigrated);
+            Assert.IsNull(result.BackupFilePath, "A rejected rotation must not take a backup.");
+
+            var backupDir = Path.Combine(tempDataDir, "backups");
+            Assert.IsFalse(Directory.Exists(backupDir));
+
+            heldByOther!.Dispose();
+            Assert.IsNull(sharedLock.CurrentOperation);
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            if (Directory.Exists(tempDataDir))
+                Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task GetStatusAsync_NoEncryptionKeyConfigured_ReportsUnavailable()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -226,7 +267,8 @@ public sealed class EncryptionRotationServiceTests
     // Caller owns the returned DbContext and must dispose it — see call sites below. Disposing
     // it before deleting any temp data directory matters most on Windows, where an open SQLite
     // file handle can block deletion.
-    private static EncryptionRotationService CreateRotationService(TestFixture fixture, out string tempDataDir, out ApplicationDbContext db)
+    private static EncryptionRotationService CreateRotationService(
+        TestFixture fixture, out string tempDataDir, out ApplicationDbContext db, DestructiveOperationLock? destructiveOperationLock = null)
     {
         tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-encryption-test-{Guid.NewGuid():N}");
         var runtimePaths = new RuntimePaths(
@@ -239,7 +281,8 @@ public sealed class EncryptionRotationServiceTests
         db = fixture.CreateDbContext();
         var encryption = CreateService();
         var backup = new SqliteBackupService(db, runtimePaths, NullLogger<SqliteBackupService>.Instance);
-        return new EncryptionRotationService(db, encryption, backup, NullLogger<EncryptionRotationService>.Instance);
+        return new EncryptionRotationService(
+            db, encryption, backup, destructiveOperationLock ?? new DestructiveOperationLock(), NullLogger<EncryptionRotationService>.Instance);
     }
 
     private static SecretEncryptionService CreateService()

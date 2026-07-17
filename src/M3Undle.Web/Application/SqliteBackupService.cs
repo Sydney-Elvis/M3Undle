@@ -18,24 +18,32 @@ public sealed class SqliteBackupService(ApplicationDbContext db, RuntimePaths ru
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var backupPath = Path.Combine(backupDir, $"m3undle-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{uniqueSuffix}.db");
 
+        await VacuumIntoAsync(backupPath, cancellationToken);
+
+        logger.LogInformation("Database backup created at {BackupPath} before encryption key rotation.", backupPath);
+        return backupPath;
+    }
+
+    /// <summary>
+    /// Runs VACUUM INTO against an arbitrary destination path — the primitive every
+    /// point-in-time copy (key-rotation safety copy, portable backup, restore rollback
+    /// checkpoint) is built on. The destination must never be derived from user input: SQLite
+    /// treats VACUUM as a utility statement, not ordinary DML, so its filename argument cannot
+    /// reliably be passed as a bound parameter.
+    /// </summary>
+    public async Task VacuumIntoAsync(string destinationPath, CancellationToken cancellationToken)
+    {
         await db.Database.OpenConnectionAsync(cancellationToken);
         try
         {
             var connection = db.Database.GetDbConnection();
             await using var command = connection.CreateCommand();
-            // VACUUM INTO does not reliably support bound parameters for its filename argument
-            // (SQLite treats VACUUM as a utility statement, not ordinary DML) — the path is
-            // generated entirely by this method (fixed data dir + timestamp), never user input,
-            // so an escaped string literal is safe here.
-            command.CommandText = $"VACUUM INTO '{backupPath.Replace("'", "''")}'";
+            command.CommandText = $"VACUUM INTO '{destinationPath.Replace("'", "''")}'";
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         finally
         {
             await db.Database.CloseConnectionAsync();
         }
-
-        logger.LogInformation("Database backup created at {BackupPath} before encryption key rotation.", backupPath);
-        return backupPath;
     }
 }

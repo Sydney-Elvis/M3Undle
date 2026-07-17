@@ -41,4 +41,9 @@ public sealed class SiteSettings
 
     public bool XtreamCompatibilityEnabled { get; set; } = true;
     public string? HdhrAllowedNetworks { get; set; }
+
+    // Portable backup schedule — disabled by default until an operator opts in (see
+    // .ai_docs/M3Undle_Backup_Restore_Implementation_Plan.md §6). Fixed weekly cadence only.
+    public bool BackupScheduleEnabled { get; set; }
+    public DateTime? BackupLastRunUtc { get; set; }
 }

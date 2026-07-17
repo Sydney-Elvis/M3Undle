@@ -30,6 +30,7 @@ public sealed class EncryptionRotationService(
     ApplicationDbContext db,
     SecretEncryptionService encryption,
     SqliteBackupService backupService,
+    DestructiveOperationLock destructiveOperationLock,
     ILogger<EncryptionRotationService> logger)
 {
     public async Task<EncryptionStatusResult> GetStatusAsync(CancellationToken cancellationToken)
@@ -63,6 +64,20 @@ public sealed class EncryptionRotationService(
 
     public async Task<RotateResult> RotateAsync(CancellationToken cancellationToken)
     {
+        if (!destructiveOperationLock.TryAcquire("encryption-key-rotation", out var lockHandle))
+        {
+            return new RotateResult(
+                Success: false,
+                ErrorMessage: $"Another destructive operation ({destructiveOperationLock.CurrentOperation}) is already in progress. Try again once it completes.",
+                ActiveKeyId: null,
+                BackupFilePath: null,
+                ProvidersMigrated: 0,
+                DownstreamIntegrationsMigrated: 0,
+                RowsAlreadyCurrent: 0);
+        }
+
+        using var _ = lockHandle;
+
         if (!encryption.IsAvailable)
             return new RotateResult(
                 Success: false,

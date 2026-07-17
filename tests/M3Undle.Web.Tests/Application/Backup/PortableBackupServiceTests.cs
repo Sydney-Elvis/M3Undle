@@ -1,0 +1,389 @@
+using System.IO.Compression;
+using System.Text.Json;
+using M3Undle.Core;
+using M3Undle.Web.Application;
+using M3Undle.Web.Application.Backup;
+using M3Undle.Web.Data;
+using M3Undle.Web.Data.Entities;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace M3Undle.Web.Tests.Application.Backup;
+
+[TestClass]
+public sealed class PortableBackupServiceTests
+{
+    [TestMethod]
+    public async Task CreateAsync_ExcludesRegeneratedTables_ButKeepsDurableConfiguration()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Providers.Add(SimpleProvider("p1"));
+            setup.Profiles.Add(SimpleProfile("pr1"));
+            setup.EpgSources.Add(SimpleEpgSource("epg1"));
+            setup.FetchRuns.Add(SimpleFetchRun("f1", "p1"));
+            setup.EpgFetchRuns.Add(SimpleEpgFetchRun("ef1", "epg1"));
+            setup.SystemEvents.Add(SimpleSystemEvent("se1"));
+            setup.StreamChannelHealthEvents.Add(SimpleHealthEvent("he1", "p1"));
+            setup.XtreamSeriesCache.Add(SimpleSeriesCache("p1"));
+            setup.Snapshots.Add(SimpleSnapshot("sn1", "pr1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+        try
+        {
+            var result = await service.CreateAsync(CancellationToken.None);
+
+            Assert.IsTrue(result.Success, result.ErrorMessage);
+            using var extracted = ExtractDatabase(result.FilePath!);
+
+            foreach (var table in PortableBackupExcludedTables.TableNames)
+                Assert.AreEqual(0, await CountRowsAsync(extracted.DatabasePath, table), $"Excluded table '{table}' must be empty after backup.");
+
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "providers"), "Providers is not on the exclude list and must survive.");
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "profiles"), "Profiles is not on the exclude list and must survive.");
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "epg_sources"), "EpgSources is not on the exclude list and must survive.");
+
+            var report = ReadReport(extracted);
+            foreach (var table in PortableBackupExcludedTables.TableNames)
+                Assert.AreEqual(1, report.RowsRemovedByTable[table], $"Report should record exactly the one seeded row removed from '{table}'.");
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task CreateAsync_ManifestChecksum_MatchesArchivedDatabase()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Providers.Add(SimpleProvider("p1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+        try
+        {
+            var result = await service.CreateAsync(CancellationToken.None);
+
+            Assert.IsTrue(result.Success, result.ErrorMessage);
+            using var extracted = ExtractDatabase(result.FilePath!);
+
+            var actualHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(extracted.DatabasePath))).ToLowerInvariant();
+
+            Assert.AreEqual(result.Manifest!.DatabaseSha256, actualHash);
+            Assert.AreEqual("m3undle-backup", result.Manifest.FormatIdentifier);
+            Assert.AreEqual("1", result.Manifest.FormatVersion);
+            CollectionAssert.AreEquivalent(PortableBackupExcludedTables.TableNames.ToArray(), result.Manifest.ExcludedTables.ToArray());
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task CreateAsync_AnotherDestructiveOperationHoldsTheLock_FailsWithoutCreatingAnArchive()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var sharedLock = new DestructiveOperationLock();
+        var service = CreateService(fixture, out var tempDataDir, out var db, sharedLock);
+
+        try
+        {
+            Assert.IsTrue(sharedLock.TryAcquire("encryption-key-rotation", out var heldByOther));
+
+            var result = await service.CreateAsync(CancellationToken.None);
+
+            Assert.IsFalse(result.Success);
+            Assert.IsTrue(result.ErrorMessage!.Contains("encryption-key-rotation"));
+            Assert.AreEqual(0, service.List().Count);
+
+            heldByOther!.Dispose();
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            if (Directory.Exists(tempDataDir))
+                Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task CreateAsync_MoreThanRetainedCount_RemovesOnlyTheOldest()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+
+        try
+        {
+            var created = new List<string>();
+            for (var i = 0; i < 6; i++)
+            {
+                var result = await service.CreateAsync(CancellationToken.None);
+                Assert.IsTrue(result.Success, result.ErrorMessage);
+                created.Add(result.FilePath!);
+                await Task.Delay(50); // ensure distinct file-write timestamps for retention ordering
+            }
+
+            var remaining = service.List();
+
+            Assert.AreEqual(5, remaining.Count, "Retention must keep only the 5 most recent backups.");
+            Assert.IsFalse(File.Exists(created[0]), "The oldest backup must be removed by retention.");
+            Assert.IsTrue(File.Exists(created[^1]), "The newest backup must survive retention.");
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ResolvePath_RejectsPathTraversalAndNonExistentNames()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+
+        try
+        {
+            var result = await service.CreateAsync(CancellationToken.None);
+            Assert.IsTrue(result.Success, result.ErrorMessage);
+            var fileName = Path.GetFileName(result.FilePath!);
+
+            Assert.IsNotNull(service.ResolvePath(fileName));
+            Assert.IsNull(service.ResolvePath("../" + fileName));
+            Assert.IsNull(service.ResolvePath(Path.Combine("subdir", fileName)));
+            Assert.IsNull(service.ResolvePath("does-not-exist.m3undle-backup"));
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Delete_RemovesAnExistingBackup_AndReturnsFalseForUnknownNames()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+
+        try
+        {
+            var result = await service.CreateAsync(CancellationToken.None);
+            Assert.IsTrue(result.Success, result.ErrorMessage);
+            var fileName = Path.GetFileName(result.FilePath!);
+
+            Assert.IsFalse(service.Delete("does-not-exist.m3undle-backup"));
+            Assert.IsTrue(service.Delete(fileName));
+            Assert.IsFalse(File.Exists(result.FilePath));
+            Assert.AreEqual(0, service.List().Count);
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    private static PortableBackupService CreateService(
+        TestFixture fixture, out string tempDataDir, out ApplicationDbContext db, DestructiveOperationLock? destructiveOperationLock = null)
+    {
+        tempDataDir = Path.Combine(Path.GetTempPath(), $"m3undle-portable-backup-test-{Guid.NewGuid():N}");
+        var runtimePaths = new RuntimePaths(
+            DataDirectory: tempDataDir,
+            DatabasePath: string.Empty,
+            DatabaseConnectionString: string.Empty,
+            LogDirectory: string.Empty,
+            SnapshotDirectory: string.Empty);
+
+        db = fixture.CreateDbContext();
+        var sqliteBackup = new SqliteBackupService(db, runtimePaths, NullLogger<SqliteBackupService>.Instance);
+        var encryption = new SecretEncryptionService(new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance));
+        var buildInfo = new AppBuildInfo("1.2.3-test", null, null, null);
+
+        return new PortableBackupService(
+            db,
+            sqliteBackup,
+            runtimePaths,
+            encryption,
+            buildInfo,
+            destructiveOperationLock ?? new DestructiveOperationLock(),
+            NullLogger<PortableBackupService>.Instance);
+    }
+
+    private static async Task<int> CountRowsAsync(string databasePath, string table)
+    {
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM \"{table}\"";
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private static ExtractedArchive ExtractDatabase(string archivePath)
+    {
+        var extractDir = Path.Combine(Path.GetTempPath(), $"m3undle-portable-backup-extract-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(extractDir);
+        ZipFile.ExtractToDirectory(archivePath, extractDir);
+        return new ExtractedArchive(extractDir);
+    }
+
+    private static PortableBackupReport ReadReport(ExtractedArchive extracted)
+    {
+        var json = File.ReadAllText(Path.Combine(extracted.Directory, "backup-report.json"));
+        return JsonSerializer.Deserialize<PortableBackupReport>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+    }
+
+    private static Provider SimpleProvider(string id) => new()
+    {
+        ProviderId = id,
+        Name = id,
+        PlaylistUrl = "http://example.invalid/playlist.m3u",
+        CreatedUtc = DateTime.UtcNow,
+        UpdatedUtc = DateTime.UtcNow,
+    };
+
+    private static Profile SimpleProfile(string id) => new()
+    {
+        ProfileId = id,
+        Name = id,
+        Enabled = true,
+        IsActive = true,
+        OutputName = id,
+        MergeMode = "union",
+        CreatedUtc = DateTime.UtcNow,
+        UpdatedUtc = DateTime.UtcNow,
+    };
+
+    private static EpgSource SimpleEpgSource(string id) => new()
+    {
+        EpgSourceId = id,
+        Name = id,
+        Kind = "xmltv_url",
+        CreatedUtc = DateTime.UtcNow,
+        UpdatedUtc = DateTime.UtcNow,
+    };
+
+    private static FetchRun SimpleFetchRun(string id, string providerId) => new()
+    {
+        FetchRunId = id,
+        ProviderId = providerId,
+        StartedUtc = DateTime.UtcNow,
+        Status = "ok",
+        Type = "snapshot",
+    };
+
+    private static EpgFetchRun SimpleEpgFetchRun(string id, string epgSourceId) => new()
+    {
+        EpgFetchRunId = id,
+        EpgSourceId = epgSourceId,
+        StartedUtc = DateTime.UtcNow,
+        Status = "ok",
+    };
+
+    private static SystemEvent SimpleSystemEvent(string id) => new()
+    {
+        SystemEventId = id,
+        EventType = "test",
+        Severity = "info",
+        Title = "test event",
+        OccurredAt = DateTime.UtcNow,
+    };
+
+    private static StreamChannelHealthEvent SimpleHealthEvent(string id, string providerId) => new()
+    {
+        StreamChannelHealthEventId = id,
+        ProviderId = providerId,
+        ProviderChannelId = "pc1",
+        DisplayName = "Test Channel",
+        EventKind = "stall",
+        EventUtc = DateTime.UtcNow,
+    };
+
+    private static XtreamSeriesCache SimpleSeriesCache(string providerId) => new()
+    {
+        ProviderId = providerId,
+        SeriesId = 1,
+        LastModifiedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+        EpisodesJson = "[]",
+    };
+
+    private static Snapshot SimpleSnapshot(string id, string profileId) => new()
+    {
+        SnapshotId = id,
+        ProfileId = profileId,
+        CreatedUtc = DateTime.UtcNow,
+        Status = "ok",
+        PlaylistPath = "playlist.m3u",
+        XmltvPath = "guide.xml",
+        ChannelIndexPath = "index.json",
+        StatusJsonPath = "status.json",
+    };
+
+    private sealed class ExtractedArchive(string directory) : IDisposable
+    {
+        public string Directory { get; } = directory;
+        public string DatabasePath => Path.Combine(Directory, "configuration.db");
+
+        public void Dispose()
+        {
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                System.IO.Directory.Delete(Directory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
+    // Real temp-file SQLite database — VACUUM INTO does not produce a file against SQLite's
+    // named in-memory/shared-cache mode (see the same note in EncryptionRotationServiceTests).
+    private static async Task<TestFixture> CreateFixtureAsync()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"m3undle-portable-backup-src-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={dbPath}";
+
+        await using (var db = new ApplicationDbContext(new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlite(connectionString).Options))
+        {
+            await db.Database.EnsureCreatedAsync();
+        }
+
+        return new TestFixture(dbPath, connectionString);
+    }
+
+    private sealed class TestFixture(string dbPath, string connectionString) : IAsyncDisposable
+    {
+        public ApplicationDbContext CreateDbContext()
+            => new(new DbContextOptionsBuilder<ApplicationDbContext>().UseSqlite(connectionString).Options);
+
+        public ValueTask DisposeAsync()
+        {
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                File.Delete(dbPath);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup — a lingering handle shouldn't fail the test.
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
+}

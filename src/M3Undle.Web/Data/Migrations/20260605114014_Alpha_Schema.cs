@@ -174,7 +174,9 @@ namespace M3Undle.Web.Data.Migrations
                     observability_metrics_enable_channel_labels = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: false),
                     observability_metrics_local_allowed_cidrs = table.Column<string>(type: "TEXT", nullable: true),
                     xtream_compatibility_enabled = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: true),
-                    hdhr_allowed_networks = table.Column<string>(type: "TEXT", nullable: true)
+                    hdhr_allowed_networks = table.Column<string>(type: "TEXT", nullable: true),
+                    backup_schedule_enabled = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: false),
+                    backup_last_run_utc = table.Column<DateTime>(type: "TEXT", nullable: true)
                 },
                 constraints: table =>
                 {
@@ -1060,8 +1062,8 @@ namespace M3Undle.Web.Data.Migrations
 
             migrationBuilder.InsertData(
                 table: "site_settings",
-                columns: new[] { "id", "event_retention_days", "generated_hls_enabled", "generated_hls_ffmpeg_path", "hdhr_advertised_base_url", "hdhr_allowed_networks", "hdhr_discovery_enabled", "hdhr_enabled", "hdhr_friendly_name", "hdhr_silicondust_discovery_enabled", "hdhr_ssdp_enabled", "hdhr_tuner_count_override", "observability_metrics_enabled", "observability_metrics_local_allowed_cidrs", "observability_metrics_mode", "refresh_schedule_kind", "refresh_startup_catchup", "stream_buffer_max_bytes_hard_cap", "stream_buffer_max_bytes_per_session", "stream_buffer_read_chunk_size_bytes", "stream_idle_grace_hard_cap_seconds", "stream_idle_grace_seconds", "stream_max_concurrent_sessions", "stream_reconnect_connect_timeout_seconds", "stream_reconnect_outage_window_seconds", "stream_reconnect_read_stall_timeout_seconds", "streaming_enabled", "xtream_compatibility_enabled" },
-                values: new object[] { 1, 7, true, null, null, null, true, true, null, true, true, null, true, null, "LocalOnly", "6h", true, 33554432, 4194304, 32768, 120, 15, 50, 15, 75, 30, true, true });
+                columns: new[] { "id", "backup_last_run_utc", "backup_schedule_enabled", "event_retention_days", "generated_hls_enabled", "generated_hls_ffmpeg_path", "hdhr_advertised_base_url", "hdhr_allowed_networks", "hdhr_discovery_enabled", "hdhr_enabled", "hdhr_friendly_name", "hdhr_silicondust_discovery_enabled", "hdhr_ssdp_enabled", "hdhr_tuner_count_override", "observability_metrics_enabled", "observability_metrics_local_allowed_cidrs", "observability_metrics_mode", "refresh_schedule_kind", "refresh_startup_catchup", "stream_buffer_max_bytes_hard_cap", "stream_buffer_max_bytes_per_session", "stream_buffer_read_chunk_size_bytes", "stream_idle_grace_hard_cap_seconds", "stream_idle_grace_seconds", "stream_max_concurrent_sessions", "stream_reconnect_connect_timeout_seconds", "stream_reconnect_outage_window_seconds", "stream_reconnect_read_stall_timeout_seconds", "streaming_enabled", "xtream_compatibility_enabled" },
+                values: new object[] { 1, null, false, 7, true, null, null, null, true, true, null, true, true, null, true, null, "LocalOnly", "6h", true, 33554432, 4194304, 32768, 120, 15, 50, 15, 75, 30, true, true });
 
             migrationBuilder.CreateIndex(
                 name: "IX_AspNetRoleClaims_RoleId",

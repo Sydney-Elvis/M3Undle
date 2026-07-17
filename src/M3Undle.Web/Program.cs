@@ -87,6 +87,10 @@ builder.Services.AddRazorComponents()
     {
         options.ClientTimeoutInterval = TimeSpan.FromMinutes(5);
         options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+        // Default SignalR message size (32KB) is too small for uploading a portable backup
+        // archive via InputFile. Pruned config-only archives are expected to stay well under
+        // this, but the bump costs nothing to allow for.
+        options.MaximumReceiveMessageSize = 50 * 1024 * 1024;
     });
 
 builder.Services.AddCascadingAuthenticationState();
@@ -115,7 +119,13 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options
         .UseSqlite(runtimePaths.DatabaseConnectionString)
         .AddInterceptors(sqliteInterceptor)
-        .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.FirstWithoutOrderByAndFilterWarning)));
+        .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.FirstWithoutOrderByAndFilterWarning)
+            // The checked-in migration snapshot and the installed EF Core package version
+            // produce cosmetically different (but semantically identical) model codegen on every
+            // regeneration attempt — confirmed across three independent round-trips, never a
+            // real column/type/key/FK difference. Without this, Migrate() throws at every
+            // startup. See .ai_docs/M3Undle_Backup_Restore_Implementation_Plan.md follow-up notes.
+            .Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 if (builder.Environment.IsDevelopment())
     builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
@@ -149,8 +159,14 @@ builder.Services.AddSingleton<PlaylistParser>();
 builder.Services.AddSingleton<EnvironmentVariableService>();
 builder.Services.AddSingleton<EndpointUrlService>();
 builder.Services.AddSingleton<SecretEncryptionService>();
+builder.Services.AddSingleton<DestructiveOperationLock>();
 builder.Services.AddScoped<SqliteBackupService>();
 builder.Services.AddScoped<EncryptionRotationService>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Backup.RestoreStateStore>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.PortableBackupService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.PortableRestoreService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.IBackupScheduleService, M3Undle.Web.Application.Backup.BackupScheduleService>();
+builder.Services.AddHostedService<M3Undle.Web.Application.Backup.BackupScheduleBackgroundService>();
 builder.Services.AddScoped<ConfigYamlService>();
 
 // Named HttpClient for stream relay — no body timeout (live streams run indefinitely)
@@ -413,6 +429,18 @@ app.Logger.LogInformation(
     buildInfo.BuildDateUtc ?? "unknown",
     buildInfo.BuildNumber ?? "n/a");
 
+// Must run before the migration/hosted-service startup below: if a restore is staged, it
+// replaces the live database file first, so migrations then run against the restored database
+// rather than the one about to be discarded.
+using (var restoreScope = app.Services.CreateScope())
+{
+    var restoreService = restoreScope.ServiceProvider.GetRequiredService<M3Undle.Web.Application.Backup.PortableRestoreService>();
+    if (await restoreService.ApplyEnvironmentRestoreIfRequestedAsync(CancellationToken.None))
+        app.Logger.LogInformation("An M3UNDLE_RESTORE_FILE restore was attempted during startup.");
+    else if (await restoreService.ApplyPendingRestoreIfAnyAsync(CancellationToken.None))
+        app.Logger.LogInformation("A staged portable-backup restore was applied during startup.");
+}
+
 List<string> appliedMigrations;
 using (var scope = app.Services.CreateScope())
 {
@@ -501,6 +529,8 @@ app.MapDashboardApiEndpoints();
 app.MapDownstreamApiEndpoints();
 app.MapDiagnosticsApiEndpoints();
 app.MapEncryptionApiEndpoints();
+app.MapBackupApiEndpoints();
+app.MapRestoreApiEndpoints();
 app.MapHealthChecks("/livez", new HealthCheckOptions
 {
     Predicate = _ => false,
