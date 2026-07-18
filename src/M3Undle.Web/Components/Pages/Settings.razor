@@ -30,7 +30,7 @@
 <div class="d-flex align-start" style="gap:24px;">
 
     @* ── Sidebar nav ───────────────────────────────────────────────────── *@
-    <MudPaper Elevation="1" Class="pa-2" Style="width:190px;min-width:190px;flex-shrink:0;">
+    <MudPaper Elevation="1" Class="pa-2" Style="width:210px;min-width:210px;flex-shrink:0;">
         <MudStack Spacing="0">
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Schedule"
@@ -104,7 +104,7 @@
                        StartIcon="@Icons.Material.Filled.Backup"
                        Variant="@(_section == "backup" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "backup" ? Color.Primary : Color.Default)"
-                       OnClick="@(() => NavigateToSection("backup"))">Backup &amp; Restore</MudButton>
+                       OnClick="@(() => NavigateToSection("backup"))"><span style="white-space:nowrap">Backup &amp; Restore</span></MudButton>
         </MudStack>
     </MudPaper>
 
