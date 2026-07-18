@@ -267,17 +267,15 @@ public sealed class PortableBackupService(
 
             foreach (var table in PortableBackupExcludedTables.TableNames)
             {
-                await using var countCommand = connection.CreateCommand();
-                countCommand.CommandText = $"SELECT COUNT(*) FROM \"{table}\"";
-                var count = Convert.ToInt32(await countCommand.ExecuteScalarAsync(cancellationToken));
-                rowsRemovedByTable[table] = count;
-
-                if (count == 0)
-                    continue;
-
                 await using var deleteCommand = connection.CreateCommand();
-                deleteCommand.CommandText = $"DELETE FROM \"{table}\"";
-                await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
+                // provider_channels.last_fetch_run_id is a required, restrict-on-delete FK into
+                // fetch_runs — wiping the whole table violates it for any channel whose most
+                // recent fetch is still current. Keep the referenced rows; everything else is
+                // regenerable history and safe to drop.
+                deleteCommand.CommandText = table == "fetch_runs"
+                    ? "DELETE FROM \"fetch_runs\" WHERE fetch_run_id NOT IN (SELECT last_fetch_run_id FROM provider_channels)"
+                    : $"DELETE FROM \"{table}\"";
+                rowsRemovedByTable[table] = await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
             }
 
             await using (var vacuumCommand = connection.CreateCommand())

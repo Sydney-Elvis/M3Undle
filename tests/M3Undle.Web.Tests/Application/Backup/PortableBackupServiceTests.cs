@@ -61,6 +61,48 @@ public sealed class PortableBackupServiceTests
     }
 
     [TestMethod]
+    public async Task CreateAsync_FetchRunStillReferencedByProviderChannel_IsKeptNotDeleted()
+    {
+        // Reproduces the toontown-int-srv1 failure: provider_channels.last_fetch_run_id is a
+        // required, restrict-on-delete FK into fetch_runs. Wiping the whole table throws a
+        // FOREIGN KEY constraint violation for any channel whose most recent fetch is still
+        // current — only rows nothing references may actually be dropped.
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Providers.Add(SimpleProvider("p1"));
+            setup.FetchRuns.Add(SimpleFetchRun("f-old", "p1"));
+            setup.FetchRuns.Add(SimpleFetchRun("f-current", "p1"));
+            setup.ProviderChannels.Add(SimpleProviderChannel("pc1", "p1", "f-current"));
+            await setup.SaveChangesAsync();
+        }
+
+        var service = CreateService(fixture, out var tempDataDir, out var db);
+        try
+        {
+            var result = await service.CreateAsync(CancellationToken.None);
+
+            Assert.IsTrue(result.Success, result.ErrorMessage);
+            using var extracted = ExtractDatabase(result.FilePath!);
+
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "fetch_runs"),
+                "The fetch_run still referenced by a provider_channel must survive.");
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "provider_channels"),
+                "provider_channels is not on the exclude list and must survive.");
+
+            var report = ReadReport(extracted);
+            Assert.AreEqual(1, report.RowsRemovedByTable["fetch_runs"],
+                "Only the unreferenced fetch_run should be reported as removed.");
+        }
+        finally
+        {
+            await db.DisposeAsync();
+            Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task CreateAsync_ManifestChecksum_MatchesArchivedDatabase()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -402,6 +444,18 @@ public sealed class PortableBackupServiceTests
         StartedUtc = DateTime.UtcNow,
         Status = "ok",
         Type = "snapshot",
+    };
+
+    private static ProviderChannel SimpleProviderChannel(string id, string providerId, string lastFetchRunId) => new()
+    {
+        ProviderChannelId = id,
+        ProviderId = providerId,
+        DisplayName = id,
+        StreamUrl = "http://example.invalid/stream",
+        FirstSeenUtc = DateTime.UtcNow,
+        LastSeenUtc = DateTime.UtcNow,
+        Active = true,
+        LastFetchRunId = lastFetchRunId,
     };
 
     private static EpgFetchRun SimpleEpgFetchRun(string id, string epgSourceId) => new()
