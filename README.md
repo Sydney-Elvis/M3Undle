@@ -283,6 +283,8 @@ You can also [sponsor M3Undle on GitHub](https://github.com/sponsors/Sydney-Elvi
 
 M3Undle is built with .NET and the web UI is server-side Blazor. AI-assisted tools are used for implementation, testing, and documentation, but every change is still human-reviewed and has to build cleanly and pass the full automated test suite with zero warnings before it merges.
 
+In addition to the public automated test suite, changes affecting streaming, provider compatibility, or failure recovery are exercised against a private simulator-backed lab — simulated upstream providers and concurrent clients used to validate reconnects, stalls, shared-stream behavior, and HLS delivery under conditions that are hard to reproduce with unit tests alone. This lab isn't public, so its results aren't part of the CI badge above.
+
 For now, contribution work is expected to be issue-driven. If you want to help, start with an open issue or file a new one describing the problem before opening a larger pull request.
 
 Basic local workflow:
