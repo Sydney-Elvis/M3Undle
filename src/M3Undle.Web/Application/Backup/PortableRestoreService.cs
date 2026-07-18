@@ -192,8 +192,21 @@ public sealed class PortableRestoreService(
         finally
         {
             SqliteConnection.ClearAllPools();
-            if (Directory.Exists(workDir))
-                Directory.Delete(workDir, recursive: true);
+            // Best-effort: a delete failure here (e.g. a lingering file handle) must not throw
+            // out of this finally block and mask the preflight result the try block produced.
+            try
+            {
+                if (Directory.Exists(workDir))
+                    Directory.Delete(workDir, recursive: true);
+            }
+            catch (IOException ex)
+            {
+                logger.LogWarning(ex, "Failed to clean up preflight work directory {WorkDir}.", workDir);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                logger.LogWarning(ex, "Failed to clean up preflight work directory {WorkDir}.", workDir);
+            }
         }
     }
 
@@ -356,8 +369,11 @@ public sealed class PortableRestoreService(
         var manifest = preflight.Manifest!;
 
         // Same filesystem as the live database (both under DataDirectory) so the eventual swap
-        // is a true atomic rename rather than a cross-device copy.
-        var workDir = Path.Combine(runtimePaths.DataDirectory, "restore-work", $"apply-{manifest.BackupId}");
+        // is a true atomic rename rather than a cross-device copy. Named with a freshly generated
+        // id rather than manifest.BackupId — the manifest comes from untrusted archive content,
+        // and splicing it into a path unvalidated would allow a crafted BackupId to escape
+        // restore-work (e.g. "..") when combined with the directory below.
+        var workDir = Path.Combine(runtimePaths.DataDirectory, "restore-work", $"apply-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workDir);
         string? checkpointPath = null;
 

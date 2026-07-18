@@ -9,7 +9,7 @@ namespace M3Undle.Web.Application;
 public sealed class DestructiveOperationLock
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
-    private string? _currentOperation;
+    private volatile string? _currentOperation;
 
     /// <summary>Name of the operation currently holding the lock, or null if free.</summary>
     public string? CurrentOperation => _currentOperation;
