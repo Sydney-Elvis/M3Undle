@@ -24,8 +24,8 @@ public sealed class MigrationBaselineTests
         await connection.OpenAsync();
         await using var db = CreateDb(connection);
 
-        var migrations = db.Database.GetService<IMigrationsAssembly>().Migrations;
-        Assert.IsTrue(migrations.First().Key.EndsWith("_Alpha_Schema", StringComparison.Ordinal),
+        var migrations = db.Database.GetMigrations().ToList();
+        Assert.IsTrue(migrations[0].EndsWith("_Alpha_Schema", StringComparison.Ordinal),
             "The Alpha_Schema baseline must remain the first migration.");
 
         await db.Database.MigrateAsync();
