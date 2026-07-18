@@ -236,6 +236,10 @@ curl -s http://<host>:8080/api/admin/diagnostics/epg
 
 Use these APIs when investigating provider fetches, stream sharing, lineup publish history, or EPG source behavior. Use `/metrics` for time-series monitoring.
 
+### Test-mode RCA bundle
+
+When `M3UNDLE_TEST_MODE=true`, an additional `GET /debug/streams/rca` endpoint (UI admin auth required) returns a compact root-cause-analysis bundle: active/recent stream sessions, clients, provider streams, cooldowns, and recent stream diagnostic events in one payload. Combine it with the application logs under the container's `/data/logs/` directory when investigating playback stalls or provider failures.
+
 ---
 
 ## Troubleshooting

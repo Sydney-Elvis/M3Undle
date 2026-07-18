@@ -1,9 +1,9 @@
 # M3Undle Config – Schema
 
-This document defines the **shared configuration schema** used by the CLI, Blazor Server app, and Docker image. Keep it source‑of‑truth so all entry points behave identically.
+This document defines the `config.yaml` schema M3Undle Web can import providers from (see **Settings → Providers → Import**, and `docs/DOCKER.md` § Config File Integration). It originated as a schema shared with the standalone `bndl` CLI; the CLI has since moved to the separate `m3undle-cli` repository and owns its own copy of this schema there — the two may diverge over time. This document describes Web's import behavior only.
 
 - **Formats supported:** YAML (preferred) and JSON
-- **Profiles:** Multiple named configurations may be defined for the CLI; select one via `--profile`. The service resolves published output from the active profile.
+- **Profiles:** A `config.yaml` file may define multiple named profiles. Each one becomes an importable provider definition in the Web UI; there is no `--profile` flag here — that belongs to the separate CLI tool.
 - **Env substitution:** `%VAR%` placeholders inside string fields will be replaced with values from the `.env` file
 
 ---
@@ -20,6 +20,8 @@ profiles:
 ```
 
 > **Required keys per profile:** `inputs`, `output`. Others are optional with defaults.
+
+> **Scope note:** M3Undle Web's import (`ConfigYamlService`) only reads `profiles.<name>.inputs.playlist` and `profiles.<name>.inputs.epg` — that's all it needs to create a provider. `filters`, `mapping`, `output`, and `logging` below are part of the schema for compatibility with the separate `m3undle-cli` tool; Web parses and ignores them. Don't expect setting them in an imported `config.yaml` to change Web behavior — use the Channel Mapping page for filtering/renaming instead.
 
 ---
 
@@ -68,7 +70,7 @@ filters:
 **Notes**
 - Matching is **exact** for group names (case-sensitive by default). Consider normalizing names in `mapping` if needed.
 - Regex uses .NET engine. Invalid regex → config validation error.
-- `bndl groups --config /path/config.yaml --profile my-profile` writes the curated group list to `filters.groupsFile` when it is set; otherwise it falls back to `filters.dropListFile`. That means your remove list stays aligned with the CLI workflow even when you drive everything from config files.
+- These fields are CLI-only (see the scope note above). In the `m3undle-cli` tool, `bndl groups --config /path/config.yaml --profile my-profile` writes the curated group list to `filters.groupsFile` when it is set, otherwise `filters.dropListFile`. See that repo's own docs for current CLI usage.
 
 ---
 
@@ -214,38 +216,7 @@ profiles:
 
 ---
 
-## Multi-Profile CLI Example (YAML)
-```yaml
-profiles:
-  primary:
-    inputs:
-      playlist:
-        url: "https://provider-a.example/get.php?username=%PRIMARY_USER%&password=%PRIMARY_PASS%&type=m3u_plus"
-      epg:
-        url: "https://provider-a.example/xmltv.php?username=%PRIMARY_USER%&password=%PRIMARY_PASS%"
-        allowCompressed: true
-    filters:
-      includeGroups: ["USA | Sports", "USA | News"]
-      groupsFile: "/var/lib/m3undle/m3u/primary.groups.txt"
-    output:
-      playlistPath: "/var/lib/m3undle/m3u/primary.m3u"
-      epgPath: "/var/lib/m3undle/m3u/primary.xml"
-
-  secondary:
-    inputs:
-      playlist:
-        url: "https://provider-b.example/api/m3u?user=%SECONDARY_USER%&token=%SECONDARY_TOKEN%"
-      epg:
-        url: "https://provider-b.example/api/xmltv?user=%SECONDARY_USER%&token=%SECONDARY_TOKEN%"
-    filters:
-      excludeGroups: ["VOD", "International"]
-      dropListFile: "/var/lib/m3undle/m3u/secondary.remove.txt"
-    output:
-      playlistPath: "/var/lib/m3undle/m3u/secondary.m3u"
-      epgPath: "/var/lib/m3undle/m3u/secondary.xml"
-```
-
-Store this config alongside `m3undle/scripts/.env` so the `%PRIMARY_*%` and `%SECONDARY_*%` placeholders are resolved. Running `bndl groups --config m3undle/scripts/config.yaml --profile primary` updates `/var/lib/m3undle/m3u/primary.groups.txt`, while the same command with `--profile secondary` falls back to `/var/lib/m3undle/m3u/secondary.remove.txt` (your remove list). Filtering with `bndl run --config ... --profile ...` writes playlists/EPGs directly into `/var/lib/bndl/m3u/*.m3u` and `.xml` paths.
+A multi-profile CLI workflow example (with `bndl groups`/`bndl run` commands) previously lived here; it described the separate `m3undle-cli` tool and was removed in the 2026-07-18 documentation cleanup. See that repo's own docs for current CLI usage — the schema above (`inputs`, `filters`, `mapping`, `output`, `logging`) is unchanged and still applies there.
 
 ---
 

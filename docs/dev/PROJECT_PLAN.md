@@ -189,8 +189,7 @@ Status: Complete. (Related issue seeds: #3, #4, #5, #6, #7, #8, #9)
   - [x] `/status` and readiness semantics aligned with the active profile state
   - [x] Regression coverage for multi-profile status cases: inactive profiles with retained snapshots, successful switch, failed switch, and no-active-profile state
 
-> See the Alpha 5 validation checklist for concrete acceptance criteria:
-> `docs/dev/ALPHA5_VALIDATION_CHECKLIST.md`
+Alpha 5 acceptance criteria were validated and signed off; the checklist itself was removed after completion (2026-07-18 documentation cleanup) since it had no further maintenance value.
 
 ### Alpha 6 — Per-Provider Gateway Support, Xtream Auto-Detection & System Events
 Goal: Per-provider gateway/VPN routing with Block and Fallback modes. Xtream Codes auto-detection at provider add time with explicit user mode selection. System event infrastructure with nav bar badge for diagnostic visibility. Gateway documentation and the companion gateway project are currently Insiders-only while they stabilize, ahead of moving to the public edition.
@@ -251,4 +250,5 @@ Status: In progress.
 - [HTTP_COMPATIBILITY.md](../design/HTTP_COMPATIBILITY.md)
 - [LINEUP_RULES.md](../design/LINEUP_RULES.md)
 - [NUMBERING_RULES.md](../design/NUMBERING_RULES.md)
-- [stream_proxy_design.md](../design/stream_proxy_design.md)
+
+`stream_proxy_design.md` (the original pre-implementation brief) was removed in the 2026-07-18 documentation cleanup — it predated the Alpha 4-7 stream-hardening work (relay policy, adaptive recovery, channel health tracking) and no longer described actual behavior. Current stream proxy behavior is captured in `HTTP_COMPATIBILITY.md` and `ARCHITECTURE_MAP.md` above.

@@ -1,0 +1,4 @@
+# Pinned versions for building the documentation site.
+# Used by scripts/build-docs.sh and the docs CI workflow — bump deliberately, not silently.
+mkdocs==1.6.1
+mkdocs-material==9.7.7

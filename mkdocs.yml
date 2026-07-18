@@ -1,0 +1,101 @@
+site_name: M3Undle
+site_description: Turn oversized IPTV provider lists into lineups your apps can actually use.
+site_url: https://sydney-elvis.github.io/M3Undle/
+repo_url: https://github.com/Sydney-Elvis/M3Undle
+repo_name: Sydney-Elvis/M3Undle
+edit_uri: edit/main/docs/user/
+
+docs_dir: docs/user
+site_dir: build/docs/site
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - What M3Undle Does: getting-started/what-it-does.md
+      - Install with Docker: getting-started/install-with-docker.md
+      - Add the First Provider: getting-started/add-first-provider.md
+      - Create the First Lineup/Profile: getting-started/create-first-lineup.md
+      - Connect the First Client: getting-started/connect-first-client.md
+  - Core Concepts:
+      - Providers: concepts/providers.md
+      - Channels and Groups: concepts/channels-and-groups.md
+      - Profiles and Users: concepts/profiles-and-users.md
+      - EPG: concepts/epg.md
+      - Stream Proxying: concepts/stream-proxying.md
+      - HDHomeRun Compatibility: concepts/hdhomerun-compatibility.md
+      - Security: concepts/security.md
+      - Retry, Failover, and Cooldowns: concepts/retry-failover-cooldowns.md
+      - Observability: concepts/observability.md
+  - Guides:
+      - Build a Lineup: guides/build-a-lineup.md
+      - Map EPG Data: guides/map-epg-data.md
+      - Manage Providers: guides/manage-providers.md
+      - Manage Profiles: guides/manage-profiles.md
+      - Back Up and Restore: guides/back-up-and-restore.md
+      - Use a Reverse Proxy: guides/use-a-reverse-proxy.md
+      - Monitor with Prometheus / Grafana: guides/monitor-with-prometheus-grafana.md
+  - Clients:
+      - Jellyfin: clients/jellyfin.md
+      - NextPVR: clients/nextpvr.md
+      - Plex: clients/plex.md
+      - TiviMate / Android TV: clients/tivimate-android-tv.md
+      - Roku Notes: clients/roku-notes.md
+      - HDHomeRun-Compatible Clients: clients/hdhomerun-compatible-clients.md
+  - Troubleshooting:
+      - Client Cannot Connect: troubleshooting/client-cannot-connect.md
+      - Channel Does Not Tune: troubleshooting/channel-does-not-tune.md
+      - Missing EPG: troubleshooting/missing-epg.md
+      - Authentication Errors: troubleshooting/authentication-errors.md
+      - 407 Errors: troubleshooting/407-errors.md
+      - 429 and Rate Limits: troubleshooting/429-and-rate-limits.md
+      - Buffering and Stream Recovery: troubleshooting/buffering-and-stream-recovery.md
+      - LAN and Reverse-Proxy Problems: troubleshooting/lan-and-reverse-proxy-problems.md
+  - Reference:
+      - Docker Compose: reference/docker-compose.md
+      - Environment Variables: reference/environment-variables.md
+      - Ports and Endpoints: reference/ports-and-endpoints.md
+      - API Reference: reference/api-reference.md
+      - Metrics: reference/metrics.md
+  - Architecture:
+      - System Overview: architecture/system-overview.md
+      - Stream Pipeline: architecture/stream-pipeline.md
+      - EPG Pipeline: architecture/epg-pipeline.md
+      - Profile and Security Model: architecture/profile-and-security-model.md
+      - Failure and Cooldown Model: architecture/failure-and-cooldown-model.md

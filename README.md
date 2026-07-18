@@ -23,7 +23,7 @@ Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and othe
 > [!NOTE]
 > **Emby** and **Plex** support Live TV and DVR only with a paid subscription (Emby Premiere and Plex Pass respectively). Full compatibility with M3Undle has not been validated without those subscriptions.
 
-![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/images/readme-dashboard.png)
+![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/user/images/readme-dashboard.png)
 
 > [!IMPORTANT]
 > **Beta Status**
@@ -105,11 +105,11 @@ Instead of making every client parse the full provider list, M3Undle publishes o
 
 The provider dialog supports URL playlists, local files, Xtream Codes, imported configuration, optional XMLTV guide URLs, content-type toggles, provider stream limits, and profile association.
 
-![Add Provider dialog showing URL playlist setup, optional XMLTV guide URL, content-type toggles, stream limit controls, and automatic profile association](docs/images/readme-add-provider.png)
+![Add Provider dialog showing URL playlist setup, optional XMLTV guide URL, content-type toggles, stream limit controls, and automatic profile association](docs/user/images/readme-add-provider.png)
 
-![Channel Mapping page with group filter applied, showing mapped and unmapped groups with channel counts](docs/images/readme-filter.png)
+![Channel Mapping page with group filter applied, showing mapped and unmapped groups with channel counts](docs/user/images/readme-filter.png)
 
-![Custom Locals group with channel search showing selected local channels with assigned numbers](docs/images/readme-channel-search.png)
+![Custom Locals group with channel search showing selected local channels with assigned numbers](docs/user/images/readme-channel-search.png)
 
 ## What it does
 
@@ -133,13 +133,13 @@ Publish the same managed lineup through M3U, XMLTV, HDHomeRun-compatible, and Xt
 
 Proxy live streams through M3Undle, hide provider credentials from clients, share live streams across multiple downstream clients, and monitor active stream sessions. M3Undle tracks per-channel stream health (Stable, Cautious, Unstable) and uses configurable relay policy to handle noisy provider channels without disrupting connected clients.
 
-![Stream Monitor showing two active sessions with buffer usage and three connected clients sharing streams](docs/images/readme-streams.png)
+![Stream Monitor showing two active sessions with buffer usage and three connected clients sharing streams](docs/user/images/readme-streams.png)
 
 The stream health panel highlights unstable channels over a 24-hour observation window. A channel can remain cautious when recent upstream failures have not yet been offset by recoveries, and it can relax back toward stable once clean watch time accumulates.
 
-![Stream health panel for Antiques Roadshow PBS showing a cautious channel with four upstream failures, no recoveries, and an improving trend](docs/images/readme-stream-health1.png)
+![Stream health panel for Antiques Roadshow PBS showing a cautious channel with four upstream failures, no recoveries, and an improving trend](docs/user/images/readme-stream-health1.png)
 
-![Stream health panel for The Pet Collective Sweden showing a cautious channel with two upstream failures, accumulated clean watch time, and a recovery toward stable](docs/images/readme-stream-health2.png)
+![Stream health panel for The Pet Collective Sweden showing a cautious channel with two upstream failures, accumulated clean watch time, and a recovery toward stable](docs/user/images/readme-stream-health2.png)
 
 ### Observability
 
@@ -147,7 +147,7 @@ Expose Prometheus-compatible metrics, liveness/readiness probes, and authenticat
 
 The dashboard surfaces copy-ready client endpoints, current published state, and system events such as startup and migration activity without requiring log access for routine checks.
 
-![Dashboard with system events drawer open, showing published profile status, M3U and XMLTV endpoint URLs, HDHomeRun details, and recent startup events](docs/images/readme-events.png)
+![Dashboard with system events drawer open, showing published profile status, M3U and XMLTV endpoint URLs, HDHomeRun details, and recent startup events](docs/user/images/readme-events.png)
 
 ### Profiles and publishing
 
@@ -275,7 +275,7 @@ M3Undle is built as an open-source project and is currently focused on getting t
 
 If you find it useful and want to support the work:
 
-<a href="https://buymeacoffee.com/jake1164s"><img src="docs/images/violet-button.png" alt="Buy Me A Coffee" width="200"></a>
+<a href="https://buymeacoffee.com/jake1164s"><img src="docs/user/images/violet-button.png" alt="Buy Me A Coffee" width="200"></a>
 
 You can also [sponsor M3Undle on GitHub](https://github.com/sponsors/Sydney-Elvis).
 
