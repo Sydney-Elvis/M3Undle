@@ -58,6 +58,43 @@ public sealed class SecretEncryptionServiceTests
     }
 
     [TestMethod]
+    public void ActiveKeyFingerprint_NoKeyConfigured_IsNull()
+    {
+        using var env = new EnvScope(keys: null, key: null);
+        var encryption = CreateService();
+
+        Assert.IsNull(encryption.ActiveKeyFingerprint);
+    }
+
+    [TestMethod]
+    public void ActiveKeyFingerprint_SameKeyMaterial_IsStableAcrossInstances()
+    {
+        var key = RandomKey();
+        using var env = new EnvScope(keys: $"k1:{key}");
+
+        var first = CreateService().ActiveKeyFingerprint;
+        var second = CreateService().ActiveKeyFingerprint;
+
+        Assert.IsNotNull(first);
+        Assert.AreEqual(first, second);
+    }
+
+    [TestMethod]
+    public void ActiveKeyFingerprint_SameKeyIdDifferentMaterial_Differs()
+    {
+        // This is the exact scenario a backup manifest's key-id check alone cannot catch: an
+        // operator reusing a key id after rotating the underlying key material.
+        using var envA = new EnvScope(keys: $"k1:{RandomKey()}");
+        var fingerprintA = CreateService().ActiveKeyFingerprint;
+        envA.Dispose();
+
+        using var envB = new EnvScope(keys: $"k1:{RandomKey()}");
+        var fingerprintB = CreateService().ActiveKeyFingerprint;
+
+        Assert.AreNotEqual(fingerprintA, fingerprintB);
+    }
+
+    [TestMethod]
     public void MultiKeyRing_DecryptsValueEncryptedUnderNonActiveRingKey()
     {
         var keyA = RandomKey();

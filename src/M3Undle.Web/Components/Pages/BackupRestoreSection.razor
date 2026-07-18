@@ -1,0 +1,401 @@
+@using M3Undle.Web.Application
+@using M3Undle.Web.Application.Backup
+@inject PortableBackupService BackupService
+@inject PortableRestoreService RestoreService
+@inject IBackupScheduleService ScheduleService
+@inject IApplicationRestartService ApplicationRestart
+@inject IDialogService DialogService
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+    <MudText Typo="Typo.h6" Class="flex-grow-1">Backup &amp; Restore</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Backup"
+               Disabled="@(_creatingBackup || _restoreInProgress)"
+               OnClick="CreateBackupAsync">
+        @(_creatingBackup ? "Creating..." : "Back Up Now")
+    </MudButton>
+</MudStack>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    Backs up configuration, mappings, users, and credentials (still encrypted under this host's key).
+    Provider/EPG history, logs, and caches are excluded — they rebuild automatically after a restore.
+</MudText>
+
+@if (_pendingRestoreMarker is { State: RestoreState.Requested })
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-3">
+        <MudText Class="mb-2">
+            A restore of <b>@_pendingRestoreMarker.ArchiveFileName</b> is staged. Confirming restarts the
+            application and replaces the current database. If it is not confirmed within 15 minutes,
+            it expires and will not apply.
+        </MudText>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Filled" Color="Color.Warning" Disabled="_restoreInProgress" OnClick="ConfirmStagedRestoreAsync">
+                Confirm &amp; Restart Now
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Disabled="_restoreInProgress" OnClick="CancelStagedRestore">
+                Cancel Staged Restore
+            </MudButton>
+        </MudStack>
+    </MudAlert>
+}
+else if (_pendingRestoreMarker is { State: RestoreState.Completed or RestoreState.Failed or RestoreState.RolledBack } marker)
+{
+    <MudAlert Severity="@RestoreOutcomeSeverity(marker.State)" Class="mb-3" ShowCloseIcon="true" CloseIconClicked="DismissRestoreStatus">
+        @RestoreOutcomeMessage(marker)
+    </MudAlert>
+}
+
+@if (!string.IsNullOrWhiteSpace(_backupError))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_backupError</MudAlert>
+}
+@if (!string.IsNullOrWhiteSpace(_backupSuccess))
+{
+    <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_backupSuccess</MudAlert>
+}
+
+<MudText Typo="Typo.subtitle1" Class="mb-1 mt-4">Weekly Schedule</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+    When enabled, a backup is created automatically about once a week.
+</MudText>
+@if (_loadingSchedule)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else
+{
+    <MudSwitch T="bool" Label="@ScheduleLabel" Value="_scheduleEnabled" ValueChanged="OnScheduleToggledAsync"
+               Color="Color.Primary" Disabled="_savingSchedule" Class="mb-3" />
+}
+
+<MudText Typo="Typo.subtitle1" Class="mb-1 mt-4">Upload a Backup</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+    Upload a .m3undle-backup archive — for example, one created on another host — to restore from it.
+</MudText>
+<InputFile OnChange="OnFileSelectedAsync" accept=".m3undle-backup" disabled="@_uploading" />
+@if (_uploading)
+{
+    <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="ml-2" />
+}
+
+<MudText Typo="Typo.subtitle1" Class="mb-1 mt-4">Backups</MudText>
+@if (_loadingBackups)
+{
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (_backups.Count == 0)
+{
+    <MudText Typo="Typo.body2" Color="Color.Secondary">No backups yet.</MudText>
+}
+else
+{
+    <MudTable Items="_backups" Dense="true" Hover="true" Elevation="0">
+        <HeaderContent>
+            <MudTh>Created</MudTh>
+            <MudTh>Size</MudTh>
+            <MudTh></MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Created">@context.CreatedUtc.ToLocalTime().ToString("d MMM yyyy h:mm tt")</MudTd>
+            <MudTd DataLabel="Size">@FormatSize(context.SizeBytes)</MudTd>
+            <MudTd>
+                <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                    <MudButton Size="Size.Small" Href="@($"/api/v1/backups/{context.FileName}/download")" Target="_blank">
+                        Download
+                    </MudButton>
+                    <MudButton Size="Size.Small" OnClick="@(() => ValidateBackupAsync(context.FileName))">
+                        Validate
+                    </MudButton>
+                    <MudButton Size="Size.Small" OnClick="@(() => ShowReportAsync(context.FileName))">
+                        Report
+                    </MudButton>
+                    <MudButton Size="Size.Small" Disabled="_restoreInProgress" OnClick="@(() => RestoreAsync(context.FileName))">
+                        Restore
+                    </MudButton>
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                   Disabled="_restoreInProgress"
+                                   OnClick="@(() => DeleteBackupAsync(context.FileName))" />
+                </MudStack>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private bool _loadingBackups = true;
+    private List<PortableBackupSummary> _backups = [];
+    private bool _creatingBackup;
+    private string? _backupError;
+    private string? _backupSuccess;
+    private bool _restoreInProgress;
+    private RestoreStateMarker? _pendingRestoreMarker;
+
+    private bool _loadingSchedule = true;
+    private bool _savingSchedule;
+    private bool _scheduleEnabled;
+    private DateTime? _nextRunUtc;
+
+    private bool _uploading;
+
+    private string ScheduleLabel => _nextRunUtc is { } next
+        ? $"Weekly backup enabled — next run {next.ToLocalTime():d MMM h:mm tt}"
+        : "Weekly backup";
+
+    protected override async Task OnInitializedAsync()
+    {
+        LoadBackups();
+        await LoadScheduleAsync();
+        _pendingRestoreMarker = RestoreService.GetCurrentStatus();
+    }
+
+    private void LoadBackups()
+    {
+        _loadingBackups = true;
+        _backups = BackupService.List().ToList();
+        _loadingBackups = false;
+    }
+
+    private async Task LoadScheduleAsync()
+    {
+        _loadingSchedule = true;
+        var settings = await ScheduleService.GetSettingsAsync();
+        _scheduleEnabled = settings.Enabled;
+        _nextRunUtc = await ScheduleService.GetNextScheduledBackupUtcAsync();
+        _loadingSchedule = false;
+    }
+
+    private async Task CreateBackupAsync()
+    {
+        _creatingBackup = true;
+        _backupError = null;
+        _backupSuccess = null;
+        try
+        {
+            var result = await BackupService.CreateAsync(CancellationToken.None);
+            if (result.Success)
+            {
+                _backupSuccess = $"Backup created ({FormatSize(result.Report!.DatabaseSizeBytes)}).";
+                LoadBackups();
+            }
+            else
+            {
+                _backupError = result.ErrorMessage;
+            }
+        }
+        finally
+        {
+            _creatingBackup = false;
+        }
+    }
+
+    private async Task OnScheduleToggledAsync(bool enabled)
+    {
+        _scheduleEnabled = enabled;
+        _savingSchedule = true;
+        try
+        {
+            await ScheduleService.SetEnabledAsync(enabled);
+            _nextRunUtc = await ScheduleService.GetNextScheduledBackupUtcAsync();
+        }
+        finally
+        {
+            _savingSchedule = false;
+        }
+    }
+
+    private async Task OnFileSelectedAsync(InputFileChangeEventArgs e)
+    {
+        _uploading = true;
+        _backupError = null;
+        _backupSuccess = null;
+        try
+        {
+            string savedFileName;
+            await using (var stream = e.File.OpenReadStream(maxAllowedSize: PortableBackupFormat.MaxArchiveSizeBytes))
+            {
+                savedFileName = await BackupService.SaveUploadedArchiveAsync(stream, CancellationToken.None);
+            }
+
+            // Validate immediately so a bad archive is flagged now, not at restore time.
+            var preflight = await RestoreService.PreflightAsync(BackupService.ResolvePath(savedFileName)!, CancellationToken.None);
+            if (preflight.Success)
+                _backupSuccess = "Archive uploaded and validated.";
+            else
+                _backupError = $"Archive uploaded, but it failed validation and cannot be restored: {string.Join(" ", preflight.Errors)}";
+
+            LoadBackups();
+        }
+        catch (Exception ex)
+        {
+            _backupError = $"Upload failed: {ex.Message}";
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private void CancelStagedRestore()
+    {
+        RestoreService.CancelStagedRestore();
+        _pendingRestoreMarker = RestoreService.GetCurrentStatus();
+        _backupSuccess = "Staged restore cancelled.";
+    }
+
+    private async Task ValidateBackupAsync(string fileName)
+    {
+        var path = BackupService.ResolvePath(fileName);
+        if (path is null)
+            return;
+
+        var preflight = await RestoreService.PreflightAsync(path, CancellationToken.None);
+        await DialogService.ShowMessageBoxAsync(
+            preflight.Success ? "Backup Is Valid" : "Backup Failed Validation",
+            preflight.Success
+                ? $"'{fileName}' passed all preflight checks and can be restored on this host."
+                : string.Join("\n", preflight.Errors));
+    }
+
+    private async Task ShowReportAsync(string fileName)
+    {
+        var (manifest, report) = BackupService.ReadArchiveInfo(fileName);
+        if (manifest is null && report is null)
+        {
+            await DialogService.ShowMessageBoxAsync("No Report", $"'{fileName}' does not contain a readable manifest or report.");
+            return;
+        }
+
+        var lines = new List<string>();
+        if (manifest is not null)
+        {
+            lines.Add($"Created: {manifest.CreatedUtc.ToLocalTime():d MMM yyyy h:mm tt}");
+            lines.Add($"App version: {manifest.AppVersion ?? "unknown"}");
+            lines.Add($"Schema version: {manifest.SchemaVersion ?? "unknown"}");
+            lines.Add($"Encryption key: {manifest.EncryptionKeyId ?? "none"}");
+        }
+        if (report is not null)
+        {
+            lines.Add($"Database size: {FormatSize(report.DatabaseSizeBytes)}");
+            lines.Add($"Duration: {report.DurationSeconds:0.0}s");
+            var excludedRows = report.RowsRemovedByTable.Where(kvp => kvp.Value > 0).ToList();
+            lines.Add(excludedRows.Count == 0
+                ? "Excluded history/cache tables were already empty."
+                : "Excluded rows: " + string.Join(", ", excludedRows.Select(kvp => $"{kvp.Key}={kvp.Value}")));
+            foreach (var warning in report.Warnings)
+                lines.Add($"Warning: {warning}");
+        }
+
+        await DialogService.ShowMessageBoxAsync($"Backup Report — {fileName}", string.Join("\n", lines));
+    }
+
+    private async Task DeleteBackupAsync(string fileName)
+    {
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Delete Backup", $"Delete '{fileName}'? This cannot be undone.",
+            yesText: "Delete", cancelText: "Cancel");
+        if (confirmed != true)
+            return;
+
+        BackupService.Delete(fileName);
+        LoadBackups();
+    }
+
+    private async Task RestoreAsync(string fileName)
+    {
+        _backupError = null;
+        _backupSuccess = null;
+
+        var path = BackupService.ResolvePath(fileName);
+        if (path is null)
+        {
+            _backupError = "Backup file not found.";
+            return;
+        }
+
+        var preflight = await RestoreService.PreflightAsync(path, CancellationToken.None);
+        if (!preflight.Success)
+        {
+            await DialogService.ShowMessageBoxAsync("Cannot Restore", string.Join("\n", preflight.Errors));
+            return;
+        }
+
+        var manifest = preflight.Manifest!;
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Restore Backup",
+            $"Restore '{fileName}' (created {manifest.CreatedUtc.ToLocalTime():d MMM yyyy h:mm tt})? " +
+            "This restarts the application, replaces the current database, and signs everyone out. " +
+            "A rollback checkpoint is taken automatically before anything changes.",
+            yesText: "Restore & Restart", cancelText: "Cancel");
+        if (confirmed != true)
+            return;
+
+        _restoreInProgress = true;
+        try
+        {
+            var stageResult = await RestoreService.StageAsync(fileName, CancellationToken.None);
+            if (!stageResult.Success)
+            {
+                _backupError = "Restore failed to stage: " + string.Join(" ", stageResult.Errors);
+                _restoreInProgress = false;
+                return;
+            }
+
+            _backupSuccess = "Restore staged. Restarting the application now...";
+            await ApplicationRestart.RequestRestartAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _backupError = $"Failed to start restore: {ex.Message}";
+            _restoreInProgress = false;
+        }
+    }
+
+    private async Task ConfirmStagedRestoreAsync()
+    {
+        _restoreInProgress = true;
+        try
+        {
+            _backupSuccess = "Restarting the application now...";
+            await ApplicationRestart.RequestRestartAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _backupError = $"Failed to restart: {ex.Message}";
+            _restoreInProgress = false;
+        }
+    }
+
+    private void DismissRestoreStatus()
+    {
+        RestoreService.ClearStatus();
+        _pendingRestoreMarker = null;
+    }
+
+    private static Severity RestoreOutcomeSeverity(RestoreState state) => state switch
+    {
+        RestoreState.Completed => Severity.Success,
+        RestoreState.RolledBack => Severity.Warning,
+        _ => Severity.Error,
+    };
+
+    private static string RestoreOutcomeMessage(RestoreStateMarker marker) => marker.State switch
+    {
+        RestoreState.Completed => $"Restore of '{marker.ArchiveFileName}' completed successfully.",
+        RestoreState.RolledBack => $"Restore of '{marker.ArchiveFileName}' failed and was automatically rolled back: {marker.ErrorMessage}",
+        _ => $"Restore of '{marker.ArchiveFileName}' failed: {marker.ErrorMessage}",
+    };
+
+    private static string FormatSize(long bytes)
+    {
+        double size = bytes;
+        string[] units = ["B", "KB", "MB", "GB"];
+        var unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.Length - 1)
+        {
+            size /= 1024;
+            unitIndex++;
+        }
+
+        return $"{size:0.#} {units[unitIndex]}";
+    }
+}

@@ -87,6 +87,10 @@ builder.Services.AddRazorComponents()
     {
         options.ClientTimeoutInterval = TimeSpan.FromMinutes(5);
         options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+        // Default SignalR message size (32KB) is too small for uploading a portable backup
+        // archive via InputFile. Pruned config-only archives are expected to stay well under
+        // this, but the bump costs nothing to allow for.
+        options.MaximumReceiveMessageSize = 50 * 1024 * 1024;
     });
 
 builder.Services.AddCascadingAuthenticationState();
@@ -101,6 +105,15 @@ builder.Services.AddAuthentication(options =>
         options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
     })
     .AddIdentityCookies();
+// Security stamps are validated on every authenticated request (interval zero) so that
+// rotating them — which a portable-backup restore does for all users, see
+// PortableRestoreService.RotateSecurityStampsAsync — signs existing sessions out immediately
+// rather than at the default 30-minute revalidation. Cost is one user lookup per authenticated
+// request; the admin UI is the only authenticated surface (streaming endpoints are anonymous).
+builder.Services.AddScoped<Microsoft.AspNetCore.Identity.ISecurityStampValidator,
+    Microsoft.AspNetCore.Identity.SecurityStampValidator<ApplicationUser>>();
+builder.Services.Configure<Microsoft.AspNetCore.Identity.SecurityStampValidatorOptions>(
+    options => options.ValidationInterval = TimeSpan.Zero);
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.LoginPath = "/Account/Login";
@@ -115,12 +128,21 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options
         .UseSqlite(runtimePaths.DatabaseConnectionString)
         .AddInterceptors(sqliteInterceptor)
-        .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.FirstWithoutOrderByAndFilterWarning)));
+        .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.FirstWithoutOrderByAndFilterWarning)
+            // The checked-in migration snapshot and the installed EF Core package version
+            // produce cosmetically different (but semantically identical) model codegen on every
+            // regeneration attempt — confirmed across three independent round-trips, never a
+            // real column/type/key/FK difference. Without this, Migrate() throws at every
+            // startup. See .ai_docs/M3Undle_Backup_Restore_Implementation_Plan.md follow-up notes.
+            .Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 if (builder.Environment.IsDevelopment())
     builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks()
-    .AddCheck<M3UndleReadinessHealthCheck>("m3undle_ready", tags: ["ready"]);
+    .AddCheck<M3UndleReadinessHealthCheck>("m3undle_ready", tags: ["ready"])
+    // Degraded when the last restore attempt failed or rolled back — makes a failed
+    // M3UNDLE_RESTORE_FILE restore on a headless container visible to external monitors.
+    .AddCheck<M3Undle.Web.Application.Backup.RestoreStateHealthCheck>("restore_state");
 builder.Services.AddM3UndleOpenApi();
 builder.Services.AddValidation();
 builder.Services.AddMemoryCache();
@@ -149,8 +171,14 @@ builder.Services.AddSingleton<PlaylistParser>();
 builder.Services.AddSingleton<EnvironmentVariableService>();
 builder.Services.AddSingleton<EndpointUrlService>();
 builder.Services.AddSingleton<SecretEncryptionService>();
+builder.Services.AddSingleton<DestructiveOperationLock>();
 builder.Services.AddScoped<SqliteBackupService>();
 builder.Services.AddScoped<EncryptionRotationService>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Backup.RestoreStateStore>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.PortableBackupService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.PortableRestoreService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.IBackupScheduleService, M3Undle.Web.Application.Backup.BackupScheduleService>();
+builder.Services.AddHostedService<M3Undle.Web.Application.Backup.BackupScheduleBackgroundService>();
 builder.Services.AddScoped<ConfigYamlService>();
 
 // Named HttpClient for stream relay — no body timeout (live streams run indefinitely)
@@ -188,6 +216,21 @@ builder.Services.Configure<ObservabilityOptions>(builder.Configuration.GetSectio
 var metricsScrapePath = NormalizeObservabilityPath(builder.Configuration["M3Undle:Observability:Metrics:Path"], "/metrics");
 builder.Services.AddRateLimiter(options =>
 {
+    // Backup/restore initiation endpoints (create, upload, validate, stage, confirm) — each is
+    // expensive (VACUUM, extraction, integrity checks) and admin-only, so a low fixed window
+    // per client is plenty. Plan §10.
+    options.AddPolicy(M3Undle.Web.Api.BackupApiEndpoints.RateLimitPolicyName, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            $"backup-restore:{GetRateLimitClientKey(context)}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                AutoReplenishment = true,
+            }));
+
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = static async (context, cancellationToken) =>
     {
@@ -413,6 +456,18 @@ app.Logger.LogInformation(
     buildInfo.BuildDateUtc ?? "unknown",
     buildInfo.BuildNumber ?? "n/a");
 
+// Must run before the migration/hosted-service startup below: if a restore is staged, it
+// replaces the live database file first, so migrations then run against the restored database
+// rather than the one about to be discarded.
+using (var restoreScope = app.Services.CreateScope())
+{
+    var restoreService = restoreScope.ServiceProvider.GetRequiredService<M3Undle.Web.Application.Backup.PortableRestoreService>();
+    if (await restoreService.ApplyEnvironmentRestoreIfRequestedAsync(CancellationToken.None))
+        app.Logger.LogInformation("An M3UNDLE_RESTORE_FILE restore was attempted during startup.");
+    else if (await restoreService.ApplyPendingRestoreIfAnyAsync(CancellationToken.None))
+        app.Logger.LogInformation("A staged portable-backup restore was applied during startup.");
+}
+
 List<string> appliedMigrations;
 using (var scope = app.Services.CreateScope())
 {
@@ -501,6 +556,8 @@ app.MapDashboardApiEndpoints();
 app.MapDownstreamApiEndpoints();
 app.MapDiagnosticsApiEndpoints();
 app.MapEncryptionApiEndpoints();
+app.MapBackupApiEndpoints();
+app.MapRestoreApiEndpoints();
 app.MapHealthChecks("/livez", new HealthCheckOptions
 {
     Predicate = _ => false,

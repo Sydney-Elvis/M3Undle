@@ -30,7 +30,7 @@
 <div class="d-flex align-start" style="gap:24px;">
 
     @* ── Sidebar nav ───────────────────────────────────────────────────── *@
-    <MudPaper Elevation="1" Class="pa-2" Style="width:190px;min-width:190px;flex-shrink:0;">
+    <MudPaper Elevation="1" Class="pa-2" Style="width:210px;min-width:210px;flex-shrink:0;">
         <MudStack Spacing="0">
             <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Schedule"
@@ -99,6 +99,12 @@
                        Variant="@(_section == "system" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "system" ? Color.Primary : Color.Default)"
                        OnClick="@(() => NavigateToSection("system"))">System</MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.Backup"
+                       Variant="@(_section == "backup" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "backup" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("backup"))"><span style="white-space:nowrap">Backup &amp; Restore</span></MudButton>
         </MudStack>
     </MudPaper>
 
@@ -1346,6 +1352,14 @@
             </MudPaper>
         }
 
+        @* ════════════════════════════════════════ BACKUP & RESTORE ═══════ *@
+        @if (_section == "backup")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <BackupRestoreSection />
+            </MudPaper>
+        }
+
     </div>
 </div>
 
@@ -1487,7 +1501,7 @@
         {
             var requested = sectionParam.ToString().ToLowerInvariant();
             if (requested is "schedule" or "security" or "streaming" or "hdhr"
-                         or "endpoints" or "integrations" or "observability" or "system")
+                         or "endpoints" or "integrations" or "observability" or "system" or "backup")
                 _section = requested;
         }
 

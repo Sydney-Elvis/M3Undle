@@ -45,6 +45,23 @@ public sealed class SecretEncryptionService
 
     public IReadOnlyList<string> KnownKeyIds { get; }
 
+    /// <summary>
+    /// A non-reversible fingerprint of the active key's material (SHA-256, truncated). Lets a
+    /// backup manifest and restore preflight detect an operator reusing a key id with different
+    /// key bytes, which the id alone cannot catch.
+    /// </summary>
+    public string? ActiveKeyFingerprint => _ring.Count > 0 ? ComputeFingerprint(_ring[0].Key) : null;
+
+    /// <summary>
+    /// Fingerprint of a specific key id anywhere in the ring (not just the active one) — restore
+    /// preflight needs this to check the key the backup actually names, which may not be active.
+    /// </summary>
+    public string? GetKeyFingerprint(string keyId)
+        => _byId.TryGetValue(keyId, out var key) ? ComputeFingerprint(key) : null;
+
+    private static string ComputeFingerprint(byte[] key)
+        => Convert.ToHexString(SHA256.HashData(key))[..16].ToLowerInvariant();
+
     public string Encrypt(string plaintext)
     {
         if (_ring.Count == 0)

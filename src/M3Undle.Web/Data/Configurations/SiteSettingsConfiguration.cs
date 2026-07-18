@@ -105,6 +105,11 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             .HasDefaultValue(true);
         builder.Property(s => s.HdhrAllowedNetworks)
             .HasColumnName("hdhr_allowed_networks");
+        builder.Property(s => s.BackupScheduleEnabled)
+            .HasColumnName("backup_schedule_enabled")
+            .HasDefaultValue(false);
+        builder.Property(s => s.BackupLastRunUtc)
+            .HasColumnName("backup_last_run_utc");
 
         builder.HasData(new SiteSettings
         {
@@ -142,6 +147,8 @@ public sealed class SiteSettingsConfiguration : IEntityTypeConfiguration<SiteSet
             ObservabilityMetricsLocalAllowedCidrs = null,
             XtreamCompatibilityEnabled = true,
             HdhrAllowedNetworks = null,
+            BackupScheduleEnabled = false,
+            BackupLastRunUtc = null,
         });
     }
 }
