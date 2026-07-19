@@ -1,6 +1,6 @@
 # Profiles and Users
 
-A **profile** is a named, published lineup — the thing your clients actually connect to. It scopes a set of linked providers, a set of channel-mapping decisions, and a published version history under one name.
+A **profile** is a named, published lineup — the thing your clients actually connect to. It scopes a set of linked providers, a set of channel-mapping decisions, and a published version history under one name. For the day-to-day screens (creating, activating, and deleting profiles), see [Manage Profiles](../guides/manage-profiles.md).
 
 ## One active profile
 

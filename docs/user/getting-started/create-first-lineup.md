@@ -22,7 +22,7 @@ Once you've made your selections, click **Build Output**. Changes to channel set
 
 ## 4. Confirm it published
 
-Return to the dashboard. Under **Selected Profile**, confirm **Status** is **Serving** and check the **Published** timestamp. You can also open **Profiles**, select the profile, and review **Published Output** and **Published History**.
+Return to the dashboard. Under **Selected Profile**, confirm **Status** is **Serving** and check the **Published** timestamp — see [Read the Dashboard](../guides/dashboard-overview.md) for what everything on that page means. You can also open **Profiles**, select the profile, and review **Published Output** and **Published History** — see [Manage Profiles](../guides/manage-profiles.md).
 
 Your lineup is now live at:
 

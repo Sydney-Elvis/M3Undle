@@ -52,7 +52,7 @@ Cooldowns protect you two ways: they avoid burning your provider connection limi
 
 ## Where to look when a channel misbehaves
 
-- **Streams** page — live Health and Relay columns per active stream, with a details dialog for the full evidence.
+- **[Monitor Live Streams](../guides/monitor-streams.md)** — live Health and Relay columns per active stream, with a details dialog for the full evidence.
 - **[Channel Does Not Tune](../troubleshooting/channel-does-not-tune.md)** — first stop when a channel won't start at all.
 - **[Monitor with Prometheus / Grafana](../guides/monitor-with-prometheus-grafana.md)** — stream failure and recovery counters, if you want history beyond the live view.
 
