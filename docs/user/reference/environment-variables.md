@@ -56,7 +56,7 @@ environment:
 
 ## Optional — Stream Relay Tuning
 
-Most stream proxy settings are managed from **Settings → Stream Proxy**, and restart-required changes are tracked in the UI. The variables below are advanced startup/config controls for behavior not exposed as a normal UI field.
+Most stream proxy settings are managed from **Settings → Streaming**, and restart-required changes are tracked in the UI. The variables below are advanced startup/config controls for behavior not exposed as a normal UI field.
 
 | Variable | Default | Description |
 |---|---|---|

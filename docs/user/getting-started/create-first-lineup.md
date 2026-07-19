@@ -6,7 +6,7 @@ This walks through the minimum steps to get a working lineup published. For the 
 
 ## 1. Open Channel Mapping
 
-Go to **Channel Mapping** and select the profile you want to build. The page summarizes groups as **mapped**, **unmapped**, or **excluded** and has filters for new and removed groups.
+Go to **Channel Mapping** and select the profile you want to build. The page summarizes groups as **mapped**, **unmapped**, or **excluded** and has filters for new and removed groups — see [Concepts > Channels and Groups](../concepts/channels-and-groups.md) for what these states mean.
 
 Provider groups are initially unmapped. Use the group-row actions to map channels from groups you want, or exclude groups you do not want. The icon-only actions have tooltips; hover over an icon before using it if its purpose is unclear.
 
@@ -22,7 +22,7 @@ Once you've made your selections, click **Build Output**. Changes to channel set
 
 ## 4. Confirm it published
 
-Return to the dashboard. Under **Selected Profile**, confirm **Status** is **Serving** and check the **Published** timestamp. You can also open **Profiles**, select the profile, and review **Published Output** and **Published History**.
+Return to the dashboard. Under **Selected Profile**, confirm **Status** is **Serving** and check the **Published** timestamp — see [Read the Dashboard](../guides/dashboard-overview.md) for what everything on that page means. You can also open **Profiles**, select the profile, and review **Published Output** and **Published History** — see [Manage Profiles](../guides/manage-profiles.md).
 
 Your lineup is now live at:
 

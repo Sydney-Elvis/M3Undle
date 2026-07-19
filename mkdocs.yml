@@ -69,6 +69,7 @@ nav:
       - Retry, Failover, and Cooldowns: concepts/retry-failover-cooldowns.md
       - Observability: concepts/observability.md
   - Guides:
+      - Read the Dashboard: guides/dashboard-overview.md
       - Build a Lineup: guides/build-a-lineup.md
       - Map EPG Data: guides/map-epg-data.md
       - Manage Providers: guides/manage-providers.md
@@ -77,7 +78,9 @@ nav:
       - Use a Reverse Proxy: guides/use-a-reverse-proxy.md
       - Downstream Integrations: guides/downstream-integrations.md
       - Browser Playback: guides/browser-playback.md
+      - Monitor Live Streams: guides/monitor-streams.md
       - Monitor with Prometheus / Grafana: guides/monitor-with-prometheus-grafana.md
+      - View Logs: guides/view-logs.md
   - Clients:
       - Jellyfin: clients/jellyfin.md
       - NextPVR: clients/nextpvr.md
