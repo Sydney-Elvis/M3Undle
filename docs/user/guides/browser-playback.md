@@ -34,6 +34,42 @@ Browser Playback appears below **Stream Proxy** on the same Streaming settings p
 
 The page distinguishes when settings take effect: new viewer sessions inherit Stream Proxy settings immediately, while overall limits and Browser Playback changes require a restart.
 
+## Sizing storage for generated HLS
+
+Generated HLS writes rolling playlists/segments under `/data/hls-work` by default. These are rolling/sliding, session-scoped, and cleaned up on session end or inactivity — not full VOD retention — but you still need to size the volume that backs `/data`.
+
+Estimate required storage with:
+
+```
+required_bytes ≈ concurrent_generated_hls_sessions × average_bitrate_bytes_per_second × retained_seconds
+```
+
+or in Mbps terms:
+
+```
+required_gb ≈ concurrent_sessions × average_mbps × retained_seconds / 8 / 1024
+```
+
+Recommended planning:
+
+- Start with a **2×–4× safety multiplier** over the raw estimate.
+- Small/home usage: allocate **2–5 GB**.
+- Multi-user usage: allocate **10–20 GB** or more, depending on bitrate and concurrency.
+
+Examples:
+
+- 5 sessions at 8 Mbps, 60 seconds retained: raw ~300 MB → recommended **1–2 GB**.
+- 10 sessions at 12 Mbps, 90 seconds retained: raw ~1.35 GB → recommended **3–5 GB**.
+
+If you expect heavy browser playback and want this scratch space on a separate disk, mount it directly at the internal path:
+
+```yaml
+volumes:
+  - ./config:/config
+  - ./data:/data
+  - ./hls-work:/data/hls-work
+```
+
 ## Before changing the settings
 
 1. Confirm the page says FFmpeg is available.

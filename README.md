@@ -8,7 +8,7 @@
 [![Release](https://badgen.net/github/release/Sydney-Elvis/M3Undle?icon=github)](https://github.com/Sydney-Elvis/M3Undle/releases/latest)
 [![License](https://badgen.net/github/license/Sydney-Elvis/M3Undle)](LICENSE)
 
-[**Documentation**](docs/user/index.md) | [**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](CHANGELOG.md) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+[**Documentation**](https://sydney-elvis.github.io/M3Undle/) | [**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](CHANGELOG.md) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
 
 </div>
 
@@ -60,7 +60,7 @@ volumes:
 docker compose up -d
 ```
 
-Open `http://<host>:8080`, add a provider, and build your first lineup — see **[Install with Docker](docs/user/getting-started/install-with-docker.md)** and **[What M3Undle Does](docs/user/getting-started/what-it-does.md)** for the full walkthrough.
+Open `http://<host>:8080`, add a provider, and build your first lineup — see **[Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)** and **[What M3Undle Does](https://sydney-elvis.github.io/M3Undle/getting-started/what-it-does/)** for the full walkthrough.
 
 ## What it does
 
@@ -73,22 +73,22 @@ Open `http://<host>:8080`, add a provider, and build your first lineup — see *
 - **Observability** — Prometheus-compatible metrics, health probes, and authenticated diagnostics APIs
 - **Profiles** — named lineups with published history and automatic fallback to last-known-good output
 
-See **[Core Concepts](docs/user/concepts/providers.md)** for how these fit together, or **[Guides](docs/user/guides/build-a-lineup.md)** for step-by-step workflows.
+See **[Core Concepts](https://sydney-elvis.github.io/M3Undle/concepts/providers/)** for how these fit together, or **[Guides](https://sydney-elvis.github.io/M3Undle/guides/build-a-lineup/)** for step-by-step workflows.
 
 ## Documentation
 
-Full documentation — installation, concepts, guides, client setup, troubleshooting, and reference — lives under [`docs/user/`](docs/user/index.md) in this repo (a public documentation site is in progress; this README will link to it directly once published).
+Full documentation — installation, concepts, guides, client setup, troubleshooting, and reference — is published at **[sydney-elvis.github.io/M3Undle](https://sydney-elvis.github.io/M3Undle/)**. Source lives under [`docs/user/`](docs/user/index.md) in this repo if you'd rather browse or edit it directly.
 
 Start here:
 
-- [What M3Undle Does](docs/user/getting-started/what-it-does.md)
-- [Install with Docker](docs/user/getting-started/install-with-docker.md)
-- [Connect a Client](docs/user/getting-started/connect-first-client.md)
-- [Troubleshooting](docs/user/troubleshooting/client-cannot-connect.md)
+- [What M3Undle Does](https://sydney-elvis.github.io/M3Undle/getting-started/what-it-does/)
+- [Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)
+- [Connect a Client](https://sydney-elvis.github.io/M3Undle/getting-started/connect-first-client/)
+- [Troubleshooting](https://sydney-elvis.github.io/M3Undle/troubleshooting/client-cannot-connect/)
 
 ## Security notes
 
-M3Undle is designed for self-hosted use on a trusted network. For first-run testing, the web UI can run without authentication — before exposing it outside your LAN, enable UI authentication and endpoint security, and put it behind a reverse proxy or firewall rules you trust. See [Security](docs/user/concepts/security.md).
+M3Undle is designed for self-hosted use on a trusted network. For first-run testing, the web UI can run without authentication — before exposing it outside your LAN, enable UI authentication and endpoint security, and put it behind a reverse proxy or firewall rules you trust. See [Security](https://sydney-elvis.github.io/M3Undle/concepts/security/).
 
 You are responsible for the sources you configure and for following the terms that apply to them.
 

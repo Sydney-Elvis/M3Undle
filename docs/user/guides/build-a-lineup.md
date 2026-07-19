@@ -53,6 +53,17 @@ The **View Channels** table is the published result, not the full provider catal
 
 The observed lineup contained six channels numbered 100 through 105 in the **Locals** output group. **Manage Numbers** is available from this page for numbering work.
 
+### Number Manager mode
+
+Selecting **Manage Numbers** replaces the channel grid with a full-channel editable list:
+
+- Each row shows the current channel number (editable), channel name, and group
+- **▲ ▼** buttons swap a channel with its neighbor, transferring their numbers
+- Editing a number field directly updates the value and re-sorts the list
+- Changed rows are marked with an indicator
+- **Apply All** saves all pending number changes to the database
+- Changes take effect after a Build Output; exit the mode with **Exit Number Manager**
+
 ## Publish the changes
 
 Return to **Channel Mapping** and select **Build Output**. Mapping edits do not change the published endpoints until an output build completes.

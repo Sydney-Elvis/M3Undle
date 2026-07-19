@@ -66,6 +66,21 @@ Keep `5004:5004` published if you plan to use any HDHomeRun-compatible client (N
 
 Bind-mounting `./config` keeps configuration files easy to inspect, edit, and back up outside of Docker. The example above uses a Docker-managed volume for `/data`; a bind mount (`./data:/data`) works too if you'd rather have that on the host as well.
 
+### Config file integration
+
+Place a `config.yaml` (and optionally a `.env` credential file) directly in the `config/` directory mapped to `/config` — M3Undle finds them automatically, no extra environment variables required:
+
+```
+m3undle/
+  compose.yaml
+  config/
+    config.yaml    ← provider definitions
+    .env           ← credentials (never commit this)
+  data/            ← managed by the container
+```
+
+If you have a `config.yaml` already, you can import providers from it directly via the Add Provider dialog — see [Add the First Provider](add-first-provider.md).
+
 ## Tags
 
 | Tag | Tracks |

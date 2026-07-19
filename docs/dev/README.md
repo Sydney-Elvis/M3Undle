@@ -1,6 +1,6 @@
 # Developer Documentation
 
-This is contributor/maintainer reference for M3Undle — not user-facing. If you're looking for install/configuration/usage docs, see [DOCKER.md](../DOCKER.md), [GUI.md](../GUI.md), and [OBSERVABILITY.md](../OBSERVABILITY.md) (being migrated to a public documentation site under `docs/user/` — tracked in [issue #114](https://github.com/Sydney-Elvis/M3Undle/issues/114) if you're working on that).
+This is contributor/maintainer reference for M3Undle — not user-facing. If you're looking for install/configuration/usage docs, see the published documentation site at **[sydney-elvis.github.io/M3Undle](https://sydney-elvis.github.io/M3Undle/)** — source lives under `docs/user/` in this repo. The old flat `docs/DOCKER.md`, `docs/GUI.md`, and `docs/OBSERVABILITY.md` were retired once their content was fully migrated there.
 
 None of the files below are part of the public documentation site. They live here, in the public GitHub repo, for contributors.
 
