@@ -25,4 +25,4 @@ Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and othe
 
 ---
 
-*This site is under construction — most pages linked above are placeholders. See `.ai_docs/m3undle-documentation-plan-reviewed-2026-07.md` for the build plan. The full [README](https://github.com/Sydney-Elvis/M3Undle#readme) has a complete quick-start in the meantime.*
+*This site is under construction — most pages linked above are placeholders, tracked in [issue #114](https://github.com/Sydney-Elvis/M3Undle/issues/114). The full [README](https://github.com/Sydney-Elvis/M3Undle#readme) has a complete quick-start in the meantime.*

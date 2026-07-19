@@ -1,3 +1,3 @@
 # Manage Profiles
 
-*This page is planned but not yet written — see `.ai_docs/m3undle-documentation-plan-reviewed-2026-07.md` (Milestone 2/5) for what will go here.*
+*This page is planned but not yet written — tracked in [issue #114](https://github.com/Sydney-Elvis/M3Undle/issues/114).*

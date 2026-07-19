@@ -28,9 +28,9 @@ Expand **Advanced Options** to configure:
 - **Virtual Tuner ID**, used by players that support HDHomeRun tuner reuse. The UI recommends changing it only when multiple M3Undle instances require unique IDs.
 - **Enable Xtream protocol**. When disabled, the UI states that all Xtream routes return `404`, regardless of credential state.
 
-## HDHomeRun network restrictions
+## HDHomeRun gets both controls
 
-The Security page does not list HDHomeRun among the endpoints covered by the media username/password. HDHomeRun access has its own network control under **Settings → HDHomeRun → Allowed Networks**, covering discovery, lineup, and tuning. Use the two screens together when exposing M3Undle beyond a single trusted LAN.
+The Security page's visible list doesn't name HDHomeRun explicitly, but HDHomeRun endpoints (discovery, lineup, tuning) are actually covered by **both** protections: the same endpoint-credential enforcement as M3U/XMLTV/streams/Xtream when it's enabled, *and* the separate network restriction under **Settings → HDHomeRun → Allowed Networks**. Don't assume HDHomeRun is exempt from endpoint credentials just because the Security page's UI text doesn't spell it out — enabling credential enforcement protects it too. Use both screens together when exposing M3Undle beyond a single trusted LAN, since Allowed Networks is a separate, additional layer, not a replacement.
 
 ## Verify after a change
 
