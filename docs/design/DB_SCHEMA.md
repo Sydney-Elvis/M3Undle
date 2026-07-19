@@ -41,7 +41,7 @@ Note: active state lives on `profiles.is_active`.
 Set when the provider is configured as a native Xtream Codes API provider (as opposed to a playlist/file provider, including one whose M3U URL happens to embed Xtream-style credentials — see `xtream_detected_capable` below).
 - xtream_base_url (TEXT, nullable) -- Xtream panel base URL
 - xtream_username (TEXT, nullable)
-- xtream_encrypted_password (TEXT, nullable) -- AES-256-GCM encrypted; requires `M3UNDLE_ENCRYPTION_KEY` or the rotatable `M3UNDLE_ENCRYPTION_KEYS` (see docs/DOCKER.md). Never stored in plaintext
+- xtream_encrypted_password (TEXT, nullable) -- AES-256-GCM encrypted; requires `M3UNDLE_ENCRYPTION_KEY` or the rotatable `M3UNDLE_ENCRYPTION_KEYS` (see https://sydney-elvis.github.io/M3Undle/guides/manage-providers/). Never stored in plaintext
 - xtream_include_xmltv (INTEGER, 0/1, default 0) -- include the Xtream panel's own XMLTV guide instead of/alongside configured EPG sources
 - xtream_detected_capable (INTEGER, 0/1, default 0) -- set true when a `player_api.php` probe succeeds for an M3U-URL-mode provider with embedded credentials; lets a playlist provider be upgraded to native Xtream mode without re-entering credentials
 - playlist_expires_utc (TEXT, nullable) -- UTC expiry parsed from the Xtream `player_api.php` `user_info.exp_date`; null if unknown or not Xtream-capable
@@ -448,7 +448,7 @@ Configured downstream client integrations (Jellyfin, Emby, webhook).
 - name (TEXT)
 - kind (TEXT) -- 'jellyfin'|'emby'|'webhook'
 - base_url (TEXT)
-- api_key_encrypted (TEXT, nullable) -- AES-256-GCM encrypted; requires M3UNDLE_ENCRYPTION_KEY or the rotatable M3UNDLE_ENCRYPTION_KEYS (see docs/DOCKER.md)
+- api_key_encrypted (TEXT, nullable) -- AES-256-GCM encrypted; requires M3UNDLE_ENCRYPTION_KEY or the rotatable M3UNDLE_ENCRYPTION_KEYS (see https://sydney-elvis.github.io/M3Undle/guides/manage-providers/)
 - webhook_headers_json (TEXT, nullable)
 - trigger_on_lineup_update (INTEGER, 0/1, default 1)
 - trigger_on_guide_update (INTEGER, 0/1, default 1)

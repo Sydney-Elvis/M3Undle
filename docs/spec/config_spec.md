@@ -1,6 +1,6 @@
 # M3Undle Config – Schema
 
-This document defines the `config.yaml` schema M3Undle Web can import providers from (see **Settings → Providers → Import**, and `docs/DOCKER.md` § Config File Integration). It originated as a schema shared with the standalone `bndl` CLI; the CLI has since moved to the separate `m3undle-cli` repository and owns its own copy of this schema there — the two may diverge over time. This document describes Web's import behavior only.
+This document defines the `config.yaml` schema M3Undle Web can import providers from (see **Settings → Providers → Import**, and [Install with Docker § Config file integration](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)). It originated as a schema shared with the standalone `bndl` CLI; the CLI has since moved to the separate `m3undle-cli` repository and owns its own copy of this schema there — the two may diverge over time. This document describes Web's import behavior only.
 
 - **Formats supported:** YAML (preferred) and JSON
 - **Profiles:** A `config.yaml` file may define multiple named profiles. Each one becomes an importable provider definition in the Web UI; there is no `--profile` flag here — that belongs to the separate CLI tool.

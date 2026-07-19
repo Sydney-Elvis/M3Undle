@@ -22,6 +22,30 @@ The dashboard provides read-only URL fields and copy actions for M3U and XMLTV. 
 
 Use liveness to confirm that the process is running and readiness to confirm that it is ready for normal traffic.
 
+## Diagnostics APIs
+
+Authenticated JSON diagnostics for operators, requiring existing admin/UI authorization — not exposed through metrics-token authentication. Use these when investigating provider fetches, stream sharing, lineup publish history, or EPG source behavior; use `/metrics` (see [Metrics](metrics.md)) for time-series monitoring instead.
+
+If **UI Authentication** is disabled (the default — see [Security](../concepts/security.md)), these endpoints are open to anyone who can reach the server, and the plain `curl` examples below work as shown. If UI Authentication is enabled, they require a real authenticated session — pass your login cookie (e.g. `curl -b cookies.txt`, saved from a browser or a prior `curl -c cookies.txt` login request) rather than expecting a bare `curl` call to work.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/admin/diagnostics/providers` | Provider fetch and channel diagnostics |
+| `GET /api/admin/diagnostics/streams` | Active and recently ended stream sessions, clients, and upstreams |
+| `GET /api/admin/diagnostics/lineup` | Published lineup status and recent snapshots |
+| `GET /api/admin/diagnostics/epg` | EPG source, fetch, and mapping diagnostics |
+
+```bash
+curl -s http://<host>:8080/api/admin/diagnostics/providers
+curl -s http://<host>:8080/api/admin/diagnostics/streams
+curl -s http://<host>:8080/api/admin/diagnostics/lineup
+curl -s http://<host>:8080/api/admin/diagnostics/epg
+```
+
+### Test-mode RCA bundle
+
+When `M3UNDLE_TEST_MODE=true`, an additional `GET /debug/streams/rca` endpoint (UI admin auth required) returns a compact root-cause-analysis bundle: active/recent stream sessions, clients, provider streams, cooldowns, and recent stream diagnostic events in one payload. Combine it with the container's application logs when investigating playback stalls or provider failures.
+
 ## HDHomeRun endpoints
 
 Open **HDHomeRun** and copy the generated values under **HDHR Endpoints**. On the observed instance they used these paths:

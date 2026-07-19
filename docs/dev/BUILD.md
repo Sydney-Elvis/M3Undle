@@ -1,6 +1,6 @@
 # Build and Run From Source
 
-This covers building and running M3Undle locally from source, using the root `compose.yaml` — distinct from `docs/DOCKER.md`, which covers running the *published* image.
+This covers building and running M3Undle locally from source, using the root `compose.yaml` — distinct from [Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/), which covers running the *published* image.
 
 ## Prerequisites
 
@@ -40,7 +40,7 @@ Bind-mounted host directories (created automatically alongside `compose.yaml`):
 - `./data` → `/data` — SQLite database, snapshots, logs
 - `./m3u_data` → `/m3u_data` — local `.m3u` files, browsable via the in-app file browser (`M3UNDLE_M3U_DIR`)
 
-Note: this compose file does **not** mount `/config`, so `config.yaml` import and the `%VAR_NAME%` URL-credential-substitution feature (which need `/config` and `/config/.env` — see `docs/DOCKER.md`) aren't available in this local-build setup out of the box. Add a `./config:/config` volume yourself if you need to test that path.
+Note: this compose file does **not** mount `/config`, so `config.yaml` import and the `%VAR_NAME%` URL-credential-substitution feature (which need `/config` and `/config/.env` — see [Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)) aren't available in this local-build setup out of the box. Add a `./config:/config` volume yourself if you need to test that path.
 
 To wipe all persisted data:
 
