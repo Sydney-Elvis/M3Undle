@@ -63,12 +63,17 @@ TestResults/
 .ai_docs/
 .local_artifacts/
 .claude/
+.codex/
 .stfolder/
 .stignore
 AGENTS.md
 CLAUDE.md
 .stignore
 .stfolder/
+
+# Documentation site build output and local tooling venv
+build/docs/
+.venv-docs/
 
 # Temporary files
 *.tmp

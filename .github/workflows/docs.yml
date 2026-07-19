@@ -1,0 +1,101 @@
+name: Documentation Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/user/**'
+      - 'mkdocs.yml'
+      - 'docs/requirements.txt'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/user/**'
+      - 'mkdocs.yml'
+      - 'docs/requirements.txt'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install docs dependencies
+        run: pip install -r docs/requirements.txt
+
+      - name: Build with MkDocs (strict)
+        run: mkdocs build --strict
+
+      - name: Check links
+        # Scans markdown source, not the rendered HTML in build/docs/site/ —
+        # the rendered output is full of Material-theme-generated root-relative
+        # nav/asset links (e.g. /M3Undle/...) that lychee can't resolve without
+        # real deployment context, and self-referential site_url canonical
+        # links that would 404 on every PR forever since PRs never deploy.
+        # Internal markdown-to-markdown links are already fully validated by
+        # the strict MkDocs build above; this step's job is external links.
+        #
+        # The docs/dev/BUILD.md exclude is a one-time bootstrapping exception,
+        # not a general carve-out: that file was introduced in the same PR as
+        # this link, so blob/main/... 404s until the PR merges. Safe to remove
+        # this exclude line once that's happened — it'll just always resolve
+        # successfully after, so leaving it is harmless but no longer needed.
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >
+            --no-progress
+            --timeout 20
+            --max-retries 1
+            --exclude-loopback
+            --exclude '<host>'
+            --exclude 'Sydney-Elvis/M3Undle/blob/main/docs/dev/BUILD\.md'
+            'docs/user/**/*.md'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fail: true
+
+      - name: Upload PR preview artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-preview
+          path: build/docs/site
+          retention-days: 7
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/docs/site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
