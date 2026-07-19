@@ -4,34 +4,25 @@ Adding a provider auto-created a profile for you with the same name — you don'
 
 This walks through the minimum steps to get a working lineup published. For the full set of lineup-shaping options (event tracking, custom groups, per-channel overrides), see [Build a Lineup](../guides/build-a-lineup.md).
 
-## 1. Review provider groups
+## 1. Open Channel Mapping
 
-Go to **Channel Mapping**. Every group from your provider starts in **pending** — parked, not yet publishable. For each group you actually want, mark it:
+Go to **Channel Mapping** and select the profile you want to build. The page summarizes groups as **mapped**, **unmapped**, or **excluded** and has filters for new and removed groups.
 
-- **Include** — channels from this group appear in your output
-- **Exclude** — group is ignored entirely
-- Leave anything you haven't decided on yet as **pending**
+Provider groups are initially unmapped. Use the group-row actions to map channels from groups you want, or exclude groups you do not want. The icon-only actions have tooltips; hover over an icon before using it if its purpose is unclear.
 
-## 2. Choose a group mode
+## 2. Map channels
 
-For each included group, pick how new channels in it get handled:
+Select **Map Channels** (or **View Channels** followed by **Map Channels**) to choose channels for the profile. **View Channels** shows the current published lineup with channel number, name, output group, and EPG ID.
 
-- **Manual review** — only channels you explicitly check are published
-- **Auto-update** — active channels publish automatically unless you exclude them
+The running `v1.0.0-beta.6` UI does not present this workflow as the **Include**, **Manual review**, and **Auto-update** choices described in earlier drafts. Use the mapped/unmapped/excluded status and Map Channels screen as the source of truth for this version.
 
-For a first pass, manual review on a small number of groups is the easiest way to see exactly what you're publishing.
-
-## 3. Select channels (manual review groups)
-
-Within an included manual-review group, check the individual channels you want. You can set a channel number and an output group per channel as you go, or leave numbering to auto-assignment — see [Build a Lineup](../guides/build-a-lineup.md) for how auto-numbering and pinned numbers interact.
-
-## 4. Build Output
+## 3. Build Output
 
 Once you've made your selections, click **Build Output**. Changes to channel settings are pending until the next build — nothing publishes automatically as you check boxes.
 
-## 5. Confirm it published
+## 4. Confirm it published
 
-Check the dashboard for the current published version and last refresh status. If a refresh ever fails, M3Undle keeps serving the last known-good version rather than breaking your clients.
+Return to the dashboard. Under **Selected Profile**, confirm **Status** is **Serving** and check the **Published** timestamp. You can also open **Profiles**, select the profile, and review **Published Output** and **Published History**.
 
 Your lineup is now live at:
 

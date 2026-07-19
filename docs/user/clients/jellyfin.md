@@ -17,11 +17,17 @@ Jellyfin supports M3Undle in two modes. Either works; HDHomeRun mode gets you Je
 ## HDHomeRun mode
 
 1. **Dashboard → Live TV → Add Tuner Device → HD Homerun**
-2. Enter `http://<host-ip>:5004` manually.
+2. Enter the **Discover JSON** base address shown on M3Undle's **HDHomeRun** page — on the default install (see [Install with Docker](../getting-started/install-with-docker.md)) this is `http://<host-ip>:5004`.
 3. Jellyfin fetches `discover.json` and `lineup.json` and shows your channels.
 
 !!! warning "Use manual entry, not auto-discovery"
-    Jellyfin's "Detect My Devices" auto-discovery may not find M3Undle in Docker bridge or NAT-like setups — some of Jellyfin's autodetect flows connect to the responder IP on port `80` instead of the advertised base URL on port `5004`. Manual entry with `http://<host-ip>:5004` works reliably regardless of networking mode, and is the supported path for Jellyfin specifically.
+    Jellyfin's "Detect My Devices" auto-discovery may not find M3Undle in Docker bridge or NAT-like setups. Use the manual **Discover JSON** URL displayed by M3Undle instead of guessing it.
+
+!!! note "If port 5004 isn't reachable"
+    M3Undle serves the same HDHomeRun endpoints on every port it's actually listening on — if your deployment only publishes port `8080` (some reverse-proxy or custom-compose setups do), the HDHomeRun endpoints work there too. Whatever the actual URL is, use exactly what's shown on M3Undle's **HDHomeRun** page rather than assuming a port.
+
+!!! note "Jellyfin itself was not tested"
+    These M3Undle endpoints were verified in the browser, but an actual Jellyfin installation was not available for an end-to-end tuner or guide refresh test. Jellyfin menu wording can vary by Jellyfin version.
 
 ## If endpoint security is enabled
 

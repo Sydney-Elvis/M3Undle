@@ -4,22 +4,22 @@ This is different from [Client Cannot Connect](client-cannot-connect.md) — her
 
 ## 1. Confirm the channel is actually live upstream
 
-Check the provider's status in **Provider** — last refresh success/failure, and whether the source channel is still active. A channel that vanished from the provider's own catalog will fail to tune no matter what M3Undle does.
+Check the provider's status in **Providers**—the table shows last refresh, expiry, and published status. Use **Preview** to inspect provider content without changing the published lineup. A channel that vanished from the provider's own catalog will fail to tune no matter what M3Undle does.
 
 ## 2. Check the provider's stream limit
 
-If the provider has a maximum concurrent stream limit configured and it's currently exhausted, new *unique* channel sessions are rejected — but joining a channel someone else is already watching always succeeds regardless of the cap, since it shares the existing upstream connection. Check **Streams** in the web UI for current active sessions and provider limits. See [Stream Proxying](../concepts/stream-proxying.md).
+If the provider has a maximum concurrent stream limit configured and it is exhausted, new stream requests may be rejected. Open **Streams** to see **Active Streams** and **Connected Clients**; the footer also shows the current stream count and maximum. See [Stream Proxying](../concepts/stream-proxying.md).
 
 ## 3. Check the channel's stream health
 
-M3Undle classifies channels as **Stable**, **Cautious**, or **Unstable** based on observed disconnects and recoveries. A channel that's been flaky will show its health history and current relay policy decision in the stream monitor. See [Retry, Failover, and Cooldowns](../concepts/retry-failover-cooldowns.md) for what these states mean and how relay policy (Auto/On/Off) affects them.
+Open **Streams** while reproducing the problem. The page refreshes every three seconds and lists active streams and connected clients. No stream was active during documentation validation, so the per-stream health fields and the earlier draft's **Stable / Cautious / Unstable** labels could not be verified against the running UI. See [Retry, Failover, and Cooldowns](../concepts/retry-failover-cooldowns.md) for the intended health model.
 
 ## 4. Confirm the channel wasn't dropped by a lineup change
 
 If the channel used to work and stopped:
 
-- Check whether its provider group is still **Included** — an excluded group's channels are deactivated, not just hidden.
-- Check whether the channel itself was individually excluded during review.
+- In **Channel Mapping**, check whether its provider group is mapped, unmapped, or excluded.
+- Select **View Channels** to confirm the channel is still present in the published lineup.
 - Confirm you ran **Build Output** after making any changes — pending channel-setting changes don't take effect until the next build.
 
 ## 5. HDHomeRun-specific: tuner exhaustion

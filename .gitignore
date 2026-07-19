@@ -63,6 +63,7 @@ TestResults/
 .ai_docs/
 .local_artifacts/
 .claude/
+.codex/
 .stfolder/
 .stignore
 AGENTS.md

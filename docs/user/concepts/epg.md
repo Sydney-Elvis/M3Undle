@@ -4,12 +4,10 @@ M3Undle manages guide data (XMLTV) separately from the channel lineup itself, th
 
 ## EPG sources are per-provider
 
-Each provider can have multiple XMLTV guide sources: the provider's own built-in XMLTV, a remote URL, or a local file. For each source you can:
+Open **EPG** to manage guide data per provider. The page has **Sources** and **Channel Mappings** tabs. Sources may include the provider's own XMLTV, a remote URL, or a local file. The source table shows kind, URL/path, priority, and status.
 
 - Set a priority order (which source wins when more than one covers the same channel)
-- Run an on-demand test fetch and parse
-- Auto-map channels from that guide source to your published channels
-- Override individual channel-to-guide mappings by hand
+The **Channel Mappings** tab shows each published channel's `tvg-id`, EPG source, matched EPG channel, and mapping mode. Use **Edit** on a row to override a mapping. On the validated instance, all six published channels showed **Auto (ID)** mappings.
 
 ## How the published guide gets built
 
@@ -17,8 +15,8 @@ The published `/xmltv/m3undle.xml` output is compiled from all *enabled* sources
 
 ## Why guide IDs matter
 
-Client apps match guide data to channels using the XMLTV channel ID (`tvg-id`). If a provider's `tvg-id` values are unstable — changing between refreshes, or not matching your published channel at all — guide data can silently stop lining up with the right channel. If that happens for a specific channel, you can set an explicit `tvg-id` override on it: see [Channels](../getting-started/create-first-lineup.md) — it's a lock-gated field (you have to unlock and confirm it) because an incorrect override breaks guide data for that channel, not just fails to fix it.
+Client apps match guide data to channels using the XMLTV channel ID (`tvg-id`). If a provider's IDs change or do not match your published channels, guide data can stop lining up correctly. Use **EPG → Channel Mappings → Edit** to review or override a specific mapping. The earlier draft's lock-gated channel-field workflow was not present in the validated EPG screen.
 
 ## Where this fits in your lineup
 
-EPG mapping is independent of group inclusion/exclusion — a channel can be fully published and playable with no matching guide entry; it just won't show programme data in clients that expect it. See [Map EPG Data](../guides/map-epg-data.md) for the step-by-step workflow.
+EPG mapping is independent of whether a channel is present in the published lineup—a published channel can be playable with no matching guide entry; it just will not show programme data in clients that expect it. See [Map EPG Data](../guides/map-epg-data.md) for the step-by-step workflow.

@@ -13,14 +13,13 @@ You can configure multiple profiles, but only one publishes to those shared endp
 
 ## What a profile shows you
 
-Each profile tracks:
+The profile detail page shows:
 
-- Display name and output name
-- Enabled/disabled state
-- Which providers are linked, and their priority
+- Profile name, creation time, and active/published status
+- Linked providers, priority, expiry, and status
 - The effective refresh schedule (inherited from the global default, or overridden per profile)
-- Last published time and health status
-- Live, movie, and series channel counts
+- Last-published time and published history
+- Live, movie, and series counts
 
 ## Refresh scheduling
 

@@ -24,7 +24,10 @@ M3Undle emulates a network HDHomeRun tuner so DVR applications can consume your 
    ```
    http://<host>:5004
    ```
-2. Jellyfin fetches the discovery info and channel lineup automatically.
+   (the default HDHomeRun port — see [Install with Docker](install-with-docker.md))
+2. Jellyfin fetches `/discover.json` and follows its advertised lineup URL automatically.
+
+M3Undle serves the same HDHomeRun endpoints on every port it's actually listening on, so if your deployment only publishes port `8080` (some reverse-proxy or custom-compose setups do), the same URLs work there too. Confirm the exact **Discover JSON** URL on M3Undle's own **HDHomeRun** page rather than assuming a port either way.
 
 Manual entry like this is the recommended path — some clients' auto-discovery doesn't reliably find M3Undle in Docker bridge/NAT networking. See [Clients > HDHomeRun-Compatible Clients](../clients/hdhomerun-compatible-clients.md) if you want auto-discovery working too.
 

@@ -70,6 +70,8 @@ nav:
       - Manage Profiles: guides/manage-profiles.md
       - Back Up and Restore: guides/back-up-and-restore.md
       - Use a Reverse Proxy: guides/use-a-reverse-proxy.md
+      - Downstream Integrations: guides/downstream-integrations.md
+      - Browser Playback: guides/browser-playback.md
       - Monitor with Prometheus / Grafana: guides/monitor-with-prometheus-grafana.md
   - Clients:
       - Jellyfin: clients/jellyfin.md
