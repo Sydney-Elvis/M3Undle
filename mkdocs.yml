@@ -35,6 +35,11 @@ theme:
     - content.code.copy
     - content.action.edit
 
+extra:
+  analytics:
+    provider: google
+    property: G-2GH3CEEX92
+
 markdown_extensions:
   - admonition
   - pymdownx.details
