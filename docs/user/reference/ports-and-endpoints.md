@@ -1,10 +1,10 @@
 # Ports and Endpoints
 
-Use the URLs displayed by M3Undle rather than assuming that every deployment publishes the same host ports. The observed instance served the web UI, media output, health checks, and HDHomeRun HTTP endpoints on port `8080`.
+Use the URLs displayed by M3Undle rather than assuming that every deployment publishes the same host ports. By default, the web UI, media output, health checks, and HDHomeRun HTTP endpoints are all served on port `8080`.
 
 ## User interface and media output
 
-| Purpose | Observed path | Where to find it |
+| Purpose | Path | Where to find it |
 |---|---|---|
 | Web interface | `/` | Open M3Undle in a browser |
 | M3U playlist | `/m3u/m3undle.m3u` | Dashboard → **Endpoints → M3U Playlist** |
@@ -15,7 +15,7 @@ The dashboard provides read-only URL fields and copy actions for M3U and XMLTV. 
 
 ## Health endpoints
 
-| Purpose | Path | Observed response |
+| Purpose | Path | Response |
 |---|---|---|
 | Liveness | `/livez` | `200`, plain-text `Healthy` |
 | Readiness | `/readyz` | `200`, JSON with `ready: true` and `status: Healthy` |
@@ -48,7 +48,7 @@ When `M3UNDLE_TEST_MODE=true`, an additional `GET /debug/streams/rca` endpoint (
 
 ## HDHomeRun endpoints
 
-Open **HDHomeRun** and copy the generated values under **HDHR Endpoints**. On the observed instance they used these paths:
+Open **HDHomeRun** and copy the generated values under **HDHR Endpoints**. These paths are used:
 
 | UI label | Path |
 |---|---|
@@ -59,11 +59,11 @@ Open **HDHomeRun** and copy the generated values under **HDHR Endpoints**. On th
 
 The discovery response advertises the base URL, lineup URL, device identity, and tuner count. Use **Discover JSON** for clients that support manual HDHomeRun entry.
 
-This deployment also answered compatibility aliases such as `/discover.json` and `/lineup.json`, but the `/hdhr/` URLs above are the values shown by the UI and should be preferred.
+M3Undle also answers compatibility aliases such as `/discover.json` and `/lineup.json`, but the `/hdhr/` URLs above are the values shown by the UI and should be preferred.
 
 ## Xtream
 
-The dashboard shows whether Xtream access is secured, and **Settings → Security → Advanced Options** can enable or disable the protocol. The running UI does not display a copyable Xtream API path, so this page does not invent one. Use the client-specific guide for the version you are configuring.
+The dashboard shows whether Xtream access is secured, and **Settings → Security → Advanced Options** can enable or disable the protocol. M3Undle's UI doesn't display a copyable Xtream API path, so this page doesn't invent one. Use the client-specific guide for the version you are configuring.
 
 ## Choosing the correct base URL
 
@@ -79,6 +79,6 @@ For another container on the same Docker network, the page recommends a Compose 
 
 ## Port `5004`
 
-The documented, recommended default install (see [Install with Docker](../getting-started/install-with-docker.md)) publishes port `5004` specifically for HDHomeRun-style tuning, separate from `8080`. The instance this page was validated against was configured differently — it didn't have `5004` published, and its HDHomeRun HTTP endpoints worked on `8080` instead, which is possible because the whole application listens on every port it's given, not just specific routes per port.
+The documented, recommended default install (see [Install with Docker](../getting-started/install-with-docker.md)) publishes port `5004` specifically for HDHomeRun-style tuning, separate from `8080`. Some deployments don't publish `5004` at all — HDHomeRun HTTP endpoints still work on `8080` in that case, since the whole application listens on every port it's given, not just specific routes per port.
 
 Don't hard-code either port. Whatever your deployment's actual configuration is, the authoritative value is the **Discover JSON** URL shown on that instance's own **HDHomeRun** page — use that.

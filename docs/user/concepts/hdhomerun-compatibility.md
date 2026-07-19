@@ -25,7 +25,7 @@ For manual setup, use the **Discover JSON** value displayed under **HDHR Endpoin
 - **Lineup JSON**
 - **Lineup Status**
 
-Do not construct these URLs from an assumed port. The documented default install publishes a dedicated port `5004` for this (see [Install with Docker](../getting-started/install-with-docker.md)), but the instance this page was validated against was configured differently — its endpoints were reachable under the main `:8080/hdhr/` path instead, with `5004` not published. Whichever your deployment is, use the values actually shown on its **HDHomeRun** page rather than assuming either port.
+Do not construct these URLs from an assumed port. The documented default install publishes a dedicated port `5004` for this (see [Install with Docker](../getting-started/install-with-docker.md)), but some deployments don't publish `5004` at all — their endpoints are reachable under the main `:8080/hdhr/` path instead. Whichever your deployment is, use the values actually shown on its **HDHomeRun** page rather than assuming either port.
 
 ## Configure emulation
 
@@ -42,8 +42,4 @@ The UI states that HDHomeRun setting changes take effect after a restart. Loopba
 
 ## Tuner count and provider limit
 
-The settings page distinguishes the effective HDHomeRun tuner count from the provider stream limit. On the observed instance both were `2`, and stream-limit enforcement was active. Check this page rather than assuming the two values are always identical.
-
-## Verification boundary
-
-The browser retrieved the discovery, device, lineup, and lineup-status endpoints and confirmed that the lineup advertised the six published channels. No separate DVR client was available to test network auto-discovery or simultaneous tuner use.
+The settings page distinguishes the effective HDHomeRun tuner count from the provider stream limit. These can differ — check this page rather than assuming the two values are always identical.

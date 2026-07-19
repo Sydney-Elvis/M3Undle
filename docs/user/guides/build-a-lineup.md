@@ -25,7 +25,7 @@ Each chip doubles as a view filter — click it to show or hide groups in that s
 
 Each row shows the group name, provider, optional **Start #**, and mapped/total channel count. Hover over an icon-only action to see its purpose.
 
-The observed actions included:
+Each row's icon-only actions include:
 
 - **Rename group** — renaming to an existing output name merges the groups into a combined group
 - **Exclude group** / **Remove exclusion**
@@ -33,7 +33,7 @@ The observed actions included:
 - **Group settings** (the sliders icon)
 - expand or collapse mapped-channel details
 
-A combined group displays how many provider groups it contains. For example, the configured **Locals** group combined six provider groups. You can also create your own group from scratch with **Create custom group**.
+A combined group displays how many provider groups it contains — for example, a **Locals** group might merge six regional provider groups into one output group. You can also create your own group from scratch with **Create custom group**.
 
 Watch for row badges: **new** (added since last sync — click to dismiss, or dismiss all from the chip row), **missing** (a mapped group no longer in the provider feed), and **event?** (the group looks like time-limited PPV/sports content — worth a look at its Group settings).
 
@@ -61,7 +61,7 @@ The **View Channels** table is the published result, not the full provider catal
 - output group
 - EPG ID
 
-The observed lineup contained six channels numbered 100 through 105 in the **Locals** output group. **Manage Numbers** is available from this page for numbering work, and a **Rebuild needed** chip appears when the published lineup is behind your latest edits.
+For example, a **Locals** output group might be numbered 100 through 105 to keep local channels together. **Manage Numbers** is available from this page for numbering work, and a **Rebuild needed** chip appears when the published lineup is behind your latest edits.
 
 Each row also has per-channel actions:
 
@@ -89,7 +89,3 @@ Confirm the result in either place:
 - **Profiles → profile name**: **Published Output** and **Published History**
 
 The dashboard then exposes the profile's M3U and XMLTV URLs. See [Ports and Endpoints](../reference/ports-and-endpoints.md).
-
-## Features not exercised during this walkthrough
-
-The existing profile already had a completed lineup. The browser walkthroughs (including a second pass against the same live instance with a 117-group catalog) inspected its group controls, the Group Settings drawer options, badges, filters, mapped channels, Review Queue, What's On, and published history, but did not save new selections or run **Build Output**. Destructive group actions, numbering changes, and per-channel edits were left untouched; the Review Queue and What's On pages were observed empty, so their populated behavior is described from the UI's own labels and tooltips.

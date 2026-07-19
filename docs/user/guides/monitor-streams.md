@@ -44,7 +44,3 @@ Sessions that closed recently collapse into an expandable **Recently Ended** pan
 ## Nothing here
 
 If no one is watching anything, both tables simply say so — this is a live view, not a history, so it's normal to see "No active streams" and "No connected clients" between sessions.
-
-## Verification boundary
-
-The page structure, both tables' full column sets, the Recently Ended panel, and the empty-state text were observed on a live v1.0.0-beta.6 instance. No stream was active during validation, so populated rows, the HLS-restart action, and the details dialog's contents are described from the component source rather than an observed live session.

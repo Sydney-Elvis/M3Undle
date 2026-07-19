@@ -18,7 +18,7 @@ Select the profile chip to open its profile details.
 
 ## Edit a provider
 
-Hover over the pencil icon and select **Edit provider settings**. The fields depend on provider type. For the observed Xtream Codes provider, the editor contained:
+Hover over the pencil icon and select **Edit provider settings**. The fields depend on provider type. For an Xtream Codes provider, the editor contains:
 
 - **Name**
 - **Server URL**
@@ -63,7 +63,7 @@ Preview is useful when checking whether a group or channel still exists upstream
 
 ## Add another provider
 
-Select **Add Provider** to open **From URL**, **From File**, **Xtream Codes**, or **Import**. See [Add the First Provider](../getting-started/add-first-provider.md) for the fields observed on each tab.
+Select **Add Provider** to open **From URL**, **From File**, **Xtream Codes**, or **Import**. See [Add the First Provider](../getting-started/add-first-provider.md) for the fields on each tab.
 
 ## Credential security
 
@@ -125,7 +125,3 @@ This is scriptable — the steps below are what an automation job would run, wit
    ```
 
 Backups written to `/data/backups/` aren't automatically pruned — clean up old ones periodically.
-
-## What was not changed during validation
-
-The walkthrough opened the real provider's editor and preview, but did not change credentials, enablement, profile association, content types, or stream limit. Disable and delete behavior was identified from the UI tooltips and was not executed. The Advanced Options fields (Timeout, Force MPEG-TS, Relay policy) were read from the live editor's expanded panel without saving any change.

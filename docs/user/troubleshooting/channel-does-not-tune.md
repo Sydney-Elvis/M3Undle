@@ -12,7 +12,7 @@ If the provider has a maximum concurrent stream limit configured and it is exhau
 
 ## 3. Check the channel's stream health
 
-Open **Streams** while reproducing the problem. The page refreshes every three seconds and lists active streams and connected clients. No stream was active during documentation validation, so the per-stream health fields and the earlier draft's **Stable / Cautious / Unstable** labels could not be verified against the running UI. See [Retry, Failover, and Cooldowns](../concepts/retry-failover-cooldowns.md) for the intended health model.
+Open **Streams** while reproducing the problem. The page refreshes every three seconds and lists active streams and connected clients, including each stream's **Health** (Stable / Cautious / Unstable) and **Relay** columns. See [Retry, Failover, and Cooldowns](../concepts/retry-failover-cooldowns.md) for what drives those grades.
 
 ## 4. Confirm the channel wasn't dropped by a lineup change
 

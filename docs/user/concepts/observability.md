@@ -4,7 +4,7 @@ M3Undle exposes runtime measurements in Prometheus text format at `/metrics`. Op
 
 ## Endpoint controls
 
-The observed settings are:
+The available settings are:
 
 - **Expose metrics endpoint** — enables or disables metrics output.
 - **Access mode** — controls who can request `/metrics`.
@@ -24,13 +24,9 @@ Select **Apply** after changing the endpoint, mode, CIDRs, or advanced options.
 
 When access mode is **Token**, use the **Metrics Tokens** section. Enter a **Token Name**, optionally set **Expires**, and select **Generate**. The page recommends one token per scraper so an individual scraper can be revoked independently.
 
-The validated instance had no metrics tokens configured.
-
 ## Channel labels and cardinality
 
 **Enable channel labels** adds `channel_name` and `channel_id` to stream metrics. The UI warns that every distinct channel increases the number of Prometheus time series and recommends avoiding this option on lineups larger than a few hundred channels.
-
-It was disabled on the validated instance, so those labels were not present in the captured payload.
 
 ## What the endpoint currently exposes
 
@@ -44,12 +40,8 @@ The live output included measurements for:
 - HTTP request count and duration
 - build information and process uptime
 
-See [Metrics](../reference/metrics.md) for the exact names present in the captured `v1.0.0-beta.6` payload.
+See [Metrics](../reference/metrics.md) for the exact metric names.
 
-## Access behavior observed
+## Access behavior
 
-With **Local only** selected and no allowed CIDR matching the browser, `/metrics` returned `403`. With temporary **Public** access it returned Prometheus text with HTTP `200`. The original **Local only** setting was restored afterward, and another request again returned `403`.
-
-## What wasn't verified
-
-Token generation, bearer-token requests, token expiry/revocation, disabled-endpoint behavior, allowed-CIDR matching, and channel-label output were not exercised. No observability setting other than the temporary approved access-mode change was applied, and that change was reverted.
+With **Local only** selected and no allowed CIDR matching the requester, `/metrics` returns `403`. With **Public** access, it returns Prometheus text with HTTP `200`.

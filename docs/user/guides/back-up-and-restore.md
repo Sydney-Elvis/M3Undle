@@ -6,13 +6,13 @@ Open **Settings → Backup & Restore** to create, download, inspect, upload, and
 
 The page states that a backup includes configuration, mappings, users, and credentials. Credentials remain encrypted under the host's encryption key.
 
-Provider and EPG history, logs, and caches are excluded because they rebuild after restore. The observed backup report identified excluded rows from fetch runs, EPG fetch runs, the Xtream series cache, and snapshots.
+Provider and EPG history, logs, and caches are excluded because they rebuild after restore. The backup report lists excluded rows from fetch runs, EPG fetch runs, the Xtream series cache, and snapshots.
 
 ## Create a backup
 
 Select **Back Up Now**. Completed backups appear in the **Backups** table with their creation time and archive size.
 
-Use **Weekly backup** under **Weekly Schedule** to have M3Undle create a backup automatically about once a week. This toggle was off on the validated instance.
+Use **Weekly backup** under **Weekly Schedule** to have M3Undle create a backup automatically about once a week.
 
 ## Inspect an existing backup
 
@@ -23,7 +23,7 @@ Each backup row provides:
 - **Report** — display backup metadata.
 - **Restore** — begin restoring that archive.
 
-The observed report showed creation time, application version, schema version, encryption-key classification, database size, duration, and excluded-row counts.
+The report shows creation time, application version, schema version, encryption-key classification, database size, duration, and excluded-row counts.
 
 Download important archives and store them somewhere separate from the M3Undle container and its configuration volume.
 
@@ -37,7 +37,7 @@ Because credentials remain encrypted under the source host's key, preserve and a
 
 Select **Restore** only after validating the intended archive and confirming that it is the correct backup. Restore changes the active M3Undle data, so take a current backup first and avoid interrupting the operation.
 
-The validated instance displayed a success message for an earlier restore of the listed archive. After a restore, review:
+A successful restore displays a confirmation message for the archive that was restored. Afterward, review:
 
 - **Providers** and associated profiles
 - **Channel Mapping** and the published lineup
@@ -46,7 +46,3 @@ The validated instance displayed a success message for an earlier restore of the
 - dashboard endpoints and published counts
 
 History and caches excluded from the archive may need time or a scheduled refresh to rebuild.
-
-## What wasn't verified
-
-The existing backup list, report, archive extension, weekly schedule, upload control, and previous successful-restore message were observed directly. Creating, downloading, validating, uploading, or restoring an archive—and the restore confirmation flow—was not exercised because those operations can create files or change the configured instance.

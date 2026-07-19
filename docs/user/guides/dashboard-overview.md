@@ -43,12 +43,8 @@ Each URL row can offer alternate copies (Docker-internal, external/reverse-proxy
 A few things appear on every page, not just the dashboard:
 
 - **System Events** (top bar) — a bell-style summary of active system-level warnings, separate from the per-profile Needs Attention banner.
-- **Footer status bar** — live counts that update continuously: `Streams x/y max`, `Clients n`, pending groups/channels shortcuts when nonzero, total live channel count, and an overall health indicator (Healthy / degraded / etc.). A **Status delayed** chip can appear if the counts themselves are lagging. The version number on the left opens the **About** panel — see [Client Cannot Connect](../troubleshooting/client-cannot-connect.md#include-this-information) for why that's useful when reporting an issue.
+- **Footer status bar** — live counts that update continuously: `Streams x/y max`, `Clients n`, pending groups/channels shortcuts when nonzero, total live channel count, and an overall health indicator (Healthy / degraded / etc.). A **Status delayed** chip can appear if the counts themselves are lagging. The version number on the left opens the **About** panel — see [Client Cannot Connect](../troubleshooting/client-cannot-connect.md#still-stuck) for why that's useful when reporting an issue.
 
 ## Triggering a refresh
 
 The **Refresh Lineup** button in the left navigation (not on the dashboard itself) manually triggers the same refresh the dashboard tracks — useful right after changing provider settings or channel mappings instead of waiting for the next scheduled run. Its progress and result appear back on this page's Status line. Refresh scheduling itself (interval, manual-only, startup catch-up) is configured in **Settings → Schedule** or per-profile — see [Profiles and Users](../concepts/profiles-and-users.md#refresh-scheduling).
-
-## Verification boundary
-
-Every element described above — the Needs Attention banner conditions, Selected Profile fields, Endpoints section (including the Unsecured chip and HDHomeRun details), footer status bar, and the Refresh Lineup button's relationship to this page — was observed on a live v1.0.0-beta.6 instance with a real published profile. No refresh was manually triggered during validation; refreshing behavior (the progress view, cancel button) is described from the component source together with what the page showed for a completed refresh.

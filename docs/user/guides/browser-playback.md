@@ -83,7 +83,3 @@ volumes:
 3. Match the general simultaneous-stream limit to the upstream provider's connection limit.
 4. Apply changes and restart M3Undle when the page says a restart is required.
 5. Reopen **Settings → Streaming** and confirm Browser Playback reports active.
-
-## What wasn't verified
-
-The FFmpeg availability result, generated-HLS switch, FFmpeg Path field, restart notice, and neighboring Stream Proxy controls (including the Session Limits / Buffering / Reconnect Behaviour groupings and their stated defaults) were observed directly on a live instance. No live channel was opened in the browser because that would create a shared upstream session; HLS generation, FFmpeg invocation, generated files, playback cleanup, and behavior during an active or failed session were not verified.

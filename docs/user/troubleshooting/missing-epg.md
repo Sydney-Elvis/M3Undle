@@ -39,12 +39,8 @@ Open the XMLTV URL copied from the dashboard:
 http://<host>:8080/xmltv/m3undle.xml
 ```
 
-On the validated instance it returned XML containing `<channel>` and `<programme>` elements for the published lineup. If the endpoint is unreachable, follow [Client Cannot Connect](client-cannot-connect.md). If it returns XML but the affected channel is absent, recheck that the channel is published under **View Channels** and mapped on the EPG page.
+It should return XML containing `<channel>` and `<programme>` elements for the published lineup. If the endpoint is unreachable, follow [Client Cannot Connect](client-cannot-connect.md). If it returns XML but the affected channel is absent, recheck that the channel is published under **View Channels** and mapped on the EPG page.
 
 ## 5. Refresh the client
 
 After correcting the source or mapping, trigger a guide refresh in the client. M3Undle can be serving updated XML while the client still displays its cached guide.
-
-## Verification boundary
-
-The observed provider had one **OK** source and six of six published channels mapped in **Auto (ID)** mode, so an actual missing-guide failure was not available to reproduce. The source test, auto-map, and delete operations were identified by their live UI tooltips but were not run against the healthy source. Client-side cache refresh behavior was not tested because no separate TV client was available.

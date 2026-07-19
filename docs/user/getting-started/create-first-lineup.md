@@ -14,8 +14,6 @@ Provider groups are initially unmapped. Use the group-row actions to map channel
 
 Select **Map Channels** (or **View Channels** followed by **Map Channels**) to choose channels for the profile. **View Channels** shows the current published lineup with channel number, name, output group, and EPG ID.
 
-The running `v1.0.0-beta.6` UI does not present this workflow as the **Include**, **Manual review**, and **Auto-update** choices described in earlier drafts. Use the mapped/unmapped/excluded status and Map Channels screen as the source of truth for this version.
-
 ## 3. Build Output
 
 Once you've made your selections, click **Build Output**. Changes to channel settings are pending until the next build — nothing publishes automatically as you check boxes.
