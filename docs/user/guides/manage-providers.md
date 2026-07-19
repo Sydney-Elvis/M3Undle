@@ -68,7 +68,7 @@ M3UNDLE_ENCRYPTION_KEYS=<keyId>:<base64key>[,<keyId>:<base64key>...]
 
 The **first** entry is the active key, used to encrypt everything from now on. Every entry in the list can still decrypt existing data — this is what lets old and new keys coexist during a rotation. `M3UNDLE_ENCRYPTION_KEYS` takes precedence over `M3UNDLE_ENCRYPTION_KEY` if both are present.
 
-This is fully scriptable — the steps below are exactly what an automation job would run:
+This is scriptable — the steps below are what an automation job would run, with one caveat: if **UI Authentication** is enabled (see [Security](../concepts/security.md)), the two API calls in steps 2 and 3 need an authenticated session (a login cookie), not a bare `curl` call — see the note on each step below. If UI Authentication is disabled, the plain `curl` commands work as shown.
 
 1. **Generate a new key and add it to the ring, ahead of the old one:**
 
@@ -84,11 +84,13 @@ This is fully scriptable — the steps below are exactly what an automation job 
 
    Restart the container. This is a normal, brief restart — not a maintenance window; nothing is re-encrypted yet.
 
-2. **Trigger the bulk re-encryption** (requires login if `M3UNDLE_AUTH_ENABLED` is set):
+2. **Trigger the bulk re-encryption:**
 
    ```bash
    curl -X POST http://<host>:8080/api/v1/encryption/rotate
    ```
+
+   If UI Authentication is enabled, this needs an authenticated session — pass your login cookie (e.g. `curl -X POST -b cookies.txt ...`) rather than a bare call.
 
    This takes a database backup (`VACUUM INTO`, saved under `/data/backups/`) and re-encrypts every stored Xtream password and downstream integration API key under the new active key, inside a single transaction — it either fully succeeds or changes nothing. Calling it again once everything is migrated is a cheap no-op.
 
@@ -97,6 +99,8 @@ This is fully scriptable — the steps below are exactly what an automation job 
    ```bash
    curl http://<host>:8080/api/v1/encryption/status
    ```
+
+   Same authentication note as step 2 — pass a login cookie if UI Authentication is enabled.
 
    Look for `providersOnOtherKey` and `downstreamIntegrationsOnOtherKey` to both read `0`.
 

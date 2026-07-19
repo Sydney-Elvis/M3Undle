@@ -26,6 +26,8 @@ Use liveness to confirm that the process is running and readiness to confirm tha
 
 Authenticated JSON diagnostics for operators, requiring existing admin/UI authorization — not exposed through metrics-token authentication. Use these when investigating provider fetches, stream sharing, lineup publish history, or EPG source behavior; use `/metrics` (see [Metrics](metrics.md)) for time-series monitoring instead.
 
+If **UI Authentication** is disabled (the default — see [Security](../concepts/security.md)), these endpoints are open to anyone who can reach the server, and the plain `curl` examples below work as shown. If UI Authentication is enabled, they require a real authenticated session — pass your login cookie (e.g. `curl -b cookies.txt`, saved from a browser or a prior `curl -c cookies.txt` login request) rather than expecting a bare `curl` call to work.
+
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/admin/diagnostics/providers` | Provider fetch and channel diagnostics |
