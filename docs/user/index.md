@@ -25,4 +25,4 @@ Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and othe
 
 ---
 
-*This site is under construction — most pages linked above are placeholders, tracked in [issue #114](https://github.com/Sydney-Elvis/M3Undle/issues/114). The full [README](https://github.com/Sydney-Elvis/M3Undle#readme) has a complete quick-start in the meantime.*
+*M3Undle is in beta and its documentation is actively expanding. Installation, lineup management, Jellyfin and HDHomeRun setup, security, monitoring, troubleshooting, and configuration reference are covered now; remaining pages are tracked in [issue #114](https://github.com/Sydney-Elvis/M3Undle/issues/114).*

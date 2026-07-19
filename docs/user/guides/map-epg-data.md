@@ -17,7 +17,7 @@ Run the test action after adding or changing a source. A successful fetch popula
 
 ## Add a source
 
-Select **Add Source**. The observed URL-source form contained:
+Select **Add Source**. The URL-source form contains:
 
 - **Name**
 - **Kind**, described as how the source is fetched
@@ -41,7 +41,7 @@ Open **Channel Mappings**. The page shows total, mapped, and unmapped counts. Ea
 - mapping mode
 - actions
 
-On the observed profile, all six published channels were mapped in **Auto (ID)** mode.
+**Auto (ID)** mode means the channel's `tvg-id` matched a guide channel automatically, with no manual override needed.
 
 ## Override a mapping
 
@@ -58,7 +58,3 @@ http://<host>:8080/xmltv/m3undle.xml
 ```
 
 See [Missing EPG](../troubleshooting/missing-epg.md) if the source is healthy but a client still has no programme data.
-
-## What was not changed during validation
-
-The existing provider source reported **OK**, and its six published channels showed automatic mappings. The add-source and manual-map panels were inspected and cancelled; no new guide source or override was saved.

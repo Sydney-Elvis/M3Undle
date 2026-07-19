@@ -39,7 +39,3 @@ Three actions sit at the top of the page: **Map Channels** and **View Channels**
 By default a profile inherits the global refresh interval from **Settings → Schedule**. Toggle **Use profile-specific schedule** to override it with its own interval, or set it to manual-only. If your override matches the global default exactly, the page warns you that no meaningful override will actually be saved — there's no reason to store a redundant value.
 
 This only visibly changes anything once the profile is active: refresh scheduling is a property of whichever profile is currently serving, so a non-active profile's schedule section is shown for reference but doesn't drive an actual timer until you activate it.
-
-## Verification boundary
-
-The Profiles list card layout, New Profile dialog, Set Active/Delete actions and their disabled conditions, and the full profile detail page (Identity, Published Output, Providers table, Refresh Schedule with the redundant-override warning, and Published History) were all observed on a live v1.0.0-beta.6 instance with a real profile and provider. No profile was created, activated, or deleted during validation — the real profile inspected was already active with an existing publish history.

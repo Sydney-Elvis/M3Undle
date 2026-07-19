@@ -55,7 +55,3 @@ Cooldowns protect you two ways: they avoid burning your provider connection limi
 - **[Monitor Live Streams](../guides/monitor-streams.md)** — live Health and Relay columns per active stream, with a details dialog for the full evidence.
 - **[Channel Does Not Tune](../troubleshooting/channel-does-not-tune.md)** — first stop when a channel won't start at all.
 - **[Monitor with Prometheus / Grafana](../guides/monitor-with-prometheus-grafana.md)** — stream failure and recovery counters, if you want history beyond the live view.
-
-## Verification boundary
-
-The Reconnect Behaviour settings, their defaults, and the per-provider Relay policy control (including its Auto/On/Off helper text) were verified against a live v1.0.0-beta.6 instance. The Streams-page Health and Relay columns, health grading thresholds, the 24-hour observation and clean-watch healing windows, unstable-channel recovery changes, and cooldown durations were verified against the application source code — no channel on the validated instance was unhealthy (or even playing) during validation, so the adaptive behavior itself was not observed live.

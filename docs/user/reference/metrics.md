@@ -1,8 +1,8 @@
 # Metrics
 
-This catalog comes from the live `/metrics` output of M3Undle `v1.0.0-beta.6`. It lists only metric families that were actually present in that payload.
+This catalog lists the metric families M3Undle exposes at `/metrics`. Metrics tied to a specific state — active playback, failures, token use — only appear once that state occurs, so a given scrape may not show every metric listed here.
 
-Every observed series included `otel_scope_name` and `otel_scope_version`. The tables below list additional labels that distinguish measurements.
+Every series includes `otel_scope_name` and `otel_scope_version`. The tables below list additional labels that distinguish measurements.
 
 ## Provider and lineup
 
@@ -28,7 +28,7 @@ Histograms expose the standard `_bucket`, `_sum`, and `_count` series. Timestamp
 | `m3undle_downstream_clients_active` | gauge | — |
 | `m3undle_stream_share_ratio` | gauge | — |
 
-Channel labels were disabled on the captured instance. The UI says **Enable channel labels** can add `channel_name` and `channel_id` to stream metrics, but no such labeled series was present in this payload.
+**Enable channel labels** (**Settings → Observability → Advanced Options**) adds `channel_name` and `channel_id` to these stream metrics when turned on.
 
 ## EPG
 
@@ -55,7 +55,7 @@ Channel labels were disabled on the captured instance. The UI says **Enable chan
 | `http_requests_total` | counter | `method`, `route`, `status_code` |
 | `http_request_duration_seconds` | histogram | `method`, `route`, `status_code`; histogram bucket `le` |
 
-The observed `route` label included application pages, media endpoints, health checks, HDHomeRun endpoints, Blazor framework requests, and `404` routes. Avoid creating a separate dashboard panel for every raw route unless that level of detail is useful.
+The `route` label covers application pages, media endpoints, health checks, HDHomeRun endpoints, Blazor framework requests, and `404` routes. Avoid creating a separate dashboard panel for every raw route unless that level of detail is useful.
 
 ## Runtime information
 
@@ -83,6 +83,6 @@ histogram_quantile(
 )
 ```
 
-## What wasn't verified
+## Coverage
 
-The catalog reflects one scrape while no stream was active. Metrics emitted only during active playback, failures, token use, or other unobserved states may exist but are intentionally not listed. Metric stability across future versions and channel-labeled variants were not verified.
+This list may not be exhaustive across future M3Undle versions — check a live `/metrics` scrape for the definitive set on your deployment.

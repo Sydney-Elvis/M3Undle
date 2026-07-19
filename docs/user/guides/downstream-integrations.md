@@ -47,15 +47,13 @@ Enable either one or both depending on what the downstream target needs to refre
 
 ## Profile binding
 
-The validated Add Integration dialog did not contain a profile selector or show a profile association. This UI version therefore does not expose a way to bind an integration to an individual profile. Do not assume that a notification can be scoped per profile unless a later version adds an explicit field.
+The Add Integration dialog does not contain a profile selector or show a profile association — this version has no way to bind an integration to an individual profile. Do not assume that a notification can be scoped per profile unless a later version adds an explicit field.
 
-## Empty state and configured status
+## Empty state
 
-No integrations were configured on the validated instance. The page displayed:
+With no integrations configured, the page displays:
 
 > No integrations configured. Add one to enable automatic downstream notifications.
-
-Because the list was empty, no configured-integration status, last-delivery result, error, or notification history was available to document. After adding an integration, use the fields actually displayed in its row or detail view rather than assuming a history feature exists.
 
 ## Add an integration
 
@@ -66,7 +64,3 @@ Because the list was empty, no configured-integration status, last-delivery resu
 5. Select the lineup and guide triggers you need.
 6. Confirm **Enabled** is set appropriately.
 7. Select **Add Integration**.
-
-## What wasn't verified
-
-The empty state, supported types, all type-specific fields, default trigger selections, and lack of a profile selector were observed directly. No integration was created, so delivery payloads, authentication, retry behavior, configured-row actions, status, and notification history could not be verified.

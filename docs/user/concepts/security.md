@@ -4,7 +4,7 @@ M3Undle has two independent locks. Mixing them up is the most common security mi
 
 | | Protects | Turned on with |
 |---|---|---|
-| **UI Authentication** | The Blazor web interface itself — the screens you use to manage M3Undle | Environment variable: [`M3UNDLE_AUTH_ENABLED`](../reference/environment-variables.md#optional--authentication) (requires a container restart) |
+| **UI Authentication** | The Blazor web interface itself — the screens you use to manage M3Undle | Environment variable: [`M3UNDLE_AUTH_ENABLED`](../reference/environment-variables.md#optional-authentication) (requires a container restart) |
 | **Endpoint Credentials** | What your media clients connect to — M3U, XMLTV, streams, Xtream, HDHomeRun | **Settings → Security → Endpoint Credentials** in the UI (takes effect immediately, no restart) |
 
 If you only set `M3UNDLE_AUTH_ENABLED=true`, your provider playlist and streams are still wide open to anyone who has the URL. If you only enable Endpoint Credentials, anyone who can reach the server can still open the admin UI and change your configuration. **For an instance reachable beyond a trusted LAN, set up both.**
@@ -27,11 +27,11 @@ Endpoint Credentials protects HDHomeRun too, even though the on-screen list does
 Do both steps above — they're independent switches, and turning on one does not turn on the other. This is the recommended setup for anything reachable outside a single trusted LAN.
 
 **I forgot my admin password.**
-See the recovery steps in [Environment Variables → Authentication](../reference/environment-variables.md#optional--authentication).
+See the recovery steps in [Environment Variables → Authentication](../reference/environment-variables.md#optional-authentication).
 
 ## UI Authentication
 
-Open **Settings → Security** to see its current state. On the observed instance it was disabled, and the page displayed a warning that the interface was open to anyone who could reach the server, along with instructions to "configure ASP.NET Core Identity to enable it" — that message doesn't name the actual switch. The real one is the `M3UNDLE_AUTH_ENABLED` environment variable, set in your `compose.yaml` or `.env` file, not from a page in the UI. See [Environment Variables → Authentication](../reference/environment-variables.md#optional--authentication) for the full variable list, including admin username/password and the password-recovery workflow, and restart the container after changing it.
+Open **Settings → Security** to see its current state. When UI Authentication is disabled, the page displays a warning that the interface is open to anyone who can reach the server, along with instructions to "configure ASP.NET Core Identity to enable it" — that message doesn't name the actual switch. The real one is the `M3UNDLE_AUTH_ENABLED` environment variable, set in your `compose.yaml` or `.env` file, not from a page in the UI. See [Environment Variables → Authentication](../reference/environment-variables.md#optional-authentication) for the full variable list, including admin username/password and the password-recovery workflow, and restart the container after changing it.
 
 ## Endpoint Credentials
 
@@ -60,7 +60,3 @@ The Security page's visible list doesn't name HDHomeRun explicitly, but HDHomeRu
 ## Verify after a change
 
 After applying endpoint credentials, test the same URL your client uses. An unauthenticated M3U, XMLTV, stream, or Xtream request should no longer behave like it did with enforcement disabled. Then configure the client with the M3Undle endpoint credential—not the upstream provider's username and password.
-
-## Verification boundary
-
-The settings and explanatory text were inspected directly. Credential enforcement was not enabled on the shared instance, so authenticated request formats and failure response codes were not exercised.

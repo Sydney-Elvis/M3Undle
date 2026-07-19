@@ -8,6 +8,21 @@ edit_uri: edit/main/docs/user/
 docs_dir: docs/user
 site_dir: build/docs/site
 
+# Pages that exist but aren't ready for navigation yet (tracked in issue #114).
+# Listed here so `mkdocs build --strict` doesn't fail on the "not in nav" warning.
+not_in_nav: |
+  /guides/use-a-reverse-proxy.md
+  /clients/nextpvr.md
+  /clients/plex.md
+  /clients/tivimate-android-tv.md
+  /clients/roku-notes.md
+  /troubleshooting/authentication-errors.md
+  /troubleshooting/407-errors.md
+  /troubleshooting/429-and-rate-limits.md
+  /troubleshooting/buffering-and-stream-recovery.md
+  /troubleshooting/lan-and-reverse-proxy-problems.md
+  /architecture/*.md
+
 theme:
   name: material
   palette:
@@ -75,7 +90,6 @@ nav:
       - Manage Providers: guides/manage-providers.md
       - Manage Profiles: guides/manage-profiles.md
       - Back Up and Restore: guides/back-up-and-restore.md
-      - Use a Reverse Proxy: guides/use-a-reverse-proxy.md
       - Downstream Integrations: guides/downstream-integrations.md
       - Browser Playback: guides/browser-playback.md
       - Monitor Live Streams: guides/monitor-streams.md
@@ -83,29 +97,14 @@ nav:
       - View Logs: guides/view-logs.md
   - Clients:
       - Jellyfin: clients/jellyfin.md
-      - NextPVR: clients/nextpvr.md
-      - Plex: clients/plex.md
-      - TiviMate / Android TV: clients/tivimate-android-tv.md
-      - Roku Notes: clients/roku-notes.md
       - HDHomeRun-Compatible Clients: clients/hdhomerun-compatible-clients.md
   - Troubleshooting:
       - Client Cannot Connect: troubleshooting/client-cannot-connect.md
       - Channel Does Not Tune: troubleshooting/channel-does-not-tune.md
       - Missing EPG: troubleshooting/missing-epg.md
-      - Authentication Errors: troubleshooting/authentication-errors.md
-      - 407 Errors: troubleshooting/407-errors.md
-      - 429 and Rate Limits: troubleshooting/429-and-rate-limits.md
-      - Buffering and Stream Recovery: troubleshooting/buffering-and-stream-recovery.md
-      - LAN and Reverse-Proxy Problems: troubleshooting/lan-and-reverse-proxy-problems.md
   - Reference:
       - Docker Compose: reference/docker-compose.md
       - Environment Variables: reference/environment-variables.md
       - Ports and Endpoints: reference/ports-and-endpoints.md
       - API Reference: reference/api-reference.md
       - Metrics: reference/metrics.md
-  - Architecture:
-      - System Overview: architecture/system-overview.md
-      - Stream Pipeline: architecture/stream-pipeline.md
-      - EPG Pipeline: architecture/epg-pipeline.md
-      - Profile and Security Model: architecture/profile-and-security-model.md
-      - Failure and Cooldown Model: architecture/failure-and-cooldown-model.md

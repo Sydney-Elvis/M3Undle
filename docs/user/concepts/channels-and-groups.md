@@ -46,7 +46,7 @@ These settings can differ per group — a locals group on Manual selection with 
 You aren't limited to the provider's grouping:
 
 - **Custom groups** — create your own group from the Custom Groups section and move channels into it.
-- **Rename or merge** — renaming a provider group to an output name that already exists merges them into one **combined group**. The validated instance's "Locals" group combined six provider groups into one published group of local stations.
+- **Rename or merge** — renaming a provider group to an output name that already exists merges them into one **combined group**. For example, renaming several regional provider groups to "Locals" merges them into one published group of local stations.
 - Combined groups get extra row actions: **Manage member groups** (see and manage what's inside), **Move to different group** and **Remove from this group** for individual members, and **Exclude all member groups** in one click.
 
 Your players only ever see the output group name — the provider's original grouping is your private organizing tool.
@@ -89,7 +89,3 @@ This is deliberate: you can reorganize freely, then publish one coherent change.
 - [Build a Lineup](../guides/build-a-lineup.md) — the step-by-step walkthrough of the Mapping page.
 - [Create the First Lineup/Profile](../getting-started/create-first-lineup.md) — the minimum path for a first-time setup.
 - [EPG](epg.md) — how guide data attaches to the channels you've mapped.
-
-## Verification boundary
-
-Group states and badges (including **missing** and **event?**), the Group Settings drawer with its exact Mode and New channel handling option labels, custom/combined group behavior ("Locals" with six member groups), the Channels page columns and toolbar, the Review Queue controls, and the What's On empty state were all observed on a live v1.0.0-beta.6 instance with a real 117-group provider catalog. The numbering precedence, overflow-at-9000 behavior, refresh stability of pinned vs. auto-assigned numbers, and the browser-local nature of "Start at #" were verified against source code. No selections, group settings, numbers, or builds were changed during validation.

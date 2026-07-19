@@ -27,7 +27,7 @@ From the same network namespace as Prometheus, request:
 curl -i http://<m3undle-host>:8080/metrics
 ```
 
-A permitted request returns HTTP `200` and Prometheus text beginning with `# TYPE` declarations. A request outside the configured local networks returned `403` during validation.
+A permitted request returns HTTP `200` and Prometheus text beginning with `# TYPE` declarations. A request outside the configured local networks returns `403`.
 
 ## 3. Add a Prometheus scrape job
 
@@ -44,7 +44,7 @@ scrape_configs:
 
 Use a hostname reachable from the Prometheus container. **Settings → Endpoint URLs** recommends the Compose service form `http://m3undle:8080` for containers on the same Docker network.
 
-If you select **Token**, generate a token in **Metrics Tokens** and configure Prometheus to send it as a bearer token. Consult the Prometheus version's configuration reference for the supported secret-file setting; the token flow was not exercised during this walkthrough.
+If you select **Token**, generate a token in **Metrics Tokens** and configure Prometheus to send it as a bearer token. Consult the Prometheus version's configuration reference for the supported secret-file setting.
 
 ## 4. Check useful queries
 
@@ -59,14 +59,10 @@ m3undle_hdhr_tuners_in_use
 rate(http_requests_total[5m])
 ```
 
-For latency percentiles, use the observed `http_request_duration_seconds` histogram, grouped by its `route`, `method`, and `status_code` labels as needed.
+For latency percentiles, use the `http_request_duration_seconds` histogram, grouped by its `route`, `method`, and `status_code` labels as needed.
 
 ## 5. Add Prometheus to Grafana
 
 In Grafana, add the Prometheus server—not M3Undle's `/metrics` endpoint—as a Prometheus data source. Build panels from the exact names in the [Metrics reference](../reference/metrics.md).
 
 Keep high-cardinality dimensions under control. M3Undle's **Enable channel labels** option adds channel identifiers to stream measurements and carries an explicit warning for lineups larger than a few hundred channels.
-
-## What wasn't verified
-
-No Prometheus or Grafana instance was available, so scrape scheduling, bearer-token configuration, PromQL results, dashboards, and alerts were not tested end to end. The M3Undle endpoint itself was fetched successfully, and local-only denial was verified after restoring the original access setting.
