@@ -52,6 +52,12 @@ jobs:
         # links that would 404 on every PR forever since PRs never deploy.
         # Internal markdown-to-markdown links are already fully validated by
         # the strict MkDocs build above; this step's job is external links.
+        #
+        # The docs/dev/BUILD.md exclude is a one-time bootstrapping exception,
+        # not a general carve-out: that file was introduced in the same PR as
+        # this link, so blob/main/... 404s until the PR merges. Safe to remove
+        # this exclude line once that's happened — it'll just always resolve
+        # successfully after, so leaving it is harmless but no longer needed.
         uses: lycheeverse/lychee-action@v2
         with:
           args: >
@@ -60,6 +66,7 @@ jobs:
             --max-retries 1
             --exclude-loopback
             --exclude '<host>'
+            --exclude 'Sydney-Elvis/M3Undle/blob/main/docs/dev/BUILD\.md'
             'docs/user/**/*.md'
           token: ${{ secrets.GITHUB_TOKEN }}
           fail: true
