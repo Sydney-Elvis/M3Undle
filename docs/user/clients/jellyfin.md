@@ -31,7 +31,7 @@ Jellyfin supports M3Undle in two modes. Either works; HDHomeRun mode gets you Je
 
 ## If endpoint security is enabled
 
-If you've turned on endpoint credentials in **Settings → Endpoint Security**, Jellyfin needs the username/password included — check how your Jellyfin version accepts credentials for M3U/XMLTV/tuner URLs (typically as part of the URL or a separate auth field, depending on version).
+If you've turned on endpoint credentials in **Settings → Security → Endpoint Credentials**, Jellyfin needs the username/password included — check how your Jellyfin version accepts credentials for M3U/XMLTV/tuner URLs (typically as part of the URL or a separate auth field, depending on version).
 
 ## Troubleshooting
 

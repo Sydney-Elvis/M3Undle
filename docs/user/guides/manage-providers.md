@@ -29,9 +29,22 @@ Hover over the pencil icon and select **Edit provider settings**. The fields dep
 - **Include VOD / Movies** and **Include Series**
 - **Limit concurrent streams** and **Stream limit**
 - **Enabled**
-- **Advanced Options**
+- **Advanced Options** — see below
 
 Select **Save Changes** only after reviewing the effect on the associated profile. Passwords are not displayed in plaintext.
+
+## Advanced Options: timeout and stream format
+
+Expanding **Advanced Options** in the provider editor reveals:
+
+- **Timeout (seconds)** — how long M3Undle waits for the provider to respond before giving up. The UI notes 120 seconds is suitable for most providers.
+- **Force MPEG-TS** — asks the provider for MPEG-TS transport instead of HLS, and disables HLS delivery to clients for this provider. The UI advises enabling it only if streams stutter or your player handles TS containers better than HLS segments. Leave it off unless you're troubleshooting.
+- **Relay policy** — controls whether M3Undle passes stream data through untouched or cleans it up with FFmpeg first:
+    - **Auto** (the default) — stable channels are relayed directly; channels M3Undle has classified as unstable are run through an FFmpeg *clean remux*, which repackages the stream into clean MPEG-TS without re-encoding the picture. This is the adaptive behavior described in [Retry, Failover, and Cooldowns](../concepts/retry-failover-cooldowns.md) — most people should leave it on Auto.
+    - **On** — forces the FFmpeg clean remux for every channel on this provider.
+    - **Off** — forces direct relay for every channel, disabling the adaptive clean-up.
+
+You can see which mode each active stream is actually using in the **Relay** column of the **Streams** page.
 
 ## Enable, disable, or delete
 
@@ -115,4 +128,4 @@ Backups written to `/data/backups/` aren't automatically pruned — clean up old
 
 ## What was not changed during validation
 
-The walkthrough opened the real provider's editor and preview, but did not change credentials, enablement, profile association, content types, or stream limit. Disable and delete behavior was identified from the UI tooltips and was not executed.
+The walkthrough opened the real provider's editor and preview, but did not change credentials, enablement, profile association, content types, or stream limit. Disable and delete behavior was identified from the UI tooltips and was not executed. The Advanced Options fields (Timeout, Force MPEG-TS, Relay policy) were read from the live editor's expanded panel without saving any change.

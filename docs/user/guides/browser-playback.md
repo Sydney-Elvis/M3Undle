@@ -4,9 +4,7 @@ M3Undle can generate HLS for browser and Electron clients when a live stream is 
 
 ## How browser playback works
 
-The settings page states that M3Undle uses FFmpeg to transcode an MPEG-TS-only stream to HLS on demand so a browser can play it natively. FFmpeg must be installed on the M3Undle server.
-
-The validated instance reported:
+When a browser (or Electron app) asks for a channel that the provider only offers as MPEG-TS — a format browsers can't play directly — M3Undle uses FFmpeg to convert it to HLS on the fly. FFmpeg must be installed on the M3Undle server; the top of the Browser Playback section tells you whether it was found:
 
 > FFmpeg is available. Browser playback is active.
 
@@ -14,23 +12,31 @@ The validated instance reported:
 
 The visible controls are:
 
-- **Enable generated HLS** — enables the generated browser-compatible output.
-- **FFmpeg Path** under **Advanced Options** — leave it blank to use `ffmpeg` from the server's `PATH`, or enter an absolute path when FFmpeg is installed elsewhere.
+- **Enable generated HLS** — turns the browser-compatible output on or off.
+- **FFmpeg Path** under **Advanced Options** — leave it blank to use `ffmpeg` from the server's `PATH`, or enter an absolute path when FFmpeg is installed elsewhere. The field shows which executable is currently active.
 
-The observed field was blank and the UI reported the active executable as `ffmpeg`. Browser Playback changes take effect after a restart. Select the **Apply** button in the Browser Playback section after making a change.
+Browser Playback changes take effect after a restart. Select the **Apply** button in the Browser Playback section after making a change.
 
-No FFmpeg codec, bitrate, resolution, HLS segment-length, playlist-length, or hardware-acceleration controls were exposed in this screen.
+There are no FFmpeg codec, bitrate, resolution, HLS segment-length, playlist-length, or hardware-acceleration controls — M3Undle manages those itself.
 
-## Related Stream Proxy limits
+## Related Stream Proxy settings
 
-Browser Playback appears below **Stream Proxy** on the same Streaming settings page. These controls affect viewer sessions generally, including sessions that may require generated HLS:
+Browser Playback appears below **Stream Proxy** on the same **Settings → Streaming** page. These controls affect viewer sessions generally, including sessions that use generated HLS:
 
-- **Max Simultaneous Streams** — the maximum concurrent viewers across all channels. The UI says new tune requests receive a tuner-busy response when the hard cap is reached.
-- **Disconnect Grace Period (sec)** — keeps the upstream connection open for this period after the last viewer leaves.
-- **Maximum Idle Time (sec)** — closes an idle stream after the configured hard limit.
-- **Buffer per Stream (bytes)** and **Total Buffer Limit (bytes)** — bound the memory used to smooth brief provider interruptions.
-- **Download Chunk Size (bytes)** — controls the amount read at a time.
-- **Stall Detection (sec)**, **Reconnect Window (sec)**, and **Connection Timeout (sec)** — control general upstream timeout and reconnection behavior.
+- **Enable Stream Proxy** — the master switch for relaying streams through M3Undle.
+- Under **Session Limits**:
+    - **Max Simultaneous Streams** — the maximum concurrent viewers across all channels. When the cap is reached, new tune requests receive a "tuner busy" response. Match this to your provider's connection limit.
+    - **Disconnect Grace Period (sec)** — keeps the upstream connection open for this period after the last viewer leaves, so a viewer who reconnects quickly picks up without rebuffering.
+- Under **Advanced Options → Buffering**:
+    - **Maximum Idle Time (sec)** — hard limit: closes any idle stream beyond this, even if grace periods keep renewing. Default 120 s.
+    - **Buffer per Stream (bytes)** and **Total Buffer Limit (bytes)** — bound the memory used to smooth brief provider interruptions. Defaults ≈ 4 MiB per stream, 32 MiB total.
+    - **Download Chunk Size (bytes)** — how much is read from the provider at a time. Default ≈ 32 KiB.
+- Under **Advanced Options → Reconnect Behaviour**:
+    - **Stall Detection (sec)** — silence from the provider before the stream is treated as stalled. Default 30 s.
+    - **Reconnect Window (sec)** — how long M3Undle keeps retrying after a stall before giving up. Default 75 s.
+    - **Connection Timeout (sec)** — how long to wait for the provider to respond on connect. Default 15 s.
+
+What happens during and after a reconnect — and how M3Undle adapts to channels that stall repeatedly — is explained in [Retry, Failover, and Cooldowns](../concepts/retry-failover-cooldowns.md).
 
 The page distinguishes when settings take effect: new viewer sessions inherit Stream Proxy settings immediately, while overall limits and Browser Playback changes require a restart.
 
@@ -80,4 +86,4 @@ volumes:
 
 ## What wasn't verified
 
-The FFmpeg availability result, generated-HLS switch, FFmpeg Path field, restart notice, and neighboring Stream Proxy limits were observed directly. No live channel was opened in the browser because that would create a shared upstream session; HLS generation, FFmpeg invocation, generated files, playback cleanup, and behavior during an active or failed session were not verified.
+The FFmpeg availability result, generated-HLS switch, FFmpeg Path field, restart notice, and neighboring Stream Proxy controls (including the Session Limits / Buffering / Reconnect Behaviour groupings and their stated defaults) were observed directly on a live instance. No live channel was opened in the browser because that would create a shared upstream session; HLS generation, FFmpeg invocation, generated files, playback cleanup, and behavior during an active or failed session were not verified.
