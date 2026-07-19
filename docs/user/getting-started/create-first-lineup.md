@@ -6,7 +6,7 @@ This walks through the minimum steps to get a working lineup published. For the 
 
 ## 1. Open Channel Mapping
 
-Go to **Channel Mapping** and select the profile you want to build. The page summarizes groups as **mapped**, **unmapped**, or **excluded** and has filters for new and removed groups.
+Go to **Channel Mapping** and select the profile you want to build. The page summarizes groups as **mapped**, **unmapped**, or **excluded** and has filters for new and removed groups — see [Concepts > Channels and Groups](../concepts/channels-and-groups.md) for what these states mean.
 
 Provider groups are initially unmapped. Use the group-row actions to map channels from groups you want, or exclude groups you do not want. The icon-only actions have tooltips; hover over an icon before using it if its purpose is unclear.
 
