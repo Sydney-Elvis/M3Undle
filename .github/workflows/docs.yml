@@ -45,14 +45,22 @@ jobs:
         run: mkdocs build --strict
 
       - name: Check links
+        # Scans markdown source, not the rendered HTML in build/docs/site/ —
+        # the rendered output is full of Material-theme-generated root-relative
+        # nav/asset links (e.g. /M3Undle/...) that lychee can't resolve without
+        # real deployment context, and self-referential site_url canonical
+        # links that would 404 on every PR forever since PRs never deploy.
+        # Internal markdown-to-markdown links are already fully validated by
+        # the strict MkDocs build above; this step's job is external links.
         uses: lycheeverse/lychee-action@v2
         with:
           args: >
             --no-progress
-            --exclude-mail
+            --timeout 20
+            --max-retries 1
             --exclude-loopback
             --exclude '<host>'
-            'build/docs/site/**/*.html'
+            'docs/user/**/*.md'
           token: ${{ secrets.GITHUB_TOKEN }}
           fail: true
 
