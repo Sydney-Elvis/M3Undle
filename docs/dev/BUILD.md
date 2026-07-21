@@ -16,6 +16,14 @@ echo "PUID=$(id -u)" >> .env
 echo "PGID=$(id -g)" >> .env
 ```
 
+Then create the bind-mounted data directories yourself, before the first run:
+
+```bash
+mkdir -p ./data ./m3u_data
+```
+
+Docker auto-creates a missing bind-mount source as `root` on first use, which the container (running as `PUID:PGID`) then can't write to — `mkdir`-ing it first as your own user avoids that.
+
 ## Build and run
 
 ```bash
@@ -35,7 +43,7 @@ Compose publishes both ports the Dockerfile exposes:
 - `5004` — HDHomeRun-compatible tuning
 - `8080` — web UI, M3U/XMLTV, Xtream, and general compatibility endpoints
 
-Bind-mounted host directories (created automatically alongside `compose.yaml`):
+Bind-mounted host directories (create these yourself before the first run — see Setup above):
 
 - `./data` → `/data` — SQLite database, snapshots, logs
 - `./m3u_data` → `/m3u_data` — local `.m3u` files, browsable via the in-app file browser (`M3UNDLE_M3U_DIR`)

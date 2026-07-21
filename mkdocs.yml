@@ -99,6 +99,7 @@ nav:
       - Jellyfin: clients/jellyfin.md
       - HDHomeRun-Compatible Clients: clients/hdhomerun-compatible-clients.md
   - Troubleshooting:
+      - Container Won't Start: troubleshooting/container-wont-start.md
       - Client Cannot Connect: troubleshooting/client-cannot-connect.md
       - Channel Does Not Tune: troubleshooting/channel-does-not-tune.md
       - Missing EPG: troubleshooting/missing-epg.md

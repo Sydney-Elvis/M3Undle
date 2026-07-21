@@ -22,6 +22,8 @@ volumes:
 
 Named volumes avoid the ownership requirement on Linux and can give better I/O performance, but you can't browse the files directly from the host.
 
+If you bind-mount instead, create the host directory yourself (`mkdir -p ./data`) before the first `docker compose up`. Docker auto-creates a missing bind-mount source as `root`, and M3Undle needs write access to `/data` from the moment it starts — a root-owned directory it can't write to causes an immediate crash. See [Container Won't Start](../troubleshooting/container-wont-start.md).
+
 ## Generated HLS storage sizing
 
 See [Browser Playback](../guides/browser-playback.md) for how to size the `/data/hls-work` scratch space used by generated HLS sessions.
