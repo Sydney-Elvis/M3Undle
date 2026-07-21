@@ -63,6 +63,7 @@ Most stream proxy settings are managed from **Settings → Streaming**, and rest
 | `M3Undle__Streaming__ProviderMaxConcurrentUpstreams` | *(unset)* | Optional global provider-upstream cap used when a provider doesn't have its own max concurrent stream limit. |
 | `M3Undle__Streaming__Reconnect__ContentStallTimeout` | `00:00:08` | MPEG-TS content-stall timeout. Real TS content resets this timer; null-only packets don't, so prolonged CDN gaps can reconnect before the generic read-stall timeout. |
 | `M3Undle__Streaming__Reconnect__StrikeCooldown` | `00:05:00` | Cooldown after retry exhaustion for a failing source, used to avoid provider retune storms. |
+| `M3Undle__Streaming__GeneratedHls__Directory` | `/data/hls-work` | Where generated-HLS scratch files (rolling playlists/segments) are written. A relative value is resolved under `/data`; an absolute path is used as-is and does **not** need to live under `/data` — useful for mounting it on separate storage (e.g. `/hls-work`). The directory is created automatically if it doesn't exist. See [Browser Playback](../guides/browser-playback.md). |
 
 ## App Settings
 
