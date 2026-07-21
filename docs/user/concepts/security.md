@@ -60,3 +60,5 @@ The Security page's visible list doesn't name HDHomeRun explicitly, but HDHomeRu
 ## Verify after a change
 
 After applying endpoint credentials, test the same URL your client uses. An unauthenticated M3U, XMLTV, stream, or Xtream request should no longer behave like it did with enforcement disabled. Then configure the client with the M3Undle endpoint credential—not the upstream provider's username and password.
+
+For how these controls are actually implemented — how credentials are hashed, how provider passwords are encrypted rather than hashed, and how the same filter covers every client route including HDHomeRun — see [Profile and Security Model](../architecture/profile-and-security-model.md).

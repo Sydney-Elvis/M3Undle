@@ -55,3 +55,5 @@ Cooldowns protect you two ways: they avoid burning your provider connection limi
 - **[Monitor Live Streams](../guides/monitor-streams.md)** — live Health and Relay columns per active stream, with a details dialog for the full evidence.
 - **[Channel Does Not Tune](../troubleshooting/channel-does-not-tune.md)** — first stop when a channel won't start at all.
 - **[Monitor with Prometheus / Grafana](../guides/monitor-with-prometheus-grafana.md)** — stream failure and recovery counters, if you want history beyond the live view.
+
+For the exact health-grade thresholds, cooldown durations, and reconnect timing behind all of this, see [Architecture > Failure and Cooldown Model](../architecture/failure-and-cooldown-model.md).

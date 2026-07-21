@@ -23,3 +23,5 @@ For live MPEG-TS delivery, M3Undle can send null-packet keepalives during short 
 ## Where you configure this
 
 Session limits, buffer size, and reconnect behavior are all configurable in **Settings → Streaming**, under the **Stream Proxy** section — see [Guides > Browser Playback](../guides/browser-playback.md) for a walkthrough of those controls, and [Reference > Environment Variables](../reference/environment-variables.md) for the advanced env/config-only controls. The per-provider stream format and relay policy options are covered in [Guides > Manage Providers](../guides/manage-providers.md).
+
+For how the shared session, subscriber fanout, and reconnect logic are actually built, see [Architecture > Stream Pipeline](../architecture/stream-pipeline.md).
