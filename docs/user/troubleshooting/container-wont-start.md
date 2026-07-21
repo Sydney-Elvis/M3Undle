@@ -12,7 +12,7 @@ A stack trace ending in something like `System.UnauthorizedAccessException: Acce
 
 ## 2. Confirm what's actually mounted and configured
 
-Docker compose files drift from the documented examples over time — volumes get added for a specific reason and never written down, or an environment variable gets copied from an old example and stops matching what's current. Before debugging further, see what's actually in effect:
+Docker Compose files drift from the documented examples over time — volumes get added for a specific reason and never written down, or an environment variable gets copied from an old example and stops matching what's current. Before debugging further, see what's actually in effect:
 
 ```bash
 docker compose config
