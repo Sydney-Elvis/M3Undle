@@ -416,15 +416,25 @@ public sealed class UpstreamStreamConnector(
         info.ArgumentList.Add("warning");
         info.ArgumentList.Add("-reconnect");
         info.ArgumentList.Add("1");
-        // -reconnect_at_eof is fatal for HLS: every playlist/segment fetch ends in a
-        // normal EOF, which FFmpeg's HTTP layer then treats as a failure and keeps
-        // reconnecting the *playlist* instead of pulling segments — producing zero
-        // output. Only apply it to continuous (non-HLS) inputs.
-        if (!inputIsHls)
-        {
-            info.ArgumentList.Add("-reconnect_at_eof");
-            info.ArgumentList.Add("1");
-        }
+        // -reconnect_at_eof is deliberately NOT set, for two reasons:
+        //  1. It's fatal for HLS: every playlist/segment fetch ends in a normal
+        //     EOF, which FFmpeg's HTTP layer then treats as a failure and keeps
+        //     reconnecting the *playlist* instead of pulling segments — producing
+        //     zero output.
+        //  2. For continuous MPEG-TS, it's what let a provider's replay-from-byte-
+        //     zero on reconnect through undetected: FFmpeg reconnects and re-muxes
+        //     inside a single continuous process, and MPEG-TS's muxer *must*
+        //     enforce non-decreasing output DTS, so it silently clamps the
+        //     restarted (backward) source timestamps forward instead of emitting
+        //     them — no flag combination (including -copyts, spiked and confirmed
+        //     ineffective) makes it do otherwise, since that would produce invalid
+        //     output. The backward jump is only observable *before* it enters that
+        //     muxer session. Letting FFmpeg exit on EOF and handing off to
+        //     M3Undle's own outer reconnect (ChannelStreamSession's UpstreamFailureKind.EndOfStream
+        //     path) puts the reconnect at a point M3Undle can see it, so the
+        //     existing overlap-trim recovery (already exercised by direct-relay
+        //     reconnects) applies here too instead of being architecturally
+        //     unreachable.
         // Issue #96: let FFmpeg ride out provider blips itself instead of exiting
         // (which makes M3Undle tear down and reconnect the whole session). Reconnect
         // on network errors too. reconnect_delay_max is the delay after which FFmpeg
@@ -439,14 +449,6 @@ public sealed class UpstreamStreamConnector(
         {
             info.ArgumentList.Add("-reconnect_streamed");
             info.ArgumentList.Add("1");
-            // Without -copyts, FFmpeg's muxer normalizes output PTS/DTS to a
-            // monotonic forward timeline, which silently absorbs a provider
-            // restarting the source from byte zero on an internal reconnect.
-            // -copyts preserves the source's own timestamps so a backward jump
-            // survives into the remuxed output, where M3Undle's own rewind
-            // detector (ChannelStreamSession.DetectInProcessTimelineRewind) can
-            // see it and trigger the existing overlap-trim recovery.
-            info.ArgumentList.Add("-copyts");
         }
         info.ArgumentList.Add("-fflags");
         info.ArgumentList.Add("+genpts+discardcorrupt");
