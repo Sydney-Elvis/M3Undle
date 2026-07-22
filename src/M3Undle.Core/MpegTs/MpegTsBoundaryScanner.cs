@@ -16,6 +16,7 @@ public sealed class MpegTsBoundaryScanner
     private bool _spsSeen;
     private bool _ppsSeen;
     private long? _currentVideoPesDts90k;
+    private long? _batchEarliestVideoDts90k;
     private long? _batchLatestVideoDts90k;
     private long? _batchIdrDts90k;
 
@@ -26,6 +27,7 @@ public sealed class MpegTsBoundaryScanner
 
         var dropped = 0;
         var syncLost = false;
+        _batchEarliestVideoDts90k = null;
         _batchLatestVideoDts90k = null;
         _batchIdrDts90k = null;
         _pending.AddRange(input);
@@ -85,7 +87,10 @@ public sealed class MpegTsBoundaryScanner
             syncLost,
             _videoPid is not null,
             _batchLatestVideoDts90k,
-            _batchIdrDts90k);
+            _batchIdrDts90k)
+        {
+            EarliestVideoDts90k = _batchEarliestVideoDts90k,
+        };
     }
 
     public void Reset()
@@ -99,6 +104,7 @@ public sealed class MpegTsBoundaryScanner
         _spsSeen = false;
         _ppsSeen = false;
         _currentVideoPesDts90k = null;
+        _batchEarliestVideoDts90k = null;
         _batchLatestVideoDts90k = null;
         _batchIdrDts90k = null;
     }
@@ -237,7 +243,10 @@ public sealed class MpegTsBoundaryScanner
         {
             _currentVideoPesDts90k = ParsePesTimestamp(payload);
             if (_currentVideoPesDts90k is { } dts)
+            {
+                _batchEarliestVideoDts90k ??= dts;
                 _batchLatestVideoDts90k = dts;
+            }
 
             var pesHeaderLength = payload[8];
             var offset = 9 + pesHeaderLength;

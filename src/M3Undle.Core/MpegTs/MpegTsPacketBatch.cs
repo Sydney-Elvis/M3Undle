@@ -7,4 +7,7 @@ public sealed record MpegTsPacketBatch(
     bool SyncLost,
     bool HasKnownH264VideoStream = false,
     long? LatestVideoDts90k = null,
-    long? IdrDts90k = null);
+    long? IdrDts90k = null)
+{
+    public long? EarliestVideoDts90k { get; init; }
+}

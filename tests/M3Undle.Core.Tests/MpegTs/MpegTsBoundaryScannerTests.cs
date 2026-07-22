@@ -192,6 +192,25 @@ public sealed class MpegTsBoundaryScannerTests
     }
 
     [TestMethod]
+    public void Process_MultipleTimestampedVideoPackets_ReportsEarliestAndLatestDts()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        const long earliestDts = 3_780_000;
+        const long latestDts = 9_360_000;
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], earliestDts, earliestDts))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x02], latestDts, latestDts))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.AreEqual(earliestDts, batch.EarliestVideoDts90k);
+        Assert.AreEqual(latestDts, batch.LatestVideoDts90k);
+    }
+
+    [TestMethod]
     public void Process_VideoPesWithPtsOnly_ReportsPtsAsDts()
     {
         var scanner = new MpegTsBoundaryScanner();

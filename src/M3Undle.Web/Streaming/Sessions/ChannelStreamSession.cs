@@ -719,6 +719,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
             resetStallTimer = HasNonNullTsContent(batch.Data);
             Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
+            DetectInProcessTimelineRewind(batch);
             using var published = _buffer.Write(batch.Data);
             var suppressForOverlapTrim = ShouldSuppressSafeStartForOverlapTrim(batch);
             var safeStart = MarkMpegTsSafeStartIfReady(
@@ -1275,6 +1276,41 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         if (batch.LatestVideoDts90k is { } dts)
             _lastRelayedVideoDts90k = dts;
+    }
+
+    private void DetectInProcessTimelineRewind(MpegTsPacketBatch batch)
+    {
+        if (_recoveryOutputHoldActive
+            || !_reconnectOptions.EnableRecoveryOverlapTrim
+            || _lastRelayedVideoDts90k is not { } target
+            || batch.EarliestVideoDts90k is not { } earliest)
+        {
+            return;
+        }
+
+        var deltaSeconds = MpegTsTimestamp.DeltaSeconds(target, earliest);
+        if (deltaSeconds >= 0
+            || deltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+        {
+            return;
+        }
+
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.InProcessRelayTimelineRewind,
+            message: $"In-process relay timeline rewind detected: {-deltaSeconds:F1}s behind the last relayed video DTS; entering bounded overlap recovery.");
+        _logger.LogWarning(
+            "In-process relay timeline rewind detected: SessionId={SessionId} DisplayName={DisplayName} RelayMode={RelayMode} RewindSeconds={RewindSeconds:F1}",
+            _sessionId,
+            _source.DisplayName,
+            _relayMode,
+            -deltaSeconds);
+
+        _buffer.ResetGeneration();
+        _mpegTsSafeStartSelected = false;
+        _mpegTsCandidateSafeStartGeneration = null;
+        _mpegTsCandidateSafeStartSequence = null;
+        Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
+        BeginRecoveryOutputHold(reconnectAttempt: 0);
     }
 
     private bool ShouldSuppressSafeStartForOverlapTrim(MpegTsPacketBatch batch)

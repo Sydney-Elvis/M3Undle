@@ -1117,6 +1117,161 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ContinuousRelayTimelineRewind_DoesNotPublishReplayedSpan()
+    {
+        const long preFailureDts = 102L * 90000;
+        var originalIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], 100L * 90000);
+        var replayedIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xA5], 42L * 90000);
+        var caughtUpIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC5], 104L * 90000);
+
+        var initialSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], 100L * 90000),
+            originalIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], 101L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x93], preFailureDts),
+        };
+        var replaySequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            replayedIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA6], 72L * 90000),
+            PatPacket(100),
+            PmtPacket(100, 256),
+            caughtUpIdr,
+        };
+
+        var filler = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD1], 105L * 90000);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
+            initialSequence,
+            replaySequence,
+            filler,
+            TimeSpan.FromMilliseconds(150),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), caughtUpIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount, "The rewind must occur inside one uninterrupted upstream connection.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered));
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, originalIdr));
+        Assert.AreEqual(-1, IndexOf(data, replayedIdr), "Replayed content from the hidden FFmpeg reconnect must be suppressed.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, caughtUpIdr), "Output must resume at the first caught-up IDR.");
+        Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ContinuousRelayTimelineRewind_ThatCannotCatchUp_UsesBoundedFallback()
+    {
+        const long preFailureDts = 102L * 90000;
+        var replayedIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], 42L * 90000);
+        var initialSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x83], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x84], preFailureDts),
+        };
+        var replayStart = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            replayedIdr,
+        };
+
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
+            initialSequence,
+            replayStart,
+            replayedIdr,
+            TimeSpan.FromMilliseconds(100),
+            ct));
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(1),
+                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoveryOverlapTrimMaxBytes = 1024 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        Assert.AreEqual(1, handler.ConnectionCount);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+        Assert.IsTrue(session.State is SessionState.Live or SessionState.HoldingOutput);
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedWithoutForcedRetune()
     {
         // A provider that replays rewound content at 1x would never catch up to the
@@ -3763,7 +3918,7 @@ public sealed class ChannelSessionIntegrationTests
         private readonly Func<CancellationToken, Task<HttpResponseMessage>> _defaultBehavior;
         private int _connectionCount;
 
-        private FakeStreamingHandler(Func<CancellationToken, Task<HttpResponseMessage>> defaultBehavior)
+        public FakeStreamingHandler(Func<CancellationToken, Task<HttpResponseMessage>> defaultBehavior)
             => _defaultBehavior = defaultBehavior;
 
         public int ConnectionCount => Volatile.Read(ref _connectionCount);
@@ -3859,6 +4014,44 @@ public sealed class ChannelSessionIntegrationTests
                 try
                 {
                     foreach (var chunk in once)
+                    {
+                        await pipe.Writer.WriteAsync(chunk, ct);
+                        await Task.Delay(5, ct);
+                    }
+
+                    while (!ct.IsCancellationRequested)
+                    {
+                        await pipe.Writer.WriteAsync(forever, ct);
+                        await Task.Delay(5, ct);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { }
+                finally { pipe.Writer.Complete(); }
+            });
+            return Task.FromResult(CreateStreamingResponse(pipe.Reader.AsStream()));
+        }
+
+        public static Task<HttpResponseMessage> WritePhasedSequenceThenForever(
+            IReadOnlyList<byte[]> initial,
+            IReadOnlyList<byte[]> afterPause,
+            byte[] forever,
+            TimeSpan pause,
+            CancellationToken ct)
+        {
+            var pipe = new Pipe();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    foreach (var chunk in initial)
+                    {
+                        await pipe.Writer.WriteAsync(chunk, ct);
+                        await Task.Delay(5, ct);
+                    }
+
+                    await Task.Delay(pause, ct);
+                    foreach (var chunk in afterPause)
                     {
                         await pipe.Writer.WriteAsync(chunk, ct);
                         await Task.Delay(5, ct);

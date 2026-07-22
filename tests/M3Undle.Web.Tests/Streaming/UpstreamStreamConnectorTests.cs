@@ -335,12 +335,18 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "-headers");
             StringAssert.Contains(argsText, "X-Auth-Token: abc123");
             StringAssert.Contains(argsText, "-reconnect_streamed");
+            StringAssert.Contains(argsText, "-reconnect_on_network_error");
+            StringAssert.Contains(argsText, "-reconnect_delay_max");
+            StringAssert.Contains(argsText, "30");
             StringAssert.Contains(argsText, "-avoid_negative_ts");
             StringAssert.Contains(argsText, "make_zero");
             StringAssert.Contains(argsText, "-reconnect_at_eof");
             Assert.IsFalse(
                 argsText.Contains("-use_wallclock_as_timestamps", StringComparison.Ordinal),
                 "Clean remux must not stamp live packets with wall-clock time; downstream HLS remuxers can preserve that as a large timeline jump.");
+            Assert.IsFalse(
+                argsText.Contains("-reconnect_on_http_error", StringComparison.Ordinal),
+                "FFmpeg must not hide HTTP status failures from M3Undle's auth, rate-limit, Retry-After, and cooldown classifier.");
         }
         finally
         {
