@@ -21,7 +21,6 @@ not_in_nav: |
   /troubleshooting/429-and-rate-limits.md
   /troubleshooting/buffering-and-stream-recovery.md
   /troubleshooting/lan-and-reverse-proxy-problems.md
-  /architecture/*.md
 
 theme:
   name: material
@@ -58,7 +57,11 @@ extra:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - toc:
       permalink: true
 
@@ -109,3 +112,9 @@ nav:
       - Ports and Endpoints: reference/ports-and-endpoints.md
       - API Reference: reference/api-reference.md
       - Metrics: reference/metrics.md
+  - Architecture:
+      - System Overview: architecture/system-overview.md
+      - Stream Pipeline: architecture/stream-pipeline.md
+      - EPG Pipeline: architecture/epg-pipeline.md
+      - Profile and Security Model: architecture/profile-and-security-model.md
+      - Failure and Cooldown Model: architecture/failure-and-cooldown-model.md

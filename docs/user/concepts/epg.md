@@ -20,3 +20,5 @@ Client apps match guide data to channels using the XMLTV channel ID (`tvg-id`). 
 ## Where this fits in your lineup
 
 EPG mapping is independent of whether a channel is present in the published lineup—a published channel can be playable with no matching guide entry; it just will not show programme data in clients that expect it. See [Map EPG Data](../guides/map-epg-data.md) for the step-by-step workflow.
+
+For how fetching, auto-mapping, and guide compilation actually work — including the matching tiers and how source priority is resolved — see [Architecture > EPG Pipeline](../architecture/epg-pipeline.md).
