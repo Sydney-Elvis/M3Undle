@@ -341,6 +341,7 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "-avoid_negative_ts");
             StringAssert.Contains(argsText, "make_zero");
             StringAssert.Contains(argsText, "-reconnect_at_eof");
+            StringAssert.Contains(argsText, "-copyts");
             Assert.IsFalse(
                 argsText.Contains("-use_wallclock_as_timestamps", StringComparison.Ordinal),
                 "Clean remux must not stamp live packets with wall-clock time; downstream HLS remuxers can preserve that as a large timeline jump.");
@@ -375,6 +376,9 @@ public sealed class UpstreamStreamConnectorTests
             var argsText = await File.ReadAllTextAsync(argsFile);
             Assert.IsFalse(argsText.Contains("-reconnect_streamed", StringComparison.Ordinal));
             Assert.IsFalse(argsText.Contains("-reconnect_at_eof", StringComparison.Ordinal));
+            Assert.IsFalse(
+                argsText.Contains("-copyts", StringComparison.Ordinal),
+                "-copyts is only meaningful alongside the continuous-input reconnect flags; HLS segments have their own timestamp conventions.");
         }
         finally
         {
