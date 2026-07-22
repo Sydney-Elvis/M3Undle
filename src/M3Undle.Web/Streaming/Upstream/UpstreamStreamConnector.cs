@@ -439,6 +439,14 @@ public sealed class UpstreamStreamConnector(
         {
             info.ArgumentList.Add("-reconnect_streamed");
             info.ArgumentList.Add("1");
+            // Without -copyts, FFmpeg's muxer normalizes output PTS/DTS to a
+            // monotonic forward timeline, which silently absorbs a provider
+            // restarting the source from byte zero on an internal reconnect.
+            // -copyts preserves the source's own timestamps so a backward jump
+            // survives into the remuxed output, where M3Undle's own rewind
+            // detector (ChannelStreamSession.DetectInProcessTimelineRewind) can
+            // see it and trigger the existing overlap-trim recovery.
+            info.ArgumentList.Add("-copyts");
         }
         info.ArgumentList.Add("-fflags");
         info.ArgumentList.Add("+genpts+discardcorrupt");
