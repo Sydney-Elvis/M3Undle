@@ -82,6 +82,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private DateTimeOffset? _lastRecoveryStartedUtc;
     private long? _lastRelayedVideoDts90k;
     private int _clampedDtsRampEvidence;
+    private bool _recoveryHoldTriggeredByClampedRamp;
+    private long? _lastHeldVideoDts90k;
+    private int _clampedRampHealthyStreak;
     private long? _recoveryTrimTargetDts90k;
     private bool _recoveryTrimEvaluated;
     private bool _recoveryTrimActive;
@@ -722,7 +725,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
             DetectInProcessTimelineRewind(batch);
             using var published = _buffer.Write(batch.Data);
-            var suppressForOverlapTrim = ShouldSuppressSafeStartForOverlapTrim(batch);
+            var suppressForOverlapTrim = _recoveryHoldTriggeredByClampedRamp
+                ? ShouldSuppressSafeStartForClampedRampRecovery(batch)
+                : ShouldSuppressSafeStartForOverlapTrim(batch);
             var safeStart = MarkMpegTsSafeStartIfReady(
                 published,
                 batch.StartupKind,
@@ -1085,6 +1090,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldStartedUtc = holdStartedUtc;
         _lastRecoveryStartedUtc = holdStartedUtc;
         _recoveryBytesSuppressed = 0;
+        _recoveryHoldTriggeredByClampedRamp = false;
+        _lastHeldVideoDts90k = null;
+        _clampedRampHealthyStreak = 0;
         var trimOnRetryCooldown = _lastRecoveryTrimAbandonedUtc is { } lastAbandonedUtc
             && holdStartedUtc - lastAbandonedUtc < _reconnectOptions.RecoveryOverlapTrimRetryCooldown;
         _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim && !trimOnRetryCooldown
@@ -1350,6 +1358,44 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _mpegTsCandidateSafeStartSequence = null;
         Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
         BeginRecoveryOutputHold(reconnectAttempt: 0);
+
+        // A clamped-ramp detection has no real target DTS to catch up to — the
+        // incoming values are the muxer's own last+1, last+2, ... clamp sequence,
+        // which would satisfy the genuine-rewind trim's "IDR >= target" resume
+        // condition almost immediately and let the client keep receiving the
+        // still-degenerate span. Route it to a resume condition that waits for
+        // healthy frame-paced deltas to return instead.
+        if (rewindSeconds is null)
+            _recoveryHoldTriggeredByClampedRamp = true;
+    }
+
+    private bool ShouldSuppressSafeStartForClampedRampRecovery(MpegTsPacketBatch batch)
+    {
+        if (!_recoveryOutputHoldActive || !_recoveryHoldTriggeredByClampedRamp)
+            return false;
+
+        if (!batch.HasKnownH264VideoStream || batch.EarliestVideoDts90k is not { } earliest)
+            return true;
+
+        if (_lastHeldVideoDts90k is { } lastHeld)
+        {
+            var crossingHealthy = MpegTsTimestamp.Delta(lastHeld, earliest) > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+            var withinBatchHealthy = batch.LatestVideoDts90k is not { } latest
+                || latest == earliest
+                || MpegTsTimestamp.Delta(earliest, latest) > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+
+            _clampedRampHealthyStreak = crossingHealthy && withinBatchHealthy
+                ? _clampedRampHealthyStreak + 1
+                : 0;
+        }
+
+        _lastHeldVideoDts90k = batch.LatestVideoDts90k ?? earliest;
+
+        // Deliberately does not clear _recoveryHoldTriggeredByClampedRamp on success:
+        // this hold cycle keeps routing here until it actually resumes (or fails),
+        // so a later batch within the same hold can't fall through to the unrelated
+        // overlap-trim target-catchup logic using a now-stale target.
+        return _clampedRampHealthyStreak < _reconnectOptions.ClampedDtsRampMinEvidence;
     }
 
     private bool ShouldSuppressSafeStartForOverlapTrim(MpegTsPacketBatch batch)
