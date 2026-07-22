@@ -104,6 +104,12 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
         if (options.RecoveryOverlapTrimRetryCooldown < TimeSpan.Zero || options.RecoveryOverlapTrimRetryCooldown > TimeSpan.FromMinutes(30))
             errors.Add("Streaming:Reconnect:RecoveryOverlapTrimRetryCooldown must be between 0 seconds and 30 minutes.");
 
+        if (options.ClampedDtsRampMaxDeltaTicks < 1 || options.ClampedDtsRampMaxDeltaTicks > 9000)
+            errors.Add("Streaming:Reconnect:ClampedDtsRampMaxDeltaTicks must be between 1 and 9000 (90kHz) ticks.");
+
+        if (options.ClampedDtsRampMinEvidence < 1 || options.ClampedDtsRampMinEvidence > 50)
+            errors.Add("Streaming:Reconnect:ClampedDtsRampMinEvidence must be between 1 and 50.");
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);

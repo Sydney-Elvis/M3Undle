@@ -340,13 +340,7 @@ public sealed class UpstreamStreamConnectorTests
             StringAssert.Contains(argsText, "30");
             StringAssert.Contains(argsText, "-avoid_negative_ts");
             StringAssert.Contains(argsText, "make_zero");
-            Assert.IsFalse(
-                argsText.Contains("-reconnect_at_eof", StringComparison.Ordinal),
-                "FFmpeg must not reconnect across an EOF on its own: a provider that restarts the source " +
-                "from byte zero on reconnect would replay content inside FFmpeg's single continuous muxer " +
-                "session, where MPEG-TS's monotonic-DTS requirement makes the replay undetectable downstream. " +
-                "Letting FFmpeg exit on EOF hands the reconnect to M3Undle's own outer reconnect path instead, " +
-                "where the existing overlap-trim recovery can see and trim it.");
+            StringAssert.Contains(argsText, "-reconnect_at_eof");
             Assert.IsFalse(
                 argsText.Contains("-use_wallclock_as_timestamps", StringComparison.Ordinal),
                 "Clean remux must not stamp live packets with wall-clock time; downstream HLS remuxers can preserve that as a large timeline jump.");

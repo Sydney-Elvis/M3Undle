@@ -81,6 +81,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private double? _lastRecoveryOutputHeldMs;
     private DateTimeOffset? _lastRecoveryStartedUtc;
     private long? _lastRelayedVideoDts90k;
+    private int _clampedDtsRampEvidence;
     private long? _recoveryTrimTargetDts90k;
     private bool _recoveryTrimEvaluated;
     private bool _recoveryTrimActive;
@@ -1289,21 +1290,59 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         var deltaSeconds = MpegTsTimestamp.DeltaSeconds(target, earliest);
-        if (deltaSeconds >= 0
-            || deltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+        if (deltaSeconds < 0)
         {
+            _clampedDtsRampEvidence = 0;
+            if (deltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+                return;
+
+            FireInProcessTimelineRewind(-deltaSeconds);
             return;
         }
 
-        RecordDiagnostic(
-            StreamDiagnosticEventKind.InProcessRelayTimelineRewind,
-            message: $"In-process relay timeline rewind detected: {-deltaSeconds:F1}s behind the last relayed video DTS; entering bounded overlap recovery.");
+        // A real backward jump is the primary signal, but FFmpeg's mpegts muxer
+        // enforces non-decreasing output DTS at the container level (required by
+        // the format), so a provider restarting from byte zero inside a continuous
+        // clean-remux relay never surfaces as a negative delta here — the muxer
+        // silently clamps the desired (backward) timestamp up to last+1 each time
+        // instead. That shows up as a run of near-zero-tick increments where a
+        // real frame-paced increment is expected. Track that as a secondary,
+        // corroborating signal: accumulate "evidence" from both the batch-boundary
+        // crossing delta and, when a batch itself spans multiple video timestamps,
+        // the delta within the batch — a single batch containing several clamped
+        // frames is stronger evidence than one crossing alone — and only act once
+        // enough has accumulated to rule out a one-off scanner artifact.
+        var crossingClamped = MpegTsTimestamp.Delta(target, earliest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+        var withinBatchClamped = batch.LatestVideoDts90k is { } latest
+            && latest != earliest
+            && MpegTsTimestamp.Delta(earliest, latest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+
+        if (!crossingClamped && !withinBatchClamped)
+        {
+            _clampedDtsRampEvidence = 0;
+            return;
+        }
+
+        _clampedDtsRampEvidence += (crossingClamped ? 1 : 0) + (withinBatchClamped ? 1 : 0);
+        if (_clampedDtsRampEvidence < _reconnectOptions.ClampedDtsRampMinEvidence)
+            return;
+
+        _clampedDtsRampEvidence = 0;
+        FireInProcessTimelineRewind(rewindSeconds: null);
+    }
+
+    private void FireInProcessTimelineRewind(double? rewindSeconds)
+    {
+        var message = rewindSeconds is { } seconds
+            ? $"In-process relay timeline rewind detected: {seconds:F1}s behind the last relayed video DTS; entering bounded overlap recovery."
+            : "In-process relay timeline rewind detected via a clamped DTS ramp (FFmpeg's muxer enforced non-decreasing output over what looks like a provider restart); entering bounded overlap recovery.";
+        RecordDiagnostic(StreamDiagnosticEventKind.InProcessRelayTimelineRewind, message: message);
         _logger.LogWarning(
-            "In-process relay timeline rewind detected: SessionId={SessionId} DisplayName={DisplayName} RelayMode={RelayMode} RewindSeconds={RewindSeconds:F1}",
+            "In-process relay timeline rewind detected: SessionId={SessionId} DisplayName={DisplayName} RelayMode={RelayMode} RewindSeconds={RewindSeconds}",
             _sessionId,
             _source.DisplayName,
             _relayMode,
-            -deltaSeconds);
+            rewindSeconds is { } s ? s.ToString("F1") : "clamped-ramp");
 
         _buffer.ResetGeneration();
         _mpegTsSafeStartSelected = false;
