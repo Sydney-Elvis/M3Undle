@@ -420,6 +420,19 @@ public sealed class UpstreamStreamConnector(
         // normal EOF, which FFmpeg's HTTP layer then treats as a failure and keeps
         // reconnecting the *playlist* instead of pulling segments — producing zero
         // output. Only apply it to continuous (non-HLS) inputs.
+        //
+        // It stays enabled for non-HLS despite letting FFmpeg reconnect and re-mux
+        // a provider's replay-from-byte-zero inside a single continuous process:
+        // MPEG-TS's muxer must enforce non-decreasing output DTS, so it silently
+        // clamps the restarted (backward) timestamps forward rather than emitting
+        // them (confirmed via real-FFmpeg spikes — neither -copyts nor removing
+        // this flag surfaced the jump; -reconnect_streamed alone reconnects across
+        // this exact failure mode too, so removing just this flag bought nothing).
+        // Detection therefore lives downstream instead: ChannelStreamSession's
+        // DetectInProcessTimelineRewind also recognizes the clamped-ramp signature
+        // (a run of near-zero-tick DTS increments) as a proxy for the jump the
+        // muxer absorbed, so FFmpeg keeps its full internal self-healing and the
+        // recovery path still fires.
         if (!inputIsHls)
         {
             info.ArgumentList.Add("-reconnect_at_eof");
@@ -439,6 +452,21 @@ public sealed class UpstreamStreamConnector(
         {
             info.ArgumentList.Add("-reconnect_streamed");
             info.ArgumentList.Add("1");
+            // -copyts does NOT make FFmpeg emit a genuinely backward output DTS
+            // when a provider restarts from byte zero (spiked and confirmed: MPEG-TS
+            // still forces the muxer to clamp it to last+1 instead). But without
+            // -copyts, FFmpeg's +genpts synthesizes output timestamps purely from
+            // frame duration, with no reference to the source's real timestamps at
+            // all — the clamp never even engages because there's nothing backward to
+            // clamp, and the output carries zero trace of the rewind (confirmed via
+            // real-FFmpeg spike: video_dts_tail was a perfectly smooth ~3600-tick
+            // ramp with -copyts absent). -copyts is what makes FFmpeg reference the
+            // source's real (jumping) timestamps in the first place, which is what
+            // makes the muxer's clamp-to-monotonic defense engage and produce the
+            // observable near-zero-tick ramp that ChannelStreamSession's
+            // DetectInProcessTimelineRewind treats as a proxy for the absorbed jump.
+            // Without this flag, that detector has no signal to find.
+            info.ArgumentList.Add("-copyts");
         }
         info.ArgumentList.Add("-fflags");
         info.ArgumentList.Add("+genpts+discardcorrupt");

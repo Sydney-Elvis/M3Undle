@@ -54,7 +54,7 @@ Not every kind of session notices a stall at the same speed, and that's delibera
 
 ## Recovery overlap trim, and when it gives up
 
-[Stream Pipeline](stream-pipeline.md#reconnects-clean-resume-not-a-raw-splice) describes overlap trim from the outside: on reconnect, hold output and resume at the first keyframe at or after the last timestamp relayed before the failure, so a provider's replay buffer doesn't flood the client with content it already saw. The trim has real limits so it can't itself become the problem:
+[Stream Pipeline](stream-pipeline.md#reconnects-clean-resume-not-a-raw-splice) describes overlap trim from the outside: after an outer reconnect, or after a reconnect hidden inside FFmpeg reveals itself — either as a backward video-DTS jump, or in clean-remux relay as a run of near-zero DTS increments left behind when FFmpeg's muxer clamps the rewound timestamps forward — hold output and resume at the first keyframe at or after the last timestamp relayed before the failure so a provider's replay buffer doesn't flood the client with content it already saw. The trim has real limits so it can't itself become the problem:
 
 - It runs against a **wall-clock hold budget** (a few seconds by default) — replayed content arrives far faster than real time, so if a match hasn't been found by the time the budget expires, the trim is abandoned and the session falls back to a plain first-keyframe resume instead of holding output indefinitely.
 - A rewind larger than a configured ceiling (180 seconds by default) is treated as **not a replay at all** — more likely the provider's encoder restarted and reset its own timeline — so trim doesn't even attempt to match it.

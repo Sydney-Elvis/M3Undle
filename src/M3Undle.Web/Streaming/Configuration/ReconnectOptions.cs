@@ -81,5 +81,26 @@ public sealed class ReconnectOptions
     /// </summary>
     public TimeSpan RecoveryOverlapTrimRetryCooldown { get; set; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// For clean-remux FFmpeg relay: a real backward DTS jump never reaches the
+    /// scanner, because FFmpeg's mpegts muxer enforces non-decreasing output DTS at
+    /// the container level and silently clamps a provider's restart-from-zero up to
+    /// last+1 each time instead. A consecutive-tick delta at or below this threshold
+    /// is treated as that clamping in progress rather than genuine frame timing.
+    /// Default (180 ticks @ 90kHz, about 2ms, "faster than 500fps") sits far above the
+    /// observed 1-tick clamp signature and far below any plausible real frame
+    /// spacing, so legitimate high-frame-rate or tightly B-frame-reordered content
+    /// should not trip it.
+    /// </summary>
+    public long ClampedDtsRampMaxDeltaTicks { get; set; } = 180;
+
+    /// <summary>
+    /// Minimum accumulated evidence (batch-boundary crossings and within-batch spans
+    /// at or below <see cref="ClampedDtsRampMaxDeltaTicks"/>) before a clamped DTS
+    /// ramp is treated as a detected in-process rewind. Guards against a single
+    /// noisy sample triggering recovery.
+    /// </summary>
+    public int ClampedDtsRampMinEvidence { get; set; } = 3;
+
     public int[] FixedStepBackoffSeconds { get; set; } = [0, 1, 2, 5, 10, 15, 30];
 }
