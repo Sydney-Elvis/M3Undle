@@ -1272,6 +1272,106 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_HoldsThroughRampAndResumesOnlyAfterHealthyDeltas()
+    {
+        // Regression test for the clamped-DTS-ramp detector (DetectInProcessTimelineRewind /
+        // ShouldSuppressSafeStartForClampedRampRecovery). Unlike the two tests above, this
+        // never puts a genuine backward DTS jump on the wire: FFmpeg's mpegts muxer enforces
+        // non-decreasing output DTS, so a provider's in-process restart never reaches the
+        // scanner as a negative delta - it gets clamped forward to last+1, last+2, ... instead.
+        // This drives that exact near-zero-tick ramp signature directly, including an IDR that
+        // arrives while the ramp is still active: pre-b93d4bd, resume was gated on "next IDR"
+        // and would have let that content through immediately; it must stay suppressed until
+        // ClampedDtsRampMinEvidence consecutive healthy (frame-paced) deltas are observed.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L; // ~60fps decode pacing, far above ClampedDtsRampMaxDeltaTicks (180).
+
+        var stillRampingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF1], baseDts + 4);
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 6 + 3 * frameSpacing);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 6 + 4 * frameSpacing);
+
+        var sequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            // Clamped ramp: three consecutive near-zero-tick crossings reach
+            // ClampedDtsRampMinEvidence on the third and fire the detector.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
+            stillRampingIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA5], baseDts + 5),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA6], baseDts + 6),
+            // Healthy, frame-paced deltas resume: three consecutive crossings above
+            // ClampedDtsRampMaxDeltaTicks are required before suppression lifts.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], baseDts + 6 + frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], baseDts + 6 + 2 * frameSpacing),
+            resumingIdr,
+            postResumeFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WriteSequenceThenForever(sequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount, "The clamped ramp must be handled inside one uninterrupted upstream connection.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, stillRampingIdr),
+            "An IDR arriving mid-ramp must not resume output while deltas are still clamped (b93d4bd regression).");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        var safeStarts = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.MpegTsSafeStartSelected);
+        Assert.IsGreaterThanOrEqualTo(2, safeStarts.Count);
+        Assert.IsTrue(safeStarts.Skip(1).Any(x => string.Equals(x.SafeStartKind, "H264Idr", StringComparison.Ordinal)));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedWithoutForcedRetune()
     {
         // A provider that replays rewound content at 1x would never catch up to the
