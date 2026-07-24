@@ -1093,6 +1093,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryHoldTriggeredByClampedRamp = false;
         _lastHeldVideoDts90k = null;
         _clampedRampHealthyStreak = 0;
+        // Evidence gathered before this hold belongs to the previous connection epoch;
+        // carrying it across recovery would let a single post-resume clamped sample
+        // trip the detector against samples from a timeline that no longer exists.
+        _clampedDtsRampEvidence = 0;
         var trimOnRetryCooldown = _lastRecoveryTrimAbandonedUtc is { } lastAbandonedUtc
             && holdStartedUtc - lastAbandonedUtc < _reconnectOptions.RecoveryOverlapTrimRetryCooldown;
         _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim && !trimOnRetryCooldown
@@ -1306,6 +1310,27 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
             FireInProcessTimelineRewind(-deltaSeconds);
             return;
+        }
+
+        // A rewind can also land entirely inside one read chunk: the batch then opens
+        // with pre-jump frames (so the crossing delta above looks healthy) and ends in
+        // the replayed span. That surfaces as a backward first-to-last delta within the
+        // batch, which without this check would be mistaken for clamped evidence below
+        // (any negative delta satisfies "<= max ticks") and then discarded when the
+        // replay's healthy pacing resets the counter — letting the replayed span flood
+        // through undetected.
+        if (batch.LatestVideoDts90k is { } last)
+        {
+            var withinBatchDeltaSeconds = MpegTsTimestamp.DeltaSeconds(earliest, last);
+            if (withinBatchDeltaSeconds < 0)
+            {
+                _clampedDtsRampEvidence = 0;
+                if (withinBatchDeltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+                    return;
+
+                FireInProcessTimelineRewind(-withinBatchDeltaSeconds);
+                return;
+            }
         }
 
         // A real backward jump is the primary signal, but FFmpeg's mpegts muxer

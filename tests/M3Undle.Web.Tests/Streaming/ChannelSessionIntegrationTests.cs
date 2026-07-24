@@ -1200,6 +1200,109 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ContinuousRelayTimelineRewind_WithinSingleBatch_DoesNotPublishReplayedSpan()
+    {
+        // Variant of the test above where the rewind lands entirely inside one read
+        // chunk: the batch opens with a healthy pre-jump frame, so the batch-boundary
+        // crossing delta looks fine and only the backward first-to-last delta within
+        // the batch reveals the jump. Without the within-batch rewind check, that span
+        // counted as one unit of clamped evidence (any negative delta satisfies
+        // "<= max ticks"), the replay's healthy pacing then reset the counter, and the
+        // replayed content flooded through undetected.
+        const long preFailureDts = 102L * 90000;
+        var originalIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], 100L * 90000);
+        var replayedIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xA5], 42L * 90000);
+        var caughtUpIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC5], 104L * 90000);
+
+        var initialSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], 100L * 90000),
+            originalIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], 101L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x93], preFailureDts),
+        };
+        var midBatchChunk = new[]
+        {
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x94], 103L * 90000),
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            replayedIdr,
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA6], 72L * 90000),
+        }.SelectMany(packet => packet).ToArray();
+        var caughtUpSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            caughtUpIdr,
+        };
+
+        var filler = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD1], 105L * 90000);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [initialSequence, [midBatchChunk], caughtUpSequence],
+            filler,
+            TimeSpan.FromMilliseconds(150),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            // The fixture's default 188-byte read chunk makes every batch a single TS
+            // packet, which can never contain a jump; a larger read chunk lets the
+            // whole mid-batch write arrive as one batch.
+            bufferOptions: new BufferOptions
+            {
+                ReadChunkSizeBytes = 4096,
+                SubscriberQueueCapacity = 128,
+                MaxBytesPerSession = 64 * 1024,
+                MaxBytesHardCap = 4 * 1024 * 1024,
+            },
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromSeconds(2),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), caughtUpIdr) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount, "The rewind must occur inside one uninterrupted upstream connection.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectRecovered));
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, originalIdr));
+        Assert.AreEqual(-1, IndexOf(data, replayedIdr), "A rewind hidden inside a single batch must be suppressed.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, caughtUpIdr), "Output must resume at the first caught-up IDR.");
+        Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimmed));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_ContinuousRelayTimelineRewind_ThatCannotCatchUp_UsesBoundedFallback()
     {
         const long preFailureDts = 102L * 90000;
@@ -4138,23 +4241,31 @@ public sealed class ChannelSessionIntegrationTests
             byte[] forever,
             TimeSpan pause,
             CancellationToken ct)
+            => WritePhasedSequencesThenForever([initial, afterPause], forever, pause, ct);
+
+        public static Task<HttpResponseMessage> WritePhasedSequencesThenForever(
+            IReadOnlyList<IReadOnlyList<byte[]>> phases,
+            byte[] forever,
+            TimeSpan pause,
+            CancellationToken ct)
         {
             var pipe = new Pipe();
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    foreach (var chunk in initial)
+                    var firstPhase = true;
+                    foreach (var phase in phases)
                     {
-                        await pipe.Writer.WriteAsync(chunk, ct);
-                        await Task.Delay(5, ct);
-                    }
+                        if (!firstPhase)
+                            await Task.Delay(pause, ct);
+                        firstPhase = false;
 
-                    await Task.Delay(pause, ct);
-                    foreach (var chunk in afterPause)
-                    {
-                        await pipe.Writer.WriteAsync(chunk, ct);
-                        await Task.Delay(5, ct);
+                        foreach (var chunk in phase)
+                        {
+                            await pipe.Writer.WriteAsync(chunk, ct);
+                            await Task.Delay(5, ct);
+                        }
                     }
 
                     while (!ct.IsCancellationRequested)

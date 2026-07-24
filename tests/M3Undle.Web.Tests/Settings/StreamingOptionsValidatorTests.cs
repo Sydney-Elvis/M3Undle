@@ -157,6 +157,22 @@ public sealed class StreamingOptionsValidatorTests
         Assert.IsFalse(result.Succeeded);
     }
 
+    [TestMethod]
+    public void ReconnectOptions_ClampedDtsRampMaxDeltaTicksZero_Fails()
+    {
+        var options = new ReconnectOptions { ClampedDtsRampMaxDeltaTicks = 0 };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void ReconnectOptions_ClampedDtsRampMinEvidenceZero_Fails()
+    {
+        var options = new ReconnectOptions { ClampedDtsRampMinEvidence = 0 };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
     // ── GeneratedHlsOptionsValidator ──────────────────────────────────────────
 
     [TestMethod]

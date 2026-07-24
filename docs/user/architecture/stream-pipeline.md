@@ -47,7 +47,7 @@ When the upstream connection drops, the session doesn't just reconnect and start
 
 How long the session is willing to search, and whether the less-precise fallback is allowed at all, depends on the channel's recent health — see [Failure and Cooldown Model](failure-and-cooldown-model.md#what-changes-for-an-unstable-channel).
 
-The same guard also covers a reconnect performed internally by FFmpeg. In that case the FFmpeg process and its output pipe remain open, so there is no outer connection event for M3Undle to observe. A backward video-DTS jump within that continuous pipe activates the same bounded overlap hold before replayed packets enter the downstream buffer.
+The same guard also covers a reconnect performed internally by FFmpeg. In that case the FFmpeg process and its output pipe remain open, so there is no outer connection event for M3Undle to observe. Two signals within that continuous pipe activate the same bounded overlap hold before replayed packets enter the downstream buffer: a backward video-DTS jump (direct pass-through of the provider's rewound timeline), or — in clean-remux relay, where FFmpeg's muxer enforces non-decreasing timestamps and absorbs the jump — a run of near-zero DTS increments where normal frame pacing is expected, the visible residue of the muxer clamping the rewound timestamps forward. A hold triggered by that clamped ramp resumes only once frame-paced timestamps return, since the clamped span itself never contains a trustworthy resume point.
 
 ## Relay mode: direct or clean remux
 
