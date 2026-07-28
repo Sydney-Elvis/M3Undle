@@ -86,6 +86,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private bool _clampedDtsRampAbandoned;
     private long? _lastHeldVideoDts90k;
     private int _clampedRampHealthyStreak;
+    private long? _lastCandidateVideoDts90k;
+    private readonly List<PendingClampedRampBatch> _pendingClampedRampBatches = [];
     private long? _recoveryTrimTargetDts90k;
     private bool _recoveryTrimEvaluated;
     private bool _recoveryTrimActive;
@@ -316,6 +318,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             await NotifyClosedAsync();
         }
 
+        DiscardPendingClampedDtsRampBatches();
         _buffer.Complete();
     }
 
@@ -724,8 +727,30 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
             resetStallTimer = HasNonNullTsContent(batch.Data);
             Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
-            DetectInProcessTimelineRewind(batch);
+            var rewindSignal = DetectInProcessTimelineRewind(batch);
             using var published = _buffer.Write(batch.Data);
+
+            if (rewindSignal == TimelineRewindSignal.Candidate)
+            {
+                // Corroborating evidence for a clamped DTS ramp is still accumulating
+                // (ClampedDtsRampMinEvidence not yet reached). This batch may turn out to
+                // be replayed provider content, so it must not reach subscribers, nor be
+                // eligible as a late-joining subscriber's safe start, until the ramp
+                // resolves — either confirmed (discarded) or a false alarm (flushed below).
+                MarkMpegTsSafeStartIfReady(
+                    published,
+                    batch.StartupKind,
+                    batch.Data.Length,
+                    batch.HasKnownH264VideoStream,
+                    suppressSelection: true);
+                _pendingClampedRampBatches.Add(new PendingClampedRampBatch(published.Duplicate(), batch));
+                PublishSnapshotsIfDue();
+                return resetStallTimer;
+            }
+
+            if (rewindSignal == TimelineRewindSignal.None)
+                await FlushPendingClampedDtsRampBatchesAsync();
+
             var suppressForOverlapTrim = _recoveryHoldTriggeredByClampedRamp
                 ? ShouldSuppressSafeStartForClampedRampRecovery(batch)
                 : ShouldSuppressSafeStartForOverlapTrim(batch);
@@ -737,6 +762,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 suppressForOverlapTrim);
             if (_recoveryOutputHoldActive)
             {
+                // A confirmed rewind (this batch, or a prior candidate streak that just
+                // reached ClampedDtsRampMinEvidence) means every withheld candidate batch
+                // was genuinely replayed content; it must never be published.
+                DiscardPendingClampedDtsRampBatches();
                 _recoveryBytesSuppressed += batch.Data.Length;
                 if (safeStart.Selected)
                 {
@@ -976,6 +1005,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _mpegTsPacketModeKnown = false;
         _mpegTsPacketizeEnabled = false;
         Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
+
+        // A real outer reconnect replaces the upstream connection entirely, so any batches
+        // withheld while gathering clamped-ramp evidence belong to a connection epoch that
+        // no longer exists — they can never be resolved as a false alarm, and must not be
+        // published as if they were.
+        DiscardPendingClampedDtsRampBatches();
+        ResetClampedDtsRampEvidence();
     }
 
     private bool ShouldPacketizeMpegTs(ReadOnlySpan<byte> data)
@@ -1306,25 +1342,25 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _lastRelayedVideoDts90k = dts;
     }
 
-    private void DetectInProcessTimelineRewind(MpegTsPacketBatch batch)
+    private TimelineRewindSignal DetectInProcessTimelineRewind(MpegTsPacketBatch batch)
     {
         if (_recoveryOutputHoldActive
             || !_reconnectOptions.EnableRecoveryOverlapTrim
             || _lastRelayedVideoDts90k is not { } target
             || batch.EarliestVideoDts90k is not { } earliest)
         {
-            return;
+            return TimelineRewindSignal.None;
         }
 
         var deltaSeconds = MpegTsTimestamp.DeltaSeconds(target, earliest);
         if (deltaSeconds < 0)
         {
-            _clampedDtsRampEvidence = 0;
+            ResetClampedDtsRampEvidence();
             if (deltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
-                return;
+                return TimelineRewindSignal.None;
 
             FireInProcessTimelineRewind(-deltaSeconds);
-            return;
+            return TimelineRewindSignal.Confirmed;
         }
 
         // A rewind can also land entirely inside one read chunk: the batch then opens
@@ -1339,12 +1375,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             var withinBatchDeltaSeconds = MpegTsTimestamp.DeltaSeconds(earliest, last);
             if (withinBatchDeltaSeconds < 0)
             {
-                _clampedDtsRampEvidence = 0;
+                ResetClampedDtsRampEvidence();
                 if (withinBatchDeltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
-                    return;
+                    return TimelineRewindSignal.None;
 
                 FireInProcessTimelineRewind(-withinBatchDeltaSeconds);
-                return;
+                return TimelineRewindSignal.Confirmed;
             }
         }
 
@@ -1360,23 +1396,74 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // the delta within the batch — a single batch containing several clamped
         // frames is stronger evidence than one crossing alone — and only act once
         // enough has accumulated to rule out a one-off scanner artifact.
-        var crossingClamped = MpegTsTimestamp.Delta(target, earliest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+        //
+        // Batches that merely add to that evidence (below) are themselves indistinguishable
+        // from real replayed content until the threshold resolves one way or the other, so
+        // the crossing delta compares against the last *candidate* sample rather than the
+        // frozen last-published DTS — otherwise a multi-batch ramp would measure an
+        // accumulating (not per-step) delta and could wrongly exceed the threshold.
+        var crossingTarget = _lastCandidateVideoDts90k ?? target;
+        var crossingClamped = MpegTsTimestamp.Delta(crossingTarget, earliest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
         var withinBatchClamped = batch.LatestVideoDts90k is { } latest
             && latest != earliest
             && MpegTsTimestamp.Delta(earliest, latest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
 
         if (!crossingClamped && !withinBatchClamped)
         {
-            _clampedDtsRampEvidence = 0;
-            return;
+            ResetClampedDtsRampEvidence();
+            return TimelineRewindSignal.None;
         }
 
         _clampedDtsRampEvidence += (crossingClamped ? 1 : 0) + (withinBatchClamped ? 1 : 0);
+        _lastCandidateVideoDts90k = batch.LatestVideoDts90k ?? earliest;
         if (_clampedDtsRampEvidence < _reconnectOptions.ClampedDtsRampMinEvidence)
+            return TimelineRewindSignal.Candidate;
+
+        ResetClampedDtsRampEvidence();
+        FireInProcessTimelineRewind(rewindSeconds: null);
+        return TimelineRewindSignal.Confirmed;
+    }
+
+    private void ResetClampedDtsRampEvidence()
+    {
+        _clampedDtsRampEvidence = 0;
+        _lastCandidateVideoDts90k = null;
+    }
+
+    private async Task FlushPendingClampedDtsRampBatchesAsync()
+    {
+        if (_pendingClampedRampBatches.Count == 0)
             return;
 
-        _clampedDtsRampEvidence = 0;
-        FireInProcessTimelineRewind(rewindSeconds: null);
+        var pending = _pendingClampedRampBatches.ToArray();
+        _pendingClampedRampBatches.Clear();
+        try
+        {
+            foreach (var item in pending)
+            {
+                await PublishToSubscribersAsync(item.Lease, isAtSafeBoundary: false);
+                UpdateLastRelayedVideoDts(item.Batch);
+            }
+        }
+        finally
+        {
+            foreach (var item in pending)
+                item.Lease.Dispose();
+        }
+    }
+
+    private void DiscardPendingClampedDtsRampBatches()
+    {
+        if (_pendingClampedRampBatches.Count == 0)
+            return;
+
+        foreach (var item in _pendingClampedRampBatches)
+        {
+            _recoveryBytesSuppressed += item.Batch.Data.Length;
+            item.Lease.Dispose();
+        }
+
+        _pendingClampedRampBatches.Clear();
     }
 
     private void FireInProcessTimelineRewind(double? rewindSeconds)
@@ -2203,6 +2290,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         public static SafeStartDecision NotSelected => new(false, string.Empty);
     }
+
+    private enum TimelineRewindSignal
+    {
+        None,
+        Candidate,
+        Confirmed,
+    }
+
+    private readonly record struct PendingClampedRampBatch(BufferLease Lease, MpegTsPacketBatch Batch);
 
     private static class RecoveryTrimOutcomes
     {

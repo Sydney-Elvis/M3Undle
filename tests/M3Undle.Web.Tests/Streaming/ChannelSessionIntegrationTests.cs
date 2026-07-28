@@ -1386,12 +1386,27 @@ public sealed class ChannelSessionIntegrationTests
         // arrives while the ramp is still active: pre-b93d4bd, resume was gated on "next IDR"
         // and would have let that content through immediately; it must stay suppressed until
         // ClampedDtsRampMinEvidence consecutive healthy (frame-paced) deltas are observed.
+        //
+        // It also covers a second, more subtle leak: ClampedDtsRampMinEvidence requires several
+        // consecutive suspicious samples before the ramp is *confirmed*, but every one of those
+        // evidence-gathering batches is itself replayed provider content — not just the batch
+        // that finally crosses the threshold. Before the fix, only the batch that crossed
+        // ClampedDtsRampMinEvidence (and everything after) was suppressed; the batches used to
+        // accumulate evidence toward that threshold were published normally, because
+        // _recoveryOutputHoldActive only flips true once the detector actually fires. The
+        // evidencePacket1/evidencePacket2 assertions below cover exactly that gap.
         const long baseDts = 100L * 90000;
         const long frameSpacing = 1500L; // ~60fps decode pacing, far above ClampedDtsRampMaxDeltaTicks (180).
 
         var stillRampingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF1], baseDts + 4);
         var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 6 + 3 * frameSpacing);
         var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 6 + 4 * frameSpacing);
+
+        // The first two evidence-gathering samples of the clamped ramp: neither individually
+        // reaches ClampedDtsRampMinEvidence (3), so before the fix the detector had not yet
+        // fired when these were processed and they were published like ordinary live content.
+        var evidencePacket1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1);
+        var evidencePacket2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2);
 
         var sequence = new[]
         {
@@ -1403,8 +1418,8 @@ public sealed class ChannelSessionIntegrationTests
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
             // Clamped ramp: three consecutive near-zero-tick crossings reach
             // ClampedDtsRampMinEvidence on the third and fire the detector.
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            evidencePacket1,
+            evidencePacket2,
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
             stillRampingIdr,
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA5], baseDts + 5),
@@ -1463,6 +1478,14 @@ public sealed class ChannelSessionIntegrationTests
             -1,
             IndexOf(data, stillRampingIdr),
             "An IDR arriving mid-ramp must not resume output while deltas are still clamped (b93d4bd regression).");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket1),
+            "A batch still accumulating clamped-ramp evidence is itself replayed content and must not be published before the ramp is confirmed.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket2),
+            "A batch still accumulating clamped-ramp evidence is itself replayed content and must not be published before the ramp is confirmed.");
         Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
         Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
 
