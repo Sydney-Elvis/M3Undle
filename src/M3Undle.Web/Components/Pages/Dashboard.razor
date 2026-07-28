@@ -408,20 +408,48 @@
                 }
             </MudStack>
 
-            <MudStack Spacing="4">
-                <div>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">M3U Playlist</MudText>
-                    <EndpointCopyRow DefaultUrl="@SelectedM3uUrl" ExtraVariants="@GetUrlVariants(SelectedM3uUrl)" />
-                </div>
+            @if (_isLoading)
+            {
+                <MudProgressCircular Indeterminate="true" />
+            }
+            else if (selProfile is null)
+            {
+                <MudAlert Severity="Severity.Warning"
+                          Variant="Variant.Filled"
+                          Icon="@Icons.Material.Filled.Output"
+                          Class="mt-2">
+                    <MudStack Spacing="2">
+                        <div>
+                            <MudText Typo="Typo.subtitle1">No output is available yet</MudText>
+                            <MudText Typo="Typo.body2">
+                                Add a provider to create your first profile. Then map channels and build the lineup before connecting a client.
+                            </MudText>
+                        </div>
+                        <MudButton Href="providers"
+                                   Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Add">
+                            Add provider
+                        </MudButton>
+                    </MudStack>
+                </MudAlert>
+            }
+            else
+            {
+                <MudStack Spacing="4">
+                    <div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">M3U Playlist</MudText>
+                        <EndpointCopyRow DefaultUrl="@SelectedM3uUrl" ExtraVariants="@GetUrlVariants(SelectedM3uUrl)" />
+                    </div>
 
-                <div>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">XMLTV Guide</MudText>
-                    <EndpointCopyRow DefaultUrl="@SelectedXmltvUrl" ExtraVariants="@GetUrlVariants(SelectedXmltvUrl)" />
-                </div>
+                    <div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-1">XMLTV Guide</MudText>
+                        <EndpointCopyRow DefaultUrl="@SelectedXmltvUrl" ExtraVariants="@GetUrlVariants(SelectedXmltvUrl)" />
+                    </div>
 
-                @* Xtream section *@
-                <MudDivider />
-                <div>
+                    @* Xtream section *@
+                    <MudDivider />
+                    <div>
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
                         <MudIcon Icon="@Icons.Material.Filled.VpnKey" Size="Size.Small" Color="@XtreamIconColor" />
                         <MudLink Href="settings?section=security" Typo="Typo.subtitle2" Underline="Underline.Hover" Color="Color.Inherit">
@@ -466,11 +494,11 @@
                             }
                         </MudStack>
                     }
-                </div>
+                    </div>
 
-                @* HDHomeRun section *@
-                <MudDivider />
-                <div>
+                    @* HDHomeRun section *@
+                    <MudDivider />
+                    <div>
                     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
                         <MudIcon Icon="@Icons.Material.Filled.Router" Size="Size.Small" Color="@(_hdhrEnabled ? Color.Primary : Color.Default)" />
                         <MudLink Href="hdhr" Typo="Typo.subtitle2" Underline="Underline.Hover" Color="Color.Inherit">
@@ -503,8 +531,9 @@
                     {
                         <MudText Typo="Typo.caption" Color="Color.Secondary">Loading HDHR info…</MudText>
                     }
-                </div>
-            </MudStack>
+                    </div>
+                </MudStack>
+            }
         </MudPaper>
     </MudItem>
 

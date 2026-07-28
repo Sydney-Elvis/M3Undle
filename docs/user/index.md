@@ -11,8 +11,9 @@ Works with clients such as NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and othe
 
 ## Where to start
 
-- New to M3Undle? Start with **[What M3Undle Does](getting-started/what-it-does.md)**, then **[Install with Docker](getting-started/install-with-docker.md)**.
-- Already running it? Jump to **[Guides](guides/build-a-lineup.md)** or **[Reference](reference/environment-variables.md)**.
+- New to M3Undle? Follow the complete first-run path: **[understand the workflow](getting-started/what-it-does.md)**, **[install with Docker](getting-started/install-with-docker.md)**, **[add a provider](getting-started/add-first-provider.md)**, then **[build and publish a lineup](getting-started/create-first-lineup.md)**.
+- Container running but no channels visible? Starting Docker is only the installation step. You still need to **[add a provider](getting-started/add-first-provider.md)**, map channels, and build the output.
+- Already configured and publishing a lineup? Jump to **[Guides](guides/build-a-lineup.md)** or **[Reference](reference/environment-variables.md)**.
 - Connecting a specific client? See **[Clients](clients/jellyfin.md)**.
 - Something not working? See **[Troubleshooting](troubleshooting/client-cannot-connect.md)**.
 

@@ -60,7 +60,7 @@ volumes:
 docker compose up -d
 ```
 
-Open `http://<host>:8080`, add a provider, and build your first lineup — see **[Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)** and **[What M3Undle Does](https://sydney-elvis.github.io/M3Undle/getting-started/what-it-does/)** for the full walkthrough.
+Starting the container installs M3Undle, but does not configure it or add any channels. Open `http://<host>:8080`, add a provider, map the channels you want, and build your first lineup. You can use the credential-free IPTV.org example in **[Add the First Provider](https://sydney-elvis.github.io/M3Undle/getting-started/add-first-provider/)** for a quick smoke test. See **[Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)** and **[What M3Undle Does](https://sydney-elvis.github.io/M3Undle/getting-started/what-it-does/)** for the complete walkthrough.
 
 ## What it does
 
