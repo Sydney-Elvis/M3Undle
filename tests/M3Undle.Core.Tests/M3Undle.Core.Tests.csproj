@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MSTest" Version="4.3.0" />
+    <PackageReference Include="MSTest" Version="4.3.2" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\M3Undle.Core\M3Undle.Core.csproj" />
