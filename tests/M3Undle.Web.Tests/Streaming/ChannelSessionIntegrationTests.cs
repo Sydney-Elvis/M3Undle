@@ -1853,6 +1853,110 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_PostAbandonWait_OutlastsGenericHoldLimitWithoutForcedRetune()
+    {
+        // Regression test for a live failure caught on the CLEAN-RELAY-06 lab scenario
+        // after the AbandonedRamp_DoesNotResumeOnStillClampedContent fix above: once a
+        // clamped-ramp hold is abandoned, IsRecoveryHoldLimitExceeded fell back to the
+        // *generic* RecoveryOutputHoldLimit (production default 3s) to bound the
+        // continued wait for healthy deltas -- reintroducing, one abandon later, the exact
+        // "too short for evidence-based convergence" problem ClampedDtsRampHoldLimit exists
+        // to fix in the first place. Live: real content took longer than
+        // ClampedDtsRampHoldLimit(6s) + the generic 3s fallback (~9s total) to produce
+        // ClampedDtsRampMinEvidence consecutive healthy crossings, forcing an avoidable
+        // RecoveryForcedRetune. Only the byte-based ceiling should apply once abandoned,
+        // mirroring the overlap-trim case: this drives a post-abandon wait past the
+        // generic RecoveryOutputHoldLimit and asserts it still resumes gracefully.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L;
+
+        var stillClampedAfterAbandon = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xA4], baseDts + 4);
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 6 + 3 * frameSpacing);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 6 + 4 * frameSpacing);
+
+        var beforePause = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
+        };
+        // First pause: long enough for ClampedDtsRampHoldLimit (100ms) to elapse and abandon.
+        var afterFirstPause = new[] { stillClampedAfterAbandon };
+        // Second pause: on its own, comfortably longer than RecoveryOutputHoldLimit (200ms)
+        // -- the old fallback would have forced a retune well before this content arrived.
+        var afterSecondPause = new[]
+        {
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], baseDts + 6 + frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], baseDts + 6 + 2 * frameSpacing),
+            resumingIdr,
+            postResumeFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [beforePause, afterFirstPause, afterSecondPause],
+            filler,
+            TimeSpan.FromMilliseconds(400),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromMilliseconds(200),
+                ClampedDtsRampHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ClampedDtsRampRecoveryAbandoned).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryHoldLimitExceeded),
+            "The generic RecoveryOutputHoldLimit must not apply once a clamped-ramp hold has been abandoned -- only the byte ceiling should.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, stillClampedAfterAbandon),
+            "Content still within the clamped ramp must not resume output just because the wall-clock ramp budget was abandoned.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedThenResumesOnlyOnceContentIsFresh()
     {
         // A provider that replays rewound content slower than real-time would never catch

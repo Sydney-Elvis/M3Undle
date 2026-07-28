@@ -1329,6 +1329,19 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
             return false;
 
+        // An abandoned ramp gave up on its own (short) wall-clock budget, but
+        // ShouldSuppressSafeStartForClampedRampRecovery keeps requiring the same
+        // ClampedDtsRampMinEvidence consecutive healthy deltas afterward — reusing the
+        // generic RecoveryOutputHoldLimit here would just reintroduce, one abandon later,
+        // the exact "too short for evidence-based convergence" problem ClampedDtsRampHoldLimit
+        // exists to fix in the first place (confirmed live: real content took longer than
+        // 6s + the generic 3s fallback to produce 3 consecutive healthy crossings, forcing
+        // an avoidable retune). Only the byte-based ceiling applies during that phase,
+        // mirroring the overlap-trim case above; it still bounds a ramp that never
+        // genuinely stabilizes.
+        if (_recoveryHoldTriggeredByClampedRamp && _clampedDtsRampAbandoned)
+            return _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
+
         // An abandoned trim gave up on precisely scanning to the pre-failure position within
         // its own (already-spent) budget, but ShouldSuppressSafeStartForOverlapTrim keeps
         // chasing the same target DTS via a looser fallback afterward — that catch-up can
