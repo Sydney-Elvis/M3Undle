@@ -83,6 +83,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long? _lastRelayedVideoDts90k;
     private int _clampedDtsRampEvidence;
     private bool _recoveryHoldTriggeredByClampedRamp;
+    private bool _clampedDtsRampAbandoned;
     private long? _lastHeldVideoDts90k;
     private int _clampedRampHealthyStreak;
     private long? _recoveryTrimTargetDts90k;
@@ -1085,12 +1086,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryTrimActive)
             AbandonRecoveryOverlapTrim("because the upstream failed again during the replayed span");
 
+        // Same reasoning as the trim case above, for a clamped-ramp wait that never
+        // reached ClampedDtsRampMinEvidence healthy deltas before a fresh reconnect.
+        if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
+            AbandonClampedDtsRampRecovery("because the upstream failed again during the ramp wait");
+
         var holdStartedUtc = DateTimeOffset.UtcNow;
         _recoveryOutputHoldActive = true;
         _recoveryOutputHoldStartedUtc = holdStartedUtc;
         _lastRecoveryStartedUtc = holdStartedUtc;
         _recoveryBytesSuppressed = 0;
         _recoveryHoldTriggeredByClampedRamp = false;
+        _clampedDtsRampAbandoned = false;
         _lastHeldVideoDts90k = null;
         _clampedRampHealthyStreak = 0;
         // Evidence gathered before this hold belongs to the previous connection epoch;
@@ -1276,6 +1283,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryTrimActive)
             return false;
 
+        // A clamped-DTS-ramp wait is evidence-based, not time-based, so it can
+        // legitimately outlast the generic hold limit. It polices its own budget
+        // (ClampedDtsRampHoldLimit) inside ShouldSuppressSafeStartForClampedRampRecovery;
+        // abandoning it there resets the standard budgets before falling through to the
+        // normal first-IDR resume, so the forced-retune path must not fire mid-wait.
+        if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
+            return false;
+
         return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
     }
@@ -1399,6 +1414,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (!_recoveryOutputHoldActive || !_recoveryHoldTriggeredByClampedRamp)
             return false;
 
+        if (_clampedDtsRampAbandoned)
+            return false;
+
+        if (GetRecoveryHoldDuration() >= _reconnectOptions.ClampedDtsRampHoldLimit)
+        {
+            AbandonClampedDtsRampRecovery("without observing enough consecutive healthy deltas within the ramp budget");
+            return false;
+        }
+
         if (!batch.HasKnownH264VideoStream || batch.EarliestVideoDts90k is not { } earliest)
             return true;
 
@@ -1421,6 +1445,31 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // so a later batch within the same hold can't fall through to the unrelated
         // overlap-trim target-catchup logic using a now-stale target.
         return _clampedRampHealthyStreak < _reconnectOptions.ClampedDtsRampMinEvidence;
+    }
+
+    private void AbandonClampedDtsRampRecovery(string reason)
+    {
+        _clampedDtsRampAbandoned = true;
+        var heldDuration = GetRecoveryHoldDuration();
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.ClampedDtsRampRecoveryAbandoned,
+            outputHeld: heldDuration,
+            bytesSuppressed: _recoveryBytesSuppressed,
+            recoveryHoldLimit: _reconnectOptions.ClampedDtsRampHoldLimit,
+            message: $"Clamped DTS ramp recovery abandoned after {heldDuration.TotalMilliseconds:F0} ms {reason}; falling back to the standard safe-start resume.");
+        _logger.LogWarning(
+            "Clamped DTS ramp recovery abandoned: SessionId={SessionId} DisplayName={DisplayName} HeldMs={HeldMs:F0} HealthyStreak={HealthyStreak} Reason={Reason}",
+            _sessionId,
+            _source.DisplayName,
+            heldDuration.TotalMilliseconds,
+            _clampedRampHealthyStreak,
+            reason);
+
+        // Restart the standard hold budgets so the fallback resume gets its normal
+        // window instead of tripping the forced-retune limits the ramp wait already spent.
+        _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
+        _recoveryBytesSuppressed = 0;
+        Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
     }
 
     private bool ShouldSuppressSafeStartForOverlapTrim(MpegTsPacketBatch batch)

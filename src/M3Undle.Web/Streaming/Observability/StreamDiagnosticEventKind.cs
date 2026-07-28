@@ -34,4 +34,5 @@ public enum StreamDiagnosticEventKind
     RecoveryOverlapTrimmed = 29,
     RecoveryOverlapTrimAbandoned = 30,
     InProcessRelayTimelineRewind = 31,
+    ClampedDtsRampRecoveryAbandoned = 32,
 }

@@ -102,5 +102,18 @@ public sealed class ReconnectOptions
     /// </summary>
     public int ClampedDtsRampMinEvidence { get; set; } = 3;
 
+    /// <summary>
+    /// Wall-clock budget for an active clamped-DTS-ramp recovery hold. This wait is
+    /// evidence-based (<see cref="ClampedDtsRampMinEvidence"/> consecutive healthy
+    /// deltas), not time-based, so it needs its own cap distinct from
+    /// <see cref="RecoveryOutputHoldLimit"/>: a ramp that never accumulates enough
+    /// healthy crossings must not hold output forever, but legitimately slow-to-settle
+    /// ramps can easily outlast the generic hold limit. On expiry the hold is
+    /// abandoned and recovery falls back to the standard first-IDR resume instead of
+    /// forcing a retune, mirroring how <see cref="RecoveryOverlapTrimHoldLimit"/>
+    /// polices the overlap-trim path.
+    /// </summary>
+    public TimeSpan ClampedDtsRampHoldLimit { get; set; } = TimeSpan.FromSeconds(6);
+
     public int[] FixedStepBackoffSeconds { get; set; } = [0, 1, 2, 5, 10, 15, 30];
 }

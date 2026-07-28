@@ -110,6 +110,9 @@ public sealed class ReconnectOptionsValidator : IValidateOptions<ReconnectOption
         if (options.ClampedDtsRampMinEvidence < 1 || options.ClampedDtsRampMinEvidence > 50)
             errors.Add("Streaming:Reconnect:ClampedDtsRampMinEvidence must be between 1 and 50.");
 
+        if (options.ClampedDtsRampHoldLimit < TimeSpan.FromMilliseconds(1) || options.ClampedDtsRampHoldLimit > TimeSpan.FromSeconds(30))
+            errors.Add("Streaming:Reconnect:ClampedDtsRampHoldLimit must be between 1 millisecond and 30 seconds.");
+
         return errors.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);
