@@ -244,6 +244,33 @@ public sealed class ProfilesPageServiceTests
         Assert.IsNotNull(error);
     }
 
+    [TestMethod]
+    public async Task DeleteProfileAsync_PublishesStateChangeEvent()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedProfilesAsync(fixture.Connection, ("p1", true));
+
+        var eventBus = new AppEventBus();
+        var reader = eventBus.Subscribe(out var unsubscriber);
+        try
+        {
+            var service = new ProfilesPageService(
+                fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+                new TestRefreshTrigger(),
+                eventBus);
+
+            var error = await service.DeleteProfileAsync("p1", CancellationToken.None);
+
+            Assert.IsNull(error);
+            Assert.IsTrue(reader.TryRead(out var evt));
+            Assert.AreEqual(AppEventKind.ProviderChanged, evt.Kind);
+        }
+        finally
+        {
+            unsubscriber.Dispose();
+        }
+    }
+
     private static async Task SeedProfilesAsync(SqliteConnection connection, params (string ProfileId, bool IsActive)[] profiles)
     {
         var options = new DbContextOptionsBuilder<ApplicationDbContext>()

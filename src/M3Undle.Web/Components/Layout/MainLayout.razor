@@ -534,7 +534,7 @@
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)
                 {
-                    await LoadLineupStatusAsync();
+                    await Task.WhenAll(LoadChannelStatsAsync(), LoadLineupStatusAsync());
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.SystemEventPublished)
                 {

@@ -412,7 +412,7 @@
             {
                 <MudProgressCircular Indeterminate="true" />
             }
-            else if (selProfile is null)
+            else if (selProfile is null || selProfile.Providers.Count == 0)
             {
                 <MudAlert Severity="Severity.Warning"
                           Variant="Variant.Filled"
@@ -420,9 +420,16 @@
                           Class="mt-2">
                     <MudStack Spacing="2">
                         <div>
-                            <MudText Typo="Typo.subtitle1">No output is available yet</MudText>
+                            <MudText Typo="Typo.subtitle1">No output is available</MudText>
                             <MudText Typo="Typo.body2">
-                                Add a provider to create your first profile. Then map channels and build the lineup before connecting a client.
+                                @if (selProfile is null)
+                                {
+                                    <text>Add a provider to create your first profile. Then map channels and build the lineup before connecting a client.</text>
+                                }
+                                else
+                                {
+                                    <text>The active profile has no enabled provider. Add or enable a provider, then build the lineup before connecting a client.</text>
+                                }
                             </MudText>
                         </div>
                         <MudButton Href="providers"
@@ -769,7 +776,7 @@
                 {
                     await InvokeAsync(LoadDashboardStatsAsync);
                 }
-                else if (evt.Kind == AppEventKind.ProviderActivated)
+                else if (evt.Kind is AppEventKind.ProviderActivated or AppEventKind.ProviderChanged)
                 {
                     if (!_isLoading)
                         await InvokeAsync(LoadAllAsync);
