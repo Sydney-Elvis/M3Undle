@@ -93,3 +93,4 @@ docker inspect --format='{{json .State.Health}}' m3undle
 - The container runs as whatever user `PUID`/`PGID` in `.env` resolve to.
 - `SOURCE_REVISION` is an optional build arg that feeds the informational build version (see `docs/spec/version_management.md`); leave it unset for local builds.
 - If Docker in WSL is unavailable, enable WSL integration in Docker Desktop.
+- `compose.yaml` hardcodes `ASPNETCORE_ENVIRONMENT: Production` (line 17). For manual API testing, change that to `Development` locally (don't commit it) to enable the interactive Scalar reference at `/scalar` and the raw OpenAPI document at `/openapi/management.json` — both require logging in via `/Account/Login` first. Neither is available in a standard Production run.

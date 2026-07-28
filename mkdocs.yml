@@ -110,7 +110,6 @@ nav:
       - Docker Compose: reference/docker-compose.md
       - Environment Variables: reference/environment-variables.md
       - Ports and Endpoints: reference/ports-and-endpoints.md
-      - API Reference: reference/api-reference.md
       - Metrics: reference/metrics.md
   - Architecture:
       - System Overview: architecture/system-overview.md
