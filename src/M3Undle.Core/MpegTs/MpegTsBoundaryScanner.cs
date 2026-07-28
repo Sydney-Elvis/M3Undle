@@ -19,6 +19,8 @@ public sealed class MpegTsBoundaryScanner
     private long? _batchEarliestVideoDts90k;
     private long? _batchLatestVideoDts90k;
     private long? _batchIdrDts90k;
+    private long? _batchPreviousVideoDts90k;
+    private long? _batchMinVideoDtsStep90k;
 
     public MpegTsPacketBatch? Process(ReadOnlySpan<byte> input)
     {
@@ -30,6 +32,10 @@ public sealed class MpegTsBoundaryScanner
         _batchEarliestVideoDts90k = null;
         _batchLatestVideoDts90k = null;
         _batchIdrDts90k = null;
+        // Steps are only meaningful inside one batch; the batch-boundary crossing is the
+        // caller's concern, so the previous-timestamp anchor resets with every batch.
+        _batchPreviousVideoDts90k = null;
+        _batchMinVideoDtsStep90k = null;
         _pending.AddRange(input);
 
         var output = new List<byte>(_pending.Count - (_pending.Count % PacketSize));
@@ -90,6 +96,7 @@ public sealed class MpegTsBoundaryScanner
             _batchIdrDts90k)
         {
             EarliestVideoDts90k = _batchEarliestVideoDts90k,
+            MinVideoDtsStep90k = _batchMinVideoDtsStep90k,
         };
     }
 
@@ -107,6 +114,8 @@ public sealed class MpegTsBoundaryScanner
         _batchEarliestVideoDts90k = null;
         _batchLatestVideoDts90k = null;
         _batchIdrDts90k = null;
+        _batchPreviousVideoDts90k = null;
+        _batchMinVideoDtsStep90k = null;
     }
 
     private bool LooksLikePacketStart(int index)
@@ -244,6 +253,14 @@ public sealed class MpegTsBoundaryScanner
             _currentVideoPesDts90k = ParsePesTimestamp(payload);
             if (_currentVideoPesDts90k is { } dts)
             {
+                if (_batchPreviousVideoDts90k is { } previous)
+                {
+                    var step = MpegTsTimestamp.Delta(previous, dts);
+                    if (_batchMinVideoDtsStep90k is not { } currentMin || step < currentMin)
+                        _batchMinVideoDtsStep90k = step;
+                }
+
+                _batchPreviousVideoDts90k = dts;
                 _batchEarliestVideoDts90k ??= dts;
                 _batchLatestVideoDts90k = dts;
             }

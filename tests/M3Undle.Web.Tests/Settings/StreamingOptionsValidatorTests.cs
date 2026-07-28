@@ -173,6 +173,24 @@ public sealed class StreamingOptionsValidatorTests
         Assert.IsFalse(result.Succeeded);
     }
 
+    [TestMethod]
+    public void ReconnectOptions_NegativeClampedDtsRampRetryCooldown_Fails()
+    {
+        var options = new ReconnectOptions { ClampedDtsRampRetryCooldown = TimeSpan.FromSeconds(-1) };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public void ReconnectOptions_ZeroClampedDtsRampRetryCooldown_Passes()
+    {
+        // Zero is the documented "disable the cooldown" value, matching
+        // RecoveryOverlapTrimRetryCooldown.
+        var options = new ReconnectOptions { ClampedDtsRampRetryCooldown = TimeSpan.Zero };
+        var result = new ReconnectOptionsValidator().Validate(null, options);
+        Assert.IsTrue(result.Succeeded);
+    }
+
     // ── GeneratedHlsOptionsValidator ──────────────────────────────────────────
 
     [TestMethod]

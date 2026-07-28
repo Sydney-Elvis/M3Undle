@@ -83,11 +83,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long? _lastRelayedVideoDts90k;
     private int _clampedDtsRampEvidence;
     private bool _recoveryHoldTriggeredByClampedRamp;
+    private bool _clampedDtsRampAbandoned;
+    private DateTimeOffset? _lastClampedDtsRampAbandonedUtc;
     private long? _lastHeldVideoDts90k;
     private int _clampedRampHealthyStreak;
+    private long? _lastCandidateVideoDts90k;
+    private readonly List<PendingClampedRampBatch> _pendingClampedRampBatches = [];
     private long? _recoveryTrimTargetDts90k;
     private bool _recoveryTrimEvaluated;
     private bool _recoveryTrimActive;
+    private bool _recoveryTrimAbandoned;
     private long _recoveryTrimmedBytes;
     private string _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.NotApplicable;
     private double? _lastRecoveryTrimRewindSeconds;
@@ -315,6 +320,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             await NotifyClosedAsync();
         }
 
+        DiscardPendingClampedDtsRampBatches();
         _buffer.Complete();
     }
 
@@ -723,8 +729,30 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
             resetStallTimer = HasNonNullTsContent(batch.Data);
             Interlocked.Add(ref _mpegTsBytesSinceReset, batch.Data.Length);
-            DetectInProcessTimelineRewind(batch);
+            var rewindSignal = DetectInProcessTimelineRewind(batch);
             using var published = _buffer.Write(batch.Data);
+
+            if (rewindSignal == TimelineRewindSignal.Candidate)
+            {
+                // Corroborating evidence for a clamped DTS ramp is still accumulating
+                // (ClampedDtsRampMinEvidence not yet reached). This batch may turn out to
+                // be replayed provider content, so it must not reach subscribers, nor be
+                // eligible as a late-joining subscriber's safe start, until the ramp
+                // resolves — either confirmed (discarded) or a false alarm (flushed below).
+                MarkMpegTsSafeStartIfReady(
+                    published,
+                    batch.StartupKind,
+                    batch.Data.Length,
+                    batch.HasKnownH264VideoStream,
+                    suppressSelection: true);
+                _pendingClampedRampBatches.Add(new PendingClampedRampBatch(published.Duplicate(), batch));
+                PublishSnapshotsIfDue();
+                return resetStallTimer;
+            }
+
+            if (rewindSignal == TimelineRewindSignal.None)
+                await FlushPendingClampedDtsRampBatchesAsync();
+
             var suppressForOverlapTrim = _recoveryHoldTriggeredByClampedRamp
                 ? ShouldSuppressSafeStartForClampedRampRecovery(batch)
                 : ShouldSuppressSafeStartForOverlapTrim(batch);
@@ -736,6 +764,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 suppressForOverlapTrim);
             if (_recoveryOutputHoldActive)
             {
+                // A confirmed rewind (this batch, or a prior candidate streak that just
+                // reached ClampedDtsRampMinEvidence) means every withheld candidate batch
+                // was genuinely replayed content; it must never be published.
+                DiscardPendingClampedDtsRampBatches();
                 _recoveryBytesSuppressed += batch.Data.Length;
                 if (safeStart.Selected)
                 {
@@ -975,6 +1007,13 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _mpegTsPacketModeKnown = false;
         _mpegTsPacketizeEnabled = false;
         Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
+
+        // A real outer reconnect replaces the upstream connection entirely, so any batches
+        // withheld while gathering clamped-ramp evidence belong to a connection epoch that
+        // no longer exists — they can never be resolved as a false alarm, and must not be
+        // published as if they were.
+        DiscardPendingClampedDtsRampBatches();
+        ResetClampedDtsRampEvidence();
     }
 
     private bool ShouldPacketizeMpegTs(ReadOnlySpan<byte> data)
@@ -1085,12 +1124,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryTrimActive)
             AbandonRecoveryOverlapTrim("because the upstream failed again during the replayed span");
 
+        // Same reasoning as the trim case above, for a clamped-ramp wait that never
+        // reached ClampedDtsRampMinEvidence healthy deltas before a fresh reconnect.
+        if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
+            AbandonClampedDtsRampRecovery("because the upstream failed again during the ramp wait");
+
         var holdStartedUtc = DateTimeOffset.UtcNow;
         _recoveryOutputHoldActive = true;
         _recoveryOutputHoldStartedUtc = holdStartedUtc;
         _lastRecoveryStartedUtc = holdStartedUtc;
         _recoveryBytesSuppressed = 0;
         _recoveryHoldTriggeredByClampedRamp = false;
+        _clampedDtsRampAbandoned = false;
         _lastHeldVideoDts90k = null;
         _clampedRampHealthyStreak = 0;
         // Evidence gathered before this hold belongs to the previous connection epoch;
@@ -1112,6 +1157,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
         _recoveryTrimEvaluated = false;
         _recoveryTrimActive = false;
+        _recoveryTrimAbandoned = false;
         _recoveryTrimmedBytes = 0;
         _lastRecoveryTrimOutcome = _recoveryTrimTargetDts90k is null
             ? RecoveryTrimOutcomes.NotApplicable
@@ -1276,6 +1322,29 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryTrimActive)
             return false;
 
+        // A clamped-DTS-ramp wait is evidence-based, not time-based, so it can
+        // legitimately outlast the generic hold limit. It polices its own budget
+        // (ClampedDtsRampHoldLimit) inside ShouldSuppressSafeStartForClampedRampRecovery;
+        // abandoning it there resets the standard budgets before falling through to the
+        // normal first-IDR resume, so the forced-retune path must not fire mid-wait.
+        if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
+            return false;
+
+        // An abandoned ramp needs no special ceiling: ShouldSuppressSafeStartForClampedRampRecovery
+        // stops suppressing entirely once abandoned, so the standard safe-start resume
+        // (and its own budgets, restarted by AbandonClampedDtsRampRecovery) governs from
+        // there — the same window every other recovery gets.
+
+        // An abandoned trim gave up on precisely scanning to the pre-failure position within
+        // its own (already-spent) budget, but ShouldSuppressSafeStartForOverlapTrim keeps
+        // chasing the same target DTS via a looser fallback afterward — that catch-up can
+        // easily take longer than the generic wall-clock hold limit (the trim's own budget
+        // was tuned for "give up scanning precisely", not "give up entirely"). Only the
+        // byte-based ceiling applies during that phase; it still bounds a stream that never
+        // actually reaches the target.
+        if (_recoveryTrimAbandoned)
+            return _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
+
         return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
     }
@@ -1291,25 +1360,34 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _lastRelayedVideoDts90k = dts;
     }
 
-    private void DetectInProcessTimelineRewind(MpegTsPacketBatch batch)
+    private TimelineRewindSignal DetectInProcessTimelineRewind(MpegTsPacketBatch batch)
     {
-        if (_recoveryOutputHoldActive
-            || !_reconnectOptions.EnableRecoveryOverlapTrim
-            || _lastRelayedVideoDts90k is not { } target
-            || batch.EarliestVideoDts90k is not { } earliest)
+        if (_recoveryOutputHoldActive || !_reconnectOptions.EnableRecoveryOverlapTrim || _lastRelayedVideoDts90k is not { } target)
+            return TimelineRewindSignal.None;
+
+        if (batch.EarliestVideoDts90k is not { } earliest)
         {
-            return;
+            // This batch carries no video timestamp to evaluate (audio-only content, a PAT/PMT-only
+            // chunk, or a continuation batch with no PES header — all routine on a real socket, unlike
+            // the fully-timestamped packets synthetic tests feed this method). That is inconclusive,
+            // not evidence of anything. With no candidate streak in progress it is ordinary content and
+            // safe to pass straight through (None, same as before). But if a clamped-ramp streak is
+            // still accumulating, this batch sits between withheld candidates in byte order and must
+            // not be mistaken for the "healthy" signal that resolves them — returning None here would
+            // flush still-unconfirmed (possibly replayed) candidates before the ramp is actually
+            // confirmed or cleared. Hold it alongside them instead so it resolves with the rest.
+            return _clampedDtsRampEvidence > 0 ? TimelineRewindSignal.Candidate : TimelineRewindSignal.None;
         }
 
         var deltaSeconds = MpegTsTimestamp.DeltaSeconds(target, earliest);
         if (deltaSeconds < 0)
         {
-            _clampedDtsRampEvidence = 0;
+            ResetClampedDtsRampEvidence();
             if (deltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
-                return;
+                return TimelineRewindSignal.None;
 
             FireInProcessTimelineRewind(-deltaSeconds);
-            return;
+            return TimelineRewindSignal.Confirmed;
         }
 
         // A rewind can also land entirely inside one read chunk: the batch then opens
@@ -1324,13 +1402,37 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             var withinBatchDeltaSeconds = MpegTsTimestamp.DeltaSeconds(earliest, last);
             if (withinBatchDeltaSeconds < 0)
             {
-                _clampedDtsRampEvidence = 0;
+                ResetClampedDtsRampEvidence();
                 if (withinBatchDeltaSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
-                    return;
+                    return TimelineRewindSignal.None;
 
                 FireInProcessTimelineRewind(-withinBatchDeltaSeconds);
-                return;
+                return TimelineRewindSignal.Confirmed;
             }
+        }
+
+        // A backward jump that partially recovers before the batch ends leaves the
+        // first-to-last span above positive, hiding the dip. The smallest step between
+        // consecutive timestamps inside the batch does not.
+        if (batch.MinVideoDtsStep90k is { } backwardStep && backwardStep < 0)
+        {
+            var backwardStepSeconds = backwardStep / MpegTsTimestamp.TicksPerSecond;
+            ResetClampedDtsRampEvidence();
+            if (backwardStepSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+                return TimelineRewindSignal.None;
+
+            FireInProcessTimelineRewind(-backwardStepSeconds);
+            return TimelineRewindSignal.Confirmed;
+        }
+
+        // Clamped-ramp detection stays disarmed for a cooldown after a ramp recovery was
+        // abandoned: that recovery already concluded the ramp is not going to clear, and
+        // re-detecting it against the content it just resumed on would loop forever. A
+        // genuine backward jump (both branches above) is still detected during it.
+        if (IsClampedDtsRampDetectionOnRetryCooldown())
+        {
+            ResetClampedDtsRampEvidence();
+            return TimelineRewindSignal.None;
         }
 
         // A real backward jump is the primary signal, but FFmpeg's mpegts muxer
@@ -1345,23 +1447,81 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // the delta within the batch — a single batch containing several clamped
         // frames is stronger evidence than one crossing alone — and only act once
         // enough has accumulated to rule out a one-off scanner artifact.
-        var crossingClamped = MpegTsTimestamp.Delta(target, earliest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
-        var withinBatchClamped = batch.LatestVideoDts90k is { } latest
-            && latest != earliest
-            && MpegTsTimestamp.Delta(earliest, latest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+        //
+        // Batches that merely add to that evidence (below) are themselves indistinguishable
+        // from real replayed content until the threshold resolves one way or the other, so
+        // the crossing delta compares against the last *candidate* sample rather than the
+        // frozen last-published DTS — otherwise a multi-batch ramp would measure an
+        // accumulating (not per-step) delta and could wrongly exceed the threshold.
+        //
+        // The within-batch signal is the *smallest* step between consecutive timestamps,
+        // not the batch's first-to-last span. A read chunk that opens with normally-paced
+        // frames and then crosses into the clamped run spans a large, healthy-looking
+        // delta end to end, so the span test scored it as ordinary content and published
+        // it — leaking the first frames of the replay (and poisoning _lastRelayedVideoDts90k
+        // with a clamped value) on every rewind, since with production read chunk sizes
+        // that straddling batch is the norm rather than the exception.
+        var crossingTarget = _lastCandidateVideoDts90k ?? target;
+        var crossingClamped = MpegTsTimestamp.Delta(crossingTarget, earliest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+        var withinBatchClamped = batch.MinVideoDtsStep90k is { } minStep
+            && minStep <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
 
         if (!crossingClamped && !withinBatchClamped)
         {
-            _clampedDtsRampEvidence = 0;
-            return;
+            ResetClampedDtsRampEvidence();
+            return TimelineRewindSignal.None;
         }
 
         _clampedDtsRampEvidence += (crossingClamped ? 1 : 0) + (withinBatchClamped ? 1 : 0);
+        _lastCandidateVideoDts90k = batch.LatestVideoDts90k ?? earliest;
         if (_clampedDtsRampEvidence < _reconnectOptions.ClampedDtsRampMinEvidence)
+            return TimelineRewindSignal.Candidate;
+
+        ResetClampedDtsRampEvidence();
+        FireInProcessTimelineRewind(rewindSeconds: null);
+        return TimelineRewindSignal.Confirmed;
+    }
+
+    private void ResetClampedDtsRampEvidence()
+    {
+        _clampedDtsRampEvidence = 0;
+        _lastCandidateVideoDts90k = null;
+    }
+
+    private async Task FlushPendingClampedDtsRampBatchesAsync()
+    {
+        if (_pendingClampedRampBatches.Count == 0)
             return;
 
-        _clampedDtsRampEvidence = 0;
-        FireInProcessTimelineRewind(rewindSeconds: null);
+        var pending = _pendingClampedRampBatches.ToArray();
+        _pendingClampedRampBatches.Clear();
+        try
+        {
+            foreach (var item in pending)
+            {
+                await PublishToSubscribersAsync(item.Lease, isAtSafeBoundary: false);
+                UpdateLastRelayedVideoDts(item.Batch);
+            }
+        }
+        finally
+        {
+            foreach (var item in pending)
+                item.Lease.Dispose();
+        }
+    }
+
+    private void DiscardPendingClampedDtsRampBatches()
+    {
+        if (_pendingClampedRampBatches.Count == 0)
+            return;
+
+        foreach (var item in _pendingClampedRampBatches)
+        {
+            _recoveryBytesSuppressed += item.Batch.Data.Length;
+            item.Lease.Dispose();
+        }
+
+        _pendingClampedRampBatches.Clear();
     }
 
     private void FireInProcessTimelineRewind(double? rewindSeconds)
@@ -1399,15 +1559,49 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (!_recoveryOutputHoldActive || !_recoveryHoldTriggeredByClampedRamp)
             return false;
 
+        if (!_clampedDtsRampAbandoned && GetRecoveryHoldDuration() >= _reconnectOptions.ClampedDtsRampHoldLimit)
+        {
+            // The ramp's own (short) wall-clock budget ran out without ClampedDtsRampMinEvidence
+            // consecutive healthy deltas ever converging. Abandoning here means what the
+            // diagnostic has always claimed: fall back to the standard safe-start resume
+            // (below, once _clampedDtsRampAbandoned is set) instead of continuing to demand
+            // healthy deltas that may never come. FFmpeg's mpegts muxer keeps a monotonic
+            // per-stream last-DTS high-water mark that survives its own internal HTTP
+            // reconnect, so once a finite upstream restarts from byte zero, no later pass
+            // over that source can ever produce a DTS above the mark -- every packet is
+            // clamped to last+1 and healthy deltas never return. Requiring them anyway could
+            // then only ever end in RecoveryForcedRetune (observed live on both
+            // CLEAN-RELAY-05 and CLEAN-RELAY-06: hold, abandon, 40s of nothing, forced
+            // retune at the byte ceiling). Clamped output is still monotonic, decodable and
+            // the same content, so resuming on it beats killing the client's session.
+            //
+            // Resuming immediately reintroduces a different failure mode though: the content
+            // just published is itself still clamped, so the very next batch looks like a
+            // brand new ramp relative to it and re-triggers detection (reproduced live:
+            // CLEAN-RELAY-06 cycled InProcessRelayTimelineRewind -> RecoveryStarted ->
+            // ClampedDtsRampRecoveryAbandoned -> RecoveryOutputResumed roughly every 7s for
+            // the whole capture window, never delivering real output). ClampedDtsRampRetryCooldown,
+            // armed by AbandonClampedDtsRampRecovery below and enforced in
+            // DetectInProcessTimelineRewind, is what prevents that loop -- clamped-ramp
+            // detection stays disarmed for the cooldown so this resume sticks.
+            AbandonClampedDtsRampRecovery("without observing enough consecutive healthy deltas within the ramp budget");
+        }
+
+        if (_clampedDtsRampAbandoned)
+            return false;
+
         if (!batch.HasKnownH264VideoStream || batch.EarliestVideoDts90k is not { } earliest)
             return true;
 
         if (_lastHeldVideoDts90k is { } lastHeld)
         {
             var crossingHealthy = MpegTsTimestamp.Delta(lastHeld, earliest) > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
-            var withinBatchHealthy = batch.LatestVideoDts90k is not { } latest
-                || latest == earliest
-                || MpegTsTimestamp.Delta(earliest, latest) > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+            // Mirrors the detector: the smallest step inside the batch, not its outer
+            // span, is what says whether the whole batch is genuinely frame-paced. A
+            // batch straddling the end of the ramp spans a healthy-looking delta while
+            // still containing clamped steps, and must not count toward the streak.
+            var withinBatchHealthy = batch.MinVideoDtsStep90k is not { } minStep
+                || minStep > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
 
             _clampedRampHealthyStreak = crossingHealthy && withinBatchHealthy
                 ? _clampedRampHealthyStreak + 1
@@ -1421,6 +1615,38 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // so a later batch within the same hold can't fall through to the unrelated
         // overlap-trim target-catchup logic using a now-stale target.
         return _clampedRampHealthyStreak < _reconnectOptions.ClampedDtsRampMinEvidence;
+    }
+
+    private bool IsClampedDtsRampDetectionOnRetryCooldown()
+        => _reconnectOptions.ClampedDtsRampRetryCooldown > TimeSpan.Zero
+            && _lastClampedDtsRampAbandonedUtc is { } lastAbandonedUtc
+            && DateTimeOffset.UtcNow - lastAbandonedUtc < _reconnectOptions.ClampedDtsRampRetryCooldown;
+
+    private void AbandonClampedDtsRampRecovery(string reason)
+    {
+        _clampedDtsRampAbandoned = true;
+        _lastClampedDtsRampAbandonedUtc = DateTimeOffset.UtcNow;
+        var heldDuration = GetRecoveryHoldDuration();
+        RecordDiagnostic(
+            StreamDiagnosticEventKind.ClampedDtsRampRecoveryAbandoned,
+            outputHeld: heldDuration,
+            bytesSuppressed: _recoveryBytesSuppressed,
+            recoveryHoldLimit: _reconnectOptions.ClampedDtsRampHoldLimit,
+            message: $"Clamped DTS ramp recovery abandoned after {heldDuration.TotalMilliseconds:F0} ms {reason}; falling back to the standard safe-start resume, with clamped-ramp detection disarmed for {_reconnectOptions.ClampedDtsRampRetryCooldown.TotalSeconds:F0}s.");
+        _logger.LogWarning(
+            "Clamped DTS ramp recovery abandoned: SessionId={SessionId} DisplayName={DisplayName} HeldMs={HeldMs:F0} HealthyStreak={HealthyStreak} RetryCooldownSeconds={RetryCooldownSeconds:F0} Reason={Reason}",
+            _sessionId,
+            _source.DisplayName,
+            heldDuration.TotalMilliseconds,
+            _clampedRampHealthyStreak,
+            _reconnectOptions.ClampedDtsRampRetryCooldown.TotalSeconds,
+            reason);
+
+        // Restart the standard hold budgets so the fallback resume gets its normal
+        // window instead of tripping the forced-retune limits the ramp wait already spent.
+        _recoveryOutputHoldStartedUtc = DateTimeOffset.UtcNow;
+        _recoveryBytesSuppressed = 0;
+        Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
     }
 
     private bool ShouldSuppressSafeStartForOverlapTrim(MpegTsPacketBatch batch)
@@ -1463,16 +1689,26 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         if (!_recoveryTrimActive)
-            return false;
+        {
+            // Never needed a trim (the initial delta already showed fresh content) — nothing
+            // more to check. An abandoned trim is different: this span is positively known to
+            // still be replayed content until a fresh IDR at/after the target actually shows
+            // up. Trusting whatever IDR happens to arrive next (the prior behavior) resumed
+            // output on content already known to be stale — keep applying the same DTS test
+            // the trim itself used; the generic RecoveryOutputHoldLimit / RecoverySafeStartSearchLimitBytes
+            // budgets (see IsRecoveryHoldLimitExceeded's own exemption for this phase) remain
+            // the outer bound if fresh content never arrives.
+            return _recoveryTrimAbandoned && !HasReachedRecoveryTrimTarget(batch, target);
+        }
 
         if (GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOverlapTrimHoldLimit
             || _recoveryTrimmedBytes >= _reconnectOptions.RecoveryOverlapTrimMaxBytes)
         {
             AbandonRecoveryOverlapTrim("without reaching the pre-failure position within the trim budget");
-            return false;
+            return !HasReachedRecoveryTrimTarget(batch, target);
         }
 
-        if (batch.IdrDts90k is { } idrDts && MpegTsTimestamp.Delta(target, idrDts) >= 0)
+        if (HasReachedRecoveryTrimTarget(batch, target) && batch.IdrDts90k is { } idrDts)
         {
             CompleteRecoveryOverlapTrim(target, idrDts);
             return false;
@@ -1481,6 +1717,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryTrimmedBytes += batch.Data.Length;
         return true;
     }
+
+    private static bool HasReachedRecoveryTrimTarget(MpegTsPacketBatch batch, long targetDts90k)
+        => batch.IdrDts90k is { } idrDts && MpegTsTimestamp.Delta(targetDts90k, idrDts) >= 0;
 
     private void CompleteRecoveryOverlapTrim(long targetDts90k, long resumeIdrDts90k)
     {
@@ -1504,6 +1743,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private void AbandonRecoveryOverlapTrim(string reason)
     {
         _recoveryTrimActive = false;
+        _recoveryTrimAbandoned = true;
         _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.Abandoned;
         _lastRecoveryTrimAbandonedUtc = DateTimeOffset.UtcNow;
         var heldDuration = GetRecoveryHoldDuration();
@@ -2154,6 +2394,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     {
         public static SafeStartDecision NotSelected => new(false, string.Empty);
     }
+
+    private enum TimelineRewindSignal
+    {
+        None,
+        Candidate,
+        Confirmed,
+    }
+
+    private readonly record struct PendingClampedRampBatch(BufferLease Lease, MpegTsPacketBatch Batch);
 
     private static class RecoveryTrimOutcomes
     {

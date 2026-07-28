@@ -208,6 +208,65 @@ public sealed class MpegTsBoundaryScannerTests
         Assert.IsNotNull(batch);
         Assert.AreEqual(earliestDts, batch.EarliestVideoDts90k);
         Assert.AreEqual(latestDts, batch.LatestVideoDts90k);
+        Assert.AreEqual(latestDts - earliestDts, batch.MinVideoDtsStep90k);
+    }
+
+    [TestMethod]
+    public void Process_BatchStraddlingAClampedRun_ReportsTheClampedStepNotTheOuterSpan()
+    {
+        // The batch opens with a normally-paced frame and then crosses into an
+        // FFmpeg-clamped (last+1) run. Its first-to-last span is a healthy 3601 ticks;
+        // only the smallest step between consecutive timestamps exposes the crossing.
+        var scanner = new MpegTsBoundaryScanner();
+        const long baseDts = 9_000_000;
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], baseDts, baseDts))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x02], baseDts + 3600, baseDts + 3600))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x03], baseDts + 3601, baseDts + 3601))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.AreEqual(baseDts, batch.EarliestVideoDts90k);
+        Assert.AreEqual(baseDts + 3601, batch.LatestVideoDts90k);
+        Assert.AreEqual(1, batch.MinVideoDtsStep90k);
+    }
+
+    [TestMethod]
+    public void Process_BatchWithOneVideoTimestamp_ReportsNoStep()
+    {
+        var scanner = new MpegTsBoundaryScanner();
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], 9_000_000, 9_000_000))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.IsNull(batch.MinVideoDtsStep90k);
+    }
+
+    [TestMethod]
+    public void Process_BatchWithABackwardDipThatRecovers_ReportsANegativeStep()
+    {
+        // A rewind that dips backward and partially recovers inside one batch leaves the
+        // first-to-last span positive, hiding the jump from a span-only test.
+        var scanner = new MpegTsBoundaryScanner();
+        var input = PatPacket(100)
+            .Concat(PmtPacket(100, 256))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x01], 9_270_000, 9_270_000))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x02], 3_780_000, 3_780_000))
+            .Concat(VideoPacketWithTimestamps(256, [0x00, 0x00, 0x01, 0x41, 0x03], 9_360_000, 9_360_000))
+            .ToArray();
+
+        var batch = scanner.Process(input);
+
+        Assert.IsNotNull(batch);
+        Assert.IsGreaterThan(0, MpegTsTimestamp.Delta(batch.EarliestVideoDts90k!.Value, batch.LatestVideoDts90k!.Value));
+        Assert.AreEqual(3_780_000 - 9_270_000, batch.MinVideoDtsStep90k);
     }
 
     [TestMethod]

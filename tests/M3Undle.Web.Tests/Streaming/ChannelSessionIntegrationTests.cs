@@ -1303,10 +1303,22 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_ContinuousRelayTimelineRewind_ThatCannotCatchUp_UsesBoundedFallback()
+    public async Task Session_ContinuousRelayTimelineRewind_ThatCannotCatchUpWithinBudget_ResumesOnlyOnceFreshDtsArrives()
     {
+        // Continuous-relay (in-process, no reconnect) counterpart of the
+        // MpegTsReconnect_SlowRewoundReplay test above: the trim gives up at its own
+        // (short) hold limit, but must keep withholding output until the replay actually
+        // reaches the pre-failure DTS rather than trusting whatever IDR shows up right
+        // after the abandon. A stream that never reaches the target at all is expected to
+        // eventually force a retune via the generic byte ceiling -- this test instead lets
+        // fresh content legitimately arrive after the abandon, so no forced retune should
+        // occur, and none of the still-stale content in between may leak.
         const long preFailureDts = 102L * 90000;
-        var replayedIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], 42L * 90000);
+        var staleIdr1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD1], 42L * 90000);
+        var staleIdr2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD2], 90L * 90000);
+        var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], preFailureDts);
+        var postFreshFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD6], preFailureDts + 1500);
+
         var initialSequence = new[]
         {
             PatPacket(100),
@@ -1322,14 +1334,23 @@ public sealed class ChannelSessionIntegrationTests
             PmtPacket(100, 256),
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
-            replayedIdr,
+            staleIdr1,
         };
+        // Real-time gap so the trim's own 100ms budget genuinely elapses (and abandons)
+        // before the replay resumes toward the pre-failure position.
+        var afterFirstPause = new[] { staleIdr2 };
+        // Re-sending PAT/PMT here, as a real repeating provider would, keeps
+        // MarkMpegTsSafeStartIfReady's rolling PAT/PMT splice candidate from staying
+        // pinned to the single PAT/PMT sent at replayStart -- see the sibling
+        // MpegTsReconnect test above for why that candidate must be kept fresh.
+        var afterSecondPause = new[] { PatPacket(100), PmtPacket(100, 256), freshIdr };
+        var afterThirdPause = new[] { postFreshFrame };
 
-        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
-            initialSequence,
-            replayStart,
-            replayedIdr,
-            TimeSpan.FromMilliseconds(100),
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [initialSequence, replayStart, afterFirstPause, afterSecondPause, afterThirdPause],
+            filler,
+            TimeSpan.FromMilliseconds(300),
             ct));
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
@@ -1337,7 +1358,7 @@ public sealed class ChannelSessionIntegrationTests
             {
                 ReadStallTimeout = TimeSpan.FromSeconds(2),
                 RecoveryOutputHoldLimit = TimeSpan.FromSeconds(1),
-                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
                 RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
                 RecoveryOverlapTrimMaxBytes = 1024 * 1024,
                 OutageWindow = TimeSpan.FromSeconds(30),
@@ -1360,17 +1381,30 @@ public sealed class ChannelSessionIntegrationTests
                 sessionId: session.SessionId,
                 kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
             TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postFreshFrame) >= 0, TimeSpan.FromSeconds(5));
 
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
         Assert.AreEqual(1, handler.ConnectionCount);
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
         Assert.IsTrue(session.State is SessionState.Live or SessionState.HoldingOutput);
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr1),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr2),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "Output must resume once the replay actually reaches the pre-failure DTS.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postFreshFrame));
 
-        cts.Cancel();
-        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
-        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
         await session.DisposeAsync();
     }
 
@@ -1386,12 +1420,27 @@ public sealed class ChannelSessionIntegrationTests
         // arrives while the ramp is still active: pre-b93d4bd, resume was gated on "next IDR"
         // and would have let that content through immediately; it must stay suppressed until
         // ClampedDtsRampMinEvidence consecutive healthy (frame-paced) deltas are observed.
+        //
+        // It also covers a second, more subtle leak: ClampedDtsRampMinEvidence requires several
+        // consecutive suspicious samples before the ramp is *confirmed*, but every one of those
+        // evidence-gathering batches is itself replayed provider content — not just the batch
+        // that finally crosses the threshold. Before the fix, only the batch that crossed
+        // ClampedDtsRampMinEvidence (and everything after) was suppressed; the batches used to
+        // accumulate evidence toward that threshold were published normally, because
+        // _recoveryOutputHoldActive only flips true once the detector actually fires. The
+        // evidencePacket1/evidencePacket2 assertions below cover exactly that gap.
         const long baseDts = 100L * 90000;
         const long frameSpacing = 1500L; // ~60fps decode pacing, far above ClampedDtsRampMaxDeltaTicks (180).
 
         var stillRampingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF1], baseDts + 4);
         var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 6 + 3 * frameSpacing);
         var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 6 + 4 * frameSpacing);
+
+        // The first two evidence-gathering samples of the clamped ramp: neither individually
+        // reaches ClampedDtsRampMinEvidence (3), so before the fix the detector had not yet
+        // fired when these were processed and they were published like ordinary live content.
+        var evidencePacket1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1);
+        var evidencePacket2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2);
 
         var sequence = new[]
         {
@@ -1403,8 +1452,8 @@ public sealed class ChannelSessionIntegrationTests
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
             // Clamped ramp: three consecutive near-zero-tick crossings reach
             // ClampedDtsRampMinEvidence on the third and fire the detector.
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            evidencePacket1,
+            evidencePacket2,
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
             stillRampingIdr,
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA5], baseDts + 5),
@@ -1463,6 +1512,14 @@ public sealed class ChannelSessionIntegrationTests
             -1,
             IndexOf(data, stillRampingIdr),
             "An IDR arriving mid-ramp must not resume output while deltas are still clamped (b93d4bd regression).");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket1),
+            "A batch still accumulating clamped-ramp evidence is itself replayed content and must not be published before the ramp is confirmed.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket2),
+            "A batch still accumulating clamped-ramp evidence is itself replayed content and must not be published before the ramp is confirmed.");
         Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
         Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
 
@@ -1475,42 +1532,372 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedWithoutForcedRetune()
+    public async Task Session_ContinuousRelayClampedDtsRamp_SlowToStabilize_ResumesGracefullyInsteadOfForcedRetune()
     {
-        // A provider that replays rewound content at 1x would never catch up to the
-        // pre-failure DTS; the trim must give up at its hold limit and fall back to the
-        // standard first-IDR resume instead of forcing a retune.
-        const long preFailureDts = 102L * 90000;
-        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], 43L * 90000);
+        // Regression test: ClampedDtsRampMinEvidence is evidence-based (consecutive
+        // healthy deltas), not time-based, so a ramp can legitimately take longer than
+        // the generic RecoveryOutputHoldLimit to accumulate enough evidence. Before the
+        // fix, IsRecoveryHoldLimitExceeded() had no exemption for a clamped-ramp hold
+        // (only _recoveryTrimActive was exempted), so a ramp still waiting past the
+        // generic limit was torn down via RecoveryForcedRetune / UpstreamConnectException
+        // instead of being allowed to resume once the healthy deltas actually arrived
+        // (reproduced live via the CLEAN-RELAY-06 lab scenario). The generic
+        // RecoveryOutputHoldLimit here is deliberately shorter than the real-time gap
+        // before the healthy deltas arrive, while the dedicated ClampedDtsRampHoldLimit
+        // is long enough to cover it.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L; // ~60fps decode pacing, far above ClampedDtsRampMaxDeltaTicks (180).
 
-        var preFailureSequence = new[]
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 6 + 3 * frameSpacing);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 6 + 4 * frameSpacing);
+
+        var beforePause = new[]
         {
             PatPacket(100),
             PmtPacket(100, 256),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            // Clamped ramp: three consecutive near-zero-tick crossings reach
+            // ClampedDtsRampMinEvidence and fire the detector, entering the hold.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA5], baseDts + 5),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA6], baseDts + 6),
         };
 
-        var recoveredOnce = new[]
+        // A real-time gap before the stream settles onto healthy, frame-paced deltas —
+        // longer than RecoveryOutputHoldLimit but well inside ClampedDtsRampHoldLimit.
+        var afterPause = new[]
         {
-            PatPacket(100),
-            PmtPacket(100, 256),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
-            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], baseDts + 6 + frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], baseDts + 6 + 2 * frameSpacing),
+            resumingIdr,
+            postResumeFrame,
         };
 
-        var handler = FakeStreamingHandler.StreamForever(rewoundIdr);
-        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
-        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredOnce, rewoundIdr, ct));
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [beforePause, afterPause],
+            filler,
+            TimeSpan.FromSeconds(2),
+            ct));
 
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
             reconnectOptions: new ReconnectOptions
             {
-                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                ReadStallTimeout = TimeSpan.FromSeconds(10),
+                ContentStallTimeout = TimeSpan.FromSeconds(10),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(1),
+                ClampedDtsRampHoldLimit = TimeSpan.FromSeconds(8),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount, "The slow-to-stabilize ramp must be handled inside one uninterrupted upstream connection.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryHoldLimitExceeded),
+            "The generic RecoveryOutputHoldLimit must not apply while a clamped-ramp hold is still waiting for evidence.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_NoDtsBatchMidStreak_DoesNotPrematurelyFlushPendingCandidates()
+    {
+        // Regression test for a gap in the candidate-batch withholding added alongside the
+        // clamped-DTS-ramp detector: DetectInProcessTimelineRewind returned
+        // TimelineRewindSignal.None whenever a batch carried no video timestamp at all
+        // (batch.EarliestVideoDts90k is null) — indistinguishable, at that call site, from a
+        // batch that was genuinely resolved as healthy. The caller treats None as "safe to
+        // flush", so any batch with no video PES header (audio-only, PAT/PMT-only, or a
+        // continuation chunk — routine on a real socket, but absent from the fully-timestamped
+        // packets every other test in this class feeds the scanner) arriving mid-streak
+        // flushed still-unresolved, possibly-replayed evidence batches to subscribers before
+        // the ramp was confirmed or cleared. This is exactly what the CLEAN-RELAY-05/06 lab
+        // scenarios caught live (real TS chunking off a socket hits this constantly) despite
+        // the synthetic unit tests above never exercising it.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L;
+
+        var evidencePacket1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1);
+        var noDtsPacketMidStreak = FakeStreamingHandler.ValidTsPacket(0xEE);
+        var evidencePacket2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2);
+        var evidencePacket3 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3);
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 3 + 3 * frameSpacing);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 3 + 4 * frameSpacing);
+
+        var sequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            // Clamped-ramp evidence accumulating (1 of 3), then a no-video-DTS batch lands
+            // mid-streak, then evidence continues to the confirming 3rd sample.
+            evidencePacket1,
+            noDtsPacketMidStreak,
+            evidencePacket2,
+            evidencePacket3,
+            // Healthy, frame-paced deltas resume.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], baseDts + 3 + frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], baseDts + 3 + 2 * frameSpacing),
+            resumingIdr,
+            postResumeFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WriteSequenceThenForever(sequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
                 RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
-                RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket1),
+            "A candidate batch withheld while ramp evidence accumulates must not leak just because a later no-video-DTS batch arrived before the ramp resolved.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket2),
+            "A candidate batch withheld while ramp evidence accumulates must not leak just because a later no-video-DTS batch arrived before the ramp resolved.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_PermanentRamp_ResumesAfterAbandonInsteadOfForcedRetune()
+    {
+        // Regression test for the live CLEAN-RELAY-05/06 failures. FFmpeg's mpegts muxer
+        // keeps a monotonic per-stream last-DTS high-water mark that survives its own
+        // internal HTTP reconnect, so once a finite upstream restarts from byte zero, no
+        // later pass over that source can produce a DTS above the mark -- every packet is
+        // clamped to last+1 and healthy, frame-paced deltas NEVER return. Requiring
+        // ClampedDtsRampMinEvidence healthy deltas to leave the hold is therefore
+        // unsatisfiable in exactly the situation the hold exists for, and the hold could
+        // only ever end in RecoveryForcedRetune (live: hold at 8.6s, abandon at 14.6s,
+        // 40s of nothing, forced retune at the 2 MiB ceiling at 54.4s -- with the client's
+        // session killed and zero RecoveryOutputResumed).
+        //
+        // Abandoning the ramp budget must mean what its diagnostic has always said:
+        // fall back to the standard safe-start resume. Clamped output is still monotonic,
+        // decodable, and the same content, so resuming on it beats killing the session.
+        // This drives a ramp that never stabilizes and asserts a graceful resume.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L;
+
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 5);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 6);
+
+        var beforePause = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            // Three consecutive near-zero-tick crossings reach ClampedDtsRampMinEvidence
+            // and fire the detector, entering the hold.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
+        };
+        // Real-time gap so ClampedDtsRampHoldLimit genuinely elapses and abandons.
+        // Everything past it is still clamped -- this source never recovers.
+        var afterPause = new[]
+        {
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA4], baseDts + 4),
+            resumingIdr,
+            postResumeFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [beforePause, afterPause],
+            filler,
+            TimeSpan.FromMilliseconds(300),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                ClampedDtsRampHoldLimit = TimeSpan.FromMilliseconds(100),
+                ClampedDtsRampRetryCooldown = TimeSpan.FromSeconds(60),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ClampedDtsRampRecoveryAbandoned).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount, "The ramp must be handled inside one uninterrupted upstream connection.");
+        Assert.IsEmpty(
+            fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune),
+            "A ramp that never stabilizes must resume at the abandon fallback, not kill the session at the byte ceiling.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the first safe start after the ramp budget is abandoned.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_AfterAbandon_DoesNotReDetectWithinRetryCooldown()
+    {
+        // Companion to the test above. Resuming on still-clamped content republishes a
+        // near-zero-tick reference DTS, so the very next batch looks like a brand new
+        // clamped ramp and re-fires the detector -- live, that produced an endless
+        // InProcessRelayTimelineRewind -> RecoveryStarted -> ClampedDtsRampRecoveryAbandoned
+        // -> RecoveryOutputResumed cycle roughly every 7 seconds for a whole 60s capture,
+        // never delivering a single second of real output. ClampedDtsRampRetryCooldown is
+        // what makes the resume stick: clamped-ramp *detection* stays disarmed after an
+        // abandon, so the long clamped tail below flows straight through instead of
+        // re-entering the hold.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L;
+
+        var lateClampedFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xEC], baseDts + 12);
+
+        var beforePause = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
+        };
+        var afterPause = new[]
+        {
+            // Resume happens here, on an IDR that is itself still inside the ramp.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC4], baseDts + 4),
+            // ...and the ramp simply continues. Each of these would re-trip the detector
+            // against the just-published clamped reference without the cooldown.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xE5], baseDts + 5),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xE6], baseDts + 6),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xE7], baseDts + 7),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xE8], baseDts + 8),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xE9], baseDts + 9),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xEA], baseDts + 10),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xEB], baseDts + 11),
+            lateClampedFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [beforePause, afterPause],
+            filler,
+            TimeSpan.FromMilliseconds(300),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                ClampedDtsRampHoldLimit = TimeSpan.FromMilliseconds(100),
+                ClampedDtsRampRetryCooldown = TimeSpan.FromSeconds(60),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
                 OutageWindow = TimeSpan.FromSeconds(30),
                 ConnectTimeout = TimeSpan.FromSeconds(5),
                 FixedStepBackoffSeconds = [0],
@@ -1526,12 +1913,259 @@ public sealed class ChannelSessionIntegrationTests
                 sessionId: session.SessionId,
                 kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
             TimeSpan.FromSeconds(10));
-        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), rewoundIdr) >= 0, TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), lateClampedFrame) >= 0, TimeSpan.FromSeconds(10));
 
         cts.Cancel();
         await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
         await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
 
+        Assert.AreEqual(1, handler.ConnectionCount);
+        Assert.AreEqual(
+            1,
+            fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count,
+            "Clamped-ramp detection must stay disarmed for ClampedDtsRampRetryCooldown after an abandon, or the resume immediately re-enters the hold.");
+        Assert.AreEqual(
+            1,
+            fixture.DiagnosticsStore.Query(sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryStarted).Count);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_BatchStraddlingRampStart_DoesNotPublishReplayedSpan()
+    {
+        // Regression test for the CLEAN-RELAY-05 fingerprint leak. The detector's
+        // within-batch signal used to be the batch's first-to-last DTS span, which says
+        // nothing about what happens between them: a read chunk that opens with
+        // normally-paced frames and then crosses into the clamped (last+1) run spans a
+        // large, perfectly healthy-looking delta end to end. The crossing delta at the
+        // batch boundary is healthy too, so the straddling batch scored as ordinary
+        // content and was published in full -- leaking the first frames of the replay and
+        // poisoning _lastRelayedVideoDts90k with a clamped value.
+        //
+        // Unit tests never caught it because they feed one TS packet per batch, so
+        // earliest == latest and no batch can ever straddle the healthy->clamped
+        // transition. With production read chunk sizes (32 KiB, ~7 video frames per
+        // batch against the lab fixture) that straddling batch is the norm: the live
+        // fingerprint jump landed at 0.53s against a 0.495s provider close.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L;
+
+        var straddlingReplayFrame1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1);
+        var straddlingReplayFrame2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2);
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 4 + 3 * frameSpacing);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 4 + 4 * frameSpacing);
+
+        var initialSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 4 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts - frameSpacing),
+        };
+        // One read chunk that opens healthy and crosses into the ramp. First-to-last span
+        // is frameSpacing + 2 ticks -- far above ClampedDtsRampMaxDeltaTicks -- and the
+        // crossing delta from the previous batch is a healthy frameSpacing. Only the
+        // smallest step inside the batch (1 tick) reveals the crossing.
+        var straddlingChunk = new[]
+        {
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x93], baseDts),
+            straddlingReplayFrame1,
+            straddlingReplayFrame2,
+        }.SelectMany(packet => packet).ToArray();
+        var rampContinues = new[]
+        {
+            new[]
+            {
+                TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3),
+                TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA4], baseDts + 4),
+            }.SelectMany(packet => packet).ToArray(),
+        };
+        // Healthy, frame-paced deltas resume. Kept as separate writes so each lands in its
+        // own batch: ClampedDtsRampMinEvidence consecutive healthy *batches* are required,
+        // and the IDR has to be the batch on which the streak completes for it to resume.
+        var caughtUpSequence = new[]
+        {
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], baseDts + 4 + frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], baseDts + 4 + 2 * frameSpacing),
+            resumingIdr,
+            postResumeFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [initialSequence, [straddlingChunk], rampContinues, caughtUpSequence],
+            filler,
+            TimeSpan.FromMilliseconds(150),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            // The fixture's default 188-byte read chunk makes every batch a single TS
+            // packet, which can never straddle the transition; a larger read chunk lets
+            // each multi-packet write arrive as one batch, as it does in production.
+            bufferOptions: new BufferOptions
+            {
+                ReadChunkSizeBytes = 4096,
+                SubscriberQueueCapacity = 128,
+                MaxBytesPerSession = 64 * 1024,
+                MaxBytesHardCap = 4 * 1024 * 1024,
+            },
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(3),
+                ClampedDtsRampHoldLimit = TimeSpan.FromSeconds(5),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount, "The ramp must be handled inside one uninterrupted upstream connection.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, straddlingReplayFrame1),
+            "The batch straddling the start of the clamped ramp carries replayed content and must be withheld, not published because its outer span looks healthy.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, straddlingReplayFrame2),
+            "The batch straddling the start of the clamped ramp carries replayed content and must be withheld, not published because its outer span looks healthy.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedThenResumesOnlyOnceContentIsFresh()
+    {
+        // A provider that replays rewound content slower than real-time would never catch
+        // up to the pre-failure DTS within the trim's own (short) budget; the trim must
+        // give up at its hold limit rather than block forever. But giving up on precisely
+        // scanning must not mean trusting whatever IDR happens to show up next: everything
+        // still short of the pre-failure DTS is positively known to be replayed content.
+        // Regression test for exactly that gap: prior to the fix, ShouldSuppressSafeStartForOverlapTrim
+        // stopped checking DTS entirely once the trim was abandoned, so staleIdr1/staleIdr2
+        // (both still well behind preFailureDts) resumed output immediately on whichever one
+        // arrived right after the abandon — publishing stale, already-seen content as if it
+        // were live (exactly the "replayed content published despite the abandoned trim"
+        // failure the CLEAN-RELAY-07 lab scenario caught). Output must stay held until the
+        // replay actually reaches the pre-failure position, and no forced retune should occur
+        // since the content does legitimately catch up, just not inside the trim's own budget.
+        const long preFailureDts = 102L * 90000;
+        var staleIdr1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD1], 43L * 90000);
+        var staleIdr2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD2], 90L * 90000);
+        var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], preFailureDts);
+        var postFreshFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD6], preFailureDts + 1500);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+        };
+
+        var beforePause = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            staleIdr1,
+        };
+        // Real-time gap so the trim's own 100ms budget genuinely elapses (and abandons)
+        // before the replay resumes toward the pre-failure position.
+        var afterPause = new[] { staleIdr2 };
+        // A real MPEG-TS provider repeats PAT/PMT every ~100-500ms (a broadcast-spec
+        // requirement most encoders honor); MarkMpegTsSafeStartIfReady deliberately snaps
+        // an IDR-based resume to the most recently seen PAT/PMT packet boundary rather than
+        // the IDR's own lease (so a newly tuned client gets fresh program info up front).
+        // Re-sending PAT/PMT here, immediately before freshIdr, keeps that candidate rolled
+        // forward the way a real repeating provider would -- without it, the candidate would
+        // still point at the single PAT/PMT sent at the very start of the replay, and the
+        // eventual resume would splice in there instead of at freshIdr, republishing every
+        // stale packet in between.
+        var afterSecondPause = new[] { PatPacket(100), PmtPacket(100, 256), freshIdr };
+        var afterThirdPause = new[] { postFreshFrame };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [beforePause, afterPause, afterSecondPause, afterThirdPause],
+            filler,
+            TimeSpan.FromMilliseconds(300),
+            ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                // Must comfortably exceed the 300ms inter-phase pause below, otherwise
+                // M3Undle's own stall detector reconnects a second time mid-replay before
+                // the trim gets a chance to abandon and chase the target DTS as intended.
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postFreshFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
         Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
@@ -1540,6 +2174,16 @@ public sealed class ChannelSessionIntegrationTests
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr1),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr2),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "Output must resume once the replay actually reaches the pre-failure DTS.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postFreshFrame));
 
         await session.DisposeAsync();
     }
