@@ -1344,12 +1344,21 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
     private TimelineRewindSignal DetectInProcessTimelineRewind(MpegTsPacketBatch batch)
     {
-        if (_recoveryOutputHoldActive
-            || !_reconnectOptions.EnableRecoveryOverlapTrim
-            || _lastRelayedVideoDts90k is not { } target
-            || batch.EarliestVideoDts90k is not { } earliest)
-        {
+        if (_recoveryOutputHoldActive || !_reconnectOptions.EnableRecoveryOverlapTrim || _lastRelayedVideoDts90k is not { } target)
             return TimelineRewindSignal.None;
+
+        if (batch.EarliestVideoDts90k is not { } earliest)
+        {
+            // This batch carries no video timestamp to evaluate (audio-only content, a PAT/PMT-only
+            // chunk, or a continuation batch with no PES header — all routine on a real socket, unlike
+            // the fully-timestamped packets synthetic tests feed this method). That is inconclusive,
+            // not evidence of anything. With no candidate streak in progress it is ordinary content and
+            // safe to pass straight through (None, same as before). But if a clamped-ramp streak is
+            // still accumulating, this batch sits between withheld candidates in byte order and must
+            // not be mistaken for the "healthy" signal that resolves them — returning None here would
+            // flush still-unconfirmed (possibly replayed) candidates before the ramp is actually
+            // confirmed or cleared. Hold it alongside them instead so it resolves with the rest.
+            return _clampedDtsRampEvidence > 0 ? TimelineRewindSignal.Candidate : TimelineRewindSignal.None;
         }
 
         var deltaSeconds = MpegTsTimestamp.DeltaSeconds(target, earliest);

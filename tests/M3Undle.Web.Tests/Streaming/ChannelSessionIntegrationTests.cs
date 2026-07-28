@@ -1602,6 +1602,106 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    public async Task Session_ContinuousRelayClampedDtsRamp_NoDtsBatchMidStreak_DoesNotPrematurelyFlushPendingCandidates()
+    {
+        // Regression test for a gap in the candidate-batch withholding added alongside the
+        // clamped-DTS-ramp detector: DetectInProcessTimelineRewind returned
+        // TimelineRewindSignal.None whenever a batch carried no video timestamp at all
+        // (batch.EarliestVideoDts90k is null) — indistinguishable, at that call site, from a
+        // batch that was genuinely resolved as healthy. The caller treats None as "safe to
+        // flush", so any batch with no video PES header (audio-only, PAT/PMT-only, or a
+        // continuation chunk — routine on a real socket, but absent from the fully-timestamped
+        // packets every other test in this class feeds the scanner) arriving mid-streak
+        // flushed still-unresolved, possibly-replayed evidence batches to subscribers before
+        // the ramp was confirmed or cleared. This is exactly what the CLEAN-RELAY-05/06 lab
+        // scenarios caught live (real TS chunking off a socket hits this constantly) despite
+        // the synthetic unit tests above never exercising it.
+        const long baseDts = 100L * 90000;
+        const long frameSpacing = 1500L;
+
+        var evidencePacket1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA1], baseDts + 1);
+        var noDtsPacketMidStreak = FakeStreamingHandler.ValidTsPacket(0xEE);
+        var evidencePacket2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA2], baseDts + 2);
+        var evidencePacket3 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xA3], baseDts + 3);
+        var resumingIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xC2], baseDts + 3 + 3 * frameSpacing);
+        var postResumeFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD3], baseDts + 3 + 4 * frameSpacing);
+
+        var sequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x81], baseDts - 3 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x82], baseDts - 2 * frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x91], baseDts - frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0x92], baseDts),
+            // Clamped-ramp evidence accumulating (1 of 3), then a no-video-DTS batch lands
+            // mid-streak, then evidence continues to the confirming 3rd sample.
+            evidencePacket1,
+            noDtsPacketMidStreak,
+            evidencePacket2,
+            evidencePacket3,
+            // Healthy, frame-paced deltas resume.
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB1], baseDts + 3 + frameSpacing),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xB2], baseDts + 3 + 2 * frameSpacing),
+            resumingIdr,
+            postResumeFrame,
+        };
+
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WriteSequenceThenForever(sequence, filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postResumeFrame) >= 0, TimeSpan.FromSeconds(5));
+
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        Assert.AreEqual(1, handler.ConnectionCount);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket1),
+            "A candidate batch withheld while ramp evidence accumulates must not leak just because a later no-video-DTS batch arrived before the ramp resolved.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, evidencePacket2),
+            "A candidate batch withheld while ramp evidence accumulates must not leak just because a later no-video-DTS batch arrived before the ramp resolved.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumingIdr), "Output must resume at the IDR that follows enough healthy deltas.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postResumeFrame));
+
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedWithoutForcedRetune()
     {
         // A provider that replays rewound content at 1x would never catch up to the
