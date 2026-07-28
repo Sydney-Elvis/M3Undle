@@ -91,6 +91,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long? _recoveryTrimTargetDts90k;
     private bool _recoveryTrimEvaluated;
     private bool _recoveryTrimActive;
+    private bool _recoveryTrimAbandoned;
     private long _recoveryTrimmedBytes;
     private string _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.NotApplicable;
     private double? _lastRecoveryTrimRewindSeconds;
@@ -1155,6 +1156,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
         _recoveryTrimEvaluated = false;
         _recoveryTrimActive = false;
+        _recoveryTrimAbandoned = false;
         _recoveryTrimmedBytes = 0;
         _lastRecoveryTrimOutcome = _recoveryTrimTargetDts90k is null
             ? RecoveryTrimOutcomes.NotApplicable
@@ -1326,6 +1328,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // normal first-IDR resume, so the forced-retune path must not fire mid-wait.
         if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
             return false;
+
+        // An abandoned trim gave up on precisely scanning to the pre-failure position within
+        // its own (already-spent) budget, but ShouldSuppressSafeStartForOverlapTrim keeps
+        // chasing the same target DTS via a looser fallback afterward — that catch-up can
+        // easily take longer than the generic wall-clock hold limit (the trim's own budget
+        // was tuned for "give up scanning precisely", not "give up entirely"). Only the
+        // byte-based ceiling applies during that phase; it still bounds a stream that never
+        // actually reaches the target.
+        if (_recoveryTrimAbandoned)
+            return _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
 
         return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
@@ -1608,16 +1620,26 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         if (!_recoveryTrimActive)
-            return false;
+        {
+            // Never needed a trim (the initial delta already showed fresh content) — nothing
+            // more to check. An abandoned trim is different: this span is positively known to
+            // still be replayed content until a fresh IDR at/after the target actually shows
+            // up. Trusting whatever IDR happens to arrive next (the prior behavior) resumed
+            // output on content already known to be stale — keep applying the same DTS test
+            // the trim itself used; the generic RecoveryOutputHoldLimit / RecoverySafeStartSearchLimitBytes
+            // budgets (see IsRecoveryHoldLimitExceeded's own exemption for this phase) remain
+            // the outer bound if fresh content never arrives.
+            return _recoveryTrimAbandoned && !HasReachedRecoveryTrimTarget(batch, target);
+        }
 
         if (GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOverlapTrimHoldLimit
             || _recoveryTrimmedBytes >= _reconnectOptions.RecoveryOverlapTrimMaxBytes)
         {
             AbandonRecoveryOverlapTrim("without reaching the pre-failure position within the trim budget");
-            return false;
+            return !HasReachedRecoveryTrimTarget(batch, target);
         }
 
-        if (batch.IdrDts90k is { } idrDts && MpegTsTimestamp.Delta(target, idrDts) >= 0)
+        if (HasReachedRecoveryTrimTarget(batch, target) && batch.IdrDts90k is { } idrDts)
         {
             CompleteRecoveryOverlapTrim(target, idrDts);
             return false;
@@ -1626,6 +1648,9 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryTrimmedBytes += batch.Data.Length;
         return true;
     }
+
+    private static bool HasReachedRecoveryTrimTarget(MpegTsPacketBatch batch, long targetDts90k)
+        => batch.IdrDts90k is { } idrDts && MpegTsTimestamp.Delta(targetDts90k, idrDts) >= 0;
 
     private void CompleteRecoveryOverlapTrim(long targetDts90k, long resumeIdrDts90k)
     {
@@ -1649,6 +1674,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private void AbandonRecoveryOverlapTrim(string reason)
     {
         _recoveryTrimActive = false;
+        _recoveryTrimAbandoned = true;
         _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.Abandoned;
         _lastRecoveryTrimAbandonedUtc = DateTimeOffset.UtcNow;
         var heldDuration = GetRecoveryHoldDuration();

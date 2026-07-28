@@ -1303,10 +1303,22 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_ContinuousRelayTimelineRewind_ThatCannotCatchUp_UsesBoundedFallback()
+    public async Task Session_ContinuousRelayTimelineRewind_ThatCannotCatchUpWithinBudget_ResumesOnlyOnceFreshDtsArrives()
     {
+        // Continuous-relay (in-process, no reconnect) counterpart of the
+        // MpegTsReconnect_SlowRewoundReplay test above: the trim gives up at its own
+        // (short) hold limit, but must keep withholding output until the replay actually
+        // reaches the pre-failure DTS rather than trusting whatever IDR shows up right
+        // after the abandon. A stream that never reaches the target at all is expected to
+        // eventually force a retune via the generic byte ceiling -- this test instead lets
+        // fresh content legitimately arrive after the abandon, so no forced retune should
+        // occur, and none of the still-stale content in between may leak.
         const long preFailureDts = 102L * 90000;
-        var replayedIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], 42L * 90000);
+        var staleIdr1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD1], 42L * 90000);
+        var staleIdr2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD2], 90L * 90000);
+        var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], preFailureDts);
+        var postFreshFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD6], preFailureDts + 1500);
+
         var initialSequence = new[]
         {
             PatPacket(100),
@@ -1322,14 +1334,23 @@ public sealed class ChannelSessionIntegrationTests
             PmtPacket(100, 256),
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
-            replayedIdr,
+            staleIdr1,
         };
+        // Real-time gap so the trim's own 100ms budget genuinely elapses (and abandons)
+        // before the replay resumes toward the pre-failure position.
+        var afterFirstPause = new[] { staleIdr2 };
+        // Re-sending PAT/PMT here, as a real repeating provider would, keeps
+        // MarkMpegTsSafeStartIfReady's rolling PAT/PMT splice candidate from staying
+        // pinned to the single PAT/PMT sent at replayStart -- see the sibling
+        // MpegTsReconnect test above for why that candidate must be kept fresh.
+        var afterSecondPause = new[] { PatPacket(100), PmtPacket(100, 256), freshIdr };
+        var afterThirdPause = new[] { postFreshFrame };
 
-        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
-            initialSequence,
-            replayStart,
-            replayedIdr,
-            TimeSpan.FromMilliseconds(100),
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = new FakeStreamingHandler(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [initialSequence, replayStart, afterFirstPause, afterSecondPause, afterThirdPause],
+            filler,
+            TimeSpan.FromMilliseconds(300),
             ct));
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
@@ -1337,7 +1358,7 @@ public sealed class ChannelSessionIntegrationTests
             {
                 ReadStallTimeout = TimeSpan.FromSeconds(2),
                 RecoveryOutputHoldLimit = TimeSpan.FromSeconds(1),
-                RecoverySafeStartSearchLimitBytes = 8 * 188,
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
                 RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
                 RecoveryOverlapTrimMaxBytes = 1024 * 1024,
                 OutageWindow = TimeSpan.FromSeconds(30),
@@ -1360,17 +1381,30 @@ public sealed class ChannelSessionIntegrationTests
                 sessionId: session.SessionId,
                 kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
             TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postFreshFrame) >= 0, TimeSpan.FromSeconds(5));
 
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
         Assert.AreEqual(1, handler.ConnectionCount);
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.ReconnectScheduled));
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
         Assert.IsTrue(session.State is SessionState.Live or SessionState.HoldingOutput);
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr1),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr2),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "Output must resume once the replay actually reaches the pre-failure DTS.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postFreshFrame));
 
-        cts.Cancel();
-        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
-        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
         await session.DisposeAsync();
     }
 
@@ -1702,13 +1736,26 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedWithoutForcedRetune()
+    public async Task Session_MpegTsReconnect_SlowRewoundReplay_TrimAbandonedThenResumesOnlyOnceContentIsFresh()
     {
-        // A provider that replays rewound content at 1x would never catch up to the
-        // pre-failure DTS; the trim must give up at its hold limit and fall back to the
-        // standard first-IDR resume instead of forcing a retune.
+        // A provider that replays rewound content slower than real-time would never catch
+        // up to the pre-failure DTS within the trim's own (short) budget; the trim must
+        // give up at its hold limit rather than block forever. But giving up on precisely
+        // scanning must not mean trusting whatever IDR happens to show up next: everything
+        // still short of the pre-failure DTS is positively known to be replayed content.
+        // Regression test for exactly that gap: prior to the fix, ShouldSuppressSafeStartForOverlapTrim
+        // stopped checking DTS entirely once the trim was abandoned, so staleIdr1/staleIdr2
+        // (both still well behind preFailureDts) resumed output immediately on whichever one
+        // arrived right after the abandon — publishing stale, already-seen content as if it
+        // were live (exactly the "replayed content published despite the abandoned trim"
+        // failure the CLEAN-RELAY-07 lab scenario caught). Output must stay held until the
+        // replay actually reaches the pre-failure position, and no forced retune should occur
+        // since the content does legitimately catch up, just not inside the trim's own budget.
         const long preFailureDts = 102L * 90000;
-        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], 43L * 90000);
+        var staleIdr1 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD1], 43L * 90000);
+        var staleIdr2 = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD2], 90L * 90000);
+        var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xD5], preFailureDts);
+        var postFreshFrame = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x41, 0xD6], preFailureDts + 1500);
 
         var preFailureSequence = new[]
         {
@@ -1719,25 +1766,49 @@ public sealed class ChannelSessionIntegrationTests
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
         };
 
-        var recoveredOnce = new[]
+        var beforePause = new[]
         {
             PatPacket(100),
             PmtPacket(100, 256),
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            staleIdr1,
         };
+        // Real-time gap so the trim's own 100ms budget genuinely elapses (and abandons)
+        // before the replay resumes toward the pre-failure position.
+        var afterPause = new[] { staleIdr2 };
+        // A real MPEG-TS provider repeats PAT/PMT every ~100-500ms (a broadcast-spec
+        // requirement most encoders honor); MarkMpegTsSafeStartIfReady deliberately snaps
+        // an IDR-based resume to the most recently seen PAT/PMT packet boundary rather than
+        // the IDR's own lease (so a newly tuned client gets fresh program info up front).
+        // Re-sending PAT/PMT here, immediately before freshIdr, keeps that candidate rolled
+        // forward the way a real repeating provider would -- without it, the candidate would
+        // still point at the single PAT/PMT sent at the very start of the replay, and the
+        // eventual resume would splice in there instead of at freshIdr, republishing every
+        // stale packet in between.
+        var afterSecondPause = new[] { PatPacket(100), PmtPacket(100, 256), freshIdr };
+        var afterThirdPause = new[] { postFreshFrame };
 
-        var handler = FakeStreamingHandler.StreamForever(rewoundIdr);
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
         handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
-        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(recoveredOnce, rewoundIdr, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WritePhasedSequencesThenForever(
+            [beforePause, afterPause, afterSecondPause, afterThirdPause],
+            filler,
+            TimeSpan.FromMilliseconds(300),
+            ct));
 
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
             reconnectOptions: new ReconnectOptions
             {
-                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                // Must comfortably exceed the 300ms inter-phase pause below, otherwise
+                // M3Undle's own stall detector reconnects a second time mid-replay before
+                // the trim gets a chance to abandon and chase the target DTS as intended.
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
                 RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
                 RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoverySafeStartSearchLimitBytes = 64 * 1024,
                 OutageWindow = TimeSpan.FromSeconds(30),
                 ConnectTimeout = TimeSpan.FromSeconds(5),
                 FixedStepBackoffSeconds = [0],
@@ -1751,14 +1822,20 @@ public sealed class ChannelSessionIntegrationTests
         await WaitUntilAsync(
             () => fixture.DiagnosticsStore.Query(
                 sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned).Count > 0,
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
                 kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Count > 0,
             TimeSpan.FromSeconds(10));
-        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), rewoundIdr) >= 0, TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), postFreshFrame) >= 0, TimeSpan.FromSeconds(5));
 
         cts.Cancel();
         await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
         await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
 
+        var data = capture.Body.ToArray();
         Assert.IsNotEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
@@ -1767,6 +1844,16 @@ public sealed class ChannelSessionIntegrationTests
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
         Assert.IsEmpty(fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr1),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.AreEqual(
+            -1,
+            IndexOf(data, staleIdr2),
+            "Stale, still-behind-target content must not resume output just because the trim gave up on precise scanning.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "Output must resume once the replay actually reaches the pre-failure DTS.");
+        Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, postFreshFrame));
 
         await session.DisposeAsync();
     }
