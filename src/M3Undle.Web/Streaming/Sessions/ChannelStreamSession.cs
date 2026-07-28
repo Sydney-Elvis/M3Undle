@@ -1522,13 +1522,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (!_recoveryOutputHoldActive || !_recoveryHoldTriggeredByClampedRamp)
             return false;
 
-        if (_clampedDtsRampAbandoned)
-            return false;
-
-        if (GetRecoveryHoldDuration() >= _reconnectOptions.ClampedDtsRampHoldLimit)
+        if (!_clampedDtsRampAbandoned && GetRecoveryHoldDuration() >= _reconnectOptions.ClampedDtsRampHoldLimit)
         {
+            // Giving up on the ramp's own (short) wall-clock budget does not mean trusting
+            // whatever IDR/PAT-PMT shows up next -- that content is still provably part of
+            // the same still-ramping, not-yet-healthy span (that is why the budget ran out
+            // without resolving). Keep requiring ClampedDtsRampMinEvidence consecutive
+            // healthy deltas below; only IsRecoveryHoldLimitExceeded's exemption for this
+            // phase changes (it stops exempting the generic hold limit once abandoned), so
+            // a ramp that genuinely never stabilizes still forces a retune eventually
+            // instead of resuming on bad content in an endless detect/resume/detect loop
+            // (reproduced live: CLEAN-RELAY-06 cycled InProcessRelayTimelineRewind ->
+            // ClampedDtsRampRecoveryAbandoned -> RecoveryOutputResumed roughly every 7s
+            // for the whole capture window before this fix).
             AbandonClampedDtsRampRecovery("without observing enough consecutive healthy deltas within the ramp budget");
-            return false;
         }
 
         if (!batch.HasKnownH264VideoStream || batch.EarliestVideoDts90k is not { } earliest)
