@@ -84,6 +84,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private int _clampedDtsRampEvidence;
     private bool _recoveryHoldTriggeredByClampedRamp;
     private bool _clampedDtsRampAbandoned;
+    private DateTimeOffset? _lastClampedDtsRampAbandonedUtc;
     private long? _lastHeldVideoDts90k;
     private int _clampedRampHealthyStreak;
     private long? _lastCandidateVideoDts90k;
@@ -1329,18 +1330,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_recoveryHoldTriggeredByClampedRamp && !_clampedDtsRampAbandoned)
             return false;
 
-        // An abandoned ramp gave up on its own (short) wall-clock budget, but
-        // ShouldSuppressSafeStartForClampedRampRecovery keeps requiring the same
-        // ClampedDtsRampMinEvidence consecutive healthy deltas afterward — reusing the
-        // generic RecoveryOutputHoldLimit here would just reintroduce, one abandon later,
-        // the exact "too short for evidence-based convergence" problem ClampedDtsRampHoldLimit
-        // exists to fix in the first place (confirmed live: real content took longer than
-        // 6s + the generic 3s fallback to produce 3 consecutive healthy crossings, forcing
-        // an avoidable retune). Only the byte-based ceiling applies during that phase,
-        // mirroring the overlap-trim case above; it still bounds a ramp that never
-        // genuinely stabilizes.
-        if (_recoveryHoldTriggeredByClampedRamp && _clampedDtsRampAbandoned)
-            return _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
+        // An abandoned ramp needs no special ceiling: ShouldSuppressSafeStartForClampedRampRecovery
+        // stops suppressing entirely once abandoned, so the standard safe-start resume
+        // (and its own budgets, restarted by AbandonClampedDtsRampRecovery) governs from
+        // there — the same window every other recovery gets.
 
         // An abandoned trim gave up on precisely scanning to the pre-failure position within
         // its own (already-spent) budget, but ShouldSuppressSafeStartForOverlapTrim keeps
@@ -1418,6 +1411,30 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             }
         }
 
+        // A backward jump that partially recovers before the batch ends leaves the
+        // first-to-last span above positive, hiding the dip. The smallest step between
+        // consecutive timestamps inside the batch does not.
+        if (batch.MinVideoDtsStep90k is { } backwardStep && backwardStep < 0)
+        {
+            var backwardStepSeconds = backwardStep / MpegTsTimestamp.TicksPerSecond;
+            ResetClampedDtsRampEvidence();
+            if (backwardStepSeconds < -_reconnectOptions.RecoveryOverlapTrimMaxRewindSeconds)
+                return TimelineRewindSignal.None;
+
+            FireInProcessTimelineRewind(-backwardStepSeconds);
+            return TimelineRewindSignal.Confirmed;
+        }
+
+        // Clamped-ramp detection stays disarmed for a cooldown after a ramp recovery was
+        // abandoned: that recovery already concluded the ramp is not going to clear, and
+        // re-detecting it against the content it just resumed on would loop forever. A
+        // genuine backward jump (both branches above) is still detected during it.
+        if (IsClampedDtsRampDetectionOnRetryCooldown())
+        {
+            ResetClampedDtsRampEvidence();
+            return TimelineRewindSignal.None;
+        }
+
         // A real backward jump is the primary signal, but FFmpeg's mpegts muxer
         // enforces non-decreasing output DTS at the container level (required by
         // the format), so a provider restarting from byte zero inside a continuous
@@ -1436,11 +1453,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // the crossing delta compares against the last *candidate* sample rather than the
         // frozen last-published DTS — otherwise a multi-batch ramp would measure an
         // accumulating (not per-step) delta and could wrongly exceed the threshold.
+        //
+        // The within-batch signal is the *smallest* step between consecutive timestamps,
+        // not the batch's first-to-last span. A read chunk that opens with normally-paced
+        // frames and then crosses into the clamped run spans a large, healthy-looking
+        // delta end to end, so the span test scored it as ordinary content and published
+        // it — leaking the first frames of the replay (and poisoning _lastRelayedVideoDts90k
+        // with a clamped value) on every rewind, since with production read chunk sizes
+        // that straddling batch is the norm rather than the exception.
         var crossingTarget = _lastCandidateVideoDts90k ?? target;
         var crossingClamped = MpegTsTimestamp.Delta(crossingTarget, earliest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
-        var withinBatchClamped = batch.LatestVideoDts90k is { } latest
-            && latest != earliest
-            && MpegTsTimestamp.Delta(earliest, latest) <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+        var withinBatchClamped = batch.MinVideoDtsStep90k is { } minStep
+            && minStep <= _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
 
         if (!crossingClamped && !withinBatchClamped)
         {
@@ -1547,9 +1571,24 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             // instead of resuming on bad content in an endless detect/resume/detect loop
             // (reproduced live: CLEAN-RELAY-06 cycled InProcessRelayTimelineRewind ->
             // ClampedDtsRampRecoveryAbandoned -> RecoveryOutputResumed roughly every 7s
-            // for the whole capture window before this fix).
+            // for the whole capture window). That loop is now prevented by the
+            // ClampedDtsRampRetryCooldown armed below rather than by refusing to resume.
             AbandonClampedDtsRampRecovery("without observing enough consecutive healthy deltas within the ramp budget");
         }
+
+        // Abandoning means what the diagnostic has always claimed: fall back to the
+        // standard safe-start resume. Continuing to require healthy deltas after the
+        // budget expired is unsatisfiable in exactly the situation this path exists for.
+        // FFmpeg's mpegts muxer keeps a monotonic per-stream last-DTS high-water mark that
+        // survives its own internal HTTP reconnect, so once a finite upstream restarts
+        // from byte zero, no later pass over that source can ever produce a DTS above the
+        // mark — every packet is clamped to last+1 and healthy deltas never return. The
+        // hold could then only ever end in RecoveryForcedRetune (observed live on both
+        // CLEAN-RELAY-05 and CLEAN-RELAY-06: hold, 40s of nothing, forced retune at the
+        // byte ceiling). Clamped output is still monotonic, decodable and the same
+        // content, so resuming on it beats killing the client's session.
+        if (_clampedDtsRampAbandoned)
+            return false;
 
         if (!batch.HasKnownH264VideoStream || batch.EarliestVideoDts90k is not { } earliest)
             return true;
@@ -1557,9 +1596,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         if (_lastHeldVideoDts90k is { } lastHeld)
         {
             var crossingHealthy = MpegTsTimestamp.Delta(lastHeld, earliest) > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
-            var withinBatchHealthy = batch.LatestVideoDts90k is not { } latest
-                || latest == earliest
-                || MpegTsTimestamp.Delta(earliest, latest) > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
+            // Mirrors the detector: the smallest step inside the batch, not its outer
+            // span, is what says whether the whole batch is genuinely frame-paced. A
+            // batch straddling the end of the ramp spans a healthy-looking delta while
+            // still containing clamped steps, and must not count toward the streak.
+            var withinBatchHealthy = batch.MinVideoDtsStep90k is not { } minStep
+                || minStep > _reconnectOptions.ClampedDtsRampMaxDeltaTicks;
 
             _clampedRampHealthyStreak = crossingHealthy && withinBatchHealthy
                 ? _clampedRampHealthyStreak + 1
@@ -1575,22 +1617,29 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         return _clampedRampHealthyStreak < _reconnectOptions.ClampedDtsRampMinEvidence;
     }
 
+    private bool IsClampedDtsRampDetectionOnRetryCooldown()
+        => _reconnectOptions.ClampedDtsRampRetryCooldown > TimeSpan.Zero
+            && _lastClampedDtsRampAbandonedUtc is { } lastAbandonedUtc
+            && DateTimeOffset.UtcNow - lastAbandonedUtc < _reconnectOptions.ClampedDtsRampRetryCooldown;
+
     private void AbandonClampedDtsRampRecovery(string reason)
     {
         _clampedDtsRampAbandoned = true;
+        _lastClampedDtsRampAbandonedUtc = DateTimeOffset.UtcNow;
         var heldDuration = GetRecoveryHoldDuration();
         RecordDiagnostic(
             StreamDiagnosticEventKind.ClampedDtsRampRecoveryAbandoned,
             outputHeld: heldDuration,
             bytesSuppressed: _recoveryBytesSuppressed,
             recoveryHoldLimit: _reconnectOptions.ClampedDtsRampHoldLimit,
-            message: $"Clamped DTS ramp recovery abandoned after {heldDuration.TotalMilliseconds:F0} ms {reason}; falling back to the standard safe-start resume.");
+            message: $"Clamped DTS ramp recovery abandoned after {heldDuration.TotalMilliseconds:F0} ms {reason}; falling back to the standard safe-start resume, with clamped-ramp detection disarmed for {_reconnectOptions.ClampedDtsRampRetryCooldown.TotalSeconds:F0}s.");
         _logger.LogWarning(
-            "Clamped DTS ramp recovery abandoned: SessionId={SessionId} DisplayName={DisplayName} HeldMs={HeldMs:F0} HealthyStreak={HealthyStreak} Reason={Reason}",
+            "Clamped DTS ramp recovery abandoned: SessionId={SessionId} DisplayName={DisplayName} HeldMs={HeldMs:F0} HealthyStreak={HealthyStreak} RetryCooldownSeconds={RetryCooldownSeconds:F0} Reason={Reason}",
             _sessionId,
             _source.DisplayName,
             heldDuration.TotalMilliseconds,
             _clampedRampHealthyStreak,
+            _reconnectOptions.ClampedDtsRampRetryCooldown.TotalSeconds,
             reason);
 
         // Restart the standard hold budgets so the fallback resume gets its normal

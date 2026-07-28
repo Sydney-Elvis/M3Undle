@@ -115,5 +115,19 @@ public sealed class ReconnectOptions
     /// </summary>
     public TimeSpan ClampedDtsRampHoldLimit { get; set; } = TimeSpan.FromSeconds(6);
 
+    /// <summary>
+    /// After a clamped-DTS-ramp recovery is abandoned, clamped-ramp *detection* stays
+    /// disarmed for this long. FFmpeg's mpegts muxer keeps a monotonic per-stream
+    /// last-DTS high-water mark that survives its own internal HTTP reconnect, so once a
+    /// finite upstream restarts from byte zero the input timeline can never rise above
+    /// that mark again — every subsequent packet is clamped to last+1 and the ramp is
+    /// permanent, not transient. Resuming (the documented meaning of "abandoned") would
+    /// otherwise re-trip the detector against the just-published clamped reference on the
+    /// very next batch, producing an endless detect/hold/abandon/resume loop that never
+    /// delivers real output. The cooldown makes the resume stick; genuine backward DTS
+    /// jumps are still detected throughout it. Zero disables the cooldown.
+    /// </summary>
+    public TimeSpan ClampedDtsRampRetryCooldown { get; set; } = TimeSpan.FromSeconds(60);
+
     public int[] FixedStepBackoffSeconds { get; set; } = [0, 1, 2, 5, 10, 15, 30];
 }
