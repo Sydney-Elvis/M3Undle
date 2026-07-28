@@ -1561,32 +1561,32 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         if (!_clampedDtsRampAbandoned && GetRecoveryHoldDuration() >= _reconnectOptions.ClampedDtsRampHoldLimit)
         {
-            // Giving up on the ramp's own (short) wall-clock budget does not mean trusting
-            // whatever IDR/PAT-PMT shows up next -- that content is still provably part of
-            // the same still-ramping, not-yet-healthy span (that is why the budget ran out
-            // without resolving). Keep requiring ClampedDtsRampMinEvidence consecutive
-            // healthy deltas below; only IsRecoveryHoldLimitExceeded's exemption for this
-            // phase changes (it stops exempting the generic hold limit once abandoned), so
-            // a ramp that genuinely never stabilizes still forces a retune eventually
-            // instead of resuming on bad content in an endless detect/resume/detect loop
-            // (reproduced live: CLEAN-RELAY-06 cycled InProcessRelayTimelineRewind ->
-            // ClampedDtsRampRecoveryAbandoned -> RecoveryOutputResumed roughly every 7s
-            // for the whole capture window). That loop is now prevented by the
-            // ClampedDtsRampRetryCooldown armed below rather than by refusing to resume.
+            // The ramp's own (short) wall-clock budget ran out without ClampedDtsRampMinEvidence
+            // consecutive healthy deltas ever converging. Abandoning here means what the
+            // diagnostic has always claimed: fall back to the standard safe-start resume
+            // (below, once _clampedDtsRampAbandoned is set) instead of continuing to demand
+            // healthy deltas that may never come. FFmpeg's mpegts muxer keeps a monotonic
+            // per-stream last-DTS high-water mark that survives its own internal HTTP
+            // reconnect, so once a finite upstream restarts from byte zero, no later pass
+            // over that source can ever produce a DTS above the mark -- every packet is
+            // clamped to last+1 and healthy deltas never return. Requiring them anyway could
+            // then only ever end in RecoveryForcedRetune (observed live on both
+            // CLEAN-RELAY-05 and CLEAN-RELAY-06: hold, abandon, 40s of nothing, forced
+            // retune at the byte ceiling). Clamped output is still monotonic, decodable and
+            // the same content, so resuming on it beats killing the client's session.
+            //
+            // Resuming immediately reintroduces a different failure mode though: the content
+            // just published is itself still clamped, so the very next batch looks like a
+            // brand new ramp relative to it and re-triggers detection (reproduced live:
+            // CLEAN-RELAY-06 cycled InProcessRelayTimelineRewind -> RecoveryStarted ->
+            // ClampedDtsRampRecoveryAbandoned -> RecoveryOutputResumed roughly every 7s for
+            // the whole capture window, never delivering real output). ClampedDtsRampRetryCooldown,
+            // armed by AbandonClampedDtsRampRecovery below and enforced in
+            // DetectInProcessTimelineRewind, is what prevents that loop -- clamped-ramp
+            // detection stays disarmed for the cooldown so this resume sticks.
             AbandonClampedDtsRampRecovery("without observing enough consecutive healthy deltas within the ramp budget");
         }
 
-        // Abandoning means what the diagnostic has always claimed: fall back to the
-        // standard safe-start resume. Continuing to require healthy deltas after the
-        // budget expired is unsatisfiable in exactly the situation this path exists for.
-        // FFmpeg's mpegts muxer keeps a monotonic per-stream last-DTS high-water mark that
-        // survives its own internal HTTP reconnect, so once a finite upstream restarts
-        // from byte zero, no later pass over that source can ever produce a DTS above the
-        // mark — every packet is clamped to last+1 and healthy deltas never return. The
-        // hold could then only ever end in RecoveryForcedRetune (observed live on both
-        // CLEAN-RELAY-05 and CLEAN-RELAY-06: hold, 40s of nothing, forced retune at the
-        // byte ceiling). Clamped output is still monotonic, decodable and the same
-        // content, so resuming on it beats killing the client's session.
         if (_clampedDtsRampAbandoned)
             return false;
 
