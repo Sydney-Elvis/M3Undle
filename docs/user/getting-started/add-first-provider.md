@@ -19,6 +19,26 @@ MY_PASSWORD=supersecret
 http://my.server:8080/get.php?username=alice&password=%MY_PASSWORD%
 ```
 
+## Optional quick test with IPTV.org
+
+If you want to evaluate M3Undle before entering provider credentials, [IPTV.org](https://github.com/iptv-org/iptv) publishes playlists of publicly available streams that require no account. They are useful for confirming that M3Undle can fetch a remote playlist, import channels, build a lineup, and proxy playback.
+
+Choose a smaller playlist for your country, language, category, or region from the official [IPTV.org playlist directory](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md). For example, the United States country playlist is:
+
+```text
+https://iptv-org.github.io/iptv/countries/us.m3u
+```
+
+In M3Undle:
+
+1. Open **Providers**, select **Add Provider**, then choose **From URL**.
+2. Enter `IPTV.org test` as the name and paste the selected playlist URL.
+3. Add the provider and wait for its first refresh to finish.
+4. Continue to [Create the First Lineup/Profile](create-first-lineup.md), map a few channels, and select **Build Output**.
+5. Play a published channel to exercise the complete path through M3Undle.
+
+Avoid the global `index.m3u` playlist for a first test; a smaller playlist imports faster and is easier to explore. IPTV.org is an independent third-party project, not part of M3Undle. Individual public streams may be offline, geo-blocked, intermittent, or not available 24/7, so one failed channel does not necessarily indicate a problem with your installation.
+
 ## Xtream Codes — requires an encryption key
 
 Xtream Codes providers store the password encrypted in the database (AES-256-GCM), which requires `M3UNDLE_ENCRYPTION_KEY` to be set (see [Install with Docker](install-with-docker.md)).

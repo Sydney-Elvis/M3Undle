@@ -89,7 +89,7 @@
         <MudContainer MaxWidth="MaxWidth.False" Class="pa-6">
             @if (CurrentSetupStep != SetupStep.None)
             {
-                <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Class="mb-4" Icon="@SetupBannerIcon">
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4" Icon="@SetupBannerIcon">
                     <MudStack Spacing="0">
                         <MudText Typo="Typo.subtitle2">Setup Required</MudText>
                         <MudText Typo="Typo.body2">
@@ -534,7 +534,7 @@
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.ProviderChanged)
                 {
-                    await LoadLineupStatusAsync();
+                    await Task.WhenAll(LoadChannelStatsAsync(), LoadLineupStatusAsync());
                 }
                 else if (evt.Kind == M3Undle.Web.Application.AppEventKind.SystemEventPublished)
                 {

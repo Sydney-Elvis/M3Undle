@@ -1,6 +1,9 @@
 # Connect the First Client
 
-This walks through connecting Jellyfin, the most commonly used first client. Other clients follow the same two basic patterns (M3U/XMLTV or HDHomeRun-style) — see [Clients](../clients/jellyfin.md) for a fuller list.
+This walks through connecting Jellyfin Live TV, the most commonly used first client integration. Other clients follow the same two basic patterns (M3U/XMLTV or HDHomeRun-style) — see [Clients](../clients/jellyfin.md) for a fuller list.
+
+!!! important "Live TV only"
+    These steps add live channels and guide data. They do not add IPTV movies or series to Jellyfin's native Movies or Shows libraries. M3Undle does not currently export the `.strm` files and directory layout that native Jellyfin VOD/series integration would require. See [Jellyfin: Movies and series](../clients/jellyfin.md#movies-and-series-are-not-jellyfin-libraries).
 
 ## Option A: M3U + XMLTV (works with most clients)
 

@@ -6,30 +6,52 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ## [Unreleased]
 
+---
+
+## [v1.0.0-beta.7] — 2026-07-28
+
+Beta 7 lets you back up and restore your entire M3Undle configuration, fixes a subtler kind of playback glitch on reconnect, launches a full documentation site, and makes it much clearer on first run when a profile has no output because setup isn't finished yet.
+
 ### Backup and restore
 
-- Added portable configuration backups: a single checksummed `.m3undle-backup` archive containing all configuration, mappings, users, and credentials (still encrypted under the host's key ring), excluding regenerable history/cache tables
-- Added staged restore with automatic rollback: preflight validation (checksum, format/schema version, encryption key ID + fingerprint match), a validated rollback checkpoint before the database is touched, an atomic swap at startup before migrations run, and automatic rollback to the checkpoint if anything fails after that point
-- Added a Backup & Restore section under Settings (create, list, download, upload, delete, restore), a `/api/v1/backups` and `/api/v1/restore` admin API, an optional weekly backup schedule with count-based retention, and a headless `M3UNDLE_RESTORE_FILE` recovery path for containers that can't reach the UI
-- Added a shared destructive-operation lock so backup, restore, and encryption key rotation can never run concurrently
-- Staged restores can be cancelled (UI button and `DELETE /api/v1/restore/stage`) and expire automatically if not confirmed within 15 minutes, so an abandoned staged restore can never fire on an unrelated restart
-- Restoring signs all users out immediately: every security stamp is rotated in the restored database and stamps are now validated on every authenticated request
-- Hardened archive handling: entry-count and size caps with hard byte limits during extraction (zip-bomb defense), a free-disk-space preflight check covering staging plus the rollback checkpoint, and a per-upload size ceiling enforced at the service, endpoint, and UI layers
-- Uploaded archives are validated immediately on upload, retained separately from created backups (uploads can no longer evict real backups), and the archive a staged restore references is always protected from retention cleanup
-- Creating a backup is blocked while a restore is staged; backup/restore initiation endpoints are rate limited; the upload endpoint requires an `X-Requested-With` header as CSRF protection
-- A failed or rolled-back restore is surfaced as Degraded through the health endpoints, so a failed headless `M3UNDLE_RESTORE_FILE` restore is visible to Docker healthchecks and external monitors
-- Stale snapshot and HLS work artifacts from the pre-restore timeline are cleared after a successful restore
-- Backups in the Settings list gained Validate and View Report actions
+- You can now create a full backup of your M3Undle configuration — providers, channel mappings, users, and credentials — as a single encrypted file, and restore it later, including onto a fresh install
+- Restoring is safe by design: M3Undle checks a backup thoroughly before touching anything, keeps a rollback point, and automatically reverts if anything goes wrong partway through
+- Manage everything from a new Backup & Restore section in Settings: create, download, upload, delete, and restore backups, plus an optional automatic weekly backup that cleans up old copies on its own
+- A restore can also be triggered without opening the UI — for example on container startup — which is useful for automated or headless recovery
+- Backups now show Validate and View Report actions in Settings, so you can confirm a backup is good without actually restoring it
+- Restoring signs everyone out afterward, since the restored data may include different credentials than what was previously active
+- Uploaded backup files are checked as soon as they're uploaded and are kept separate from your regular backups, so they can't be accidentally cleaned up
+- Backup and restore can no longer be started while another backup, restore, or key rotation is already in progress, and a failed restore is now visible through M3Undle's health status
 
-### Database migration strategy
+### More reliable playback on reconnect
 
-- **Breaking with prior convention:** the `Alpha_Schema` migration baseline is now frozen as shipped in v1.0.0-beta.1, and all schema changes from now on are additive EF Core migrations — starting with `AddBackupSchedule` in this release. Editing the shipped baseline in place silently stranded existing databases (migrations would no-op and the app would fail on missing columns); with this change, in-place container upgrades from beta.1–beta.6 databases now work and are covered by tests
-- Alpha-era databases (v1.0.0-alpha.7 and earlier) remain unsupported: back up your configuration details, wipe the data directory, and reconfigure
-- Restore now structurally verifies a backup's schema (tables and columns) against the running binary's own migrations after migrating it forward, and refuses the restore before anything is modified if they diverge
+- Some providers silently restart their stream in the background and replay a few seconds of already-shown video without ever actually dropping the connection to M3Undle. Previously this kind of hidden replay could slip past M3Undle's recovery logic and cause a brief rewind or glitch in playback. M3Undle now recognizes this pattern as well and holds the stream until it catches back up, so viewers no longer see the replay
+- Fixed two related edge cases that could still let a replayed segment through under certain conditions
 
-### Testing
+### Upgrading between releases
 
-- Added 46 new tests covering backup pruning/exclusions, manifest checksums, archive tampering, encryption key fingerprint validation, restore rollback via fault injection, environment-driven restore one-shot semantics, the destructive-operation lock, the weekly schedule, the frozen-baseline tripwire, the beta.6-style in-place upgrade path, staged-restore cancel/expiry, archive entry-count limits, security-stamp rotation, retention isolation between uploads and created backups, and the restore health check
+- In-place upgrades between beta releases (beta.1 through beta.7) are now fully supported and tested, thanks to a change in how M3Undle applies database updates internally
+- Installs from the earlier alpha releases (alpha.7 and before) still cannot be upgraded in place — back up your configuration, wipe the data directory, and set up fresh
+- When restoring a backup, M3Undle now double-checks that the backup's data matches what the current version expects, and will refuse the restore rather than risk leaving your database in a broken state
+
+### Documentation
+
+- Published a full documentation site covering getting started, everyday guides, client-specific setup notes, troubleshooting, and background concepts
+- Simplified the README to a quick overview, with everything else now living on the new site
+
+### Dashboard and setup guidance
+
+- The dashboard now clearly explains when there's no output because no provider has been set up yet, instead of showing confusing empty playlist/guide links
+- Deleting a profile now updates the dashboard right away instead of leaving stale information displayed
+- Made the "Setup Required" banner more visible so it's not mistaken for routine background text
+- Fixed a mismatched label on the What's On This Week page's empty state
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.7
+ghcr.io/sydney-elvis/m3undle:beta
+```
 
 ---
 
@@ -439,6 +461,7 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
+[v1.0.0-beta.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.6...v1.0.0-beta.7
 [v1.0.0-beta.3]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [v1.0.0-beta.2]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [v1.0.0-beta.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-alpha.7...v1.0.0-beta.1

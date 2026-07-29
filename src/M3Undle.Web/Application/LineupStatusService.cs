@@ -85,7 +85,7 @@ internal sealed class LineupStatusService(
             : new ActiveProviderInfo(activeProvider.ProviderId, activeProvider.Name, activeProvider.MaxConcurrentStreams);
 
         var switchState = ComputeSwitchState(activeProfile, activeProviderInfo, activeSnapshot, lastRefresh, isRefreshing);
-        var lineupStatus = ComputeLineupStatus(activeProfile, activeSnapshot, lastRefresh, isRefreshing);
+        var lineupStatus = ComputeLineupStatus(activeProfile, activeProviderInfo, activeSnapshot, lastRefresh, isRefreshing);
 
         var lineup = new LineupStatusInfo(
             Name: "m3undle",
@@ -106,12 +106,16 @@ internal sealed class LineupStatusService(
 
     private static string ComputeLineupStatus(
         ActiveProfileInfo? activeProfile,
+        ActiveProviderInfo? activeProvider,
         Snapshot? activeSnapshot,
         LineupFetchRunInfo? lastRefresh,
         bool isRefreshing)
     {
         if (activeProfile is null)
             return LineupStatusCodes.NoActiveProfile;
+
+        if (activeProvider is null)
+            return LineupStatusCodes.NoActiveSnapshot;
 
         if (isRefreshing && activeSnapshot is null)
             return LineupStatusCodes.Switching;
@@ -138,11 +142,11 @@ internal sealed class LineupStatusService(
         if (activeProfile is null)
             return LineupSwitchStates.None;
 
-        if (activeSnapshot is not null)
-            return LineupSwitchStates.Complete;
-
         if (activeProvider is null)
             return LineupSwitchStates.None;
+
+        if (activeSnapshot is not null)
+            return LineupSwitchStates.Complete;
 
         if (isRefreshing)
             return LineupSwitchStates.InProgress;

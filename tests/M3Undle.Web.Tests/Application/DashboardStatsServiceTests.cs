@@ -1,4 +1,5 @@
 using M3Undle.Web.Application;
+using M3Undle.Web.Contracts;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.Data.Sqlite;
@@ -119,6 +120,42 @@ public sealed class DashboardStatsServiceTests
         var stats = await CreateService(fixture).GetStatsAsync(CancellationToken.None);
 
         Assert.IsNull(stats.ActiveProfileProviderExpiresUtc);
+    }
+
+    [TestMethod]
+    public async Task GetStatsAsync_ProfileWithoutProvider_DoesNotPresentOldSnapshotAsOutput()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+        var now = DateTime.UtcNow;
+
+        db.Profiles.Add(NewProfile("profile-1", isActive: true));
+        db.Snapshots.Add(new Snapshot
+        {
+            SnapshotId = "snapshot-orphaned",
+            ProfileId = "profile-1",
+            CreatedUtc = now,
+            Status = "active",
+            PlaylistPath = "playlist.m3u",
+            XmltvPath = "guide.xml",
+            ChannelIndexPath = "channels.json",
+            StatusJsonPath = "status.json",
+            ChannelCountPublished = 15,
+            LiveChannelCount = 10,
+            VodChannelCount = 5,
+        });
+        await db.SaveChangesAsync();
+
+        var stats = await CreateService(fixture).GetStatsAsync(CancellationToken.None);
+
+        var profile = stats.ProfileSummaries.Single();
+        Assert.IsFalse(profile.IsPublished);
+        Assert.AreEqual(ProfileHealthStatus.NoOutput, profile.HealthStatus);
+        Assert.AreEqual(0, profile.LiveCount);
+        Assert.AreEqual(0, profile.MovieCount);
+        Assert.IsNull(profile.LastPublishedUtc);
+        Assert.AreEqual(0, stats.PublishedLiveCount);
+        Assert.IsNull(stats.LastPublishedUtc);
     }
 
     private static DashboardStatsService CreateService(TestFixture fixture)

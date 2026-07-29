@@ -110,16 +110,6 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             if (snapshot is not null)
             {
                 health = ProfileHealthStatus.Ok;
-
-                // Only count channels served by the active profile for the output URL chips
-                if (profile.ProfileId == activeProfileId)
-                {
-                    publishedLive = snapshot.LiveChannelCount;
-                    publishedMovie = snapshot.VodChannelCount;
-                    publishedSeries = snapshot.SeriesChannelCount;
-                    lastPublishedUtc = snapshot.CreatedUtc;
-                    lastChangeClass = snapshot.ChangeClass;
-                }
             }
 
             var profileProviderIds = profileProviderMap.GetValueOrDefault(profile.ProfileId, []);
@@ -143,6 +133,20 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 })
                 .ToList();
 
+            var hasEnabledProvider = profileProviderSummaries.Count > 0;
+            if (!hasEnabledProvider)
+                health = ProfileHealthStatus.NoOutput;
+
+            // Only count channels that the active profile can still serve.
+            if (hasEnabledProvider && snapshot is not null && profile.ProfileId == activeProfileId)
+            {
+                publishedLive = snapshot.LiveChannelCount;
+                publishedMovie = snapshot.VodChannelCount;
+                publishedSeries = snapshot.SeriesChannelCount;
+                lastPublishedUtc = snapshot.CreatedUtc;
+                lastChangeClass = snapshot.ChangeClass;
+            }
+
             summaries.Add(new DashboardProfileSummary
             {
                 ProfileId = profile.ProfileId,
@@ -150,11 +154,11 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                 OutputName = profile.OutputName,
                 IsEnabled = profile.Enabled,
                 IsActive = profile.IsActive,
-                IsPublished = snapshot is not null,
-                LastPublishedUtc = snapshot?.CreatedUtc,
-                LiveCount = snapshot?.LiveChannelCount ?? 0,
-                MovieCount = snapshot?.VodChannelCount ?? 0,
-                SeriesCount = snapshot?.SeriesChannelCount ?? 0,
+                IsPublished = hasEnabledProvider && snapshot is not null,
+                LastPublishedUtc = hasEnabledProvider ? snapshot?.CreatedUtc : null,
+                LiveCount = hasEnabledProvider ? snapshot?.LiveChannelCount ?? 0 : 0,
+                MovieCount = hasEnabledProvider ? snapshot?.VodChannelCount ?? 0 : 0,
+                SeriesCount = hasEnabledProvider ? snapshot?.SeriesChannelCount ?? 0 : 0,
                 HealthStatus = health,
                 Providers = profileProviderSummaries,
             });

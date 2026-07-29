@@ -165,6 +165,41 @@ public sealed class LineupStatusServiceTests
     }
 
     [TestMethod]
+    public async Task GetStatusAsync_WhenActiveProfileLosesProvider_ReturnsSetupRequiredDespiteOldSnapshot()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedAsync(fixture.Connection, db =>
+        {
+            var now = DateTime.UtcNow;
+            db.Profiles.Add(MakeProfile("profile-active", "Active Profile", enabled: true, isActive: true, now));
+            db.Snapshots.Add(new Snapshot
+            {
+                SnapshotId = "snapshot-orphaned",
+                ProfileId = "profile-active",
+                CreatedUtc = now,
+                Status = "active",
+                PlaylistPath = "playlist.m3u",
+                XmltvPath = "guide.xml",
+                ChannelIndexPath = "channels.json",
+                StatusJsonPath = "status.json",
+                ChannelCountPublished = 12,
+                LiveChannelCount = 12,
+            });
+        });
+
+        var service = new LineupStatusService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger());
+
+        var status = await service.GetStatusAsync(CancellationToken.None);
+
+        Assert.AreEqual(LineupStatusCodes.NoActiveSnapshot, status.Status);
+        Assert.IsNotNull(status.Lineup);
+        Assert.IsNull(status.Lineup.ActiveProvider);
+        Assert.AreEqual(LineupSwitchStates.None, status.Lineup.SwitchState);
+    }
+
+    [TestMethod]
     public async Task GetStatusAsync_WhenOnlyOtherProfileHasActiveSnapshot_ReturnsNoActiveSnapshotForActiveProfile()
     {
         await using var fixture = await CreateFixtureAsync();

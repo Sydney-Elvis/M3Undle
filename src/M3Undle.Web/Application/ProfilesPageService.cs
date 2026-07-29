@@ -98,6 +98,7 @@ internal sealed class ProfilesPageService(
         db.Profiles.Remove(profile);
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
+        eventBus.Publish(AppEventKind.ProviderChanged);
 
         return null;
     }

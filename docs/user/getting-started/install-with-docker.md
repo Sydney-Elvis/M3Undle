@@ -45,7 +45,18 @@ Paste the generated value into `M3UNDLE_ENCRYPTION_KEY`, then start M3Undle:
 docker compose up -d
 ```
 
-Open the web UI at `http://<host>:8080`.
+## Finish setup in the web UI
+
+!!! important "A running container is not a configured M3Undle installation"
+    M3Undle does not include any channels or provider data. After the container starts, open the web UI at `http://<host>:8080` and sign in if you enabled UI authentication.
+
+Before M3Undle can publish a working lineup, you must:
+
+1. **[Add a provider](add-first-provider.md)** — use your own playlist or Xtream account, or use the documented IPTV.org example for a credential-free test.
+2. **[Map the channels you want](create-first-lineup.md)** — new provider groups begin as unmapped.
+3. **Build Output** to publish the lineup.
+
+Container health only confirms that the application started. Seeing channels and playing a stream confirms that you completed the initial configuration.
 
 ## Ports
 
@@ -100,7 +111,7 @@ docker compose up -d
 
 Database migrations run automatically on startup.
 
-## Next step
+## Continue setup
 
 **[Add the First Provider →](add-first-provider.md)**
 

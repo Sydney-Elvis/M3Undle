@@ -243,6 +243,25 @@ Status: In progress.
 - [ ] Documentation complete and accurate
 - [ ] DVR client validation — Plex, Emby, Jellyfin (see [BETA_VALIDATION_CHECKLIST.md](BETA_VALIDATION_CHECKLIST.md))
 
+### Future — Native media-library export
+
+This is post-Beta feature direction, not current Jellyfin capability or a v1 commitment.
+
+- [ ] STRM export for native Movies and Shows libraries
+  - separate configurable Movies and Shows output roots
+  - deterministic show → season → episode directory organization
+  - stable, filesystem-safe filenames and M3Undle-owned content identifiers
+  - TMDB/TVDB identifiers in names or metadata when the provider supplies trustworthy IDs
+  - incremental synchronization after provider catalog refreshes
+  - explicit stale-file cleanup for removed movies, shows, seasons, and episodes, with safe ownership boundaries so unrelated library files are never deleted
+  - `.strm` contents use opaque M3Undle proxy URLs and never embed upstream provider credentials
+  - dedicated, revocable, least-privilege library tokens rather than reusing UI or general client credentials
+  - documented shared-volume layout accessible to both the M3Undle and Jellyfin containers
+  - refresh semantics for changed metadata, replaced provider IDs, temporarily missing catalogs, and removed episodes
+  - integration tests covering initial export, no-op refresh, incremental additions, renames, removals, token rejection, and provider-credential non-disclosure
+
+Third-party Jellyfin Xtream plugins are a separate compatibility track. Before documenting one as supported, validate a named plugin and version end to end for catalog discovery, movie playback, series/episode mapping, refresh behavior, authentication, and credential redaction. Even if validated, describe it as optional plugin compatibility rather than native Jellyfin library integration.
+
 ## Design Documents
 
 - [ARCHITECTURE_MAP.md](../design/ARCHITECTURE_MAP.md)

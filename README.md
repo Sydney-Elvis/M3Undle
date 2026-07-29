@@ -17,6 +17,9 @@
 M3Undle is a self-hosted IPTV lineup manager and proxy for large M3U, XMLTV, Xtream, and HDHomeRun-style provider catalogs. It filters oversized provider lists down to the channels you actually want, assigns stable channel numbers, and publishes the result to DVRs, media servers, and IPTV apps — NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and anything else that consumes M3U, XMLTV, Xtream, or HDHomeRun-compatible endpoints.
 
 > [!NOTE]
+> Jellyfin integration currently means **Live TV** through M3U/XMLTV or HDHomeRun-compatible endpoints. M3Undle does not currently map IPTV movies or series into Jellyfin's native Movies/Shows libraries. Its Xtream-compatible API may be usable by third-party plugins, but that optional path is not claimed as native or validated Jellyfin VOD support. See the [Jellyfin client guide](https://sydney-elvis.github.io/M3Undle/clients/jellyfin/).
+
+> [!NOTE]
 > **Emby** and **Plex** support Live TV and DVR only with a paid subscription (Emby Premiere and Plex Pass respectively). Full compatibility with M3Undle has not been validated without those subscriptions.
 
 ![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/user/images/readme-dashboard.png)
@@ -60,7 +63,22 @@ volumes:
 docker compose up -d
 ```
 
-Open `http://<host>:8080`, add a provider, and build your first lineup — see **[Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)** and **[What M3Undle Does](https://sydney-elvis.github.io/M3Undle/getting-started/what-it-does/)** for the full walkthrough.
+> [!IMPORTANT]
+> **Docker only starts M3Undle. It does not configure a provider or add any channels.**
+>
+> **Your required next step is to open `http://<host>:8080` in a browser.** M3Undle has no usable output until you add a provider, map channels, and build the first lineup.
+
+![Fresh M3Undle dashboard showing Setup Required, no active profile, and the Add Provider action](docs/user/images/readme-dashboard-no-provider.png)
+
+After `docker compose up -d`:
+
+1. **Open `http://<host>:8080`.**
+2. Select **Add Provider** and enter your IPTV source.
+3. Map the channels you want.
+4. Build and publish your first lineup.
+5. Only then connect Jellyfin, NextPVR, or another client to M3Undle.
+
+No provider credentials handy? Use the credential-free IPTV.org example in **[Add the First Provider](https://sydney-elvis.github.io/M3Undle/getting-started/add-first-provider/)** for a quick smoke test. See **[Install with Docker](https://sydney-elvis.github.io/M3Undle/getting-started/install-with-docker/)** and **[What M3Undle Does](https://sydney-elvis.github.io/M3Undle/getting-started/what-it-does/)** for the complete walkthrough.
 
 ## What it does
 
