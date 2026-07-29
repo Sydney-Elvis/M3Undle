@@ -4,10 +4,6 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
-## [Unreleased]
-
----
-
 ## [v1.0.0-beta.7] — 2026-07-28
 
 Beta 7 lets you back up and restore your entire M3Undle configuration, fixes a subtler kind of playback glitch on reconnect, launches a full documentation site, and makes it much clearer on first run when a profile has no output because setup isn't finished yet.
