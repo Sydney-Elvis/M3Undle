@@ -16,12 +16,6 @@
 
 M3Undle is a self-hosted IPTV lineup manager and proxy for large M3U, XMLTV, Xtream, and HDHomeRun-style provider catalogs. It filters oversized provider lists down to the channels you actually want, assigns stable channel numbers, and publishes the result to DVRs, media servers, and IPTV apps — NextPVR, Jellyfin, IPTVnator, IPTV Smarters, and anything else that consumes M3U, XMLTV, Xtream, or HDHomeRun-compatible endpoints.
 
-> [!NOTE]
-> Jellyfin integration currently means **Live TV** through M3U/XMLTV or HDHomeRun-compatible endpoints. M3Undle does not currently map IPTV movies or series into Jellyfin's native Movies/Shows libraries. Its Xtream-compatible API may be usable by third-party plugins, but that optional path is not claimed as native or validated Jellyfin VOD support. See the [Jellyfin client guide](https://sydney-elvis.github.io/M3Undle/clients/jellyfin/).
-
-> [!NOTE]
-> **Emby** and **Plex** support Live TV and DVR only with a paid subscription (Emby Premiere and Plex Pass respectively). Full compatibility with M3Undle has not been validated without those subscriptions.
-
 ![M3Undle dashboard showing system status, active profile, published channel counts, and output URLs](docs/user/images/readme-dashboard.png)
 
 > [!IMPORTANT]
@@ -92,6 +86,11 @@ No provider credentials handy? Use the credential-free IPTV.org example in **[Ad
 - **Profiles** — named lineups with published history and automatic fallback to last-known-good output
 
 See **[Core Concepts](https://sydney-elvis.github.io/M3Undle/concepts/providers/)** for how these fit together, or **[Guides](https://sydney-elvis.github.io/M3Undle/guides/build-a-lineup/)** for step-by-step workflows.
+
+## Client compatibility
+
+- **Jellyfin:** current support means **Live TV** through M3U/XMLTV or HDHomeRun-compatible endpoints. M3Undle does not currently map IPTV movies or series into Jellyfin's native Movies/Shows libraries. Its Xtream-compatible API may be usable by third-party plugins, but that optional path is not claimed as native or validated Jellyfin VOD support. See the [Jellyfin client guide](https://sydney-elvis.github.io/M3Undle/clients/jellyfin/).
+- **Emby and Plex:** Live TV and DVR require paid subscriptions—Emby Premiere and Plex Pass, respectively. Full compatibility with M3Undle has not been validated without those subscriptions.
 
 ## Documentation
 
