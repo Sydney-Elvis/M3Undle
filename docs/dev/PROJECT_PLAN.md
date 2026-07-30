@@ -22,11 +22,11 @@ Primary published endpoints:
 - Alpha 1: complete
 - Alpha 2: complete
 - Alpha 3: complete
-- Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; DVR client validation (Plex/Emby/Jellyfin) moved to Beta
+- Alpha 4: complete — stream proxy, HDHomeRun tuner-slot enforcement, and EPG sources implemented; all checklist items passed; Jellyfin/NextPVR client validation moved to Beta
 - Alpha 5: complete — active profile switching, lineup status, channel review queue, dynamic groups, downstream integrations, HLS browser playback
 - Alpha 6: complete — per-provider gateway/VPN routing, Xtream auto-detection, system event badge, observability endpoints, provider expiry
 - Alpha 7: complete — adaptive stream recovery, channel health tracking (Stable/Cautious/Unstable), relay policy (auto/on/off), stream monitor improvements, HDHR page, About page, interface polish
-- Beta: in progress — DVR client validation, documentation, hardening
+- Beta: in progress — hardening, security review, performance validation, and release polish
 
 ## Release Milestones
 
@@ -136,7 +136,7 @@ Status: Complete.
 ### Alpha 4 — Stream Proxy, DVR Integration & EPG
 Goal: Native shared stream proxy, HDHomeRun compatibility, and stronger guide-source handling.
 
-Status: Complete. All checklist items passed. End-to-end DVR client validation (Plex, Emby, Jellyfin) moved to Beta — see BETA_VALIDATION_CHECKLIST.md.
+Status: Complete. All checklist items passed. End-to-end Jellyfin/NextPVR client validation moved to Beta — see BETA_VALIDATION_CHECKLIST.md.
 
 #### Stream Proxy (Shared Live Streaming)
 - [x] Native .NET MPEG-TS shared stream proxy — no FFmpeg required
@@ -206,7 +206,7 @@ Status: Complete.
 - [x] Per-provider refresh scheduling
 
 See implementation plans:
-- [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/AUTOMATION_LAB_INTEGRATION_PLAN.md) — automation lab integration (provider seed, readiness endpoints, streaming test scenarios)
+- [AUTOMATION_LAB_INTEGRATION_PLAN.md](../../.ai_docs/done/AUTOMATION_LAB_INTEGRATION_PLAN.md) — completed automation lab integration and validated release-gate coverage
 - [XTREM_PROVIDER_DETECTION.md](../../.ai_docs/XTREM_PROVIDER_DETECTION.md) — Xtream auto-detection
 - [EVENT_BADGE_SYSTEM.md](../../.ai_docs/EVENT_BADGE_SYSTEM.md) — system event badge
 
@@ -237,11 +237,11 @@ Goal: No major feature additions beyond gaps identified during alpha — functio
 Status: In progress.
 
 - [ ] Security review
-- [ ] Backup / restore (alpha gap — see #141)
+- [x] Backup / restore — delivered in beta.7; portable encrypted backup, validation, upload/download, clean-install restore, rollback protection, weekly scheduling, and headless restore
 - [ ] Performance validation for large providers
 - [ ] Bug fixes and polish
-- [ ] Documentation complete and accurate
-- [ ] DVR client validation — Plex, Emby, Jellyfin (see [BETA_VALIDATION_CHECKLIST.md](BETA_VALIDATION_CHECKLIST.md))
+- [x] Documentation site launched — delivered in beta.7 with getting started, guides, client notes, troubleshooting, concepts, and a simplified repository README
+- [~] Ad hoc client validation — Jellyfin and NextPVR remain available on srv2 for release/development checks but are not an automated Beta gate (see [BETA_VALIDATION_CHECKLIST.md](BETA_VALIDATION_CHECKLIST.md))
 
 ### Future — Native media-library export
 
