@@ -1523,13 +1523,21 @@ public sealed class SnapshotBuilder(
                     }
                 }
                 int total = live + vod + series;
-                string contentType = total == 0 ? "live"
-                    : live == total ? "live"
-                    : vod == total ? "vod"
-                    : series == total ? "series"
-                    : "mixed";
 
-                return new { GroupName = g.Key, Count = total, ContentType = contentType };
+                // A group belongs in the live lineup only if it carries at least one live
+                // channel. Xtream exposes the same genre name (e.g. "Comedy") as both a VOD
+                // and a series category, so a catalog-only group is labelled by its dominant
+                // catalog type — otherwise it surfaces in live channel mapping with tens of
+                // thousands of items that can never be selected.
+                string contentType = live > 0 || total == 0 ? "live"
+                    : series > vod ? "series"
+                    : "vod";
+
+                // Only live channels are persisted, so live-bearing groups report their live
+                // count; catalog-only groups keep their full item count for reference.
+                int count = live > 0 ? live : total;
+
+                return new { GroupName = g.Key, Count = count, ContentType = contentType };
             })
             .ToDictionary(x => x.GroupName, StringComparer.Ordinal);
 
@@ -1589,9 +1597,11 @@ public sealed class SnapshotBuilder(
         bool markNewGroups,
         CancellationToken cancellationToken)
     {
+        // Only live groups are mappable — VOD/series bypass group mapping entirely and are
+        // controlled by the provider's IncludeVod/IncludeSeries flags.
         var allGroupIds = await db.ProviderGroups
             .AsNoTracking()
-            .Where(x => x.ProviderId == providerId)
+            .Where(x => x.ProviderId == providerId && x.ContentType == "live")
             .Select(x => x.ProviderGroupId)
             .ToListAsync(cancellationToken);
 
@@ -1761,7 +1771,7 @@ public sealed class SnapshotBuilder(
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
                      && x.Decision == "exclude"
-                     && (x.ProviderGroup.ContentType == "live" || x.ProviderGroup.ContentType == "mixed"))
+                     && x.ProviderGroup.ContentType == "live")
             .Select(x => x.ProviderGroupId)
             .ToHashSetAsync(cancellationToken);
 

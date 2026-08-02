@@ -742,17 +742,12 @@ public sealed class SnapshotHandlingTests
                 newsFilter.IsNew = false;
                 newsFilter.UpdatedUtc = DateTime.UtcNow;
 
-                var moviesFilter = await edit.ProfileGroupFilters
-                    .Include(x => x.ProviderGroup)
-                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Movies");
-                moviesFilter.Decision = "exclude";
-                moviesFilter.UpdatedUtc = DateTime.UtcNow;
-
-                var seriesFilter = await edit.ProfileGroupFilters
-                    .Include(x => x.ProviderGroup)
-                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Series");
-                seriesFilter.Decision = "exclude";
-                seriesFilter.UpdatedUtc = DateTime.UtcNow;
+                // Catalog-only groups are not mappable, so they get no filter rows at all —
+                // VOD/series are controlled solely by the provider Include flags.
+                var catalogFilterCount = await edit.ProfileGroupFilters
+                    .CountAsync(x => x.ProfileId == "profile-1"
+                                  && (x.ProviderGroup.RawName == "Movies" || x.ProviderGroup.RawName == "Series"));
+                Assert.AreEqual(0, catalogFilterCount, "VOD/series groups should not receive group filters.");
 
                 // Since TrackNewChannels = false by default, no channel rows were auto-created.
                 // Directly insert included rows for the live news channels.

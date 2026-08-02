@@ -10,7 +10,10 @@ public sealed class ProviderGroup
     public DateTime LastSeenUtc { get; set; }
     public bool Active { get; set; }
     public int? ChannelCount { get; set; }
-    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'|'mixed'
+    // 'live' when the group carries at least one live channel (it may also carry catalog
+    // items); otherwise 'vod' or 'series' by dominant catalog type. Legacy rows may still
+    // hold 'mixed' until the provider's next refresh reclassifies them.
+    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'
 
     public Provider Provider { get; set; } = null!;
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();
