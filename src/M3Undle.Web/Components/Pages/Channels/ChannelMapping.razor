@@ -165,7 +165,7 @@
             .ToHashSet(StringComparer.Ordinal);
 
         var liveFilters = _allFilters
-            .Where(f => f.ProviderGroupContentType is "live" && !cgLinkedGroupIds.Contains(f.ProviderGroupId))
+            .Where(f => (f.ProviderGroupContentType is "live" or "mixed") && !cgLinkedGroupIds.Contains(f.ProviderGroupId))
             .ToList();
 
         // Standalone: no OutputName. VirtualParent members: share an OutputName.
@@ -1729,7 +1729,7 @@
 
     private List<object> BuildFilteredItems()
     {
-        var allLive = _allFilters.Where(f => f.ProviderGroupContentType is "live").ToList();
+        var allLive = _allFilters.Where(f => f.ProviderGroupContentType is "live" or "mixed").ToList();
 
             var standaloneDict = allLive
                 .Where(f => f.OutputName is null)
@@ -1841,7 +1841,7 @@
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<(string Key, string SortName, bool IsNew)>();
 
-        foreach (var f in _allFilters.Where(f => f.ProviderGroupContentType is "live"))
+        foreach (var f in _allFilters.Where(f => f.ProviderGroupContentType is "live" or "mixed"))
         {
             var key = f.OutputName is not null ? $"parent:{f.OutputName}" : f.ProfileGroupFilterId;
             var sortName = f.OutputName ?? f.ProviderGroupRawName;

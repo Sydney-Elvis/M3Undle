@@ -592,7 +592,7 @@ public sealed class SnapshotBuilder(
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
                         && x.ProviderGroup.ProviderId == provider.ProviderId
-                        && x.ProviderGroup.ContentType == "live")
+                        && (x.ProviderGroup.ContentType == "live" || x.ProviderGroup.ContentType == "mixed"))
             .ToListAsync(cancellationToken);
 
         // Load structured event interest rules for this profile (profile-wide + group-scoped)
@@ -1223,7 +1223,7 @@ public sealed class SnapshotBuilder(
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
                         && x.ProviderGroup.ProviderId == provider.ProviderId
-                        && x.ProviderGroup.ContentType == "live")
+                        && (x.ProviderGroup.ContentType == "live" || x.ProviderGroup.ContentType == "mixed"))
             .ToListAsync(cancellationToken);
 
         var includedFilterLookup = includedFilters

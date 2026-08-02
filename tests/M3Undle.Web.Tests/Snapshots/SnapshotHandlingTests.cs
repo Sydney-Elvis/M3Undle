@@ -951,6 +951,93 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_BuildOnly_HonorsLegacyMixedLiveFilterBeforeRefresh()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            setup.FetchRuns.Add(NewFetchRun("fetch-1", "provider-1"));
+            setup.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = "legacy-news",
+                ProviderId = "provider-1",
+                RawName = "News",
+                ContentType = "mixed",
+                ChannelCount = 1,
+                Active = true,
+                FirstSeenUtc = DateTime.UtcNow.AddDays(-1),
+                LastSeenUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            setup.ProviderChannels.Add(new ProviderChannel
+            {
+                ProviderChannelId = "news-channel",
+                ProviderId = "provider-1",
+                DisplayName = "Live News",
+                StreamUrl = "http://example.com/live/user/pass/100.ts",
+                GroupTitle = "News",
+                ProviderGroupId = "legacy-news",
+                Active = true,
+                ContentType = "live",
+                LastFetchRunId = "fetch-1",
+                FirstSeenUtc = DateTime.UtcNow.AddDays(-1),
+                LastSeenUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            setup.ProfileGroupFilters.Add(new ProfileGroupFilter
+            {
+                ProfileGroupFilterId = "legacy-news-filter",
+                ProfileId = "profile-1",
+                ProviderGroupId = "legacy-news",
+                Decision = "include",
+                ChannelMode = "all",
+                TrackingPolicy = "review",
+                CreatedUtc = DateTime.UtcNow.AddDays(-1),
+                UpdatedUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var cachedChannel = new ParsedProviderChannel
+        {
+            DisplayName = "Live News",
+            StreamUrl = "http://example.com/live/user/pass/100.ts",
+            GroupTitle = "News",
+        };
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                var result = await CreateBuilder(db, HttpStatusCode.OK, "<tv></tv>", tempDir)
+                    .BuildOnlyAsync(
+                        new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>
+                        {
+                            ["provider-1"] = [cachedChannel],
+                        },
+                        CancellationToken.None);
+                Assert.IsTrue(result.Succeeded, result.ErrorSummary);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .AsNoTracking()
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+
+            Assert.AreEqual(1, active.LiveChannelCount,
+                "Build-only must continue treating a legacy mixed group as its live mapping until refresh upgrades it.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_ExcludingLiveGroup_DoesNotAffectSameNamedCatalogGroup()
     {
         await using var fixture = await CreateFixtureAsync();

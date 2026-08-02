@@ -12,7 +12,7 @@ public sealed class ProviderGroup
     public int? ChannelCount { get; set; }
     // Group identity includes this value, so same-named live, VOD and series categories are
     // stored separately. Legacy rows may hold 'mixed' until the provider's next refresh.
-    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'
+    public string ContentType { get; set; } = "live"; // 'live'|'vod'|'series'; legacy: 'mixed'
 
     public Provider Provider { get; set; } = null!;
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();
