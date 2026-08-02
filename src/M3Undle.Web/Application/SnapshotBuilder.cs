@@ -600,6 +600,10 @@ public sealed class SnapshotBuilder(
             .OrderBy(r => r.Priority)
             .ToListAsync(cancellationToken);
 
+        // Keyed by raw name, which is only unique because group filters exist for live groups
+        // alone — a name may now also exist as separate VOD/series rows. If catalog filtering
+        // is ever added to this same table, this key must become (raw name, content type) or
+        // it will throw on duplicates.
         var includedGroups = groupFilters
             .Where(f => LineupReviewSemantics.IsGroupIncluded(f.Decision))
             .ToDictionary(
@@ -1500,7 +1504,7 @@ public sealed class SnapshotBuilder(
         return result;
     }
 
-    private async Task<Dictionary<string, string>> SyncProviderGroupsAsync(
+    private async Task<Dictionary<ProviderGroupKey, string>> SyncProviderGroupsAsync(
         string providerId,
         IReadOnlyList<ParsedProviderChannel> channels,
         DateTime now,
@@ -1509,55 +1513,26 @@ public sealed class SnapshotBuilder(
         // Include ALL channels (live, vod, series) — determine dominant content type per group
         var groupData = channels
             .Where(x => !string.IsNullOrWhiteSpace(x.GroupTitle) && !string.IsNullOrWhiteSpace(x.StreamUrl))
-            .GroupBy(x => x.GroupTitle!, StringComparer.Ordinal)
-            .Select(g =>
-            {
-                int live = 0, vod = 0, series = 0;
-                foreach (var ch in g)
-                {
-                    switch (LiveClassifier.ClassifyContent(ch.StreamUrl))
-                    {
-                        case "vod": vod++; break;
-                        case "series": series++; break;
-                        default: live++; break;
-                    }
-                }
-                int total = live + vod + series;
-
-                // A group belongs in the live lineup only if it carries at least one live
-                // channel. Xtream exposes the same genre name (e.g. "Comedy") as both a VOD
-                // and a series category, so a catalog-only group is labelled by its dominant
-                // catalog type — otherwise it surfaces in live channel mapping with tens of
-                // thousands of items that can never be selected.
-                string contentType = live > 0 || total == 0 ? "live"
-                    : series > vod ? "series"
-                    : "vod";
-
-                // Only live channels are persisted, so live-bearing groups report their live
-                // count; catalog-only groups keep their full item count for reference.
-                int count = live > 0 ? live : total;
-
-                return new { GroupName = g.Key, Count = count, ContentType = contentType };
-            })
-            .ToDictionary(x => x.GroupName, StringComparer.Ordinal);
-
-        var groupNames = groupData.Keys.ToList();
+            // Group identity is (name, content type). Providers routinely publish the same
+            // category name as separate live, VOD and series categories; keeping them as one
+            // row would let a live group's filter decision silently govern catalog content of
+            // the same name, and would hide catalog items behind a live-labelled row.
+            .GroupBy(x => new ProviderGroupKey(x.GroupTitle!, LiveClassifier.ClassifyContent(x.StreamUrl)))
+            .ToDictionary(g => g.Key, g => g.Count());
 
         var existingGroups = await db.ProviderGroups
             .Where(x => x.ProviderId == providerId)
             .ToListAsync(cancellationToken);
 
-        var byName = existingGroups.ToDictionary(x => x.RawName, StringComparer.Ordinal);
+        var byKey = existingGroups.ToDictionary(x => new ProviderGroupKey(x.RawName, x.ContentType));
 
-        foreach (var groupName in groupNames)
+        foreach (var (key, count) in groupData)
         {
-            var info = groupData[groupName];
-            if (byName.TryGetValue(groupName, out var existing))
+            if (byKey.TryGetValue(key, out var existing))
             {
                 existing.LastSeenUtc = now;
                 existing.Active = true;
-                existing.ChannelCount = info.Count;
-                existing.ContentType = info.ContentType;
+                existing.ChannelCount = count;
                 continue;
             }
 
@@ -1565,18 +1540,20 @@ public sealed class SnapshotBuilder(
             {
                 ProviderGroupId = Guid.NewGuid().ToString(),
                 ProviderId = providerId,
-                RawName = groupName,
+                RawName = key.RawName,
                 FirstSeenUtc = now,
                 LastSeenUtc = now,
                 Active = true,
-                ChannelCount = info.Count,
-                ContentType = info.ContentType,
+                ChannelCount = count,
+                ContentType = key.ContentType,
             });
         }
 
         foreach (var group in existingGroups)
         {
-            if (!groupData.ContainsKey(group.RawName))
+            // Legacy rows carrying the retired 'mixed' content type match no current key and
+            // deactivate here; the next build recreates them as separate per-type rows.
+            if (!groupData.ContainsKey(new ProviderGroupKey(group.RawName, group.ContentType)))
             {
                 group.Active = false;
                 group.ChannelCount = 0;
@@ -1588,8 +1565,14 @@ public sealed class SnapshotBuilder(
         return await db.ProviderGroups
             .AsNoTracking()
             .Where(x => x.ProviderId == providerId)
-            .ToDictionaryAsync(x => x.RawName, x => x.ProviderGroupId, StringComparer.Ordinal, cancellationToken);
+            .ToDictionaryAsync(x => new ProviderGroupKey(x.RawName, x.ContentType), x => x.ProviderGroupId, cancellationToken);
     }
+
+    /// <summary>
+    /// Identity of a provider group: the raw category name plus the kind of content it carries.
+    /// Ordinal, case-sensitive — provider category names are treated as opaque.
+    /// </summary>
+    internal readonly record struct ProviderGroupKey(string RawName, string ContentType);
 
     private async Task SyncGroupFiltersAsync(
         string profileId,
@@ -1743,7 +1726,7 @@ public sealed class SnapshotBuilder(
         string providerId,
         string fetchRunId,
         IReadOnlyList<ParsedProviderChannel> channels,
-        IReadOnlyDictionary<string, string> groupNameToId,
+        IReadOnlyDictionary<ProviderGroupKey, string> groupNameToId,
         DateTime now,
         CancellationToken cancellationToken)
     {
@@ -1804,7 +1787,10 @@ public sealed class SnapshotBuilder(
             var contentType = LiveClassifier.ClassifyContent(ch.StreamUrl);
             if (contentType != "live") continue;
 
-            var groupId = ch.GroupTitle is not null && groupNameToId.TryGetValue(ch.GroupTitle, out var gid)
+            // Resolve against the live row for this name — a same-named catalog category is a
+            // separate group and must never claim a live channel.
+            var groupId = ch.GroupTitle is not null
+                          && groupNameToId.TryGetValue(new ProviderGroupKey(ch.GroupTitle, contentType), out var gid)
                 ? (string?)gid : null;
             var eventClassification = EventChannelClassifier.Classify(ch.DisplayName, ch.GroupTitle);
 

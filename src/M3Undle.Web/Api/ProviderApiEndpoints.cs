@@ -1,4 +1,5 @@
 using M3Undle.Core.Events;
+using M3Undle.Core.M3u;
 using M3Undle.Core.Net;
 using M3Undle.Web.Application;
 using M3Undle.Web.Security;
@@ -1143,21 +1144,22 @@ public static class ProviderApiEndpoints
         DateTime now,
         CancellationToken cancellationToken)
     {
-        var groupNames = entries
+        // Group identity is (name, content type) — see SnapshotBuilder.ProviderGroupKey.
+        var groupKeys = entries
             .Where(x => !string.IsNullOrWhiteSpace(x.GroupTitle))
-            .Select(x => x.GroupTitle!)
-            .Distinct(StringComparer.Ordinal)
+            .Select(x => new SnapshotBuilder.ProviderGroupKey(x.GroupTitle!, LiveClassifier.ClassifyContent(x.StreamUrl)))
+            .Distinct()
             .ToList();
 
         var existingGroups = await db.ProviderGroups
             .Where(x => x.ProviderId == providerId)
             .ToListAsync(cancellationToken);
 
-        var byName = existingGroups.ToDictionary(x => x.RawName, StringComparer.Ordinal);
+        var byKey = existingGroups.ToDictionary(x => new SnapshotBuilder.ProviderGroupKey(x.RawName, x.ContentType));
 
-        foreach (var groupName in groupNames)
+        foreach (var key in groupKeys)
         {
-            if (byName.TryGetValue(groupName, out var existing))
+            if (byKey.TryGetValue(key, out var existing))
             {
                 existing.LastSeenUtc = now;
                 existing.Active = true;
@@ -1168,16 +1170,18 @@ public static class ProviderApiEndpoints
             {
                 ProviderGroupId = Guid.NewGuid().ToString(),
                 ProviderId = providerId,
-                RawName = groupName,
+                RawName = key.RawName,
                 FirstSeenUtc = now,
                 LastSeenUtc = now,
                 Active = true,
+                ContentType = key.ContentType,
             });
         }
 
+        var seenKeys = groupKeys.ToHashSet();
         foreach (var group in existingGroups)
         {
-            if (!groupNames.Contains(group.RawName, StringComparer.Ordinal))
+            if (!seenKeys.Contains(new SnapshotBuilder.ProviderGroupKey(group.RawName, group.ContentType)))
             {
                 group.Active = false;
             }
@@ -1224,7 +1228,10 @@ public static class ProviderApiEndpoints
         var groupLookup = await db.ProviderGroups
             .AsNoTracking()
             .Where(x => x.ProviderId == providerId)
-            .ToDictionaryAsync(x => x.RawName, x => x.ProviderGroupId, StringComparer.Ordinal, cancellationToken);
+            .ToDictionaryAsync(
+                x => new SnapshotBuilder.ProviderGroupKey(x.RawName, x.ContentType),
+                x => x.ProviderGroupId,
+                cancellationToken);
 
         var keys = normalizedEntries
             .Where(x => x.NormalizedKey is not null)
@@ -1257,7 +1264,10 @@ public static class ProviderApiEndpoints
         foreach (var item in normalizedEntries)
         {
             var entry = item.Entry;
-            var providerGroupId = entry.GroupTitle is not null && groupLookup.TryGetValue(entry.GroupTitle, out var foundGroupId)
+            var providerGroupId = entry.GroupTitle is not null
+                                  && groupLookup.TryGetValue(
+                                      new SnapshotBuilder.ProviderGroupKey(entry.GroupTitle, LiveClassifier.ClassifyContent(entry.StreamUrl)),
+                                      out var foundGroupId)
                 ? foundGroupId
                 : null;
             var eventClassification = EventChannelClassifier.Classify(entry.DisplayName, entry.GroupTitle);

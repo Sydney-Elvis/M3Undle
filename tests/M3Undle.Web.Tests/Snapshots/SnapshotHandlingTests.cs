@@ -792,6 +792,133 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_SplitsSameNamedGroups_ByContentType()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+
+            // One "Comedy" category per content type, not a single collapsed row.
+            var comedyGroups = await verify.ProviderGroups
+                .AsNoTracking()
+                .Where(x => x.ProviderId == "provider-1" && x.RawName == "Comedy")
+                .OrderBy(x => x.ContentType)
+                .ToListAsync();
+
+            CollectionAssert.AreEqual(
+                new[] { "live", "series", "vod" },
+                comedyGroups.Select(x => x.ContentType).ToArray(),
+                "Same-named live/VOD/series categories must be distinct group rows.");
+
+            // Each row counts only its own content type — no summing across kinds.
+            foreach (var group in comedyGroups)
+                Assert.AreEqual(1, group.ChannelCount, $"Comedy/{group.ContentType} should count only its own items.");
+
+            // Only the live row is mappable, so only it receives a filter row. A user excluding
+            // live "Comedy" must not be silently deciding anything about catalog "Comedy".
+            var filters = await verify.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .Where(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Comedy")
+                .ToListAsync();
+
+            Assert.AreEqual(1, filters.Count, "Only the live Comedy group should be mappable.");
+            Assert.AreEqual("live", filters[0].ProviderGroup.ContentType);
+
+            // The persisted live channel must attach to the live row, never a catalog row.
+            var liveGroupId = comedyGroups.Single(x => x.ContentType == "live").ProviderGroupId;
+            var persisted = await verify.ProviderChannels
+                .AsNoTracking()
+                .Where(x => x.ProviderId == "provider-1")
+                .ToListAsync();
+
+            Assert.AreEqual(1, persisted.Count, "Only live channels are persisted.");
+            Assert.AreEqual(liveGroupId, persisted[0].ProviderGroupId);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_ExcludingLiveGroup_DoesNotAffectSameNamedCatalogGroup()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            // Exclude the live "Comedy" group — the catalog items sharing that name must survive.
+            await using (var edit = fixture.CreateDbContext())
+            {
+                var liveComedy = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .SingleAsync(x => x.ProfileId == "profile-1"
+                                   && x.ProviderGroup.RawName == "Comedy"
+                                   && x.ProviderGroup.ContentType == "live");
+                liveComedy.Decision = "exclude";
+                liveComedy.UpdatedUtc = DateTime.UtcNow;
+                await edit.SaveChangesAsync();
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .AsNoTracking()
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+
+            Assert.AreEqual(1, active.VodChannelCount, "Excluding live Comedy must not drop VOD Comedy.");
+            Assert.AreEqual(1, active.SeriesChannelCount, "Excluding live Comedy must not drop series Comedy.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_DoesNotCollapseDistinctVodItems_WithSameTvgId()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -1183,6 +1310,17 @@ public sealed class SnapshotHandlingTests
         "#EXTINF:-1 group-title=\"Movies\",Movie One\n" +
         "http://example.com/movie/user/pass/200.mkv\n" +
         "#EXTINF:-1 group-title=\"Series\",Series One\n" +
+        "http://example.com/series/user/pass/300.mkv\n";
+
+    // The same category name published as live, VOD and series — the shape that previously
+    // collapsed into a single "mixed" group row.
+    private const string SampleSameNameAcrossContentTypesM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 group-title=\"Comedy\",Comedy Central\n" +
+        "http://example.com/live/user/pass/100.ts\n" +
+        "#EXTINF:-1 group-title=\"Comedy\",Funny Movie\n" +
+        "http://example.com/movie/user/pass/200.mkv\n" +
+        "#EXTINF:-1 group-title=\"Comedy\",Funny Show — S01E01\n" +
         "http://example.com/series/user/pass/300.mkv\n";
 
     private const string SampleDuplicateVodTvgIdM3u =
