@@ -1156,6 +1156,9 @@ public static class ProviderApiEndpoints
             .ToListAsync(cancellationToken);
 
         var byKey = existingGroups.ToDictionary(x => new SnapshotBuilder.ProviderGroupKey(x.RawName, x.ContentType));
+        var legacyMixedByName = existingGroups
+            .Where(x => x.ContentType == "mixed")
+            .ToDictionary(x => x.RawName, StringComparer.Ordinal);
 
         foreach (var key in groupKeys)
         {
@@ -1163,6 +1166,15 @@ public static class ProviderApiEndpoints
             {
                 existing.LastSeenUtc = now;
                 existing.Active = true;
+                continue;
+            }
+
+            if (key.ContentType == "live" && legacyMixedByName.TryGetValue(key.RawName, out var legacyMixed))
+            {
+                legacyMixed.ContentType = "live";
+                legacyMixed.LastSeenUtc = now;
+                legacyMixed.Active = true;
+                byKey[key] = legacyMixed;
                 continue;
             }
 

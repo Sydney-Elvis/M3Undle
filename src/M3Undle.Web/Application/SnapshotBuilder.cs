@@ -590,7 +590,9 @@ public sealed class SnapshotBuilder(
         var groupFilters = await db.ProfileGroupFilters
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
-            .Where(x => x.ProfileId == profileId && x.ProviderGroup.ProviderId == provider.ProviderId)
+            .Where(x => x.ProfileId == profileId
+                        && x.ProviderGroup.ProviderId == provider.ProviderId
+                        && x.ProviderGroup.ContentType == "live")
             .ToListAsync(cancellationToken);
 
         // Load structured event interest rules for this profile (profile-wide + group-scoped)
@@ -1220,7 +1222,8 @@ public sealed class SnapshotBuilder(
             .AsNoTracking()
             .Include(x => x.ProviderGroup)
             .Where(x => x.ProfileId == profileId
-                        && x.ProviderGroup.ProviderId == provider.ProviderId)
+                        && x.ProviderGroup.ProviderId == provider.ProviderId
+                        && x.ProviderGroup.ContentType == "live")
             .ToListAsync(cancellationToken);
 
         var includedFilterLookup = includedFilters
@@ -1525,6 +1528,9 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var byKey = existingGroups.ToDictionary(x => new ProviderGroupKey(x.RawName, x.ContentType));
+        var legacyMixedByName = existingGroups
+            .Where(x => x.ContentType == "mixed")
+            .ToDictionary(x => x.RawName, StringComparer.Ordinal);
 
         foreach (var (key, count) in groupData)
         {
@@ -1533,6 +1539,19 @@ public sealed class SnapshotBuilder(
                 existing.LastSeenUtc = now;
                 existing.Active = true;
                 existing.ChannelCount = count;
+                continue;
+            }
+
+            // Reuse a legacy mixed row for its live successor. Keeping the row ID preserves
+            // group decisions, channel selections, event rules and custom-group links across
+            // an in-place upgrade instead of leaving a stale filter beside a new live filter.
+            if (key.ContentType == "live" && legacyMixedByName.TryGetValue(key.RawName, out var legacyMixed))
+            {
+                legacyMixed.ContentType = "live";
+                legacyMixed.LastSeenUtc = now;
+                legacyMixed.Active = true;
+                legacyMixed.ChannelCount = count;
+                byKey[key] = legacyMixed;
                 continue;
             }
 

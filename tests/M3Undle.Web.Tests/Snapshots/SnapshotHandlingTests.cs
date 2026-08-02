@@ -861,6 +861,96 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
+    public async Task SnapshotBuilder_UpgradeReusesLegacyMixedGroupAndPreservesFilter()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            setup.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = "legacy-comedy",
+                ProviderId = "provider-1",
+                RawName = "Comedy",
+                ContentType = "mixed",
+                ChannelCount = 3,
+                Active = true,
+                FirstSeenUtc = DateTime.UtcNow.AddDays(-1),
+                LastSeenUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            setup.ProfileGroupFilters.Add(new ProfileGroupFilter
+            {
+                ProfileGroupFilterId = "legacy-comedy-filter",
+                ProfileId = "profile-1",
+                ProviderGroupId = "legacy-comedy",
+                Decision = "exclude",
+                ChannelMode = "all",
+                TrackingPolicy = "review",
+                OutputName = "My Comedy",
+                CreatedUtc = DateTime.UtcNow.AddDays(-1),
+                UpdatedUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                var result = await CreateBuilder(db, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir)
+                    .RunAsync(CancellationToken.None);
+                Assert.IsTrue(result.Succeeded, result.ErrorSummary);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var comedyGroups = await verify.ProviderGroups
+                .AsNoTracking()
+                .Where(x => x.ProviderId == "provider-1" && x.RawName == "Comedy")
+                .OrderBy(x => x.ContentType)
+                .ToListAsync();
+
+            CollectionAssert.AreEqual(
+                new[] { "live", "series", "vod" },
+                comedyGroups.Select(x => x.ContentType).ToArray());
+
+            var liveGroup = comedyGroups.Single(x => x.ContentType == "live");
+            Assert.AreEqual("legacy-comedy", liveGroup.ProviderGroupId, "The legacy row ID should become the live row.");
+
+            var filters = await verify.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .Where(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Comedy")
+                .ToListAsync();
+
+            Assert.AreEqual(1, filters.Count, "Upgrade must not create a duplicate same-named live filter.");
+            Assert.AreEqual("legacy-comedy-filter", filters[0].ProfileGroupFilterId);
+            Assert.AreEqual("exclude", filters[0].Decision);
+            Assert.AreEqual("My Comedy", filters[0].OutputName);
+            Assert.AreEqual("live", filters[0].ProviderGroup.ContentType);
+
+            var active = await verify.Snapshots
+                .AsNoTracking()
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+            Assert.AreEqual(0, active.LiveChannelCount, "The preserved exclusion should still remove live Comedy.");
+            Assert.AreEqual(1, active.VodChannelCount);
+            Assert.AreEqual(1, active.SeriesChannelCount);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SnapshotBuilder_ExcludingLiveGroup_DoesNotAffectSameNamedCatalogGroup()
     {
         await using var fixture = await CreateFixtureAsync();
