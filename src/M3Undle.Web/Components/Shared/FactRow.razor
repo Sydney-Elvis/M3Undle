@@ -1,0 +1,9 @@
+<MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-1">
+    <MudText Color="Color.Secondary">@Label</MudText>
+    <MudText>@Value</MudText>
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Value { get; set; } = string.Empty;
+}

@@ -1,0 +1,136 @@
+@page "/system/resources"
+@using M3Undle.Web.Observability.Resources
+@inject IResourceFactsProvider ResourceFactsProvider
+@implements IDisposable
+
+<PageTitle>Resource Usage — M3Undle</PageTitle>
+
+<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h5">Resource Usage</MudText>
+    <MudText Typo="Typo.caption" Color="Color.Secondary">Auto-refreshes every 5s</MudText>
+</MudStack>
+
+@if (_facts is null)
+{
+    <MudText Color="Color.Secondary">Loading…</MudText>
+}
+else
+{
+    var facts = _facts;
+
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">M3Undle process</MudText>
+                <FactRow Label="CPU usage" Value="@FormatPercent(facts.ProcessCpuPercent)" />
+                <FactRow Label="Working set memory" Value="@ResourceFactsPresentation.FormatBytes(facts.ProcessWorkingSetBytes)" />
+            </MudPaper>
+
+            <MudPaper Class="pa-4 mt-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">FFmpeg relays</MudText>
+                <FactRow Label="Active FFmpeg processes" Value="@facts.ActiveFfmpegProcessCount.ToString()" />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Container</MudText>
+                <FactRow Label="CPU usage" Value="@FormatPercent(facts.ContainerCpuPercent)" />
+                <FactRow Label="CPU throttled periods" Value="@(facts.ContainerCpuThrottledPeriods?.ToString() ?? "—")" />
+                <FactRow Label="CPU throttled time" Value="@(facts.ContainerCpuThrottledTime is { } t ? $"{t.TotalSeconds:F1}s" : "—")" />
+                <FactRow Label="Memory usage" Value="@FormatMemory(facts.ContainerMemoryUsedBytes, facts.ContainerMemoryLimitBytes)" />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Host</MudText>
+                <FactRow Label="Load average (1 min)" Value="@(facts.HostLoadAverage1Min?.ToString("F2") ?? "—")" />
+                <FactRow Label="VM CPU steal time" Value="@FormatPercent(facts.VmCpuStealPercent)" />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Network &amp; clients</MudText>
+                <FactRow Label="Active clients" Value="@facts.ActiveClientCount.ToString()" />
+                <FactRow Label="Aggregate egress" Value="@ResourceFactsPresentation.FormatBitrate(facts.AggregateEgressBytesPerSecond)" />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Disk space</MudText>
+                @if (facts.DiskVolumes.Count == 0)
+                {
+                    <MudText Color="Color.Secondary">No disk volumes could be read.</MudText>
+                }
+                else
+                {
+                    @foreach (var volume in facts.DiskVolumes)
+                    {
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                            <MudText Style="min-width:140px">@volume.Label</MudText>
+                            <MudText Color="@(volume.IsCritical ? Color.Error : Color.Default)">
+                                @ResourceFactsPresentation.FormatBytes(volume.FreeBytes) free of @ResourceFactsPresentation.FormatBytes(volume.TotalBytes)
+                            </MudText>
+                            @if (volume.IsCritical)
+                            {
+                                <StatusChip Label="Critically low" Color="Color.Error" Icon="@Icons.Material.Filled.Warning" />
+                            }
+                        </MudStack>
+                    }
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private ResourceFacts? _facts;
+    private PeriodicTimer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return;
+
+        await RefreshAsync();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = RunTimerAsync(_timer);
+    }
+
+    private async Task RunTimerAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(RefreshAndRenderAsync);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task RefreshAndRenderAsync()
+    {
+        await RefreshAsync();
+        StateHasChanged();
+    }
+
+    private async Task RefreshAsync()
+    {
+        _facts = await ResourceFactsProvider.GetSnapshotAsync(_cts.Token);
+    }
+
+    private static string FormatPercent(double? value) => value is { } v ? $"{v:F1}%" : "—";
+
+    private static string FormatMemory(long usedBytes, long limitBytes) => limitBytes > 0
+        ? $"{ResourceFactsPresentation.FormatBytes(usedBytes)} of {ResourceFactsPresentation.FormatBytes(limitBytes)} ({usedBytes * 100.0 / limitBytes:F0}%)"
+        : ResourceFactsPresentation.FormatBytes(usedBytes);
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _timer?.Dispose();
+    }
+}

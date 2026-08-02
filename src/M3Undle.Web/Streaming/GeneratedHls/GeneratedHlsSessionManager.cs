@@ -52,6 +52,10 @@ public sealed class GeneratedHlsSessionManager(
 
     public string ConfiguredFfmpegPath => _options.FfmpegPath;
 
+    // Each GeneratedHlsSession wraps exactly one FFmpeg Process, so the session count and the
+    // FFmpeg process count are the same number.
+    public int ActiveSessionCount => _sessions.Count;
+
     public static bool ShouldCountAsViewer(string? userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent))
