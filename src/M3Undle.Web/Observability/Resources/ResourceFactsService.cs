@@ -64,7 +64,7 @@ public sealed class ResourceFactsService(
     }
 
     private DateTimeOffset _lastSampleUtc = DateTimeOffset.UtcNow;
-    private TimeSpan _lastProcessCpuTime = Process.GetCurrentProcess().TotalProcessorTime;
+    private TimeSpan _lastProcessCpuTime = GetCurrentProcessCpuTime();
     private long? _lastCgroupUsageUsec;
     private long? _lastCgroupPeriods;
     private long? _lastCgroupThrottledPeriods;
@@ -84,6 +84,13 @@ public sealed class ResourceFactsService(
         await _cts.CancelAsync();
         if (_sampleTask is not null)
             await _sampleTask;
+        _cts.Dispose();
+    }
+
+    private static TimeSpan GetCurrentProcessCpuTime()
+    {
+        using var process = Process.GetCurrentProcess();
+        return process.TotalProcessorTime;
     }
 
     private async Task RunSampleLoopAsync(CancellationToken ct)
@@ -109,7 +116,7 @@ public sealed class ResourceFactsService(
         var processorCount = Math.Max(1, Environment.ProcessorCount);
         var availableCpuCores = ParseCpuLimit()?.Cores ?? processorCount;
 
-        var currentCpuTime = Process.GetCurrentProcess().TotalProcessorTime;
+        var currentCpuTime = GetCurrentProcessCpuTime();
         var cpuDeltaSeconds = (currentCpuTime - _lastProcessCpuTime).TotalSeconds;
         var processCpuPercent = Math.Clamp(cpuDeltaSeconds / elapsedSeconds / availableCpuCores * 100.0, 0, 100);
         _lastProcessCpuTime = currentCpuTime;
@@ -172,7 +179,9 @@ public sealed class ResourceFactsService(
 
     public Task<ResourceFacts> GetSnapshotAsync(CancellationToken ct = default)
     {
-        var process = Process.GetCurrentProcess();
+        long processWorkingSetBytes;
+        using (var process = Process.GetCurrentProcess())
+            processWorkingSetBytes = process.WorkingSet64;
         var gcInfo = GC.GetGCMemoryInfo();
         var memoryCurrent = ParseByteFile(CgroupMemoryCurrentPath);
         var memoryMaxContent = linuxFileReader.TryReadAllText(CgroupMemoryMaxPath);
@@ -203,7 +212,7 @@ public sealed class ResourceFactsService(
         var facts = new ResourceFacts(
             SampledUtc: DateTimeOffset.UtcNow,
             ProcessCpuPercent: rates.ProcessCpuPercent,
-            ProcessWorkingSetBytes: process.WorkingSet64,
+            ProcessWorkingSetBytes: processWorkingSetBytes,
             ContainerCpuPercent: rates.ContainerCpuPercent,
             RuntimeProcessorCount: Math.Max(1, Environment.ProcessorCount),
             ContainerCpuLimitCores: cpuLimit?.Cores,

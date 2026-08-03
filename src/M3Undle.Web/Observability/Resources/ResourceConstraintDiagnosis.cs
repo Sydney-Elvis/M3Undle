@@ -44,7 +44,7 @@ public static class ResourceConstraintDiagnosis
     {
         var throttled = facts.ContainerCpuThrottledPercent ?? 0;
         var pressure = facts.ContainerCpuPressurePercent ?? 0;
-        var cpu = facts.ContainerCpuPercent ?? 0;
+        var cpu = facts.ContainerCpuPercent ?? facts.ProcessCpuPercent ?? 0;
 
         if (facts.ContainerCpuLimitCores is { } limit && throttled >= 5)
         {

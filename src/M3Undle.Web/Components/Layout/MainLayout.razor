@@ -492,6 +492,10 @@
             _resourceFacts = await ResourceFactsProvider.GetSnapshotAsync(ct);
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to refresh resource facts for layout footer.");
+        }
     }
 
     private async Task LoadLineupStatusAsync()
