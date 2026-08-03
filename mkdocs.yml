@@ -97,6 +97,7 @@ nav:
       - Browser Playback: guides/browser-playback.md
       - Monitor Live Streams: guides/monitor-streams.md
       - Monitor with Prometheus / Grafana: guides/monitor-with-prometheus-grafana.md
+      - Monitor System Resources: guides/system-resources.md
       - View Logs: guides/view-logs.md
   - Clients:
       - Jellyfin: clients/jellyfin.md
