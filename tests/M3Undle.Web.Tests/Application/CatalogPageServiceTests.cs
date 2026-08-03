@@ -184,6 +184,42 @@ public sealed class CatalogPageServiceTests
         Assert.AreEqual("series", seriesOnly.Items.Single().ContentType);
     }
 
+    [TestMethod]
+    public async Task GetItemDetailAsync_ParsesCachedSeriesAndEpisodes()
+    {
+        await using var fixture = await CatalogFixture.CreateAsync();
+        var now = DateTime.UtcNow;
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Profiles.Add(CreateProfile("profile-1", "Primary", active: true));
+            db.Providers.Add(CreateProvider("provider-1", "Linked", includeVod: true, includeSeries: true));
+            db.ProfileProviders.Add(new ProfileProvider { ProfileId = "profile-1", ProviderId = "provider-1", Enabled = true });
+            db.ProviderGroups.Add(CreateGroup("series", "provider-1", "Comedy", "series", true, 1, now));
+            var item = CreateCatalogItem("series-1", "series", "id:201", "Abbott Elementary", now);
+            item.ContentType = "series";
+            item.ArtworkUrl = "https://images.example.test/abbott.jpg";
+            db.CatalogItems.Add(item);
+            db.XtreamSeriesCache.Add(new XtreamSeriesCache
+            {
+                ProviderId = "provider-1",
+                SeriesId = 201,
+                LastModifiedEpoch = 1,
+                EpisodesJson = """{"info":{"plot":"Teachers make it work.","genre":"Comedy"},"episodes":{"1":[{"episode_num":1,"title":"Pilot","info":{"plot":"The first day.","release_date":"2021-12-07"}}]}}""",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var detail = await CreateService(fixture).GetItemDetailAsync(
+            "profile-1", "series-1", CancellationToken.None);
+
+        Assert.IsNotNull(detail);
+        Assert.AreEqual("Teachers make it work.", detail.Plot);
+        Assert.IsTrue(detail.HasArtwork);
+        Assert.HasCount(1, detail.Seasons);
+        Assert.AreEqual("Pilot", detail.Seasons[0].Episodes.Single().Title);
+        Assert.AreEqual("The first day.", detail.Seasons[0].Episodes.Single().Plot);
+    }
+
     private static CatalogPageService CreateService(CatalogFixture fixture) =>
         new(fixture.Services.GetRequiredService<IServiceScopeFactory>(), new AppEventBus());
 

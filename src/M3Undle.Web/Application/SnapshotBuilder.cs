@@ -335,12 +335,12 @@ public sealed class SnapshotBuilder(
             sw.Restart();
 
             stage = "groups";
-            var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
+            var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, playlistResult.CatalogItems, now, cancellationToken);
             logger.LogInformation("Groups synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
             sw.Restart();
 
             stage = "catalog-items";
-            await SyncCatalogItemsAsync(provider, playlistResult.Channels, groupNameToId, now, cancellationToken);
+            await SyncCatalogItemsAsync(provider, playlistResult.Channels, playlistResult.CatalogItems, groupNameToId, now, cancellationToken);
             logger.LogInformation("Catalog browse index synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
             sw.Restart();
 
@@ -1540,6 +1540,7 @@ public sealed class SnapshotBuilder(
     private async Task<Dictionary<ProviderGroupKey, string>> SyncProviderGroupsAsync(
         string providerId,
         IReadOnlyList<ParsedProviderChannel> channels,
+        IReadOnlyList<ParsedCatalogItem>? catalogItems,
         DateTime now,
         CancellationToken cancellationToken)
     {
@@ -1552,6 +1553,18 @@ public sealed class SnapshotBuilder(
             // the same name, and would hide catalog items behind a live-labelled row.
             .GroupBy(x => new ProviderGroupKey(x.GroupTitle!, LiveClassifier.ClassifyContent(x.StreamUrl)))
             .ToDictionary(g => g.Key, g => g.Count());
+
+        if (catalogItems is not null)
+        {
+            foreach (var group in catalogItems
+                         .Where(x => !string.IsNullOrWhiteSpace(x.GroupTitle))
+                         .GroupBy(x => new ProviderGroupKey(x.GroupTitle!, x.ContentType)))
+            {
+                // Catalog counts are titles. Series episode expansion is deliberately not
+                // allowed to decide whether a category exists or how large it appears.
+                groupData[group.Key] = group.Count();
+            }
+        }
 
         var existingGroups = await db.ProviderGroups
             .Where(x => x.ProviderId == providerId)
@@ -1626,6 +1639,7 @@ public sealed class SnapshotBuilder(
     private async Task SyncCatalogItemsAsync(
         Provider provider,
         IReadOnlyList<ParsedProviderChannel> channels,
+        IReadOnlyList<ParsedCatalogItem>? catalogItems,
         IReadOnlyDictionary<ProviderGroupKey, string> groupNameToId,
         DateTime now,
         CancellationToken cancellationToken)
@@ -1637,7 +1651,7 @@ public sealed class SnapshotBuilder(
             applicableTypes.Add("series");
 
         var rows = new Dictionary<(string ProviderGroupId, string ProviderItemKey, string ContentType),
-            (string Title, int EpisodeCount)>();
+            (string Title, int EpisodeCount, string? ArtworkUrl)>();
         for (var index = 0; index < channels.Count; index++)
         {
             if ((index & 0x3FFF) == 0)
@@ -1675,11 +1689,31 @@ public sealed class SnapshotBuilder(
             if (rows.TryGetValue(key, out var existing))
             {
                 if (contentType == "series")
-                    rows[key] = (existing.Title, existing.EpisodeCount + 1);
+                    rows[key] = (existing.Title, existing.EpisodeCount + 1, existing.ArtworkUrl ?? channel.LogoUrl);
             }
             else
             {
-                rows.Add(key, (title, contentType == "series" ? 1 : 0));
+                rows.Add(key, (title, contentType == "series" ? 1 : 0, channel.LogoUrl));
+            }
+        }
+
+        if (catalogItems is not null)
+        {
+            foreach (var item in catalogItems)
+            {
+                if (string.IsNullOrWhiteSpace(item.ProviderItemId)
+                    || string.IsNullOrWhiteSpace(item.Title)
+                    || string.IsNullOrWhiteSpace(item.GroupTitle)
+                    || item.ContentType is not ("vod" or "series")
+                    || !groupNameToId.TryGetValue(new ProviderGroupKey(item.GroupTitle, item.ContentType), out var providerGroupId))
+                    continue;
+
+                applicableTypes.Add(item.ContentType);
+                var key = (providerGroupId, $"id:{item.ProviderItemId.Trim()}", item.ContentType);
+                if (rows.TryGetValue(key, out var expanded))
+                    rows[key] = (item.Title.Trim(), expanded.EpisodeCount, item.ArtworkUrl ?? expanded.ArtworkUrl);
+                else
+                    rows[key] = (item.Title.Trim(), 0, item.ArtworkUrl);
             }
         }
 
@@ -1710,13 +1744,14 @@ public sealed class SnapshotBuilder(
             """
             INSERT INTO catalog_items (
                 catalog_item_id, provider_id, provider_group_id, provider_item_key,
-                content_type, title, episode_count, first_seen_utc, last_seen_utc, active)
+                content_type, title, artwork_url, episode_count, first_seen_utc, last_seen_utc, active)
             VALUES (
                 $catalogItemId, $providerId, $providerGroupId, $providerItemKey,
-                $contentType, $title, $episodeCount, $now, $now, 1)
+                $contentType, $title, $artworkUrl, $episodeCount, $now, $now, 1)
             ON CONFLICT(provider_group_id, provider_item_key) DO UPDATE SET
                 content_type = excluded.content_type,
                 title = excluded.title,
+                artwork_url = excluded.artwork_url,
                 episode_count = excluded.episode_count,
                 last_seen_utc = excluded.last_seen_utc,
                 active = 1
@@ -1727,6 +1762,7 @@ public sealed class SnapshotBuilder(
         upsert.Parameters.Add("$providerItemKey", SqliteType.Text);
         upsert.Parameters.Add("$contentType", SqliteType.Text);
         upsert.Parameters.Add("$title", SqliteType.Text);
+        upsert.Parameters.Add("$artworkUrl", SqliteType.Text);
         upsert.Parameters.Add("$episodeCount", SqliteType.Integer);
         upsert.Parameters.Add("$now", SqliteType.Text);
 
@@ -1739,6 +1775,7 @@ public sealed class SnapshotBuilder(
             upsert.Parameters["$providerItemKey"].Value = key.ProviderItemKey;
             upsert.Parameters["$contentType"].Value = key.ContentType;
             upsert.Parameters["$title"].Value = value.Title;
+            upsert.Parameters["$artworkUrl"].Value = (object?)value.ArtworkUrl ?? DBNull.Value;
             upsert.Parameters["$episodeCount"].Value = value.EpisodeCount;
             upsert.Parameters["$now"].Value = nowText;
             await upsert.ExecuteNonQueryAsync(cancellationToken);

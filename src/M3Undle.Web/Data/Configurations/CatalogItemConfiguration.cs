@@ -17,6 +17,7 @@ public sealed class CatalogItemConfiguration : IEntityTypeConfiguration<CatalogI
         builder.Property(x => x.ProviderItemKey).HasColumnName("provider_item_key").IsRequired();
         builder.Property(x => x.ContentType).HasColumnName("content_type").IsRequired();
         builder.Property(x => x.Title).HasColumnName("title").IsRequired();
+        builder.Property(x => x.ArtworkUrl).HasColumnName("artwork_url");
         builder.Property(x => x.EpisodeCount).HasColumnName("episode_count").IsRequired().HasDefaultValue(0);
         builder.Property(x => x.FirstSeenUtc).HasColumnName("first_seen_utc").IsRequired();
         builder.Property(x => x.LastSeenUtc).HasColumnName("last_seen_utc").IsRequired();

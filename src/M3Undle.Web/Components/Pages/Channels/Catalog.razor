@@ -233,7 +233,7 @@ else
                 <MudTh>Last seen</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd DataLabel="Title">@context.Title</MudTd>
+                <MudTd DataLabel="Title"><MudLink Href="@CatalogItemHref(context)">@context.Title</MudLink></MudTd>
                 <MudTd DataLabel="Type">
                     <StatusChip Label="@(context.ContentType == VodType ? "Movie" : "Series")"
                                 Color="@(context.ContentType == VodType ? Color.Info : Color.Primary)"
@@ -381,6 +381,9 @@ else
 
     private string CatalogItemGroupHref(CatalogItemDto item) =>
         $"channels/catalog/{Uri.EscapeDataString(item.ProviderGroupId)}?profile={Uri.EscapeDataString(_profileId ?? string.Empty)}&fromType={_typeFilter}";
+
+    private string CatalogItemHref(CatalogItemDto item) =>
+        $"channels/catalog/items/{Uri.EscapeDataString(item.CatalogItemId)}?profile={Uri.EscapeDataString(_profileId ?? string.Empty)}&fromType={_typeFilter}";
 
     private async Task<TableData<CatalogItemDto>> SearchTitlesAsync(TableState state, CancellationToken cancellationToken)
     {

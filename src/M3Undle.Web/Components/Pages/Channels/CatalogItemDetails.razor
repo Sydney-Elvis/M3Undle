@@ -1,0 +1,176 @@
+@page "/channels/catalog/items/{CatalogItemId}"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject CatalogPageService CatalogPageService
+
+<PageTitle>M3Undle — @(_detail?.Title ?? "Catalog item")</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+            @if (_detail is not null)
+            {
+                <StatusChip Label="@(_detail.ContentType == "vod" ? "Movie" : "Series")"
+                            Color="@(_detail.ContentType == "vod" ? Color.Info : Color.Primary)"
+                            Icon="@(_detail.ContentType == "vod" ? Icons.Material.Filled.Movie : Icons.Material.Filled.Tv)" />
+            }
+            <MudText Typo="Typo.h5">@(_detail?.Title ?? "Loading title…")</MudText>
+        </MudStack>
+        <MudButton Href="@BackHref" Variant="Variant.Outlined" Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.ArrowBack">Back</MudButton>
+    </MudStack>
+</MudPaper>
+
+@if (_loading)
+{
+    <MudStack AlignItems="AlignItems.Center" Class="pa-8" Spacing="2">
+        <MudProgressCircular Indeterminate="true" />
+        <MudText Color="Color.Secondary">Loading provider details…</MudText>
+    </MudStack>
+}
+else if (!string.IsNullOrWhiteSpace(_error))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined">@_error</MudAlert>
+}
+else if (_detail is not null)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudGrid Spacing="3">
+            @if (_detail.HasArtwork)
+            {
+                <MudItem xs="12" sm="4" md="3">
+                    <MudImage Src="@ArtworkHref" Alt="@($"Poster for {_detail.Title}")"
+                              ObjectFit="ObjectFit.Contain" Height="420" Class="rounded" />
+                </MudItem>
+            }
+            <MudItem xs="12" sm="@(_detail.HasArtwork ? 8 : 12)" md="@(_detail.HasArtwork ? 9 : 12)">
+                <MudText Typo="Typo.h4" GutterBottom="true">@_detail.Title</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary" GutterBottom="true">
+                    @(_detail.ContentType == "vod" ? "Movie" : "Series") · @_detail.GroupName · @_detail.ProviderName
+                </MudText>
+                @if (!string.IsNullOrWhiteSpace(_detail.Plot))
+                {
+                    <MudText Typo="Typo.body1" Class="my-4" Style="white-space:pre-wrap;">@_detail.Plot</MudText>
+                }
+                <MudGrid Spacing="2">
+                    @DetailField("Genre", _detail.Genre)
+                    @DetailField("Release date", _detail.ReleaseDate)
+                    @DetailField("Director", _detail.Director)
+                    @DetailField("Cast", _detail.Cast)
+                    @DetailField("Rating", _detail.Rating)
+                    @DetailField("Duration", _detail.Duration)
+                </MudGrid>
+                @if (!string.IsNullOrWhiteSpace(_detail.MetadataNotice))
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mt-4">
+                        @_detail.MetadataNotice
+                    </MudAlert>
+                }
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    @if (_detail.ContentType == "series")
+    {
+        <MudPaper Class="pa-4" Elevation="2">
+            <MudText Typo="Typo.h5" GutterBottom="true">Seasons &amp; episodes</MudText>
+            @if (_detail.Seasons.Count == 0)
+            {
+                <MudText Color="Color.Secondary">No season or episode details are available yet.</MudText>
+            }
+            else
+            {
+                <MudExpansionPanels MultiExpansion="true">
+                    @foreach (var season in _detail.Seasons)
+                    {
+                        <MudExpansionPanel Text="@($"{season.Name} · {season.Episodes.Count:N0} episodes")">
+                            <MudList T="string" Dense="true">
+                                @foreach (var episode in season.Episodes)
+                                {
+                                    <MudListItem T="string">
+                                        <MudStack Spacing="0" Class="py-2">
+                                            <MudText Typo="Typo.subtitle2">@($"E{episode.EpisodeNumber:D2} · {episode.Title}")</MudText>
+                                            @if (!string.IsNullOrWhiteSpace(episode.ReleaseDate) || !string.IsNullOrWhiteSpace(episode.Duration))
+                                            {
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    @string.Join(" · ", new[] { episode.ReleaseDate, episode.Duration }.Where(x => !string.IsNullOrWhiteSpace(x)))
+                                                </MudText>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(episode.Plot))
+                                            {
+                                                <MudText Typo="Typo.body2" Class="mt-1" Style="white-space:pre-wrap;">@episode.Plot</MudText>
+                                            }
+                                        </MudStack>
+                                    </MudListItem>
+                                }
+                            </MudList>
+                        </MudExpansionPanel>
+                    }
+                </MudExpansionPanels>
+            }
+        </MudPaper>
+    }
+}
+
+@code {
+    [Parameter] public string CatalogItemId { get; set; } = string.Empty;
+    [SupplyParameterFromQuery(Name = "profile")] public string? ProfileId { get; set; }
+    [SupplyParameterFromQuery(Name = "fromGroup")] public string? FromGroup { get; set; }
+    [SupplyParameterFromQuery(Name = "fromType")] public string? FromType { get; set; }
+
+    private CatalogItemDetailDto? _detail;
+    private bool _loading = true;
+    private string? _error;
+
+    private string ArtworkHref =>
+        $"api/v1/profiles/{Uri.EscapeDataString(ProfileId ?? string.Empty)}/catalog-items/{Uri.EscapeDataString(CatalogItemId)}/artwork";
+
+    private string BackHref => !string.IsNullOrWhiteSpace(FromGroup)
+        ? $"channels/catalog/{Uri.EscapeDataString(FromGroup)}?profile={Uri.EscapeDataString(ProfileId ?? string.Empty)}&fromType={Uri.EscapeDataString(FromType ?? "all")}"
+        : $"channels/catalog?profile={Uri.EscapeDataString(ProfileId ?? string.Empty)}&type={Uri.EscapeDataString(FromType ?? "all")}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            ProfileId ??= await CatalogPageService.GetDefaultProfileIdAsync(CancellationToken.None);
+            _detail = string.IsNullOrWhiteSpace(ProfileId)
+                ? null
+                : await CatalogPageService.GetItemDetailAsync(ProfileId, CatalogItemId, CancellationToken.None);
+            if (_detail is null)
+                _error = "This title is not available for the selected profile.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Title details could not be loaded: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static RenderFragment DetailField(string label, string? value) => builder =>
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+        builder.OpenComponent<MudItem>(0);
+        builder.AddAttribute(1, "xs", 12);
+        builder.AddAttribute(2, "sm", 6);
+        builder.AddAttribute(3, "ChildContent", (RenderFragment)(content =>
+        {
+            content.OpenComponent<MudText>(0);
+            content.AddAttribute(1, "Typo", Typo.caption);
+            content.AddAttribute(2, "Color", Color.Secondary);
+            content.AddAttribute(3, "ChildContent", (RenderFragment)(text => text.AddContent(0, label)));
+            content.CloseComponent();
+            content.OpenComponent<MudText>(4);
+            content.AddAttribute(5, "Typo", Typo.body1);
+            content.AddAttribute(6, "ChildContent", (RenderFragment)(text => text.AddContent(0, value)));
+            content.CloseComponent();
+        }));
+        builder.CloseComponent();
+    };
+}

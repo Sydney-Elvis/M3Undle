@@ -22,6 +22,8 @@ public static class ChannelFilterApiEndpoints
         profiles.MapPatch("/{profileId}/catalog-groups/{providerGroupId}", UpdateCatalogGroupDecisionAsync).WithSummary("Update a catalog group decision");
         profiles.MapGet("/{profileId}/catalog-groups/{providerGroupId}/items", ListCatalogItemsAsync).WithSummary("Browse catalog group titles");
         profiles.MapGet("/{profileId}/catalog-items/search", SearchCatalogItemsAsync).WithSummary("Search catalog titles across groups");
+        profiles.MapGet("/{profileId}/catalog-items/{catalogItemId}", GetCatalogItemAsync).WithSummary("Inspect a catalog title");
+        profiles.MapGet("/{profileId}/catalog-items/{catalogItemId}/artwork", GetCatalogArtworkAsync).WithSummary("Get catalog title artwork");
         profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync).WithSummary("Update a group filter");
         profiles.MapPost("/{profileId}/group-filters/bulk-decide", BulkDecideAsync).WithSummary("Bulk set group decisions");
         profiles.MapPost("/{profileId}/group-filters/dismiss-new", DismissNewGroupsAsync).WithSummary("Dismiss new groups");
@@ -131,6 +133,30 @@ public static class ChannelFilterApiEndpoints
             groupSearch,
             cancellationToken);
         return TypedResults.Ok(result);
+    }
+
+    private static async Task<Results<Ok<CatalogItemDetailDto>, NotFound>> GetCatalogItemAsync(
+        string profileId,
+        string catalogItemId,
+        CatalogPageService catalogPageService,
+        CancellationToken cancellationToken)
+    {
+        var result = await catalogPageService.GetItemDetailAsync(profileId, catalogItemId, cancellationToken);
+        return result is null ? TypedResults.NotFound() : TypedResults.Ok(result);
+    }
+
+    private static async Task<Results<FileContentHttpResult, NotFound>> GetCatalogArtworkAsync(
+        string profileId,
+        string catalogItemId,
+        CatalogPageService catalogPageService,
+        HttpResponse response,
+        CancellationToken cancellationToken)
+    {
+        var artwork = await catalogPageService.GetArtworkAsync(profileId, catalogItemId, cancellationToken);
+        if (artwork is null)
+            return TypedResults.NotFound();
+        response.Headers.CacheControl = "private, max-age=3600";
+        return TypedResults.File(artwork.Value.Bytes, artwork.Value.ContentType);
     }
 
     private static async Task<Ok<List<GroupFilterDto>>> ListGroupFiltersAsync(

@@ -335,7 +335,8 @@ public sealed class ProviderFetcher(
 public sealed record PlaylistFetchResult(
     IReadOnlyList<ParsedProviderChannel> Channels,
     long Bytes,
-    XtreamAccountInfo? AccountInfo = null);
+    XtreamAccountInfo? AccountInfo = null,
+    IReadOnlyList<ParsedCatalogItem>? CatalogItems = null);
 
 public sealed record XmltvFetchResult(
     string Xml,
@@ -361,6 +362,15 @@ public sealed class ParsedProviderChannel
     public string? GroupTitle { get; init; }
     public string? CatalogItemId { get; init; }
     public string? CatalogTitle { get; init; }
+}
+
+public sealed class ParsedCatalogItem
+{
+    public string ProviderItemId { get; init; } = string.Empty;
+    public string Title { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public string? GroupTitle { get; init; }
+    public string? ArtworkUrl { get; init; }
 }
 
 // -------------------------------------------------------------------------

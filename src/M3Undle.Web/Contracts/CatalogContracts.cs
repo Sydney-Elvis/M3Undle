@@ -54,3 +54,38 @@ public sealed class CatalogTitleSearchResponse
     public int PageSize { get; set; }
     public List<CatalogItemDto> Items { get; set; } = [];
 }
+
+public sealed class CatalogItemDetailDto
+{
+    public string CatalogItemId { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public string GroupName { get; set; } = string.Empty;
+    public string ProviderName { get; set; } = string.Empty;
+    public string? Plot { get; set; }
+    public string? Genre { get; set; }
+    public string? ReleaseDate { get; set; }
+    public string? Director { get; set; }
+    public string? Cast { get; set; }
+    public string? Rating { get; set; }
+    public string? Duration { get; set; }
+    public bool HasArtwork { get; set; }
+    public string? MetadataNotice { get; set; }
+    public List<CatalogSeasonDto> Seasons { get; set; } = [];
+}
+
+public sealed class CatalogSeasonDto
+{
+    public int SeasonNumber { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public List<CatalogEpisodeDto> Episodes { get; set; } = [];
+}
+
+public sealed class CatalogEpisodeDto
+{
+    public int EpisodeNumber { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? Plot { get; set; }
+    public string? ReleaseDate { get; set; }
+    public string? Duration { get; set; }
+}

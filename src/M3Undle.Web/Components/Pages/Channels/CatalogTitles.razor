@@ -75,7 +75,7 @@
             <MudTh>Last seen</MudTh>
         </HeaderContent>
         <RowTemplate>
-            <MudTd DataLabel="Title">@context.Title</MudTd>
+            <MudTd DataLabel="Title"><MudLink Href="@ItemHref(context)">@context.Title</MudLink></MudTd>
             @if (context.ContentType == "series")
             {
                 <MudTd DataLabel="Episodes discovered">@context.EpisodeCount.ToString("N0")</MudTd>
@@ -111,6 +111,9 @@
 
     private string BackHref =>
         $"channels/catalog?profile={Uri.EscapeDataString(ProfileId ?? string.Empty)}&type={Uri.EscapeDataString(FromType ?? "all")}";
+
+    private string ItemHref(CatalogItemDto item) =>
+        $"channels/catalog/items/{Uri.EscapeDataString(item.CatalogItemId)}?profile={Uri.EscapeDataString(ProfileId ?? string.Empty)}&fromGroup={Uri.EscapeDataString(ProviderGroupId)}&fromType={Uri.EscapeDataString(FromType ?? "all")}";
 
     protected override async Task OnInitializedAsync()
     {

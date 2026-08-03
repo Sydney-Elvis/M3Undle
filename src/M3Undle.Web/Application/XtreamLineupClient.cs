@@ -58,6 +58,7 @@ public sealed class XtreamLineupClient(
         {
             long totalBytes = 0;
             var channels = new List<ParsedProviderChannel>();
+            var catalogItems = new List<ParsedCatalogItem>();
 
             // Authenticate and get expiry info.
             activityTracker.Set("Connecting to provider…");
@@ -79,6 +80,14 @@ public sealed class XtreamLineupClient(
                 var (vodBytes, vodChannels) = await FetchVodAsync(
                     client, baseUrl, username, password, provider.TimeoutSeconds, cancellationToken);
                 channels.AddRange(vodChannels);
+                catalogItems.AddRange(vodChannels.Select(channel => new ParsedCatalogItem
+                {
+                    ProviderItemId = channel.CatalogItemId ?? string.Empty,
+                    Title = channel.CatalogTitle ?? channel.DisplayName,
+                    ContentType = "vod",
+                    GroupTitle = channel.GroupTitle,
+                    ArtworkUrl = channel.LogoUrl,
+                }));
                 totalBytes += vodBytes;
             }
 
@@ -86,14 +95,15 @@ public sealed class XtreamLineupClient(
             if (provider.IncludeSeries)
             {
                 activityTracker.Set("Fetching series…");
-                var (seriesBytes, seriesChannels) = await FetchSeriesAsync(
+                var (seriesBytes, seriesChannels, seriesItems) = await FetchSeriesAsync(
                     client, baseUrl, username, password, provider,
                     provider.TimeoutSeconds, cancellationToken);
                 channels.AddRange(seriesChannels);
+                catalogItems.AddRange(seriesItems);
                 totalBytes += seriesBytes;
             }
 
-            return new PlaylistFetchResult(channels, totalBytes, accountInfo);
+            return new PlaylistFetchResult(channels, totalBytes, accountInfo, catalogItems);
         }
         finally
         {
@@ -160,7 +170,7 @@ public sealed class XtreamLineupClient(
         return (bytes, channels);
     }
 
-    private async Task<(long Bytes, List<ParsedProviderChannel> Channels)> FetchSeriesAsync(
+    private async Task<(long Bytes, List<ParsedProviderChannel> Channels, List<ParsedCatalogItem> Items)> FetchSeriesAsync(
         HttpClient client, string baseUrl, string username, string password,
         Provider provider, int timeoutSeconds, CancellationToken cancellationToken)
     {
@@ -174,7 +184,16 @@ public sealed class XtreamLineupClient(
         var categories = ParseCategories(catJson);
         var seriesList = ParseSeriesList(listJson);
         if (seriesList.Count == 0)
-            return (bytes, []);
+            return (bytes, [], []);
+
+        var items = seriesList.Select(series => new ParsedCatalogItem
+        {
+            ProviderItemId = series.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Title = series.Name,
+            ContentType = "series",
+            GroupTitle = categories.GetValueOrDefault(series.CategoryId),
+            ArtworkUrl = series.Cover,
+        }).ToList();
 
         // Load existing cache.
         var cache = await LoadSeriesCacheAsync(providerId, cancellationToken);
@@ -217,7 +236,7 @@ public sealed class XtreamLineupClient(
             await DeleteStaleCacheAsync(providerId, staleIds, cancellationToken);
 
         var channels = BuildSeriesChannels(seriesList, cache, categories, baseUrl, username, password);
-        return (bytes, channels);
+        return (bytes, channels, items);
     }
 
     // -------------------------------------------------------------------------

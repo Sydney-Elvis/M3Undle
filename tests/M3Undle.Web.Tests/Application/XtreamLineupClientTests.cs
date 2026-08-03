@@ -177,6 +177,12 @@ public sealed class XtreamLineupClientTests
 
         // No inline results from the stub queue — expansion is handed to the worker.
         Assert.IsEmpty(result.Channels);
+        Assert.IsNotNull(result.CatalogItems);
+        var indexedSeries = result.CatalogItems.Single();
+        Assert.AreEqual("1001", indexedSeries.ProviderItemId);
+        Assert.AreEqual("Breaking Bad", indexedSeries.Title);
+        Assert.AreEqual("Drama", indexedSeries.GroupTitle);
+        Assert.AreEqual("series", indexedSeries.ContentType);
         Assert.IsFalse(handler.RequestedPaths.Any(p => p.Contains("get_series_info")),
             "The lineup client itself must never call get_series_info — the expansion service owns that.");
 

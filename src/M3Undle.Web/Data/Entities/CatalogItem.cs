@@ -8,6 +8,7 @@ public sealed class CatalogItem
     public string ProviderItemKey { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
+    public string? ArtworkUrl { get; set; }
     public int EpisodeCount { get; set; }
     public DateTime FirstSeenUtc { get; set; }
     public DateTime LastSeenUtc { get; set; }
