@@ -53,6 +53,10 @@ M3Undle deliberately doesn't swallow this error and fall back to a different dir
 
 If you're using a named Docker volume rather than a bind mount, this class of problem is much rarer — see [Named volumes vs. bind mounts](../reference/docker-compose.md#named-volumes-vs-bind-mounts).
 
+## 4. Container restarts under load, not on startup
+
+If M3Undle starts fine and only cycles later — especially exit code `137` — a Docker memory limit is more likely than a code crash: Docker kills the container outright when it exceeds its memory limit, which looks the same as a crash from the outside. Before assuming it's a bug, open [System Resources](../guides/system-resources.md) while the container is healthy and check **OOM kills since start** and **Memory limit hits since start** — any nonzero count there confirms the container has hit its configured memory ceiling rather than crashed on its own.
+
 ## Still stuck
 
 Include the M3Undle version, your `compose.yaml` **with secrets removed** (encryption key, admin password, any credentials), the exact error from the logs, and the output of `docker inspect <container> --format '{{json .Mounts}}'`. Find the exact version, build commit, and build date by clicking the version number in the footer, which opens an **About** panel.
