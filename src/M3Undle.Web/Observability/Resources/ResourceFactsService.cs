@@ -17,8 +17,8 @@ namespace M3Undle.Web.Observability.Resources;
 // ILinuxResourceFileReader so the parsing logic (LinuxResourceParsers) can be unit-tested
 // against synthetic content independent of the host OS — every Linux-only field is simply
 // null on a non-Linux host or without cgroup v2, which is the correct "omit rather than
-// guess" behavior. Memory facts come from GC.GetGCMemoryInfo(), which .NET already makes
-// cgroup-aware on Linux — no hand-parsed cgroup memory files needed.
+// guess" behavior. Memory facts prefer cgroup v2 counters and fall back to the runtime's
+// GC memory view when cgroup counters are unavailable.
 public sealed class ResourceFactsService(
     StreamingRegistry registry,
     GeneratedHlsSessionManager generatedHlsManager,
@@ -28,6 +28,15 @@ public sealed class ResourceFactsService(
     ILogger<ResourceFactsService> logger) : IHostedService, IResourceFactsProvider
 {
     private const string CgroupCpuStatPath = "/sys/fs/cgroup/cpu.stat";
+    private const string CgroupCpuMaxPath = "/sys/fs/cgroup/cpu.max";
+    private const string CgroupMemoryCurrentPath = "/sys/fs/cgroup/memory.current";
+    private const string CgroupMemoryMaxPath = "/sys/fs/cgroup/memory.max";
+    private const string CgroupMemorySwapCurrentPath = "/sys/fs/cgroup/memory.swap.current";
+    private const string CgroupMemorySwapMaxPath = "/sys/fs/cgroup/memory.swap.max";
+    private const string CgroupMemoryEventsPath = "/sys/fs/cgroup/memory.events";
+    private const string CgroupCpuPressurePath = "/sys/fs/cgroup/cpu.pressure";
+    private const string CgroupMemoryPressurePath = "/sys/fs/cgroup/memory.pressure";
+    private const string CgroupIoPressurePath = "/sys/fs/cgroup/io.pressure";
     private const string ProcStatPath = "/proc/stat";
     private const string ProcLoadAvgPath = "/proc/loadavg";
     private static readonly TimeSpan SampleInterval = TimeSpan.FromSeconds(5);
@@ -45,14 +54,20 @@ public sealed class ResourceFactsService(
     // concern. The computed rates are read from arbitrary request threads via
     // GetSnapshotAsync, so they're published as one small immutable record swapped
     // atomically via Volatile.Read/Write.
-    private sealed record SampledRates(double? ProcessCpuPercent, double? ContainerCpuPercent, double? VmCpuStealPercent)
+    private sealed record SampledRates(
+        double? ProcessCpuPercent,
+        double? ContainerCpuPercent,
+        double? ContainerCpuThrottledPercent,
+        double? VmCpuStealPercent)
     {
-        public static readonly SampledRates Empty = new(null, null, null);
+        public static readonly SampledRates Empty = new(null, null, null, null);
     }
 
     private DateTimeOffset _lastSampleUtc = DateTimeOffset.UtcNow;
     private TimeSpan _lastProcessCpuTime = Process.GetCurrentProcess().TotalProcessorTime;
     private long? _lastCgroupUsageUsec;
+    private long? _lastCgroupPeriods;
+    private long? _lastCgroupThrottledPeriods;
     private long? _lastProcStatTotal;
     private long? _lastProcStatSteal;
 
@@ -92,26 +107,40 @@ public sealed class ResourceFactsService(
             return;
 
         var processorCount = Math.Max(1, Environment.ProcessorCount);
+        var availableCpuCores = ParseCpuLimit()?.Cores ?? processorCount;
 
         var currentCpuTime = Process.GetCurrentProcess().TotalProcessorTime;
         var cpuDeltaSeconds = (currentCpuTime - _lastProcessCpuTime).TotalSeconds;
-        var processCpuPercent = Math.Clamp(cpuDeltaSeconds / elapsedSeconds / processorCount * 100.0, 0, 100);
+        var processCpuPercent = Math.Clamp(cpuDeltaSeconds / elapsedSeconds / availableCpuCores * 100.0, 0, 100);
         _lastProcessCpuTime = currentCpuTime;
 
         double? containerCpuPercent = null;
+        double? containerCpuThrottledPercent = null;
         var cpuStatContent = linuxFileReader.TryReadAllText(CgroupCpuStatPath);
         if (cpuStatContent is not null && LinuxResourceParsers.ParseCgroupCpuStat(cpuStatContent) is { } cpuStat)
         {
             if (_lastCgroupUsageUsec is { } lastUsage)
             {
                 var usageDeltaSeconds = (cpuStat.UsageUsec - lastUsage) / 1_000_000.0;
-                containerCpuPercent = Math.Clamp(usageDeltaSeconds / elapsedSeconds / processorCount * 100.0, 0, 100);
+                containerCpuPercent = Math.Clamp(usageDeltaSeconds / elapsedSeconds / availableCpuCores * 100.0, 0, 100);
+            }
+            if (_lastCgroupPeriods is { } lastPeriods && _lastCgroupThrottledPeriods is { } lastThrottled)
+            {
+                var periodDelta = cpuStat.NrPeriods - lastPeriods;
+                var throttledDelta = cpuStat.NrThrottled - lastThrottled;
+                containerCpuThrottledPercent = periodDelta > 0
+                    ? Math.Clamp((double)throttledDelta / periodDelta * 100.0, 0, 100)
+                    : 0;
             }
             _lastCgroupUsageUsec = cpuStat.UsageUsec;
+            _lastCgroupPeriods = cpuStat.NrPeriods;
+            _lastCgroupThrottledPeriods = cpuStat.NrThrottled;
         }
         else
         {
             _lastCgroupUsageUsec = null;
+            _lastCgroupPeriods = null;
+            _lastCgroupThrottledPeriods = null;
         }
 
         double? vmCpuStealPercent = null;
@@ -133,7 +162,11 @@ public sealed class ResourceFactsService(
             _lastProcStatSteal = null;
         }
 
-        Volatile.Write(ref _rates, new SampledRates(processCpuPercent, containerCpuPercent, vmCpuStealPercent));
+        Volatile.Write(ref _rates, new SampledRates(
+            processCpuPercent,
+            containerCpuPercent,
+            containerCpuThrottledPercent,
+            vmCpuStealPercent));
         _lastSampleUtc = now;
     }
 
@@ -141,6 +174,13 @@ public sealed class ResourceFactsService(
     {
         var process = Process.GetCurrentProcess();
         var gcInfo = GC.GetGCMemoryInfo();
+        var memoryCurrent = ParseByteFile(CgroupMemoryCurrentPath);
+        var memoryMaxContent = linuxFileReader.TryReadAllText(CgroupMemoryMaxPath);
+        var memoryMax = memoryMaxContent is null ? null : LinuxResourceParsers.ParseCgroupByteValue(memoryMaxContent);
+        var cpuLimit = ParseCpuLimit();
+        var hasCgroupMemory = memoryCurrent is not null;
+        var hasCgroupMemoryLimit = memoryMax is > 0;
+        var memoryEvents = ParseMemoryEventsFile();
 
         long? containerThrottledPeriods = null;
         TimeSpan? containerThrottledTime = null;
@@ -151,10 +191,10 @@ public sealed class ResourceFactsService(
             containerThrottledTime = TimeSpan.FromTicks(cpuStat.ThrottledUsec * 10); // 1us = 10 ticks
         }
 
-        double? hostLoadAverage1Min = null;
+        LinuxResourceParsers.LoadAverage? hostLoadAverage = null;
         var loadAvgContent = linuxFileReader.TryReadAllText(ProcLoadAvgPath);
         if (loadAvgContent is not null)
-            hostLoadAverage1Min = LinuxResourceParsers.ParseLoadAverage1Min(loadAvgContent);
+            hostLoadAverage = LinuxResourceParsers.ParseLoadAverage(loadAvgContent);
 
         var clients = registry.GetActiveClients();
         var aggregateEgress = clients.Sum(c => c.BytesPerSecond ?? 0);
@@ -165,11 +205,30 @@ public sealed class ResourceFactsService(
             ProcessCpuPercent: rates.ProcessCpuPercent,
             ProcessWorkingSetBytes: process.WorkingSet64,
             ContainerCpuPercent: rates.ContainerCpuPercent,
+            RuntimeProcessorCount: Math.Max(1, Environment.ProcessorCount),
+            ContainerCpuLimitCores: cpuLimit?.Cores,
+            ContainerCpuLimitFileAvailable: cpuLimit is not null,
+            ContainerCpuThrottledPercent: rates.ContainerCpuThrottledPercent,
             ContainerCpuThrottledPeriods: containerThrottledPeriods,
             ContainerCpuThrottledTime: containerThrottledTime,
-            ContainerMemoryUsedBytes: gcInfo.MemoryLoadBytes,
-            ContainerMemoryLimitBytes: gcInfo.TotalAvailableMemoryBytes,
-            HostLoadAverage1Min: hostLoadAverage1Min,
+            ContainerMemoryUsedBytes: hasCgroupMemory ? memoryCurrent!.Value : gcInfo.MemoryLoadBytes,
+            ContainerMemoryLimitBytes: hasCgroupMemory ? memoryMax ?? 0 : gcInfo.TotalAvailableMemoryBytes,
+            RuntimeMemoryAvailableBytes: gcInfo.TotalAvailableMemoryBytes,
+            ContainerMemoryIsCgroupMeasurement: hasCgroupMemory,
+            ContainerMemoryHasExplicitLimit: hasCgroupMemoryLimit,
+            ContainerMemoryLimitFileAvailable: memoryMaxContent is not null,
+            ContainerSwapUsedBytes: ParseByteFile(CgroupMemorySwapCurrentPath),
+            ContainerSwapLimitBytes: ParseByteFile(CgroupMemorySwapMaxPath),
+            ContainerMemoryHighEventCount: memoryEvents?.High,
+            ContainerMemoryMaxEventCount: memoryEvents?.Max,
+            ContainerOomEventCount: memoryEvents?.Oom,
+            ContainerOomKillCount: memoryEvents?.OomKill,
+            ContainerCpuPressurePercent: ParsePressureFile(CgroupCpuPressurePath),
+            ContainerMemoryPressurePercent: ParsePressureFile(CgroupMemoryPressurePath),
+            ContainerIoPressurePercent: ParsePressureFile(CgroupIoPressurePath),
+            HostLoadAverage1Min: hostLoadAverage?.OneMinute,
+            HostLoadAverage5Min: hostLoadAverage?.FiveMinutes,
+            HostLoadAverage15Min: hostLoadAverage?.FifteenMinutes,
             VmCpuStealPercent: rates.VmCpuStealPercent,
             ActiveFfmpegProcessCount: generatedHlsManager.ActiveSessionCount,
             AggregateEgressBytesPerSecond: aggregateEgress,
@@ -177,6 +236,30 @@ public sealed class ResourceFactsService(
             DiskVolumes: ComputeDiskVolumes());
 
         return Task.FromResult(facts);
+    }
+
+    private LinuxResourceParsers.CpuLimit? ParseCpuLimit()
+    {
+        var content = linuxFileReader.TryReadAllText(CgroupCpuMaxPath);
+        return content is null ? null : LinuxResourceParsers.ParseCgroupCpuMax(content);
+    }
+
+    private long? ParseByteFile(string path)
+    {
+        var content = linuxFileReader.TryReadAllText(path);
+        return content is null ? null : LinuxResourceParsers.ParseCgroupByteValue(content);
+    }
+
+    private LinuxResourceParsers.MemoryEvents? ParseMemoryEventsFile()
+    {
+        var content = linuxFileReader.TryReadAllText(CgroupMemoryEventsPath);
+        return content is null ? null : LinuxResourceParsers.ParseMemoryEvents(content);
+    }
+
+    private double? ParsePressureFile(string path)
+    {
+        var content = linuxFileReader.TryReadAllText(path);
+        return content is null ? null : LinuxResourceParsers.ParsePressureSomeAverage10(content);
     }
 
     private List<DiskVolumeFact> ComputeDiskVolumes()

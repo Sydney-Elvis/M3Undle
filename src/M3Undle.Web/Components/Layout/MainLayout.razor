@@ -163,15 +163,17 @@
                 </MudChip>
             </MudTooltip>
         }
-        <MudTooltip Text="@CpuFooterTooltip" Placement="Placement.Top">
-            <MudLink Href="system/resources" Color="Color.Inherit" Style="font-size:0.70rem; margin-left:8px;">
+        <MudTooltip @key="_resourceFacts?.SampledUtc" Text="@CpuFooterTooltip" Placement="Placement.Top">
+            <MudLink Href="system/resources" Color="@CpuFooterColor" Style="font-size:0.70rem; margin-left:8px;">
                 @CpuFooterLabel
             </MudLink>
         </MudTooltip>
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
-            <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
-            <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
-        </MudStack>
+        <MudTooltip Text="Service health reflects lineup and streaming availability; resource capacity is reported separately by the CPU indicator." Placement="Placement.Top">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
+                <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
+                <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
+            </MudStack>
+        </MudTooltip>
     </MudAppBar>
 </MudLayout>
 
@@ -230,7 +232,7 @@
 
     private string HealthLabel => _lineupStatusCode switch
     {
-        LineupStatusCodes.Ok => "Healthy",
+        LineupStatusCodes.Ok => "Service healthy",
         LineupStatusCodes.Refreshing => "Refreshing",
         LineupStatusCodes.Switching => "Switching",
         LineupStatusCodes.Degraded => "Degraded",
@@ -251,6 +253,15 @@
     private string CpuFooterTooltip => _resourceFacts is { } facts
         ? M3Undle.Web.Observability.Resources.ResourceFactsPresentation.BuildFooterSummarySentence(facts)
         : "CPU usage data is still warming up.";
+
+    private Color CpuFooterColor => _resourceFacts is not { } facts
+        ? Color.Inherit
+        : M3Undle.Web.Observability.Resources.ResourceFactsPresentation.GetFooterCpuSeverity(facts) switch
+        {
+            M3Undle.Web.Observability.Resources.ResourceConstraintSeverity.Critical => Color.Error,
+            M3Undle.Web.Observability.Resources.ResourceConstraintSeverity.Warning => Color.Warning,
+            _ => Color.Success,
+        };
 
     private string StatusDelaySummary
     {

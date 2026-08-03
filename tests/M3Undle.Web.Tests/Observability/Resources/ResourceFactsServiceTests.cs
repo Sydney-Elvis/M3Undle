@@ -39,6 +39,8 @@ public sealed class ResourceFactsServiceTests
         Assert.IsNull(facts.ContainerCpuPercent);
         Assert.IsNull(facts.VmCpuStealPercent);
         Assert.IsNull(facts.HostLoadAverage1Min);
+        Assert.IsNull(facts.HostLoadAverage5Min);
+        Assert.IsNull(facts.HostLoadAverage15Min);
         Assert.IsNull(facts.ContainerCpuThrottledPeriods);
         Assert.IsNull(facts.ContainerCpuThrottledTime);
     }
@@ -93,6 +95,8 @@ public sealed class ResourceFactsServiceTests
         var facts = await service.GetSnapshotAsync();
 
         Assert.AreEqual(1.25, facts.HostLoadAverage1Min);
+        Assert.AreEqual(1.10, facts.HostLoadAverage5Min);
+        Assert.AreEqual(0.95, facts.HostLoadAverage15Min);
     }
 
     [TestMethod]
@@ -107,6 +111,62 @@ public sealed class ResourceFactsServiceTests
 
         Assert.IsTrue(facts.ContainerMemoryLimitBytes > 0, "Expected a positive memory limit from GC.GetGCMemoryInfo().");
         Assert.IsTrue(facts.ProcessWorkingSetBytes > 0, "Expected a positive process working-set size.");
+    }
+
+    [TestMethod]
+    public async Task GetSnapshotAsync_CgroupResourceFiles_ReportLimitsPressureAndMemoryEvents()
+    {
+        var reader = new FakeLinuxResourceFileReader
+        {
+            CgroupCpuMax = "150000 100000\n",
+            MemoryCurrent = "1073741824\n",
+            MemoryMax = "4294967296\n",
+            MemorySwapCurrent = "268435456\n",
+            MemorySwapMax = "1073741824\n",
+            MemoryEvents = "low 0\nhigh 2\nmax 4\noom 1\noom_kill 1\n",
+            CpuPressure = "some avg10=1.25 avg60=0.50 avg300=0.10 total=1\n",
+            MemoryPressure = "some avg10=2.50 avg60=1.00 avg300=0.20 total=2\n",
+            IoPressure = "some avg10=3.75 avg60=1.50 avg300=0.30 total=3\n",
+        };
+        var service = CreateService(reader);
+
+        var facts = await service.GetSnapshotAsync();
+
+        Assert.AreEqual(1.5, facts.ContainerCpuLimitCores);
+        Assert.IsTrue(facts.ContainerCpuLimitFileAvailable);
+        Assert.IsTrue(facts.RuntimeProcessorCount > 0);
+        Assert.AreEqual(1_073_741_824L, facts.ContainerMemoryUsedBytes);
+        Assert.AreEqual(4_294_967_296L, facts.ContainerMemoryLimitBytes);
+        Assert.IsTrue(facts.ContainerMemoryIsCgroupMeasurement);
+        Assert.IsTrue(facts.ContainerMemoryHasExplicitLimit);
+        Assert.IsTrue(facts.ContainerMemoryLimitFileAvailable);
+        Assert.IsTrue(facts.RuntimeMemoryAvailableBytes > 0);
+        Assert.AreEqual(268_435_456L, facts.ContainerSwapUsedBytes);
+        Assert.AreEqual(1L, facts.ContainerOomKillCount);
+        Assert.AreEqual(1.25, facts.ContainerCpuPressurePercent);
+        Assert.AreEqual(2.50, facts.ContainerMemoryPressurePercent);
+        Assert.AreEqual(3.75, facts.ContainerIoPressurePercent);
+    }
+
+    [TestMethod]
+    public async Task GetSnapshotAsync_UnlimitedCgroupFiles_DistinguishNoLimitFromUnavailable()
+    {
+        var reader = new FakeLinuxResourceFileReader
+        {
+            CgroupCpuMax = "max 100000\n",
+            MemoryCurrent = "67108864\n",
+            MemoryMax = "max\n",
+        };
+        var service = CreateService(reader);
+
+        var facts = await service.GetSnapshotAsync();
+
+        Assert.IsTrue(facts.ContainerCpuLimitFileAvailable);
+        Assert.IsNull(facts.ContainerCpuLimitCores);
+        Assert.IsTrue(facts.ContainerMemoryLimitFileAvailable);
+        Assert.IsFalse(facts.ContainerMemoryHasExplicitLimit);
+        Assert.AreEqual(67_108_864L, facts.ContainerMemoryUsedBytes);
+        Assert.AreEqual(0L, facts.ContainerMemoryLimitBytes);
     }
 
     [TestMethod]
@@ -167,12 +227,30 @@ public sealed class ResourceFactsServiceTests
     private sealed class FakeLinuxResourceFileReader : ILinuxResourceFileReader
     {
         public string? CgroupCpuStat { get; set; }
+        public string? CgroupCpuMax { get; set; }
+        public string? MemoryCurrent { get; set; }
+        public string? MemoryMax { get; set; }
+        public string? MemorySwapCurrent { get; set; }
+        public string? MemorySwapMax { get; set; }
+        public string? MemoryEvents { get; set; }
+        public string? CpuPressure { get; set; }
+        public string? MemoryPressure { get; set; }
+        public string? IoPressure { get; set; }
         public string? ProcStat { get; set; }
         public string? LoadAverage { get; set; }
 
         public string? TryReadAllText(string path) => path switch
         {
             "/sys/fs/cgroup/cpu.stat" => CgroupCpuStat,
+            "/sys/fs/cgroup/cpu.max" => CgroupCpuMax,
+            "/sys/fs/cgroup/memory.current" => MemoryCurrent,
+            "/sys/fs/cgroup/memory.max" => MemoryMax,
+            "/sys/fs/cgroup/memory.swap.current" => MemorySwapCurrent,
+            "/sys/fs/cgroup/memory.swap.max" => MemorySwapMax,
+            "/sys/fs/cgroup/memory.events" => MemoryEvents,
+            "/sys/fs/cgroup/cpu.pressure" => CpuPressure,
+            "/sys/fs/cgroup/memory.pressure" => MemoryPressure,
+            "/sys/fs/cgroup/io.pressure" => IoPressure,
             "/proc/stat" => ProcStat,
             "/proc/loadavg" => LoadAverage,
             _ => null,

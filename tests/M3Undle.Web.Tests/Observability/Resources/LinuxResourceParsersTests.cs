@@ -22,6 +22,7 @@ public sealed class LinuxResourceParsersTests
 
         Assert.IsNotNull(result);
         Assert.AreEqual(4353342314L, result.Value.UsageUsec);
+        Assert.AreEqual(24728L, result.Value.NrPeriods);
         Assert.AreEqual(71L, result.Value.NrThrottled);
         Assert.AreEqual(1520000L, result.Value.ThrottledUsec);
     }
@@ -88,18 +89,60 @@ public sealed class LinuxResourceParsersTests
     }
 
     [TestMethod]
-    public void ParseLoadAverage1Min_WellFormedContent_ReturnsFirstValue()
+    public void ParseLoadAverage_WellFormedContent_ReturnsAllWindows()
     {
-        var result = LinuxResourceParsers.ParseLoadAverage1Min("0.52 0.58 0.59 1/234 5678\n");
+        var result = LinuxResourceParsers.ParseLoadAverage("0.52 0.58 0.59 1/234 5678\n");
 
-        Assert.AreEqual(0.52, result);
+        Assert.IsNotNull(result);
+        Assert.AreEqual(0.52, result.Value.OneMinute);
+        Assert.AreEqual(0.58, result.Value.FiveMinutes);
+        Assert.AreEqual(0.59, result.Value.FifteenMinutes);
     }
 
     [TestMethod]
-    public void ParseLoadAverage1Min_EmptyContent_ReturnsNull()
+    public void ParseLoadAverage_IncompleteContent_ReturnsNull()
     {
-        var result = LinuxResourceParsers.ParseLoadAverage1Min(string.Empty);
+        var result = LinuxResourceParsers.ParseLoadAverage("0.52 0.58");
 
         Assert.IsNull(result);
+    }
+
+    [TestMethod]
+    public void ParseCgroupCpuMax_LimitedQuota_ReturnsFractionalCoreAllocation()
+    {
+        var result = LinuxResourceParsers.ParseCgroupCpuMax("150000 100000\n");
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(1.5, result.Value.Cores);
+    }
+
+    [TestMethod]
+    public void ParseCgroupCpuMax_UnlimitedQuota_ReturnsNullCoreAllocation()
+    {
+        var result = LinuxResourceParsers.ParseCgroupCpuMax("max 100000\n");
+
+        Assert.IsNotNull(result);
+        Assert.IsNull(result.Value.Cores);
+    }
+
+    [TestMethod]
+    public void ParseMemoryEvents_WellFormedContent_ReturnsDiagnosticCounts()
+    {
+        var result = LinuxResourceParsers.ParseMemoryEvents("low 0\nhigh 2\nmax 4\noom 1\noom_kill 1\n");
+
+        Assert.IsNotNull(result);
+        Assert.AreEqual(2L, result.High);
+        Assert.AreEqual(4L, result.Max);
+        Assert.AreEqual(1L, result.Oom);
+        Assert.AreEqual(1L, result.OomKill);
+    }
+
+    [TestMethod]
+    public void ParsePressureSomeAverage10_ReturnsRecentStallPercentage()
+    {
+        var result = LinuxResourceParsers.ParsePressureSomeAverage10(
+            "some avg10=2.35 avg60=1.10 avg300=0.20 total=1234\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+
+        Assert.AreEqual(2.35, result);
     }
 }

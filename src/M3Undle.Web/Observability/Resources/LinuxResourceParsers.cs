@@ -7,6 +7,75 @@ namespace M3Undle.Web.Observability.Resources;
 // formats, independent of whether this is running on Linux at all.
 internal static class LinuxResourceParsers
 {
+    public readonly record struct CpuLimit(double? Cores);
+
+    public static CpuLimit? ParseCgroupCpuMax(string content)
+    {
+        var parts = content.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2
+            || !long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var period)
+            || period <= 0)
+            return null;
+
+        if (parts[0] == "max")
+            return new CpuLimit(null);
+
+        return long.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var quota) && quota > 0
+            ? new CpuLimit((double)quota / period)
+            : null;
+    }
+
+    public static long? ParseCgroupByteValue(string content)
+    {
+        var value = content.Trim();
+        if (value == "max")
+            return null;
+
+        return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var bytes) && bytes >= 0
+            ? bytes
+            : null;
+    }
+
+    public sealed record MemoryEvents(long High, long Max, long Oom, long OomKill);
+
+    public static MemoryEvents? ParseMemoryEvents(string content)
+    {
+        var values = ParseKeyValueLines(content);
+        return values.TryGetValue("high", out var high)
+            && values.TryGetValue("max", out var max)
+            && values.TryGetValue("oom", out var oom)
+            && values.TryGetValue("oom_kill", out var oomKill)
+            ? new MemoryEvents(high, max, oom, oomKill)
+            : null;
+    }
+
+    public static double? ParsePressureSomeAverage10(string content)
+    {
+        var someLine = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(line => line.StartsWith("some ", StringComparison.Ordinal));
+        var average = someLine?.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault(part => part.StartsWith("avg10=", StringComparison.Ordinal));
+
+        return average is not null
+            && double.TryParse(average.AsSpan(6), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+    }
+
+    private static Dictionary<string, long> ParseKeyValueLines(string content)
+    {
+        var values = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var line in content.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 2
+                && long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+                values[parts[0]] = value;
+        }
+
+        return values;
+    }
+
     // cgroup v2 cpu.stat, e.g.:
     //   usage_usec 4353342314
     //   user_usec 4123456789
@@ -14,11 +83,11 @@ internal static class LinuxResourceParsers
     //   nr_periods 24728
     //   nr_throttled 71
     //   throttled_usec 1520000
-    public readonly record struct CpuStat(long UsageUsec, long NrThrottled, long ThrottledUsec);
+    public readonly record struct CpuStat(long UsageUsec, long NrPeriods, long NrThrottled, long ThrottledUsec);
 
     public static CpuStat? ParseCgroupCpuStat(string content)
     {
-        long? usageUsec = null, nrThrottled = null, throttledUsec = null;
+        long? usageUsec = null, nrPeriods = null, nrThrottled = null, throttledUsec = null;
         foreach (var line in content.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -28,13 +97,14 @@ internal static class LinuxResourceParsers
             switch (parts[0])
             {
                 case "usage_usec": usageUsec = value; break;
+                case "nr_periods": nrPeriods = value; break;
                 case "nr_throttled": nrThrottled = value; break;
                 case "throttled_usec": throttledUsec = value; break;
             }
         }
 
-        return usageUsec is { } u && nrThrottled is { } n && throttledUsec is { } t
-            ? new CpuStat(u, n, t)
+        return usageUsec is { } u && nrPeriods is { } p && nrThrottled is { } n && throttledUsec is { } t
+            ? new CpuStat(u, p, n, t)
             : null;
     }
 
@@ -68,13 +138,18 @@ internal static class LinuxResourceParsers
         return null;
     }
 
-    // /proc/loadavg: "0.52 0.58 0.59 1/234 5678" — 1-min, 5-min, 15-min load, running/total
-    // processes, last PID. Only the 1-minute figure is used today.
-    public static double? ParseLoadAverage1Min(string content)
+    // /proc/loadavg: "0.52 0.58 0.59 1/234 5678" — 1-min, 5-min, 15-min load,
+    // running/total processes, and last PID.
+    public readonly record struct LoadAverage(double OneMinute, double FiveMinutes, double FifteenMinutes);
+
+    public static LoadAverage? ParseLoadAverage(string content)
     {
         var parts = content.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 1 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var load)
-            ? load
+        return parts.Length >= 3
+            && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var one)
+            && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var five)
+            && double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var fifteen)
+            ? new LoadAverage(one, five, fifteen)
             : null;
     }
 }
