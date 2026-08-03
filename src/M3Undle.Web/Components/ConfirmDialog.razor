@@ -3,10 +3,25 @@
 <MudDialog>
     <DialogContent>
         <MudText>@ContentText</MudText>
+        @if (_isSubmitting)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-4">
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="@Color" />
+                <MudText Typo="Typo.body2">@BusyText</MudText>
+            </MudStack>
+        }
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mt-4">
+                @_error
+            </MudAlert>
+        }
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Color="@Color" Variant="Variant.Filled" OnClick="Submit">@ButtonText</MudButton>
+        <MudButton OnClick="Cancel" Disabled="_isSubmitting">Cancel</MudButton>
+        <MudButton Color="@Color" Variant="Variant.Filled" OnClick="SubmitAsync" Disabled="_isSubmitting">
+            @(_isSubmitting ? BusyButtonText : ButtonText)
+        </MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -23,6 +38,49 @@
     [Parameter]
     public Color Color { get; set; } = Color.Primary;
 
-    private void Submit() => MudDialog.Close(DialogResult.Ok(true));
+    [Parameter]
+    public Func<Task<string?>>? OnConfirmAsync { get; set; }
+
+    [Parameter]
+    public string BusyText { get; set; } = "Working…";
+
+    [Parameter]
+    public string BusyButtonText { get; set; } = "Working…";
+
+    private bool _isSubmitting;
+    private string? _error;
+
+    private async Task SubmitAsync()
+    {
+        if (_isSubmitting)
+            return;
+
+        if (OnConfirmAsync is null)
+        {
+            MudDialog.Close(DialogResult.Ok(true));
+            return;
+        }
+
+        _isSubmitting = true;
+        _error = null;
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+
+        try
+        {
+            _error = await OnConfirmAsync();
+            if (string.IsNullOrWhiteSpace(_error))
+                MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
     private void Cancel() => MudDialog.Cancel();
 }

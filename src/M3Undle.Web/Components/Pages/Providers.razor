@@ -390,43 +390,54 @@
         if (_isDeletingProvider)
             return;
 
-        var confirmed = await DialogService.ShowMessageBoxAsync(
-            "Delete Provider",
-            $"Are you sure you want to delete \"{provider.Name}\"? This will permanently remove the provider and all associated data (fetch history, channel data, and profile links).",
-            yesText: "Delete",
-            cancelText: "Cancel");
-
-        if (confirmed != true) return;
-
-        _error = null;
-        _isDeletingProvider = true;
-        _deletingProviderId = provider.ProviderId;
-        _deletingProviderName = provider.Name;
-        await InvokeAsync(StateHasChanged);
-
-        try
+        async Task<string?> DeleteConfirmedAsync()
         {
-            var error = await ProviderPageService.DeleteProviderAsync(provider.ProviderId, _cts.Token);
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                _error = error;
-                return;
-            }
+            _error = null;
+            _isDeletingProvider = true;
+            _deletingProviderId = provider.ProviderId;
+            _deletingProviderName = provider.Name;
+            await InvokeAsync(StateHasChanged);
 
+            try
+            {
+                return await ProviderPageService.DeleteProviderAsync(provider.ProviderId, _cts.Token);
+            }
+            catch (Exception ex)
+            {
+                return $"Failed to delete provider: {ex.Message}";
+            }
+            finally
+            {
+                _isDeletingProvider = false;
+                _deletingProviderId = null;
+                _deletingProviderName = null;
+            }
+        }
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.ContentText, $"Are you sure you want to delete \"{provider.Name}\"? This will permanently remove the provider and all associated data (fetch history, channel data, and profile links)." },
+            { x => x.ButtonText, "Delete" },
+            { x => x.BusyButtonText, "Deleting…" },
+            { x => x.BusyText, $"Deleting provider \"{provider.Name}\" and its associated data. Large providers can take a while." },
+            { x => x.Color, Color.Error },
+            { x => x.OnConfirmAsync, DeleteConfirmedAsync },
+        };
+        var options = new DialogOptions
+        {
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+            CloseOnEscapeKey = false,
+            BackdropClick = false,
+        };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete Provider", parameters, options);
+        var result = await dialog.Result;
+
+        if (result is { Canceled: false })
+        {
             if (_preview?.ProviderId == provider.ProviderId)
                 _preview = null;
-
             await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            _error = $"Failed to delete provider: {ex.Message}";
-        }
-        finally
-        {
-            _isDeletingProvider = false;
-            _deletingProviderId = null;
-            _deletingProviderName = null;
         }
     }
 
