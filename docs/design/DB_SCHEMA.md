@@ -118,6 +118,30 @@ Indexes:
 
 ---
 
+### catalog_items
+Rebuildable, credential-free browse index for VOD titles and distinct series titles. It is not a
+saved-selection table and is excluded from portable backups.
+- catalog_item_id (PK, TEXT, uuid)
+- provider_id (FK providers)
+- provider_group_id (FK provider_groups)
+- provider_item_key (TEXT) — provider ID when available; otherwise a hash of stable parsed identity
+- content_type (TEXT) — `'vod'` | `'series'`
+- title (TEXT)
+- episode_count (INTEGER) — discovered episodes represented by a series row; zero for VOD
+- first_seen_utc (TEXT)
+- last_seen_utc (TEXT)
+- active (INTEGER, 0/1)
+
+Unique:
+- (provider_group_id, provider_item_key)
+
+Indexes:
+- idx_catalog_items_group_item_unique (provider_group_id, provider_item_key)
+- idx_catalog_items_group_active_title (provider_group_id, active, title)
+- idx_catalog_items_provider_type_active (provider_id, content_type, active)
+
+---
+
 ### provider_channels
 Tracks the volatile world.
 - provider_channel_id (PK, TEXT, uuid)
@@ -269,6 +293,26 @@ Indexes:
 - idx_pgf_profile_group_unique (profile_id, provider_group_id)
 - idx_pgf_profile_decision (profile_id, decision)
 - idx_pgf_profile_tracking_policy (profile_id, tracking_policy)
+
+---
+
+### profile_catalog_group_filters
+Per-profile category decisions for VOD and series. Kept separate from live group filters because
+catalog categories have no channel-selection, numbering, EPG, or event-tracking behavior.
+- profile_catalog_group_filter_id (PK, TEXT, uuid)
+- profile_id (FK profiles)
+- provider_group_id (FK provider_groups; content_type is `vod` or `series`)
+- decision (TEXT) — `'include'` | `'exclude'`
+- is_new (INTEGER, 0/1)
+- created_utc (TEXT)
+- updated_utc (TEXT)
+
+Unique:
+- (profile_id, provider_group_id)
+
+Indexes:
+- idx_pcgf_profile_group_unique (profile_id, provider_group_id)
+- idx_pcgf_profile_decision (profile_id, decision)
 
 ---
 
@@ -596,4 +640,3 @@ Stream key derivation in V1:
 ## Failure behavior
 - If upstream fails, do not churn the lineup.
 - Serve last-known-good snapshot and show degraded state in /status + UI.
-

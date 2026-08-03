@@ -393,6 +393,7 @@ builder.Services.AddScoped<ProviderPageService>();
 builder.Services.AddScoped<ChannelMappingPageService>();
 builder.Services.AddScoped<CustomGroupPageService>();
 builder.Services.AddScoped<ChannelListPageService>();
+builder.Services.AddScoped<CatalogPageService>();
 builder.Services.AddScoped<EpgPageService>();
 builder.Services.AddSingleton<ChannelStatsService>();
 builder.Services.AddSingleton<DashboardStatsService>();

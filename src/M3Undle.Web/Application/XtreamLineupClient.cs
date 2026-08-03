@@ -294,6 +294,8 @@ public sealed class XtreamLineupClient(
                         LogoUrl = icon,
                         StreamUrl = streamUrl,
                         GroupTitle = groupTitle,
+                        CatalogItemId = streamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        CatalogTitle = name,
                     });
                 }
             }
@@ -338,9 +340,10 @@ public sealed class XtreamLineupClient(
                         var ext = ReadString(ep, "container_extension") ?? "mkv";
                         var epNum = ReadInt(ep, "episode_num");
 
+                        var episodeMarker = $"S{season.Name.PadLeft(2, '0')}E{epNum:D2}";
                         var displayName = string.IsNullOrWhiteSpace(epTitle)
-                            ? $"{series.Name} S{season.Name.PadLeft(2, '0')}E{epNum:D2}"
-                            : $"{series.Name} — {epTitle}";
+                            ? $"{series.Name} {episodeMarker}"
+                            : $"{series.Name} {episodeMarker} — {epTitle}";
 
                         var streamUrl = $"{baseUrl}/series/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(password)}/{epId}.{ext}";
 
@@ -351,6 +354,8 @@ public sealed class XtreamLineupClient(
                             LogoUrl = series.Cover,
                             StreamUrl = streamUrl,
                             GroupTitle = groupTitle,
+                            CatalogItemId = series.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            CatalogTitle = series.Name,
                         });
                     }
                 }

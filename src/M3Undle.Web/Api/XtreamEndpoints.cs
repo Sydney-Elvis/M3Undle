@@ -360,8 +360,12 @@ public static class XtreamEndpoints
             seriesChannels = seriesChannels.Where(c =>
                 CategoryId(c.GroupTitle ?? "Uncategorized").ToString() == categoryFilter);
 
-        var seriesList = seriesChannels
-            .GroupBy(c => ExtractSeriesName(c.DisplayName))
+        var groups = seriesChannels
+            .GroupBy(SeriesTitle)
+            .ToArray();
+        var seriesIds = BuildSeriesIdAssignment(groups.Select(g => g.Key));
+
+        var seriesList = groups
             .Select((g, i) =>
             {
                 var first = g.First();
@@ -369,7 +373,9 @@ public static class XtreamEndpoints
                 {
                     num              = i + 1,
                     name             = g.Key,
-                    series_id        = SeriesId(g.Key).ToString(),
+                    // Standard clients expect a JSON number; the assigned value is also kept
+                    // below 10M so BrightScript renders plain digits instead of scientific notation.
+                    series_id        = seriesIds.KeyToId[SeriesIdentity(g.Key)],
                     cover            = first.LogoUrl ?? string.Empty,
                     plot             = string.Empty,
                     cast             = string.Empty,
@@ -410,10 +416,17 @@ public static class XtreamEndpoints
         var password = Uri.EscapeDataString(access.UrlCredential?.Password ?? string.Empty);
         var added    = ((DateTimeOffset)lineup.SnapshotCreatedUtc).ToUnixTimeSeconds().ToString();
 
-        var match = lineup.Channels
+        var groups = lineup.Channels
             .Where(c => c.ContentType == "series")
-            .GroupBy(c => ExtractSeriesName(c.DisplayName))
-            .FirstOrDefault(g => SeriesId(g.Key) == requestedSeriesId);
+            .GroupBy(SeriesTitle)
+            .ToArray();
+        var seriesIds = BuildSeriesIdAssignment(groups.Select(g => g.Key));
+        var identity = seriesIds.IdToKey.GetValueOrDefault(requestedSeriesId)
+            ?? seriesIds.LegacyIdToKey.GetValueOrDefault(requestedSeriesId);
+        var match = identity is null
+            ? groups.FirstOrDefault(g =>
+                XtreamStreamIdCache.ToLegacyStreamId(SeriesIdentity(g.Key)) == requestedSeriesId)
+            : groups.FirstOrDefault(g => SeriesIdentity(g.Key) == identity);
 
         if (match is null)
             return Results.Json(new { }, JsonOptions);
@@ -1305,14 +1318,10 @@ public static class XtreamEndpoints
         return (int)(value & 0x7FFF_FFFF);
     }
 
-    /// <summary>Stable 31-bit numeric series ID derived from the series name.</summary>
-    private static int SeriesId(string seriesName)
-    {
-        var bytes = Encoding.UTF8.GetBytes("series:" + seriesName);
-        var hash = MD5.HashData(bytes);
-        var value = BitConverter.ToUInt32(hash, 0);
-        return (int)(value & 0x7FFF_FFFF);
-    }
+    private static string SeriesIdentity(string seriesName) => "series:" + seriesName;
+
+    private static StreamIdAssignment BuildSeriesIdAssignment(IEnumerable<string> seriesNames) =>
+        XtreamStreamIdCache.BuildAssignment(seriesNames.Select(SeriesIdentity));
 
     /// <summary>
     /// Extracts the series title from an episode display name by stripping the
@@ -1324,6 +1333,11 @@ public static class XtreamEndpoints
         var m = SeriesNameRegex.Match(displayName);
         return m.Success ? m.Groups[1].Value.Trim() : displayName;
     }
+
+    private static string SeriesTitle(RenderedLineupChannel channel) =>
+        string.IsNullOrWhiteSpace(channel.TvgName)
+            ? ExtractSeriesName(channel.DisplayName)
+            : channel.TvgName.Trim();
 
     /// <summary>
     /// Extracts the season and episode numbers from a display name.

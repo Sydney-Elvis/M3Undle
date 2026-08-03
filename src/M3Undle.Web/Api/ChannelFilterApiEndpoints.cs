@@ -18,6 +18,10 @@ public static class ChannelFilterApiEndpoints
         profiles.WithTags("Channel Filters");
         profiles.MapGet("/active", GetActiveProfileAsync).WithSummary("Get active profile");
         profiles.MapGet("/{profileId}/group-filters", ListGroupFiltersAsync).WithSummary("List group filters");
+        profiles.MapGet("/{profileId}/catalog-groups", ListCatalogGroupsAsync).WithSummary("List catalog groups");
+        profiles.MapPatch("/{profileId}/catalog-groups/{providerGroupId}", UpdateCatalogGroupDecisionAsync).WithSummary("Update a catalog group decision");
+        profiles.MapGet("/{profileId}/catalog-groups/{providerGroupId}/items", ListCatalogItemsAsync).WithSummary("Browse catalog group titles");
+        profiles.MapGet("/{profileId}/catalog-items/search", SearchCatalogItemsAsync).WithSummary("Search catalog titles across groups");
         profiles.MapPatch("/{profileId}/group-filters/{filterId}", UpdateGroupFilterAsync).WithSummary("Update a group filter");
         profiles.MapPost("/{profileId}/group-filters/bulk-decide", BulkDecideAsync).WithSummary("Bulk set group decisions");
         profiles.MapPost("/{profileId}/group-filters/dismiss-new", DismissNewGroupsAsync).WithSummary("Dismiss new groups");
@@ -61,6 +65,73 @@ public static class ChannelFilterApiEndpoints
     // -------------------------------------------------------------------------
     // Group filters
     // -------------------------------------------------------------------------
+
+    private static async Task<Ok<List<CatalogGroupDto>>> ListCatalogGroupsAsync(
+        string profileId,
+        CatalogPageService catalogPageService,
+        CancellationToken cancellationToken)
+    {
+        var groups = await catalogPageService.ListGroupsAsync(profileId, cancellationToken);
+        return TypedResults.Ok(groups);
+    }
+
+    private static async Task<Results<NoContent, BadRequest<string>, NotFound>> UpdateCatalogGroupDecisionAsync(
+        string profileId,
+        string providerGroupId,
+        UpdateCatalogGroupDecisionRequest request,
+        CatalogPageService catalogPageService,
+        CancellationToken cancellationToken)
+    {
+        if (request.Decision is not (LineupReviewSemantics.GroupDecisionInclude or LineupReviewSemantics.GroupDecisionExclude))
+            return TypedResults.BadRequest("Decision must be 'include' or 'exclude'.");
+
+        var updated = await catalogPageService.UpdateDecisionAsync(
+            profileId,
+            providerGroupId,
+            request.Decision,
+            cancellationToken);
+        return updated ? TypedResults.NoContent() : TypedResults.NotFound();
+    }
+
+    private static async Task<Results<Ok<CatalogItemsResponse>, NotFound>> ListCatalogItemsAsync(
+        string profileId,
+        string providerGroupId,
+        int? page,
+        int? pageSize,
+        string? search,
+        CatalogPageService catalogPageService,
+        CancellationToken cancellationToken)
+    {
+        var result = await catalogPageService.GetItemsAsync(
+            profileId,
+            providerGroupId,
+            page ?? 1,
+            pageSize ?? 50,
+            search,
+            cancellationToken);
+        return result is null ? TypedResults.NotFound() : TypedResults.Ok(result);
+    }
+
+    private static async Task<Ok<CatalogTitleSearchResponse>> SearchCatalogItemsAsync(
+        string profileId,
+        string? contentType,
+        int? page,
+        int? pageSize,
+        string? search,
+        string? groupSearch,
+        CatalogPageService catalogPageService,
+        CancellationToken cancellationToken)
+    {
+        var result = await catalogPageService.SearchItemsAsync(
+            profileId,
+            contentType,
+            page ?? 1,
+            pageSize ?? 50,
+            search,
+            groupSearch,
+            cancellationToken);
+        return TypedResults.Ok(result);
+    }
 
     private static async Task<Ok<List<GroupFilterDto>>> ListGroupFiltersAsync(
         string profileId,

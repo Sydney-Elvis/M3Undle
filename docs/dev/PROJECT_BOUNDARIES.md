@@ -86,7 +86,7 @@ These are load-bearing facts about the running system. Breaking one silently is 
 - Compatibility endpoints (`/m3u/`, `/xmltv/`, `/stream/`, `/health`, `/status`) are always anonymous.
 - Snapshot files live at `{ContentRootPath}/Data/snapshots/m3undle/{snapshotId}/`.
 - Output name is locked to `m3undle` in Core. Do not add code paths that change this.
-- `SnapshotBuilder` builds from in-memory `ParsedProviderChannel` data. It does not write to `provider_channels` or `provider_groups`; those tables are reserved for future use.
+- Snapshot refresh synchronizes discovered groups into `provider_groups` and live channels into `provider_channels`; VOD and series items remain in-memory and are not persisted as provider channels. Preview builds from in-memory `ParsedProviderChannel` data and does not mutate those discovery tables.
 - Stream keys are derived from stable channel properties: `tvg-id` when present, otherwise `displayName`, a unit separator, and `streamUrl`. The input is SHA-256 hashed with `profileId` and truncated to 16 base64url characters. Do not use database-assigned IDs as key inputs.
 - Refresh and preview (`RefreshPreviewAsync`) builds the preview from in-memory `ParsedProviderChannel` data. It does not upsert channels to the database; only the `fetch_runs` record is written.
 - Importing a provider auto-creates a profile with the same name. Use `GetUniqueProfileNameAsync` if the name is taken.

@@ -126,6 +126,8 @@ public sealed class XtreamLineupClientTests
         Assert.AreEqual("The Matrix", ch.DisplayName);
         Assert.AreEqual("http://panel.test:8080/movie/user/pass/200.mkv", ch.StreamUrl);
         Assert.AreEqual("Movies", ch.GroupTitle);
+        Assert.AreEqual("200", ch.CatalogItemId);
+        Assert.AreEqual("The Matrix", ch.CatalogTitle);
     }
 
     [TestMethod]
@@ -212,7 +214,10 @@ public sealed class XtreamLineupClientTests
         // Episodes fetched inside the inline budget appear in the very first lineup.
         Assert.HasCount(1, result.Channels);
         Assert.Contains("Pilot", result.Channels[0].DisplayName);
+        Assert.Contains("S01E01", result.Channels[0].DisplayName);
         Assert.AreEqual("Drama", result.Channels[0].GroupTitle);
+        Assert.AreEqual("1001", result.Channels[0].CatalogItemId);
+        Assert.AreEqual("Breaking Bad", result.Channels[0].CatalogTitle);
     }
 
     [TestMethod]

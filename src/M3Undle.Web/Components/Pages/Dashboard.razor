@@ -234,15 +234,15 @@
                                              Icon="@Icons.Material.Filled.LiveTv"
                                              OnClick="@((_) => Nav.NavigateTo("channels"))" />
                                 <TooltipChip Label="@($"Movies {selectedProfile.MovieCount}")"
-                                             TooltipText="View channel list for this profile"
+                                             TooltipText="View movie categories for this profile"
                                              Color="@(selectedProfile.MovieCount > 0 ? Color.Info : Color.Default)"
                                              Icon="@Icons.Material.Filled.Movie"
-                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                                             OnClick="@((_) => Nav.NavigateTo($"channels/catalog?profile={selectedProfile.ProfileId}&type=vod"))" />
                                 <TooltipChip Label="@($"Series {selectedProfile.SeriesCount}")"
-                                             TooltipText="View channel list for this profile"
+                                             TooltipText="View series categories for this profile"
                                              Color="@(selectedProfile.SeriesCount > 0 ? Color.Info : Color.Default)"
                                              Icon="@Icons.Material.Filled.Tv"
-                                             OnClick="@((_) => Nav.NavigateTo("channels"))" />
+                                             OnClick="@((_) => Nav.NavigateTo($"channels/catalog?profile={selectedProfile.ProfileId}&type=series"))" />
                             </MudStack>
                         </MudStack>
 

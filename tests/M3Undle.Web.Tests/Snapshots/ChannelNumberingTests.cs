@@ -96,6 +96,37 @@ public sealed class ChannelNumberingTests
     }
 
     [TestMethod]
+    public void BuildChannelIndex_ExcludesCatalogGroupByNameAndContentType()
+    {
+        var channels = new[]
+        {
+            new SnapshotBuilder.ChannelBuildData(
+                string.Empty, "vod-1", "Movie One", "http://provider/movie/1.mkv",
+                "vod", "Reality", null, null, null),
+            new SnapshotBuilder.ChannelBuildData(
+                string.Empty, "series-1", "Series One S01 E01", "http://provider/series/1.mkv",
+                "series", "Reality", null, null, null),
+        };
+        var excluded = new HashSet<SnapshotBuilder.ProviderGroupKey>
+        {
+            new("Reality", "series"),
+        };
+
+        var result = SnapshotBuilder.BuildChannelIndex(
+            channels,
+            "profile-1",
+            new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(),
+            new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(),
+            includeVod: true,
+            includeSeries: true,
+            providerId: "provider-1",
+            excludedCatalogGroups: excluded);
+
+        Assert.HasCount(1, result);
+        Assert.AreEqual("Movie One", result[0].DisplayName);
+    }
+
+    [TestMethod]
     public void AutoNumbering_AssignsSequentialNumbers()
     {
         var groups = OneGroup("News", "News", autoStart: 100, autoEnd: 110);

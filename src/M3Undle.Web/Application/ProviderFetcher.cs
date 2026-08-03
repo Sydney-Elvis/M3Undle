@@ -359,6 +359,8 @@ public sealed class ParsedProviderChannel
     public string? LogoUrl { get; init; }
     public string StreamUrl { get; init; } = string.Empty;
     public string? GroupTitle { get; init; }
+    public string? CatalogItemId { get; init; }
+    public string? CatalogTitle { get; init; }
 }
 
 // -------------------------------------------------------------------------

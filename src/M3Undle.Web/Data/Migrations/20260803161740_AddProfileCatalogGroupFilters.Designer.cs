@@ -3,6 +3,7 @@ using System;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace M3Undle.Web.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260803161740_AddProfileCatalogGroupFilters")]
+    partial class AddProfileCatalogGroupFilters
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
@@ -148,72 +151,6 @@ namespace M3Undle.Web.Data.Migrations
                         .HasDatabaseName("idx_canonical_channels_profile_enabled");
 
                     b.ToTable("canonical_channels", (string)null);
-                });
-
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.CatalogItem", b =>
-                {
-                    b.Property<string>("CatalogItemId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("catalog_item_id");
-
-                    b.Property<bool>("Active")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true)
-                        .HasColumnName("active");
-
-                    b.Property<string>("ContentType")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("content_type");
-
-                    b.Property<int>("EpisodeCount")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(0)
-                        .HasColumnName("episode_count");
-
-                    b.Property<DateTime>("FirstSeenUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("first_seen_utc");
-
-                    b.Property<DateTime>("LastSeenUtc")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("last_seen_utc");
-
-                    b.Property<string>("ProviderGroupId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_group_id");
-
-                    b.Property<string>("ProviderId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_id");
-
-                    b.Property<string>("ProviderItemKey")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("provider_item_key");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("title");
-
-                    b.HasKey("CatalogItemId");
-
-                    b.HasIndex("ProviderGroupId", "ProviderItemKey")
-                        .IsUnique()
-                        .HasDatabaseName("idx_catalog_items_group_item_unique");
-
-                    b.HasIndex("ProviderGroupId", "Active", "Title")
-                        .HasDatabaseName("idx_catalog_items_group_active_title");
-
-                    b.HasIndex("ProviderId", "ContentType", "Active")
-                        .HasDatabaseName("idx_catalog_items_provider_type_active");
-
-                    b.ToTable("catalog_items", (string)null);
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ChannelMatchRule", b =>
@@ -2478,25 +2415,6 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("Profile");
                 });
 
-            modelBuilder.Entity("M3Undle.Web.Data.Entities.CatalogItem", b =>
-                {
-                    b.HasOne("M3Undle.Web.Data.Entities.ProviderGroup", "ProviderGroup")
-                        .WithMany("CatalogItems")
-                        .HasForeignKey("ProviderGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
-                        .WithMany("CatalogItems")
-                        .HasForeignKey("ProviderId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Provider");
-
-                    b.Navigation("ProviderGroup");
-                });
-
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ChannelMatchRule", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.Profile", "Profile")
@@ -3067,8 +2985,6 @@ namespace M3Undle.Web.Data.Migrations
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Provider", b =>
                 {
-                    b.Navigation("CatalogItems");
-
                     b.Navigation("ChannelSources");
 
                     b.Navigation("FetchRuns");
@@ -3091,8 +3007,6 @@ namespace M3Undle.Web.Data.Migrations
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProviderGroup", b =>
                 {
-                    b.Navigation("CatalogItems");
-
                     b.Navigation("CustomGroupProviderLinks");
 
                     b.Navigation("ProfileCatalogGroupFilters");

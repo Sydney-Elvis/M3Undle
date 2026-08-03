@@ -68,6 +68,22 @@ public sealed class OpenApiEndpointTests
             && streamingSettingsPath.TryGetProperty("get", out _)
             && streamingSettingsPath.TryGetProperty("put", out _),
             "Expected streaming settings API operations in management OpenAPI.");
+        Assert.IsTrue(
+            paths.TryGetProperty("/api/v1/profiles/{profileId}/catalog-groups", out var catalogGroupsPath)
+            && catalogGroupsPath.TryGetProperty("get", out _),
+            "Expected catalog group listing in management OpenAPI.");
+        Assert.IsTrue(
+            paths.TryGetProperty("/api/v1/profiles/{profileId}/catalog-groups/{providerGroupId}", out var catalogDecisionPath)
+            && catalogDecisionPath.TryGetProperty("patch", out _),
+            "Expected catalog group decision updates in management OpenAPI.");
+        Assert.IsTrue(
+            paths.TryGetProperty("/api/v1/profiles/{profileId}/catalog-groups/{providerGroupId}/items", out var catalogItemsPath)
+            && catalogItemsPath.TryGetProperty("get", out _),
+            "Expected paginated catalog title browsing in management OpenAPI.");
+        Assert.IsTrue(
+            paths.TryGetProperty("/api/v1/profiles/{profileId}/catalog-items/search", out var catalogSearchPath)
+            && catalogSearchPath.TryGetProperty("get", out _),
+            "Expected profile-wide catalog title search in management OpenAPI.");
     }
 
     [TestMethod]

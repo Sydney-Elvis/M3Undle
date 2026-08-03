@@ -1,0 +1,456 @@
+@page "/channels/catalog"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject CatalogPageService CatalogPageService
+@inject ProfilesPageService ProfilesService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+<PageTitle>M3Undle — Catalog</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+        <MudStack Spacing="0">
+            <MudText Typo="Typo.h5">Movies &amp; Series</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                Categories discovered during provider refreshes. Counts describe discovered items, not necessarily published output.
+            </MudText>
+        </MudStack>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            @if (_profiles.Count > 0)
+            {
+                <MudSelect T="string"
+                           Value="_profileId"
+                           ValueChanged="OnProfileChangedAsync"
+                           Label="Profile"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="min-width:160px;"
+                           AnchorOrigin="Origin.BottomLeft">
+                    @foreach (var profile in _profiles)
+                    {
+                        <MudSelectItem Value="@profile.ProfileId">@profile.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            <MudTooltip Text="Reload catalog categories" Arrow="true">
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                               Size="Size.Small"
+                               Disabled="_isLoading"
+                               OnClick="LoadAsync" />
+            </MudTooltip>
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+}
+else if (_isLoading)
+{
+    <MudStack AlignItems="AlignItems.Center" Class="pa-8" Spacing="2">
+        <MudProgressCircular Indeterminate="true" />
+        <MudText Color="Color.Secondary">Loading catalog categories…</MudText>
+    </MudStack>
+}
+else if (_profileId is null)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        Create a profile and link a provider before browsing catalog categories.
+    </MudAlert>
+}
+else if (_groups.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Outlined">
+        No movie or series categories have been discovered for this profile. Xtream providers fetch
+        catalog categories only when Movies or Series is enabled; enable the desired content type and
+        refresh the provider to populate this page.
+    </MudAlert>
+}
+else
+{
+    <MudPaper Elevation="2">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap" Class="pa-2">
+            <MudTextField T="string"
+                          Value="_categorySearch"
+                          ValueChanged="OnCategorySearchChanged"
+                          Placeholder="Filter categories or providers…"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true"
+                          DebounceInterval="350"
+                          OnDebounceIntervalElapsed="ReloadTitlesAsync"
+                          Clearable="true"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Style="min-width:280px; flex:1;" />
+            <MudDivider Vertical="true" FlexItem="true" />
+            <MudTextField T="string"
+                          Value="_titleSearch"
+                          ValueChanged="OnTitleSearchChanged"
+                          Placeholder="Search titles across all categories…"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@Icons.Material.Filled.ManageSearch"
+                          Immediate="true"
+                          DebounceInterval="350"
+                          OnDebounceIntervalElapsed="ReloadTitlesAsync"
+                          Clearable="true"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Style="min-width:280px; flex:1;" />
+        </MudStack>
+        <MudStack Row="true" Spacing="1" Wrap="Wrap.Wrap" AlignItems="AlignItems.Center" Class="px-2 pb-2">
+            <ChipFilterToggle Label="@($"Movies · {MovieGroupCount:N0} categories")"
+                              Color="Color.Info"
+                              IsActive="@IsTypeActive(VodType)"
+                              TooltipText="Movie categories and title results. Click to toggle this filter."
+                              OnClick="@((_) => ToggleTypeFilterAsync(VodType))" />
+            <ChipFilterToggle Label="@($"Series · {SeriesGroupCount:N0} categories")"
+                              Color="Color.Primary"
+                              IsActive="@IsTypeActive(SeriesType)"
+                              TooltipText="Series categories and title results. Click to toggle this filter."
+                              OnClick="@((_) => ToggleTypeFilterAsync(SeriesType))" />
+            @if (!string.IsNullOrWhiteSpace(_titleSearch))
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-2">
+                    Title matches within the filtered categories · episode names are not indexed
+                </MudText>
+            }
+        </MudStack>
+
+        @if (string.IsNullOrWhiteSpace(_titleSearch))
+        {
+            <MudTable T="CatalogGroupDto"
+                  Items="FilteredGroups"
+                  Dense="true"
+                  Hover="true"
+                  SortLabel="Sort by"
+                  RowsPerPage="25"
+                  Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh><MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.Name">Category</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.ContentType">Type</MudTableSortLabel></MudTh>
+                <MudTh>
+                    <MudTooltip Text="Items discovered in the provider category during its latest successful catalog refresh">
+                        <MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.ItemCount">Discovered items</MudTableSortLabel>
+                    </MudTooltip>
+                </MudTh>
+                <MudTh>
+                    <MudTooltip Text="Distinct movies or series available to inspect">
+                        <MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.TitleCount">Titles</MudTableSortLabel>
+                    </MudTooltip>
+                </MudTh>
+                <MudTh><MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.ProviderName">Provider</MudTableSortLabel></MudTh>
+                <MudTh><MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.LastSeenUtc">Last seen</MudTableSortLabel></MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Output</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Category">
+                    <MudLink Href="@CatalogGroupHref(context)">@context.Name</MudLink>
+                </MudTd>
+                <MudTd DataLabel="Type">
+                    <StatusChip Label="@(context.ContentType == VodType ? "Movies" : "Series")"
+                                Color="@(context.ContentType == VodType ? Color.Info : Color.Primary)"
+                                Icon="@(context.ContentType == VodType ? Icons.Material.Filled.Movie : Icons.Material.Filled.Tv)" />
+                </MudTd>
+                <MudTd DataLabel="Discovered items">@context.ItemCount.ToString("N0")</MudTd>
+                <MudTd DataLabel="Titles">@context.TitleCount.ToString("N0")</MudTd>
+                <MudTd DataLabel="Provider">@context.ProviderName</MudTd>
+                <MudTd DataLabel="Last seen">@context.LastSeenUtc.ToLocalTime().ToString("g")</MudTd>
+                <MudTd DataLabel="Status">
+                    @if (context.ProviderEnabled && context.ProfileProviderEnabled && context.ContentTypeEnabled)
+                    {
+                        <StatusChip Label="Enabled" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle" />
+                    }
+                    else
+                    {
+                        <MudTooltip Text="@DisabledReason(context)">
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                     Icon="@Icons.Material.Filled.PauseCircle">
+                                Not refreshing
+                            </MudChip>
+                        </MudTooltip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Output">
+                    @if (context.Decision == "exclude")
+                    {
+                        <StatusChip Label="Excluded" Color="Color.Default" Icon="@Icons.Material.Filled.Block" />
+                    }
+                    else
+                    {
+                        <StatusChip Label="Included" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle" />
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (context.Decision == "exclude")
+                    {
+                        <MudButton Size="Size.Small"
+                                   Variant="Variant.Outlined"
+                                   Color="Color.Success"
+                                   StartIcon="@Icons.Material.Filled.AddCircle"
+                                   Disabled="@_busyGroupIds.Contains(context.ProviderGroupId)"
+                                   OnClick="@(() => SetDecisionAsync(context, "include"))">
+                            Include
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small"
+                                   Variant="Variant.Outlined"
+                                   Color="Color.Error"
+                                   StartIcon="@Icons.Material.Filled.RemoveCircle"
+                                   Disabled="@_busyGroupIds.Contains(context.ProviderGroupId)"
+                                   OnClick="@(() => SetDecisionAsync(context, "exclude"))">
+                            Exclude
+                        </MudButton>
+                    }
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="@(new[] { 25, 50, 100 })" />
+            </PagerContent>
+            </MudTable>
+        }
+        else
+        {
+            <MudTable @ref="_titleTable"
+                  T="CatalogItemDto"
+                  ServerData="SearchTitlesAsync"
+                  Dense="true"
+                  Hover="true"
+                  RowsPerPage="25"
+                  Breakpoint="Breakpoint.Sm"
+                  Loading="_isTitleLoading">
+            <HeaderContent>
+                <MudTh>Title</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Category</MudTh>
+                <MudTh>Provider</MudTh>
+                <MudTh>Last seen</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Title">@context.Title</MudTd>
+                <MudTd DataLabel="Type">
+                    <StatusChip Label="@(context.ContentType == VodType ? "Movie" : "Series")"
+                                Color="@(context.ContentType == VodType ? Color.Info : Color.Primary)"
+                                Icon="@(context.ContentType == VodType ? Icons.Material.Filled.Movie : Icons.Material.Filled.Tv)" />
+                </MudTd>
+                <MudTd DataLabel="Category">
+                    <MudLink Href="@CatalogItemGroupHref(context)">@context.GroupName</MudLink>
+                </MudTd>
+                <MudTd DataLabel="Provider">@context.ProviderName</MudTd>
+                <MudTd DataLabel="Last seen">@context.LastSeenUtc.ToLocalTime().ToString("g")</MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Class="pa-4" Color="Color.Secondary">
+                    No matching movie or series titles were found in the filtered categories.
+                </MudText>
+            </NoRecordsContent>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="@(new[] { 25, 50, 100 })" />
+            </PagerContent>
+            </MudTable>
+        }
+    </MudPaper>
+}
+
+@code {
+    private const string AllTypes = "all";
+    private const string VodType = "vod";
+    private const string SeriesType = "series";
+    private const string NoTypes = "none";
+
+    [SupplyParameterFromQuery(Name = "profile")]
+    public string? InitialProfile { get; set; }
+
+    [SupplyParameterFromQuery(Name = "type")]
+    public string? InitialType { get; set; }
+
+    private List<ProfileStubDto> _profiles = [];
+    private List<CatalogGroupDto> _groups = [];
+    private string? _profileId;
+    private MudTable<CatalogItemDto>? _titleTable;
+    private string _categorySearch = string.Empty;
+    private string _titleSearch = string.Empty;
+    private string _typeFilter = AllTypes;
+    private string? _error;
+    private bool _isLoading;
+    private bool _isTitleLoading;
+    private readonly HashSet<string> _busyGroupIds = [];
+
+    private IEnumerable<CatalogGroupDto> FilteredGroups => _groups.Where(group =>
+        (_typeFilter == AllTypes || group.ContentType == _typeFilter)
+        && (string.IsNullOrWhiteSpace(_categorySearch)
+            || group.Name.Contains(_categorySearch, StringComparison.OrdinalIgnoreCase)
+            || group.ProviderName.Contains(_categorySearch, StringComparison.OrdinalIgnoreCase)));
+
+    private int MovieGroupCount => _groups.Count(group => group.ContentType == VodType);
+    private int SeriesGroupCount => _groups.Count(group => group.ContentType == SeriesType);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (InitialType is VodType or SeriesType)
+            _typeFilter = InitialType;
+
+        _profiles = await ProfilesService.GetProfileStubsAsync(CancellationToken.None);
+        if (!string.IsNullOrWhiteSpace(InitialProfile) && _profiles.Any(x => x.ProfileId == InitialProfile))
+            _profileId = InitialProfile;
+        else
+            _profileId = await CatalogPageService.GetDefaultProfileIdAsync(CancellationToken.None)
+                ?? _profiles.FirstOrDefault()?.ProfileId;
+
+        await LoadAsync();
+        if (_titleTable is not null)
+            await _titleTable.ReloadServerData();
+    }
+
+    private bool IsTypeActive(string contentType) =>
+        _typeFilter == AllTypes || _typeFilter == contentType;
+
+    private async Task ToggleTypeFilterAsync(string contentType)
+    {
+        var otherType = contentType == VodType ? SeriesType : VodType;
+        _typeFilter = (_typeFilter, IsTypeActive(contentType), IsTypeActive(otherType)) switch
+        {
+            (_, true, true) => otherType,
+            (_, true, false) => NoTypes,
+            (_, false, true) => AllTypes,
+            _ => contentType,
+        };
+        if (_profileId is not null)
+            Navigation.NavigateTo(
+                $"channels/catalog?profile={Uri.EscapeDataString(_profileId)}&type={_typeFilter}",
+                replace: true);
+        if (_titleTable is not null)
+            await _titleTable.ReloadServerData();
+    }
+
+    private async Task OnProfileChangedAsync(string profileId)
+    {
+        _profileId = profileId;
+        Navigation.NavigateTo(
+            $"channels/catalog?profile={Uri.EscapeDataString(profileId)}&type={_typeFilter}",
+            replace: true);
+        await LoadAsync();
+        if (_titleTable is not null)
+            await _titleTable.ReloadServerData();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_profileId is null)
+        {
+            _groups = [];
+            return;
+        }
+
+        _isLoading = true;
+        _error = null;
+        try
+        {
+            _groups = await CatalogPageService.ListGroupsAsync(_profileId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _groups = [];
+            _error = $"Catalog categories could not be loaded: {ex.Message}";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private static string DisabledReason(CatalogGroupDto group)
+    {
+        if (!group.ProviderEnabled)
+            return "The provider is disabled, so this category is not currently refreshed.";
+        if (!group.ProfileProviderEnabled)
+            return "The provider is disabled for this profile, so this category is not currently refreshed.";
+        return group.ContentType == VodType
+            ? "Movies is disabled on the provider, so this category is not currently refreshed."
+            : "Series is disabled on the provider, so this category is not currently refreshed.";
+    }
+
+    private string CatalogGroupHref(CatalogGroupDto group) =>
+        $"channels/catalog/{Uri.EscapeDataString(group.ProviderGroupId)}?profile={Uri.EscapeDataString(_profileId ?? string.Empty)}&fromType={_typeFilter}";
+
+    private string CatalogItemGroupHref(CatalogItemDto item) =>
+        $"channels/catalog/{Uri.EscapeDataString(item.ProviderGroupId)}?profile={Uri.EscapeDataString(_profileId ?? string.Empty)}&fromType={_typeFilter}";
+
+    private async Task<TableData<CatalogItemDto>> SearchTitlesAsync(TableState state, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_profileId)
+            || string.IsNullOrWhiteSpace(_titleSearch)
+            || _typeFilter == NoTypes)
+            return new TableData<CatalogItemDto> { Items = [], TotalItems = 0 };
+
+        _isTitleLoading = true;
+        try
+        {
+            var result = await CatalogPageService.SearchItemsAsync(
+                _profileId,
+                _typeFilter == AllTypes ? null : _typeFilter,
+                state.Page + 1,
+                state.PageSize,
+                _titleSearch,
+                _categorySearch,
+                cancellationToken);
+            return new TableData<CatalogItemDto> { Items = result.Items, TotalItems = result.Total };
+        }
+        finally
+        {
+            _isTitleLoading = false;
+        }
+    }
+
+    private void OnTitleSearchChanged(string value) => _titleSearch = value;
+
+    private void OnCategorySearchChanged(string value) => _categorySearch = value;
+
+    private async Task ReloadTitlesAsync()
+    {
+        if (_titleTable is not null)
+            await _titleTable.ReloadServerData();
+    }
+
+    private async Task SetDecisionAsync(CatalogGroupDto group, string decision)
+    {
+        if (_profileId is null || !_busyGroupIds.Add(group.ProviderGroupId))
+            return;
+
+        try
+        {
+            var updated = await CatalogPageService.UpdateDecisionAsync(
+                _profileId,
+                group.ProviderGroupId,
+                decision,
+                CancellationToken.None);
+            if (!updated)
+            {
+                Snackbar.Add("The catalog category is no longer available for this profile.", Severity.Error);
+                return;
+            }
+
+            group.Decision = decision;
+            group.IsNew = false;
+            Snackbar.Add(
+                decision == "exclude"
+                    ? $"{group.Name} will be excluded from the next rebuilt output."
+                    : $"{group.Name} will be included in the next rebuilt output.",
+                Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Catalog category could not be updated: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busyGroupIds.Remove(group.ProviderGroupId);
+        }
+    }
+}

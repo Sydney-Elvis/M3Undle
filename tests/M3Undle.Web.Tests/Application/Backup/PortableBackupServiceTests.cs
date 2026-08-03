@@ -30,6 +30,8 @@ public sealed class PortableBackupServiceTests
             setup.SystemEvents.Add(SimpleSystemEvent("se1"));
             setup.StreamChannelHealthEvents.Add(SimpleHealthEvent("he1", "p1"));
             setup.XtreamSeriesCache.Add(SimpleSeriesCache("p1"));
+            setup.ProviderGroups.Add(SimpleProviderGroup("pg1", "p1"));
+            setup.CatalogItems.Add(SimpleCatalogItem("ci1", "p1", "pg1"));
             setup.Snapshots.Add(SimpleSnapshot("sn1", "pr1"));
             await setup.SaveChangesAsync();
         }
@@ -491,6 +493,30 @@ public sealed class PortableBackupServiceTests
         SeriesId = 1,
         LastModifiedEpoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
         EpisodesJson = "[]",
+    };
+
+    private static ProviderGroup SimpleProviderGroup(string id, string providerId) => new()
+    {
+        ProviderGroupId = id,
+        ProviderId = providerId,
+        RawName = "Movies",
+        ContentType = "vod",
+        Active = true,
+        FirstSeenUtc = DateTime.UtcNow,
+        LastSeenUtc = DateTime.UtcNow,
+    };
+
+    private static CatalogItem SimpleCatalogItem(string id, string providerId, string providerGroupId) => new()
+    {
+        CatalogItemId = id,
+        ProviderId = providerId,
+        ProviderGroupId = providerGroupId,
+        ProviderItemKey = "id:1",
+        ContentType = "vod",
+        Title = "Movie",
+        Active = true,
+        FirstSeenUtc = DateTime.UtcNow,
+        LastSeenUtc = DateTime.UtcNow,
     };
 
     private static Snapshot SimpleSnapshot(string id, string profileId) => new()

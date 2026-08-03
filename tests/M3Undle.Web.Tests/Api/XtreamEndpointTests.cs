@@ -120,18 +120,36 @@ public sealed class XtreamEndpointTests
         using var seriesResponse = await client.GetAsync(
             "/player_api.php?username=test-user&password=secret&action=get_series");
         using var seriesJson = JsonDocument.Parse(await seriesResponse.Content.ReadAsStringAsync());
-        var seriesId = seriesJson.RootElement[0].GetProperty("series_id").GetString();
+        Assert.AreEqual(1, seriesJson.RootElement.GetArrayLength());
+        Assert.AreEqual("Show One", seriesJson.RootElement[0].GetProperty("name").GetString());
+        var seriesIdProperty = seriesJson.RootElement[0].GetProperty("series_id");
+        Assert.AreEqual(JsonValueKind.Number, seriesIdProperty.ValueKind,
+            "Xtream clients such as Smarters require series_id to be a JSON number.");
+        var seriesId = seriesIdProperty.GetInt32();
+        Assert.IsTrue(seriesId is >= 1 and <= XtreamStreamIdCache.MaxStreamId,
+            "Numeric series IDs must remain below the BrightScript scientific-notation threshold.");
 
         using var response = await client.GetAsync(
             $"/player_api.php?username=test-user&password=secret&action=get_series_info&series_id={seriesId}");
 
         Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var episode = json.RootElement.GetProperty("episodes").GetProperty("1")[0];
+        var episodes = json.RootElement.GetProperty("episodes").GetProperty("1");
+        Assert.AreEqual(2, episodes.GetArrayLength());
+        var episode = episodes[0];
+        Assert.AreEqual(1, episode.GetProperty("episode_num").GetInt32());
+        Assert.AreEqual(2, episodes[1].GetProperty("episode_num").GetInt32());
         Assert.AreEqual("mp4", episode.GetProperty("container_extension").GetString());
         Assert.IsTrue(episode.TryGetProperty("info", out _));
         Assert.IsTrue(episode.TryGetProperty("custom_sid", out _));
         StringAssert.EndsWith(episode.GetProperty("direct_source").GetString()!, ".mp4");
+
+        var legacySeriesId = XtreamStreamIdCache.ToLegacyStreamId("series:Show One");
+        using var legacyResponse = await client.GetAsync(
+            $"/player_api.php?username=test-user&password=secret&action=get_series_info&series_id={legacySeriesId}");
+        using var legacyJson = JsonDocument.Parse(await legacyResponse.Content.ReadAsStringAsync());
+        Assert.IsTrue(legacyJson.RootElement.TryGetProperty("episodes", out _),
+            "Previously advertised 31-bit series IDs must continue resolving for cached clients.");
     }
 
     [TestMethod]
@@ -379,7 +397,8 @@ public sealed class XtreamEndpointTests
                 [
                     new RenderedLineupChannel("live-1", "Alpha", "alpha.tv", "Alpha", null, "News", 11, "http://example.com/live/alpha.ts", "live"),
                     new RenderedLineupChannel("vod-1", "Movie One", "movie.one", "Movie One", null, "Movies", null, "http://example.com/movie/one.mkv", "vod"),
-                    new RenderedLineupChannel("series-1", "Show One S01E01", "show.one", "Show One S01E01", null, "Series", null, "http://example.com/series/one.mp4?token=secret", "series"),
+                    new RenderedLineupChannel("series-1", "Show One S01E01 — Pilot", "show.one", "Show One", null, "Series", null, "http://example.com/series/one.mp4?token=secret", "series"),
+                    new RenderedLineupChannel("series-2", "Show One S01E02 — Second", "show.one", "Show One", null, "Series", null, "http://example.com/series/two.mkv?token=secret", "series"),
                     new RenderedLineupChannel("live-2", "Bravo", "bravo.tv", "Bravo HD", null, "News", null, "http://example.com/live/bravo.ts", "live"),
                 ]));
         }

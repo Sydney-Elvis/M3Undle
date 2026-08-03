@@ -22,6 +22,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<EndpointCredential> EndpointCredentials => Set<EndpointCredential>();
     public DbSet<EndpointAccessBinding> EndpointAccessBindings => Set<EndpointAccessBinding>();
     public DbSet<ProfileGroupFilter> ProfileGroupFilters => Set<ProfileGroupFilter>();
+    public DbSet<ProfileCatalogGroupFilter> ProfileCatalogGroupFilters => Set<ProfileCatalogGroupFilter>();
     public DbSet<ProfileGroupChannelFilter> ProfileGroupChannelFilters => Set<ProfileGroupChannelFilter>();
     public DbSet<EpgSource> EpgSources => Set<EpgSource>();
     public DbSet<EpgSourceChannel> EpgSourceChannels => Set<EpgSourceChannel>();
@@ -36,6 +37,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<MetricsToken> MetricsTokens => Set<MetricsToken>();
     public DbSet<StreamChannelHealthEvent> StreamChannelHealthEvents => Set<StreamChannelHealthEvent>();
     public DbSet<XtreamSeriesCache> XtreamSeriesCache => Set<XtreamSeriesCache>();
+    public DbSet<CatalogItem> CatalogItems => Set<CatalogItem>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -71,4 +73,3 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
         }
     }
 }
-

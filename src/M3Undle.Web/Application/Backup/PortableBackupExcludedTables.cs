@@ -17,6 +17,7 @@ public static class PortableBackupExcludedTables
         "system_events",
         "stream_channel_health_events",
         "xtream_series_cache",
+        "catalog_items",
         "snapshots",
     ];
 }
