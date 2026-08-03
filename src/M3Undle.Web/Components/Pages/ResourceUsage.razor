@@ -1,0 +1,337 @@
+@page "/system/resources"
+@using M3Undle.Web.Observability.Resources
+@inject IResourceFactsProvider ResourceFactsProvider
+@implements IDisposable
+
+<PageTitle>System Resources — M3Undle</PageTitle>
+
+<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+    <div>
+        <MudText Typo="Typo.h5">System Resources</MudText>
+        <MudText Typo="Typo.body2" Color="Color.Secondary">What M3Undle can observe from inside its runtime environment</MudText>
+    </div>
+    <MudText Typo="Typo.caption" Color="Color.Secondary">Updates every 5 seconds</MudText>
+</MudStack>
+
+@if (_facts is null)
+{
+    <MudText Color="Color.Secondary">Loading resource measurements…</MudText>
+}
+else
+{
+    var facts = _facts;
+
+    var findings = ResourceConstraintDiagnosis.Evaluate(facts);
+
+    <MudAlert Severity="@DiagnosisSeverity(findings)" Variant="Variant.Outlined" Class="mb-4">
+        <MudText Typo="Typo.subtitle2">What the measurements indicate</MudText>
+        <ul class="resource-findings">
+            @foreach (var finding in findings)
+            {
+                <li>@finding.Message</li>
+            }
+        </ul>
+        @if (findings.Any(finding => finding.Severity != ResourceConstraintSeverity.Information))
+        {
+            <MudText Typo="Typo.caption">
+                M3Undle can identify its cgroup limit and whether its own tasks are stalled, but it cannot identify a competing host process or container without host-level monitoring.
+            </MudText>
+        }
+    </MudAlert>
+
+    <MudGrid>
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 resource-card" Elevation="1">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-2">
+                    <MudText Typo="Typo.subtitle1">CPU</MudText>
+                    <StatusChip Label="@FormatPercent(facts.ContainerCpuPercent)" Color="@CpuColor" />
+                </MudStack>
+                <ResourceSparkline Values="@_cpuHistory" Maximum="@CpuGraphMaximum" Stroke="@SparklineStroke(CpuColor)"
+                                   ScaleLabel="@($"0–{CpuGraphMaximum:F0}%")"
+                                   AriaLabel="Container CPU usage over the time this page has been open" />
+                <FactRow Label="Container CPU usage" Value="@FormatPercent(facts.ContainerCpuPercent)"
+                         StatusColor="@ThresholdStatusColor(facts.ContainerCpuPercent, 70, 90)"
+                         Tooltip="Average CPU consumed by M3Undle and its child processes during the latest five-second sample, normalized to the CPUs available to the runtime." />
+                <FactRow Label="CPUs available" Value="@FormatAvailableCpus(facts)"
+                         Tooltip="Number of logical processors .NET can schedule work on. .NET accounts for processor affinity and rounds a fractional Docker CPU quota up to a whole processor." />
+                <FactRow Label="Docker CPU limit" Value="@FormatCpuLimit(facts)"
+                         Tooltip="The hard CPU quota reported by cgroup v2 cpu.max. 'No limit' means Docker has not configured a CPU quota; M3Undle can still compete with other host workloads." />
+                <FactRow Label="Recently throttled" Value="@FormatPercent(facts.ContainerCpuThrottledPercent)"
+                         StatusColor="@ThresholdStatusColor(facts.ContainerCpuThrottledPercent, 5, 50)"
+                         Tooltip="Percentage of cgroup scheduling periods that were throttled during the latest sample. Sustained throttling indicates that the Docker CPU limit is constraining M3Undle." />
+                <FactRow Label="CPU pressure (10 sec)" Value="@FormatPercent(facts.ContainerCpuPressurePercent)"
+                         StatusColor="@ThresholdStatusColor(facts.ContainerCpuPressurePercent, 10)"
+                         Tooltip="Share of the last ten seconds in which at least one task was ready to run but had to wait for CPU time. This Linux PSI value is a contention signal, not CPU utilization." />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 resource-card" Elevation="1">
+                <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-2">
+                    <MudText Typo="Typo.subtitle1">Memory</MudText>
+                    <StatusChip Label="@MemoryStatusLabel" Color="@MemoryColor" />
+                </MudStack>
+                @if (facts.ContainerMemoryLimitBytes > 0)
+                {
+                    <MudProgressLinear Value="@MemoryUsedPercent" Color="@MemoryColor" Rounded="true" Size="Size.Medium" Class="mb-2" />
+                }
+                <ResourceSparkline Values="@_memoryHistory" Maximum="@MemoryGraphMaximum" Stroke="@SparklineStroke(MemoryColor)"
+                                   ScaleLabel="@MemoryGraphScaleLabel"
+                                   AriaLabel="Container memory usage over the time this page has been open" />
+                <FactRow Label="Memory used" Value="@FormatUsedOfTotal(facts.ContainerMemoryUsedBytes, facts.ContainerMemoryLimitBytes)"
+                         StatusColor="@ThresholdStatusColor(facts.ContainerMemoryLimitBytes > 0 ? MemoryUsedPercent : null, 90, 95)"
+                         Tooltip="@MemoryTooltip" />
+                <FactRow Label="Docker memory limit" Value="@FormatMemoryLimit(facts)"
+                         Tooltip="The hard memory ceiling reported by cgroup v2 memory.max. 'No limit' means Docker has not configured a container memory ceiling." />
+                @if (facts.ContainerMemoryIsCgroupMeasurement && !facts.ContainerMemoryHasExplicitLimit)
+                {
+                    <FactRow Label="Runtime-visible memory" Value="@ResourceFactsPresentation.FormatBytes(facts.RuntimeMemoryAvailableBytes)"
+                             Tooltip="Memory capacity available to the .NET runtime when the most recent garbage collection occurred. With no Docker memory limit this is host-backed capacity, not a guarantee reserved for M3Undle." />
+                }
+                <FactRow Label="Swap" Value="@FormatOptionalUsedOfTotal(facts.ContainerSwapUsedBytes, facts.ContainerSwapLimitBytes)"
+                         Tooltip="Docker reports a zero allowance when swap is disabled. When enabled, swap is disk-backed memory and is much slower than RAM; persistent use can contribute to buffering and delayed HLS processing." />
+                <FactRow Label="Memory pressure (10 sec)" Value="@FormatPercent(facts.ContainerMemoryPressurePercent)"
+                         StatusColor="@ThresholdStatusColor(facts.ContainerMemoryPressurePercent, 2, 10)"
+                         Tooltip="Share of the last ten seconds in which at least one task was stalled while the kernel reclaimed or waited for memory." />
+                <FactRow Label="OOM kills since start" Value="@(facts.ContainerOomKillCount?.ToString("N0") ?? "—")"
+                         StatusColor="@(facts.ContainerOomKillCount > 0 ? Color.Error : null)"
+                         Tooltip="Number of processes killed by the Linux out-of-memory controller in this cgroup since it was created. Any increase deserves investigation." />
+                <FactRow Label="Memory limit hits since start" Value="@(facts.ContainerMemoryMaxEventCount?.ToString("N0") ?? "—")"
+                         StatusColor="@(facts.ContainerMemoryMaxEventCount > 0 ? Color.Error : null)"
+                         Tooltip="Number of times memory usage reached the cgroup hard limit. The kernel may reclaim memory or trigger an out-of-memory response when this increases." />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 resource-card" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Streaming activity</MudText>
+                <ResourceSparkline Values="@_egressHistory" Stroke="var(--mud-palette-success)"
+                                   ScaleLabel="@EgressGraphScaleLabel"
+                                   AriaLabel="Total client streaming output over the time this page has been open" />
+                <FactRow Label="Connected streaming clients" Value="@facts.ActiveClientCount.ToString("N0")"
+                         Tooltip="Clients currently receiving a stream through M3Undle. Management-page browser connections are not included." />
+                <FactRow Label="Total streaming output" Value="@ResourceFactsPresentation.FormatBitrate(facts.AggregateEgressBytesPerSecond)"
+                         Tooltip="Combined current bitrate being delivered by M3Undle to all connected streaming clients." />
+                <FactRow Label="Average per client" Value="@FormatAverageClientBitrate(facts)"
+                         Tooltip="Total streaming output divided by the number of connected streaming clients." />
+                <FactRow Label="Active HLS relay sessions" Value="@facts.ActiveFfmpegProcessCount.ToString("N0")"
+                         Tooltip="Generated-HLS sessions currently managed by M3Undle. This is a session count, not an operating-system process count." />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4 resource-card" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Advanced Linux signals</MudText>
+                <FactRow Label="M3Undle process CPU" Value="@FormatPercent(facts.ProcessCpuPercent)"
+                         Tooltip="CPU used by the M3Undle .NET process only. Child processes and FFmpeg activity are excluded." />
+                <FactRow Label="M3Undle process memory" Value="@ResourceFactsPresentation.FormatBytes(facts.ProcessWorkingSetBytes)"
+                         Tooltip="Physical memory currently resident for the M3Undle .NET process. Child-process and FFmpeg memory are excluded." />
+                <FactRow Label="Host/VM load (1 / 5 / 15 min)" Value="@FormatLoadAverage(facts)"
+                         Tooltip="Linux load averages visible through /proc/loadavg. They count runnable and uninterruptible tasks across the visible kernel and normally describe the Docker host or Docker Desktop VM, not this container alone. They provide trend context but are not used to blame the Docker quota or another workload." />
+                <FactRow Label="Virtual CPU steal" Value="@FormatPercent(facts.VmCpuStealPercent)"
+                         StatusColor="@ThresholdStatusColor(facts.VmCpuStealPercent, 5)"
+                         Tooltip="CPU time taken by the hypervisor to run another virtual machine. This is meaningful only on virtualized Linux hosts." />
+                <FactRow Label="I/O pressure (10 sec)" Value="@FormatPercent(facts.ContainerIoPressurePercent)"
+                         StatusColor="@ThresholdStatusColor(facts.ContainerIoPressurePercent, 5, 20)"
+                         Tooltip="Share of the last ten seconds in which at least one cgroup task was stalled waiting for I/O. Sustained values can indicate slow or contended storage." />
+                <FactRow Label="Throttling events since start" Value="@(facts.ContainerCpuThrottledPeriods?.ToString("N0") ?? "—")"
+                         Tooltip="Cumulative number of CPU scheduling periods throttled since this cgroup was created. Use 'Recently throttled' above to judge current impact." />
+                <FactRow Label="Time throttled since start" Value="@FormatDuration(facts.ContainerCpuThrottledTime)"
+                         Tooltip="Cumulative CPU time denied by the cgroup quota since this cgroup was created." />
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12">
+            <MudPaper Class="pa-4" Elevation="1">
+                <MudText Typo="Typo.subtitle1" Class="mb-3">Storage</MudText>
+                @if (facts.DiskVolumes.Count == 0)
+                {
+                    <MudText Color="Color.Secondary">Storage capacity is unavailable in this runtime environment.</MudText>
+                }
+                else
+                {
+                    @foreach (var volume in facts.DiskVolumes)
+                    {
+                        var usedBytes = Math.Max(0, volume.TotalBytes - volume.FreeBytes);
+                        var usedPercent = volume.TotalBytes > 0 ? usedBytes * 100.0 / volume.TotalBytes : 0;
+                        var diskColor = DiskColor(volume);
+                        <div class="resource-volume mb-4">
+                            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-1">
+                                <MudTooltip Text="@($"Capacity of the filesystem containing M3Undle's {volume.Label} path: {volume.Path}")"
+                                            Placement="Placement.Top" Arrow="true">
+                                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="resource-fact-label"
+                                              tabindex="0" aria-label="@($"{volume.Label} storage path: {volume.Path}")">
+                                        <MudText>@volume.Label</MudText>
+                                        <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="Color.Secondary" />
+                                    </MudStack>
+                                </MudTooltip>
+                                <MudText Color="@diskColor">@ResourceFactsPresentation.FormatUsedCapacity(usedBytes, volume.TotalBytes)</MudText>
+                            </MudStack>
+                            <MudProgressLinear Value="@usedPercent" Color="@diskColor" Rounded="true" Size="Size.Medium" />
+                            <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mt-1">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">@ResourceFactsPresentation.FormatBytes(volume.FreeBytes) available</MudText>
+                                @if (volume.IsCritical)
+                                {
+                                    <StatusChip Label="Critically low space" Color="Color.Error" Icon="@Icons.Material.Filled.Warning" />
+                                }
+                            </MudStack>
+                        </div>
+                    }
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private const int HistoryCapacity = 60;
+    private ResourceFacts? _facts;
+    private PeriodicTimer? _timer;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly List<double> _cpuHistory = [];
+    private readonly List<double> _memoryHistory = [];
+    private readonly List<double> _egressHistory = [];
+
+    private double MemoryUsedPercent => _facts is { ContainerMemoryLimitBytes: > 0 } facts
+        ? Math.Clamp(facts.ContainerMemoryUsedBytes * 100.0 / facts.ContainerMemoryLimitBytes, 0, 100)
+        : 0;
+    private double CpuGraphMaximum => Math.Min(100, Math.Max(10, _cpuHistory.DefaultIfEmpty(0).Max() * 1.2));
+    private double? MemoryGraphMaximum => _facts?.ContainerMemoryLimitBytes > 0 ? 100 : null;
+    private string MemoryGraphScaleLabel => _facts?.ContainerMemoryLimitBytes > 0
+        ? "0–100%"
+        : $"0–{ResourceFactsPresentation.FormatBytes((long)Math.Max(1, _memoryHistory.DefaultIfEmpty(0).Max()))}";
+    private string EgressGraphScaleLabel => $"0–{ResourceFactsPresentation.FormatBitrate(
+        (long)Math.Max(0, _egressHistory.DefaultIfEmpty(0).Max() / 8))}";
+
+    private Color CpuColor => _facts is { } facts
+        ? DiagnosisColor(ResourceFactsPresentation.GetFooterCpuSeverity(facts))
+        : Color.Default;
+    private Color MemoryColor => _facts?.ContainerMemoryLimitBytes > 0
+        ? ThresholdColor(MemoryUsedPercent, 90, 95)
+        : Color.Default;
+    private string MemoryStatusLabel => _facts is { } facts && facts.ContainerMemoryLimitBytes <= 0
+        ? ResourceFactsPresentation.FormatBytes(facts.ContainerMemoryUsedBytes)
+        : FormatPercent(MemoryUsedPercent);
+    private string MemoryTooltip => _facts?.ContainerMemoryIsCgroupMeasurement == true
+        ? _facts.ContainerMemoryHasExplicitLimit
+            ? "Physical memory charged to this Linux cgroup compared with its configured hard limit. This includes M3Undle and its child processes."
+            : "Physical memory charged to this Linux cgroup. No explicit cgroup memory limit is configured, so M3Undle does not calculate a utilization percentage."
+        : "A runtime-provided memory-load estimate compared with memory available to the .NET garbage collector. Direct container memory counters are unavailable, so this is not an authoritative Docker usage value.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!RendererInfo.IsInteractive) return;
+
+        await RefreshAsync();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        _ = RunTimerAsync(_timer);
+    }
+
+    private async Task RunTimerAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_cts.Token))
+                await InvokeAsync(RefreshAndRenderAsync);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task RefreshAndRenderAsync()
+    {
+        await RefreshAsync();
+        StateHasChanged();
+    }
+
+    private async Task RefreshAsync()
+    {
+        _facts = await ResourceFactsProvider.GetSnapshotAsync(_cts.Token);
+        AddHistory(_cpuHistory, _facts.ContainerCpuPercent);
+        AddHistory(_memoryHistory, _facts.ContainerMemoryLimitBytes > 0
+            ? MemoryUsedPercent
+            : _facts.ContainerMemoryUsedBytes);
+        AddHistory(_egressHistory, _facts.AggregateEgressBytesPerSecond * 8.0);
+    }
+
+    private static void AddHistory(List<double> history, double? value)
+    {
+        if (value is null) return;
+        history.Add(value.Value);
+        if (history.Count > HistoryCapacity)
+            history.RemoveAt(0);
+    }
+
+    private static Color ThresholdColor(double? value, double warning, double error)
+    {
+        if (value is null) return Color.Default;
+        if (value >= error) return Color.Error;
+        return value >= warning ? Color.Warning : Color.Success;
+    }
+
+    private static Color? ThresholdStatusColor(double? value, double warning, double? error = null)
+    {
+        if (value is null || value < warning) return null;
+        return error is { } critical && value >= critical ? Color.Error : Color.Warning;
+    }
+
+    private static Color DiagnosisColor(ResourceConstraintSeverity severity) => severity switch
+    {
+        ResourceConstraintSeverity.Critical => Color.Error,
+        ResourceConstraintSeverity.Warning => Color.Warning,
+        _ => Color.Success,
+    };
+
+    private static Color DiskColor(DiskVolumeFact volume)
+    {
+        if (volume.IsCritical) return Color.Error;
+        if (volume.TotalBytes <= 0) return Color.Default;
+        return (volume.TotalBytes - volume.FreeBytes) * 100.0 / volume.TotalBytes >= 80 ? Color.Warning : Color.Success;
+    }
+
+    private static string SparklineStroke(Color color) => color switch
+    {
+        Color.Error => "var(--mud-palette-error)",
+        Color.Warning => "var(--mud-palette-warning)",
+        Color.Success => "var(--mud-palette-success)",
+        _ => "var(--mud-palette-info)",
+    };
+
+    private static string FormatPercent(double? value) => value is { } v ? $"{v:F1}%" : "—";
+    private static string FormatAvailableCpus(ResourceFacts facts) => $"{facts.RuntimeProcessorCount} logical";
+    private static string FormatCpuLimit(ResourceFacts facts) => facts.ContainerCpuLimitCores is { } limit
+        ? $"{limit:F2} CPUs"
+        : facts.ContainerCpuLimitFileAvailable ? "No limit" : "Unavailable";
+    private static string FormatMemoryLimit(ResourceFacts facts) => facts.ContainerMemoryHasExplicitLimit
+        ? ResourceFactsPresentation.FormatBytes(facts.ContainerMemoryLimitBytes)
+        : facts.ContainerMemoryLimitFileAvailable ? "No limit" : "Unavailable";
+    private static string FormatUsedOfTotal(long usedBytes, long totalBytes) => totalBytes > 0
+        ? $"{ResourceFactsPresentation.FormatBytes(usedBytes)} of {ResourceFactsPresentation.FormatBytes(totalBytes)} ({usedBytes * 100.0 / totalBytes:F0}%)"
+        : ResourceFactsPresentation.FormatBytes(usedBytes);
+    private static string FormatOptionalUsedOfTotal(long? usedBytes, long? totalBytes) => usedBytes is not { } used
+        ? "—"
+        : totalBytes switch
+        {
+            0 => "Disabled",
+            > 0 => FormatUsedOfTotal(used, totalBytes.Value),
+            _ => $"{ResourceFactsPresentation.FormatBytes(used)} used; no limit detected",
+        };
+    private static string FormatAverageClientBitrate(ResourceFacts facts) => facts.ActiveClientCount > 0
+        ? ResourceFactsPresentation.FormatBitrate(facts.AggregateEgressBytesPerSecond / facts.ActiveClientCount)
+        : "0 bps";
+    private static string FormatDuration(TimeSpan? duration) => duration is { } value ? $"{value.TotalSeconds:F1} sec" : "—";
+    private static string FormatLoadAverage(ResourceFacts facts) => facts is
+        { HostLoadAverage1Min: { } one, HostLoadAverage5Min: { } five, HostLoadAverage15Min: { } fifteen }
+        ? $"{one:F2} / {five:F2} / {fifteen:F2}"
+        : "—";
+    private static Severity DiagnosisSeverity(IReadOnlyList<ResourceConstraintFinding> findings) =>
+        findings.Any(finding => finding.Severity == ResourceConstraintSeverity.Critical) ? Severity.Error
+        : findings.Any(finding => finding.Severity == ResourceConstraintSeverity.Warning) ? Severity.Warning
+        : Severity.Success;
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _timer?.Dispose();
+    }
+}

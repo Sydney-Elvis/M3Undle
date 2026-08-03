@@ -1,0 +1,27 @@
+<MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-1">
+    @if (string.IsNullOrWhiteSpace(Tooltip))
+    {
+        <MudText Color="@LabelColor">@Label</MudText>
+    }
+    else
+    {
+        <MudTooltip Text="@Tooltip" Placement="Placement.Top" Arrow="true">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="resource-fact-label"
+                      tabindex="0" aria-label="@($"{Label}. {Tooltip}")">
+                <MudText Color="@LabelColor">@Label</MudText>
+                <MudIcon Icon="@Icons.Material.Outlined.Info" Size="Size.Small" Color="@LabelColor" />
+            </MudStack>
+        </MudTooltip>
+    }
+    <MudText Color="@ValueColor">@Value</MudText>
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Value { get; set; } = string.Empty;
+    [Parameter] public string? Tooltip { get; set; }
+    [Parameter] public Color? StatusColor { get; set; }
+
+    private Color LabelColor => StatusColor ?? Color.Secondary;
+    private Color ValueColor => StatusColor ?? Color.Inherit;
+}

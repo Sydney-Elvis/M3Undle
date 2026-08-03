@@ -9,6 +9,7 @@
 @inject ISnackbar Snackbar
 @inject M3Undle.Web.Streaming.Observability.StreamingRegistry StreamingRegistry
 @inject M3Undle.Web.Application.LineupStatusService LineupStatusService
+@inject M3Undle.Web.Observability.Resources.IResourceFactsProvider ResourceFactsProvider
 @using System.Reflection
 @using System.Threading.Channels
 @using Microsoft.AspNetCore.Components.Authorization
@@ -153,10 +154,26 @@
                 </MudChip>
             </MudTooltip>
         }
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
-            <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
-            <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
-        </MudStack>
+        @if (CriticalDiskVolume is { } criticalVolume)
+        {
+            <MudTooltip Text="@($"{criticalVolume.Label}: only {M3Undle.Web.Observability.Resources.ResourceFactsPresentation.FormatBytes(criticalVolume.FreeBytes)} free.")" Placement="Placement.Top">
+                <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined"
+                         Href="system/resources" Style="font-size:0.70rem; margin-left:8px;">
+                    Disk space low
+                </MudChip>
+            </MudTooltip>
+        }
+        <MudTooltip @key="_resourceFacts?.SampledUtc" Text="@CpuFooterTooltip" Placement="Placement.Top">
+            <MudLink Href="system/resources" Color="@CpuFooterColor" Style="font-size:0.70rem; margin-left:8px;">
+                @CpuFooterLabel
+            </MudLink>
+        </MudTooltip>
+        <MudTooltip Text="Service health reflects lineup and streaming availability; resource capacity is reported separately by the CPU indicator." Placement="Placement.Top">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
+                <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
+                <MudText Typo="Typo.caption" Color="@HealthColor" Style="font-size:0.70rem;">@HealthLabel</MudText>
+            </MudStack>
+        </MudTooltip>
     </MudAppBar>
 </MudLayout>
 
@@ -179,6 +196,7 @@
 
     private int _streamCount;
     private int _clientCount;
+    private M3Undle.Web.Observability.Resources.ResourceFacts? _resourceFacts;
     private int? _providerMaxStreams;
     private string _lineupStatusCode = string.Empty;
     private bool _activeProfileHasProvider;
@@ -214,7 +232,7 @@
 
     private string HealthLabel => _lineupStatusCode switch
     {
-        LineupStatusCodes.Ok => "Healthy",
+        LineupStatusCodes.Ok => "Service healthy",
         LineupStatusCodes.Refreshing => "Refreshing",
         LineupStatusCodes.Switching => "Switching",
         LineupStatusCodes.Degraded => "Degraded",
@@ -224,6 +242,26 @@
     };
 
     private bool HasStatusDelays => _eventSummaryDelayed || _channelStatsDelayed || _lineupStatusDelayed;
+
+    private M3Undle.Web.Observability.Resources.DiskVolumeFact? CriticalDiskVolume =>
+        _resourceFacts?.DiskVolumes.FirstOrDefault(v => v.IsCritical);
+
+    private string CpuFooterLabel => _resourceFacts is { } facts
+        ? M3Undle.Web.Observability.Resources.ResourceFactsPresentation.FormatFooterLabel(facts)
+        : "CPU —";
+
+    private string CpuFooterTooltip => _resourceFacts is { } facts
+        ? M3Undle.Web.Observability.Resources.ResourceFactsPresentation.BuildFooterSummarySentence(facts)
+        : "CPU usage data is still warming up.";
+
+    private Color CpuFooterColor => _resourceFacts is not { } facts
+        ? Color.Inherit
+        : M3Undle.Web.Observability.Resources.ResourceFactsPresentation.GetFooterCpuSeverity(facts) switch
+        {
+            M3Undle.Web.Observability.Resources.ResourceConstraintSeverity.Critical => Color.Error,
+            M3Undle.Web.Observability.Resources.ResourceConstraintSeverity.Warning => Color.Warning,
+            _ => Color.Success,
+        };
 
     private string StatusDelaySummary
     {
@@ -447,6 +485,19 @@
         _clientCount = StreamingRegistry.GetActiveClients().Count;
     }
 
+    private async Task RefreshResourceFactsAsync(CancellationToken ct)
+    {
+        try
+        {
+            _resourceFacts = await ResourceFactsProvider.GetSnapshotAsync(ct);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to refresh resource facts for layout footer.");
+        }
+    }
+
     private async Task LoadLineupStatusAsync()
     {
         try
@@ -478,6 +529,7 @@
             while (await timer.WaitForNextTickAsync(ct))
             {
                 RefreshStreamCounts();
+                await RefreshResourceFactsAsync(ct);
                 await InvokeAsync(StateHasChanged);
             }
         }

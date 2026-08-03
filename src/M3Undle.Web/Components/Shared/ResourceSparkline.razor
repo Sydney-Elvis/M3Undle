@@ -1,0 +1,49 @@
+<div style="height:96px; width:100%; position:relative; overflow:hidden; margin-bottom:12px; border:1px solid var(--mud-palette-lines-default); border-radius:4px; background-image:linear-gradient(to right, var(--mud-palette-lines-default) 1px, transparent 1px),linear-gradient(to bottom, var(--mud-palette-lines-default) 1px, transparent 1px); background-size:25% 50%;">
+    <div style="height:25px; display:flex; align-items:center; justify-content:space-between; padding:0 8px; color:var(--mud-palette-text-secondary); font-size:0.70rem;">
+        <span>Last 5 min · since page opened</span>
+        <span>@ScaleLabel</span>
+    </div>
+    @if (Values.Count > 0)
+    {
+        <svg style="display:block; width:100%; height:69px;" viewBox="0 0 100 28" preserveAspectRatio="none"
+             role="img" aria-label="@AriaLabel">
+            <polyline points="@Points" fill="none" stroke="@Stroke" stroke-width="2" vector-effect="non-scaling-stroke" />
+        </svg>
+        @if (Values.All(value => value <= 0))
+        {
+            <span style="position:absolute; inset:43px 0 auto; text-align:center; color:var(--mud-palette-text-secondary); font-size:0.75rem;">No activity during this window</span>
+        }
+    }
+    else
+    {
+        <span style="position:absolute; inset:43px 0 auto; text-align:center; color:var(--mud-palette-text-secondary); font-size:0.75rem;">Collecting first sample…</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<double> Values { get; set; } = [];
+    [Parameter, EditorRequired] public string AriaLabel { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string ScaleLabel { get; set; } = string.Empty;
+    [Parameter] public double? Maximum { get; set; }
+    [Parameter] public string Stroke { get; set; } = "var(--mud-palette-info)";
+
+    private string Points
+    {
+        get
+        {
+            var maximum = Math.Max(Maximum ?? Values.Max(), 0.01);
+            if (Values.Count == 1)
+            {
+                var y = 27 - Math.Clamp(Values[0] / maximum, 0, 1) * 25;
+                return $"0,{y:F1} 100,{y:F1}";
+            }
+
+            return string.Join(' ', Values.Select((value, index) =>
+            {
+                var x = index * 100.0 / Math.Max(1, Values.Count - 1);
+                var y = 27 - Math.Clamp(value / maximum, 0, 1) * 25;
+                return $"{x:F1},{y:F1}";
+            }));
+        }
+    }
+}
