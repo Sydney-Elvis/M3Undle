@@ -165,7 +165,7 @@
             .ToHashSet(StringComparer.Ordinal);
 
         var liveFilters = _allFilters
-            .Where(f => f.ProviderGroupContentType is "live" or "mixed" && !cgLinkedGroupIds.Contains(f.ProviderGroupId))
+            .Where(f => (f.ProviderGroupContentType is "live" or "mixed") && !cgLinkedGroupIds.Contains(f.ProviderGroupId))
             .ToList();
 
         // Standalone: no OutputName. VirtualParent members: share an OutputName.

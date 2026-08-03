@@ -742,17 +742,12 @@ public sealed class SnapshotHandlingTests
                 newsFilter.IsNew = false;
                 newsFilter.UpdatedUtc = DateTime.UtcNow;
 
-                var moviesFilter = await edit.ProfileGroupFilters
-                    .Include(x => x.ProviderGroup)
-                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Movies");
-                moviesFilter.Decision = "exclude";
-                moviesFilter.UpdatedUtc = DateTime.UtcNow;
-
-                var seriesFilter = await edit.ProfileGroupFilters
-                    .Include(x => x.ProviderGroup)
-                    .SingleAsync(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Series");
-                seriesFilter.Decision = "exclude";
-                seriesFilter.UpdatedUtc = DateTime.UtcNow;
+                // Catalog-only groups are not mappable, so they get no filter rows at all —
+                // VOD/series are controlled solely by the provider Include flags.
+                var catalogFilterCount = await edit.ProfileGroupFilters
+                    .CountAsync(x => x.ProfileId == "profile-1"
+                                  && (x.ProviderGroup.RawName == "Movies" || x.ProviderGroup.RawName == "Series"));
+                Assert.AreEqual(0, catalogFilterCount, "VOD/series groups should not receive group filters.");
 
                 // Since TrackNewChannels = false by default, no channel rows were auto-created.
                 // Directly insert included rows for the live news channels.
@@ -789,6 +784,310 @@ public sealed class SnapshotHandlingTests
                 .OrderByDescending(x => x.CreatedUtc)
                 .FirstAsync();
             Assert.AreEqual(3, active2.ChannelCountPublished, "Second build should add included live channels while VOD+series remain controlled only by provider Include flags.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_SplitsSameNamedGroups_ByContentType()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+
+            // One "Comedy" category per content type, not a single collapsed row.
+            var comedyGroups = await verify.ProviderGroups
+                .AsNoTracking()
+                .Where(x => x.ProviderId == "provider-1" && x.RawName == "Comedy")
+                .OrderBy(x => x.ContentType)
+                .ToListAsync();
+
+            CollectionAssert.AreEqual(
+                new[] { "live", "series", "vod" },
+                comedyGroups.Select(x => x.ContentType).ToArray(),
+                "Same-named live/VOD/series categories must be distinct group rows.");
+
+            // Each row counts only its own content type — no summing across kinds.
+            foreach (var group in comedyGroups)
+                Assert.AreEqual(1, group.ChannelCount, $"Comedy/{group.ContentType} should count only its own items.");
+
+            // Only the live row is mappable, so only it receives a filter row. A user excluding
+            // live "Comedy" must not be silently deciding anything about catalog "Comedy".
+            var filters = await verify.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .Where(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Comedy")
+                .ToListAsync();
+
+            Assert.AreEqual(1, filters.Count, "Only the live Comedy group should be mappable.");
+            Assert.AreEqual("live", filters[0].ProviderGroup.ContentType);
+
+            // The persisted live channel must attach to the live row, never a catalog row.
+            var liveGroupId = comedyGroups.Single(x => x.ContentType == "live").ProviderGroupId;
+            var persisted = await verify.ProviderChannels
+                .AsNoTracking()
+                .Where(x => x.ProviderId == "provider-1")
+                .ToListAsync();
+
+            Assert.AreEqual(1, persisted.Count, "Only live channels are persisted.");
+            Assert.AreEqual(liveGroupId, persisted[0].ProviderGroupId);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_UpgradeReusesLegacyMixedGroupAndPreservesFilter()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            setup.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = "legacy-comedy",
+                ProviderId = "provider-1",
+                RawName = "Comedy",
+                ContentType = "mixed",
+                ChannelCount = 3,
+                Active = true,
+                FirstSeenUtc = DateTime.UtcNow.AddDays(-1),
+                LastSeenUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            setup.ProfileGroupFilters.Add(new ProfileGroupFilter
+            {
+                ProfileGroupFilterId = "legacy-comedy-filter",
+                ProfileId = "profile-1",
+                ProviderGroupId = "legacy-comedy",
+                Decision = "exclude",
+                ChannelMode = "all",
+                TrackingPolicy = "review",
+                OutputName = "My Comedy",
+                CreatedUtc = DateTime.UtcNow.AddDays(-1),
+                UpdatedUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                var result = await CreateBuilder(db, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir)
+                    .RunAsync(CancellationToken.None);
+                Assert.IsTrue(result.Succeeded, result.ErrorSummary);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var comedyGroups = await verify.ProviderGroups
+                .AsNoTracking()
+                .Where(x => x.ProviderId == "provider-1" && x.RawName == "Comedy")
+                .OrderBy(x => x.ContentType)
+                .ToListAsync();
+
+            CollectionAssert.AreEqual(
+                new[] { "live", "series", "vod" },
+                comedyGroups.Select(x => x.ContentType).ToArray());
+
+            var liveGroup = comedyGroups.Single(x => x.ContentType == "live");
+            Assert.AreEqual("legacy-comedy", liveGroup.ProviderGroupId, "The legacy row ID should become the live row.");
+
+            var filters = await verify.ProfileGroupFilters
+                .AsNoTracking()
+                .Include(x => x.ProviderGroup)
+                .Where(x => x.ProfileId == "profile-1" && x.ProviderGroup.RawName == "Comedy")
+                .ToListAsync();
+
+            Assert.AreEqual(1, filters.Count, "Upgrade must not create a duplicate same-named live filter.");
+            Assert.AreEqual("legacy-comedy-filter", filters[0].ProfileGroupFilterId);
+            Assert.AreEqual("exclude", filters[0].Decision);
+            Assert.AreEqual("My Comedy", filters[0].OutputName);
+            Assert.AreEqual("live", filters[0].ProviderGroup.ContentType);
+
+            var active = await verify.Snapshots
+                .AsNoTracking()
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+            Assert.AreEqual(0, active.LiveChannelCount, "The preserved exclusion should still remove live Comedy.");
+            Assert.AreEqual(1, active.VodChannelCount);
+            Assert.AreEqual(1, active.SeriesChannelCount);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_BuildOnly_HonorsLegacyMixedLiveFilterBeforeRefresh()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            setup.FetchRuns.Add(NewFetchRun("fetch-1", "provider-1"));
+            setup.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = "legacy-news",
+                ProviderId = "provider-1",
+                RawName = "News",
+                ContentType = "mixed",
+                ChannelCount = 1,
+                Active = true,
+                FirstSeenUtc = DateTime.UtcNow.AddDays(-1),
+                LastSeenUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            setup.ProviderChannels.Add(new ProviderChannel
+            {
+                ProviderChannelId = "news-channel",
+                ProviderId = "provider-1",
+                DisplayName = "Live News",
+                StreamUrl = "http://example.com/live/user/pass/100.ts",
+                GroupTitle = "News",
+                ProviderGroupId = "legacy-news",
+                Active = true,
+                ContentType = "live",
+                LastFetchRunId = "fetch-1",
+                FirstSeenUtc = DateTime.UtcNow.AddDays(-1),
+                LastSeenUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            setup.ProfileGroupFilters.Add(new ProfileGroupFilter
+            {
+                ProfileGroupFilterId = "legacy-news-filter",
+                ProfileId = "profile-1",
+                ProviderGroupId = "legacy-news",
+                Decision = "include",
+                ChannelMode = "all",
+                TrackingPolicy = "review",
+                CreatedUtc = DateTime.UtcNow.AddDays(-1),
+                UpdatedUtc = DateTime.UtcNow.AddDays(-1),
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var cachedChannel = new ParsedProviderChannel
+        {
+            DisplayName = "Live News",
+            StreamUrl = "http://example.com/live/user/pass/100.ts",
+            GroupTitle = "News",
+        };
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+            {
+                var result = await CreateBuilder(db, HttpStatusCode.OK, "<tv></tv>", tempDir)
+                    .BuildOnlyAsync(
+                        new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>
+                        {
+                            ["provider-1"] = [cachedChannel],
+                        },
+                        CancellationToken.None);
+                Assert.IsTrue(result.Succeeded, result.ErrorSummary);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .AsNoTracking()
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+
+            Assert.AreEqual(1, active.LiveChannelCount,
+                "Build-only must continue treating a legacy mixed group as its live mapping until refresh upgrades it.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SnapshotBuilder_ExcludingLiveGroup_DoesNotAffectSameNamedCatalogGroup()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            // Exclude the live "Comedy" group — the catalog items sharing that name must survive.
+            await using (var edit = fixture.CreateDbContext())
+            {
+                var liveComedy = await edit.ProfileGroupFilters
+                    .Include(x => x.ProviderGroup)
+                    .SingleAsync(x => x.ProfileId == "profile-1"
+                                   && x.ProviderGroup.RawName == "Comedy"
+                                   && x.ProviderGroup.ContentType == "live");
+                liveComedy.Decision = "exclude";
+                liveComedy.UpdatedUtc = DateTime.UtcNow;
+                await edit.SaveChangesAsync();
+            }
+
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db2, HttpStatusCode.OK, SampleSameNameAcrossContentTypesM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var active = await verify.Snapshots
+                .AsNoTracking()
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+
+            Assert.AreEqual(1, active.VodChannelCount, "Excluding live Comedy must not drop VOD Comedy.");
+            Assert.AreEqual(1, active.SeriesChannelCount, "Excluding live Comedy must not drop series Comedy.");
         }
         finally
         {
@@ -1188,6 +1487,17 @@ public sealed class SnapshotHandlingTests
         "#EXTINF:-1 group-title=\"Movies\",Movie One\n" +
         "http://example.com/movie/user/pass/200.mkv\n" +
         "#EXTINF:-1 group-title=\"Series\",Series One\n" +
+        "http://example.com/series/user/pass/300.mkv\n";
+
+    // The same category name published as live, VOD and series — the shape that previously
+    // collapsed into a single "mixed" group row.
+    private const string SampleSameNameAcrossContentTypesM3u =
+        "#EXTM3U\n" +
+        "#EXTINF:-1 group-title=\"Comedy\",Comedy Central\n" +
+        "http://example.com/live/user/pass/100.ts\n" +
+        "#EXTINF:-1 group-title=\"Comedy\",Funny Movie\n" +
+        "http://example.com/movie/user/pass/200.mkv\n" +
+        "#EXTINF:-1 group-title=\"Comedy\",Funny Show — S01E01\n" +
         "http://example.com/series/user/pass/300.mkv\n";
 
     private const string SampleDuplicateVodTvgIdM3u =

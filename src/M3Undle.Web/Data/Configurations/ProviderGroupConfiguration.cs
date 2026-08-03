@@ -21,7 +21,11 @@ public sealed class ProviderGroupConfiguration : IEntityTypeConfiguration<Provid
         builder.Property(x => x.ChannelCount).HasColumnName("channel_count");
         builder.Property(x => x.ContentType).HasColumnName("content_type").IsRequired().HasDefaultValue("live");
 
-        builder.HasIndex(x => new { x.ProviderId, x.RawName }).IsUnique();
+        // Keyed by content type as well as name: providers routinely publish the same category
+        // name (e.g. "Comedy", "Sport") as separate live, VOD and series categories. Collapsing
+        // them into one row would make a live group's filter decision silently govern catalog
+        // content of the same name.
+        builder.HasIndex(x => new { x.ProviderId, x.RawName, x.ContentType }).IsUnique();
         builder.HasIndex(x => new { x.ProviderId, x.Active }).HasDatabaseName("idx_provider_groups_provider_active");
 
         builder.HasOne(x => x.Provider)
