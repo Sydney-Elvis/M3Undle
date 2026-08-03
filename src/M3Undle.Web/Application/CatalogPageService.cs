@@ -62,9 +62,9 @@ public sealed class CatalogPageService(
                     IsNew = group.ProfileCatalogGroupFilters
                         .Any(filter => filter.ProfileId == profileId && filter.IsNew),
                 })
-            .OrderBy(x => x.ProviderName)
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.ProviderName)
             .ThenBy(x => x.ContentType)
-            .ThenBy(x => x.Name)
             .ToListAsync(cancellationToken);
     }
 

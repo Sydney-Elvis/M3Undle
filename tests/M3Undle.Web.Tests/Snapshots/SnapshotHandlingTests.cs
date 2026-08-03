@@ -704,7 +704,7 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
-    public async Task SnapshotBuilder_AppliesCatalogGroupExclusion_WhenVodAndSeriesEnabled()
+    public async Task SnapshotBuilder_IgnoresDormantCatalogGroupExclusion_WhenVodAndSeriesEnabled()
     {
         await using var fixture = await CreateFixtureAsync();
 
@@ -756,14 +756,20 @@ public sealed class SnapshotHandlingTests
                                   && (x.ProviderGroup.RawName == "Movies" || x.ProviderGroup.RawName == "Series"));
                 Assert.AreEqual(0, catalogFilterCount, "VOD/series groups should not receive group filters.");
 
-                var seriesCatalogFilter = await edit.ProfileCatalogGroupFilters
-                    .Include(x => x.ProviderGroup)
-                    .SingleAsync(x => x.ProfileId == "profile-1"
-                                      && x.ProviderGroup.RawName == "Series"
-                                      && x.ProviderGroup.ContentType == "series");
-                seriesCatalogFilter.Decision = LineupReviewSemantics.GroupDecisionExclude;
-                seriesCatalogFilter.IsNew = false;
-                seriesCatalogFilter.UpdatedUtc = DateTime.UtcNow;
+                var seriesGroup = await edit.ProviderGroups.SingleAsync(x =>
+                    x.ProviderId == "provider-1"
+                    && x.RawName == "Series"
+                    && x.ContentType == "series");
+                edit.ProfileCatalogGroupFilters.Add(new ProfileCatalogGroupFilter
+                {
+                    ProfileCatalogGroupFilterId = Guid.NewGuid().ToString(),
+                    ProfileId = "profile-1",
+                    ProviderGroupId = seriesGroup.ProviderGroupId,
+                    Decision = LineupReviewSemantics.GroupDecisionExclude,
+                    IsNew = false,
+                    CreatedUtc = DateTime.UtcNow,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
 
                 // Since TrackNewChannels = false by default, no channel rows were auto-created.
                 // Directly insert included rows for the live news channels.
@@ -799,7 +805,8 @@ public sealed class SnapshotHandlingTests
                 .Where(x => x.Status == "active")
                 .OrderByDescending(x => x.CreatedUtc)
                 .FirstAsync();
-            Assert.AreEqual(2, active2.ChannelCountPublished, "Second build should include live and VOD while excluding the selected series category.");
+            Assert.AreEqual(3, active2.ChannelCountPublished,
+                "Dormant catalog decisions must not silently exclude content after their UI is hidden.");
 
             await using (var db3 = fixture.CreateDbContext())
             {

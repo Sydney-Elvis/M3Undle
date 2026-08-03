@@ -349,7 +349,9 @@ public sealed class SnapshotBuilder(
             {
                 var isInitialProfileProviderSync = initialProfileProviderSyncProfileIds.Contains(link.ProfileId);
                 await SyncGroupFiltersAsync(link.ProfileId, provider.ProviderId, !isInitialProfileProviderSync, cancellationToken);
-                await SyncCatalogGroupFiltersAsync(link.ProfileId, provider.ProviderId, !isInitialProfileProviderSync, cancellationToken);
+                // Catalog exclusion decisions are intentionally dormant while their usefulness and
+                // correct granularity are reconsidered. Keep existing rows for upgrade safety, but
+                // do not create more hidden decision state.
             }
             logger.LogInformation("Group filters synced in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
@@ -522,17 +524,8 @@ public sealed class SnapshotBuilder(
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        var profileIdsWithExistingCatalogFilters = await db.ProfileCatalogGroupFilters
-            .AsNoTracking()
-            .Where(x => profileIds.Contains(x.ProfileId)
-                        && x.ProviderGroup.ProviderId == providerId)
-            .Select(x => x.ProfileId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
         var result = profileIds.ToHashSet(StringComparer.Ordinal);
         result.ExceptWith(profileIdsWithExistingFilters);
-        result.ExceptWith(profileIdsWithExistingCatalogFilters);
         return result;
     }
 
@@ -751,15 +744,6 @@ public sealed class SnapshotBuilder(
         foreach (var (cgId, overrideMap) in customGroupOverrides)
             channelOverridesByFilterId[cgId] = overrideMap;
 
-        var excludedCatalogGroups = await db.ProfileCatalogGroupFilters
-            .AsNoTracking()
-            .Include(x => x.ProviderGroup)
-            .Where(x => x.ProfileId == profileId
-                        && x.Decision == LineupReviewSemantics.GroupDecisionExclude
-                        && x.ProviderGroup.ProviderId == provider.ProviderId)
-            .Select(x => new ProviderGroupKey(x.ProviderGroup.RawName, x.ProviderGroup.ContentType))
-            .ToHashSetAsync(cancellationToken);
-
         var channelIndex = BuildChannelIndex(
             channels,
             profileId,
@@ -767,8 +751,7 @@ public sealed class SnapshotBuilder(
             channelOverridesByFilterId,
             provider.IncludeVod,
             provider.IncludeSeries,
-            provider.ProviderId,
-            excludedCatalogGroups);
+            provider.ProviderId);
 
         // Write snapshot files
         var snapshotId = Guid.NewGuid().ToString();
@@ -895,13 +878,10 @@ public sealed class SnapshotBuilder(
             var hasGroup = !string.IsNullOrWhiteSpace(groupName);
 
             // Catalog content bypasses live channel mapping. Provider type switches are the
-            // outer gate; profile catalog-group exclusions then remove selected categories.
+            // only gate while category exclusion is deferred.
             if (contentType == "vod" || contentType == "series")
             {
                 if ((contentType == "vod" && !includeVod) || (contentType == "series" && !includeSeries))
-                    continue;
-                if (hasGroup
-                    && excludedCatalogGroups?.Contains(new ProviderGroupKey(groupName!, contentType)) == true)
                     continue;
 
                 var fallbackGroup = hasGroup

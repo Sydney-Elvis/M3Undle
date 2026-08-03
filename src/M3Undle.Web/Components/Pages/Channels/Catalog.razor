@@ -4,7 +4,6 @@
 @inject CatalogPageService CatalogPageService
 @inject ProfilesPageService ProfilesService
 @inject NavigationManager Navigation
-@inject ISnackbar Snackbar
 
 <PageTitle>M3Undle — Catalog</PageTitle>
 
@@ -29,7 +28,7 @@
                            AnchorOrigin="Origin.BottomLeft">
                     @foreach (var profile in _profiles)
                     {
-                        <MudSelectItem Value="@profile.ProfileId">@profile.Name</MudSelectItem>
+                        <MudSelectItem Value="@profile.ProfileId">@profile.Name@(profile.IsActive ? " · Active default" : " · Named lineup")</MudSelectItem>
                     }
                 </MudSelect>
             }
@@ -144,8 +143,6 @@ else
                 <MudTh><MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.ProviderName">Provider</MudTableSortLabel></MudTh>
                 <MudTh><MudTableSortLabel T="CatalogGroupDto" SortBy="x => x.LastSeenUtc">Last seen</MudTableSortLabel></MudTh>
                 <MudTh>Status</MudTh>
-                <MudTh>Output</MudTh>
-                <MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
                 <MudTd DataLabel="Category">
@@ -163,7 +160,9 @@ else
                 <MudTd DataLabel="Status">
                     @if (context.ProviderEnabled && context.ProfileProviderEnabled && context.ContentTypeEnabled)
                     {
-                        <StatusChip Label="Enabled" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle" />
+                        <MudTooltip Text="This provider and content type refresh for the selected profile. Active profile status only controls the default client endpoints.">
+                            <span><StatusChip Label="Refreshing" Color="Color.Success" Icon="@Icons.Material.Filled.Sync" /></span>
+                        </MudTooltip>
                     }
                     else
                     {
@@ -173,40 +172,6 @@ else
                                 Not refreshing
                             </MudChip>
                         </MudTooltip>
-                    }
-                </MudTd>
-                <MudTd DataLabel="Output">
-                    @if (context.Decision == "exclude")
-                    {
-                        <StatusChip Label="Excluded" Color="Color.Default" Icon="@Icons.Material.Filled.Block" />
-                    }
-                    else
-                    {
-                        <StatusChip Label="Included" Color="Color.Success" Icon="@Icons.Material.Filled.CheckCircle" />
-                    }
-                </MudTd>
-                <MudTd>
-                    @if (context.Decision == "exclude")
-                    {
-                        <MudButton Size="Size.Small"
-                                   Variant="Variant.Outlined"
-                                   Color="Color.Success"
-                                   StartIcon="@Icons.Material.Filled.AddCircle"
-                                   Disabled="@_busyGroupIds.Contains(context.ProviderGroupId)"
-                                   OnClick="@(() => SetDecisionAsync(context, "include"))">
-                            Include
-                        </MudButton>
-                    }
-                    else
-                    {
-                        <MudButton Size="Size.Small"
-                                   Variant="Variant.Outlined"
-                                   Color="Color.Error"
-                                   StartIcon="@Icons.Material.Filled.RemoveCircle"
-                                   Disabled="@_busyGroupIds.Contains(context.ProviderGroupId)"
-                                   OnClick="@(() => SetDecisionAsync(context, "exclude"))">
-                            Exclude
-                        </MudButton>
                     }
                 </MudTd>
             </RowTemplate>
@@ -280,7 +245,6 @@ else
     private string? _error;
     private bool _isLoading;
     private bool _isTitleLoading;
-    private readonly HashSet<string> _busyGroupIds = [];
 
     private IEnumerable<CatalogGroupDto> FilteredGroups => _groups.Where(group =>
         (_typeFilter == AllTypes || group.ContentType == _typeFilter)
@@ -421,39 +385,4 @@ else
             await _titleTable.ReloadServerData();
     }
 
-    private async Task SetDecisionAsync(CatalogGroupDto group, string decision)
-    {
-        if (_profileId is null || !_busyGroupIds.Add(group.ProviderGroupId))
-            return;
-
-        try
-        {
-            var updated = await CatalogPageService.UpdateDecisionAsync(
-                _profileId,
-                group.ProviderGroupId,
-                decision,
-                CancellationToken.None);
-            if (!updated)
-            {
-                Snackbar.Add("The catalog category is no longer available for this profile.", Severity.Error);
-                return;
-            }
-
-            group.Decision = decision;
-            group.IsNew = false;
-            Snackbar.Add(
-                decision == "exclude"
-                    ? $"{group.Name} will be excluded from the next rebuilt output."
-                    : $"{group.Name} will be included in the next rebuilt output.",
-                Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Catalog category could not be updated: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _busyGroupIds.Remove(group.ProviderGroupId);
-        }
-    }
 }

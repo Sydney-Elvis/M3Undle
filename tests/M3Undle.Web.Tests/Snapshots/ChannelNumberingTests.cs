@@ -96,7 +96,7 @@ public sealed class ChannelNumberingTests
     }
 
     [TestMethod]
-    public void BuildChannelIndex_ExcludesCatalogGroupByNameAndContentType()
+    public void BuildChannelIndex_IgnoresDormantCatalogGroupExclusion()
     {
         var channels = new[]
         {
@@ -122,8 +122,10 @@ public sealed class ChannelNumberingTests
             providerId: "provider-1",
             excludedCatalogGroups: excluded);
 
-        Assert.HasCount(1, result);
-        Assert.AreEqual("Movie One", result[0].DisplayName);
+        Assert.HasCount(2, result);
+        CollectionAssert.AreEquivalent(
+            new[] { "Movie One", "Series One S01 E01" },
+            result.Select(x => x.DisplayName).ToArray());
     }
 
     [TestMethod]
