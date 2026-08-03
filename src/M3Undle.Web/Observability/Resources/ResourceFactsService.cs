@@ -49,6 +49,7 @@ public sealed class ResourceFactsService(
 
     private readonly CancellationTokenSource _cts = new();
     private Task? _sampleTask;
+    private int _stopped;
 
     // Delta-sampling state — only ever written by the single periodic loop, no concurrency
     // concern. The computed rates are read from arbitrary request threads via
@@ -81,6 +82,9 @@ public sealed class ResourceFactsService(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (Interlocked.Exchange(ref _stopped, 1) != 0)
+            return;
+
         await _cts.CancelAsync();
         if (_sampleTask is not null)
             await _sampleTask;
