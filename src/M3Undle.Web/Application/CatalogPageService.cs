@@ -254,12 +254,25 @@ public sealed class CatalogPageService(
                 .Where(x => x.ProviderId == item.ProviderId && x.SeriesId == providerItemId)
                 .Select(x => x.EpisodesJson)
                 .SingleOrDefaultAsync(cancellationToken);
+
+            // Not expanded yet — the background worker may be hours away from this series on a
+            // large panel. Fetch the one series the user is actually looking at, and write it
+            // through so the next refresh builds its episodes without re-fetching.
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                json = await FetchPlayerApiDetailsAsync(
+                    item.Provider, "get_series_info", "series_id", providerItemId, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(json))
+                    await CacheSeriesDetailsAsync(item.ProviderId, providerItemId, json, cancellationToken);
+            }
+
             if (string.IsNullOrWhiteSpace(json))
                 detail.MetadataNotice = "Series details are not cached yet. Background episode discovery may still be in progress.";
         }
         else if (item.ContentType == "vod")
         {
-            json = await FetchVodDetailsAsync(item.Provider, providerItemId, cancellationToken);
+            json = await FetchPlayerApiDetailsAsync(
+                item.Provider, "get_vod_info", "vod_id", providerItemId, cancellationToken);
             if (string.IsNullOrWhiteSpace(json))
                 detail.MetadataNotice = "The provider did not return movie details; indexed title and category data are shown.";
         }
@@ -318,7 +331,11 @@ public sealed class CatalogPageService(
         return (output.ToArray(), contentType);
     }
 
-    private async Task<string?> FetchVodDetailsAsync(Provider provider, int itemId, CancellationToken cancellationToken)
+    // On-demand player_api lookup for a single catalog item. Xtream-mode providers only —
+    // URL-mode providers have no stored credentials to build the call from, so their detail
+    // pages fall back to whatever the refresh already cached.
+    private async Task<string?> FetchPlayerApiDetailsAsync(
+        Provider provider, string action, string idParameter, int itemId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(provider.XtreamBaseUrl)
             || string.IsNullOrWhiteSpace(provider.XtreamUsername)
@@ -330,7 +347,7 @@ public sealed class CatalogPageService(
         string password;
         try { password = secretEncryption.Decrypt(provider.XtreamEncryptedPassword); }
         catch (InvalidOperationException) { return null; }
-        var url = $"{provider.XtreamBaseUrl.TrimEnd('/')}/player_api.php?username={Uri.EscapeDataString(provider.XtreamUsername)}&password={Uri.EscapeDataString(password)}&action=get_vod_info&vod_id={itemId.ToString(CultureInfo.InvariantCulture)}";
+        var url = $"{provider.XtreamBaseUrl.TrimEnd('/')}/player_api.php?username={Uri.EscapeDataString(provider.XtreamUsername)}&password={Uri.EscapeDataString(password)}&action={action}&{idParameter}={itemId.ToString(CultureInfo.InvariantCulture)}";
         try
         {
             return await HttpFetchHelper.FetchStringAsync(
@@ -339,6 +356,46 @@ public sealed class CatalogPageService(
         catch (Exception ex) when (ex is HttpRequestException or ProviderFetchException or OperationCanceledException)
         {
             return null;
+        }
+    }
+
+    // Best-effort write-through. LastModifiedEpoch stays 0 so the next refresh still compares
+    // unequal against the provider's real last_modified and re-expands normally — this cache
+    // fill is a display shortcut, not a claim that the series is up to date.
+    private async Task CacheSeriesDetailsAsync(
+        string providerId, int seriesId, string json, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var existing = await db.XtreamSeriesCache
+                .SingleOrDefaultAsync(x => x.ProviderId == providerId && x.SeriesId == seriesId, cancellationToken);
+            if (existing is null)
+            {
+                db.XtreamSeriesCache.Add(new XtreamSeriesCache
+                {
+                    ProviderId = providerId,
+                    SeriesId = seriesId,
+                    LastModifiedEpoch = 0,
+                    EpisodesJson = json,
+                });
+            }
+            else if (string.IsNullOrWhiteSpace(existing.EpisodesJson))
+            {
+                existing.EpisodesJson = json;
+            }
+            else
+            {
+                return;
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // The background expansion worker or a concurrent page view won the race.
+            // The detail page renders from the JSON we already hold either way.
         }
     }
 
