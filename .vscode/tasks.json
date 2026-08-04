@@ -59,14 +59,13 @@
 		{
 			"type": "docker-build",
 			"label": "docker-build: existing-image",
-			"dependsOn": ["build-web"],
+			"dependsOn": ["docker-build: base image (if missing)", "build-web"],
 			"dependsOrder": "sequence",
 			"dockerBuild": {
 				"tag": "m3undle:web-debug",
 				"target": "final",
-				"dockerfile": "${workspaceFolder}/Dockerfile",
-				"context": "${workspaceFolder}",
-				"customOptions": "--no-cache"
+				"dockerfile": "${workspaceFolder}/Dockerfile.dev",
+				"context": "${workspaceFolder}"
 			},
 			"netCore": {
 				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
@@ -92,7 +91,8 @@
 						"M3UNDLE_CONFIG_DIR": "/config",
 						"M3UNDLE_ADMIN_USER": "admin",
 						"M3UNDLE_ADMIN_PASSWORD": "dog123",
-						"M3UNDLE_AUTH_ENABLED": "true"
+						"M3UNDLE_AUTH_ENABLED": "true",
+						"M3UNDLE_SERIES_EXPAND_CONCURRENCY": "8"
 					},
 				"volumes": [
 					{
@@ -138,7 +138,8 @@
 						"M3UNDLE_CONFIG_DIR": "/config",
 						"M3UNDLE_ADMIN_USER": "admin",
 						"M3UNDLE_ADMIN_PASSWORD": "dog123",
-						"M3UNDLE_AUTH_ENABLED": "true"
+						"M3UNDLE_AUTH_ENABLED": "true",
+						"M3UNDLE_SERIES_EXPAND_CONCURRENCY": "8"
 					},
 				"volumes": [
 					{
@@ -262,19 +263,61 @@
 			"dependsOn": [
 				"docker-stop: m3undle-debug",
 				"docker-reset: data folder",
+				"docker-build: base image (if missing)",
 				"build-web"
 			],
 			"dependsOrder": "sequence",
 			"dockerBuild": {
 				"tag": "m3undle:web-debug",
 				"target": "final",
-				"dockerfile": "${workspaceFolder}/Dockerfile",
-				"context": "${workspaceFolder}",
-				"customOptions": "--no-cache"
+				"dockerfile": "${workspaceFolder}/Dockerfile.dev",
+				"context": "${workspaceFolder}"
 			},
 			"netCore": {
 				"appProject": "${workspaceFolder}/src/M3Undle.Web/M3Undle.Web.csproj"
 			}
+		},
+		{
+			"label": "docker-build: base image (if missing)",
+			"type": "process",
+			"command": "sh",
+			"args": [
+				"-c",
+				"docker image inspect m3undle-base:local >/dev/null 2>&1 || docker build -f Dockerfile.base -t m3undle-base:local ."
+			],
+			"windows": {
+				"command": "powershell",
+				"args": [
+					"-NoProfile",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"$null = docker image inspect m3undle-base:local 2>$null; if ($LASTEXITCODE -ne 0) { docker build -f Dockerfile.base -t m3undle-base:local . }; exit 0"
+				]
+			},
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "docker-build: refresh base image",
+			"type": "process",
+			"command": "docker",
+			"args": [
+				"build",
+				"--pull",
+				"--no-cache",
+				"-f",
+				"Dockerfile.base",
+				"-t",
+				"m3undle-base:local",
+				"."
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": []
 		}
 	]
 }
