@@ -2,11 +2,16 @@ using System.Text;
 
 namespace M3Undle.Web.Application;
 
-// Streams an HTTP response body with an idle-activity timeout.
-// Times out only when no bytes arrive for idleTimeoutSeconds — data still
-// flowing never causes a timeout no matter how large the file.
+// Streams an HTTP response body with an idle-activity timeout, plus a hard total-duration
+// ceiling. The idle timer resets on every byte received, so a slow trickle (or a stalled
+// connect/read whose cancellation the underlying socket doesn't actually honor promptly)
+// could otherwise run indefinitely — the hard ceiling bounds the whole call regardless.
 internal static class HttpFetchHelper
 {
+    // Floored at 5 minutes so small idle timeouts (e.g. 30s) don't produce an unreasonably
+    // tight hard cap for a large response that's still making steady progress.
+    private static readonly TimeSpan MinHardTimeout = TimeSpan.FromMinutes(5);
+
     internal static async Task<string> FetchStringAsync(
         HttpClient client,
         string url,
@@ -14,9 +19,16 @@ internal static class HttpFetchHelper
         CancellationToken cancellationToken)
     {
         var idleTimeout = TimeSpan.FromSeconds(idleTimeoutSeconds);
+        var hardTimeout = TimeSpan.FromSeconds(idleTimeoutSeconds * 6);
+        if (hardTimeout < MinHardTimeout)
+            hardTimeout = MinHardTimeout;
+
+        using var hardCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        hardCts.CancelAfter(hardTimeout);
+        var hardToken = hardCts.Token;
 
         HttpResponseMessage response;
-        using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(hardToken))
         {
             connectCts.CancelAfter(idleTimeout);
             try
@@ -27,22 +39,24 @@ internal static class HttpFetchHelper
                     HttpCompletionOption.ResponseHeadersRead,
                     connectCts.Token);
             }
-            catch (OperationCanceledException) when (connectCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new ProviderFetchException($"Fetch timed out after {idleTimeoutSeconds}s waiting for server response.");
+                throw new ProviderFetchException(hardToken.IsCancellationRequested
+                    ? $"Fetch timed out after {hardTimeout.TotalSeconds:F0}s hard ceiling waiting for server response."
+                    : $"Fetch timed out after {idleTimeoutSeconds}s waiting for server response.");
             }
         }
 
         using (response)
         {
             response.EnsureSuccessStatusCode();
-            await using var bodyStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            await using var bodyStream = await response.Content.ReadAsStreamAsync(hardToken);
             using var ms = new MemoryStream();
             var buffer = new byte[65536];
 
             while (true)
             {
-                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(hardToken);
                 idleCts.CancelAfter(idleTimeout);
 
                 int bytesRead;
@@ -50,9 +64,11 @@ internal static class HttpFetchHelper
                 {
                     bytesRead = await bodyStream.ReadAsync(buffer.AsMemory(), idleCts.Token);
                 }
-                catch (OperationCanceledException) when (idleCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
-                    throw new ProviderFetchException($"Fetch timed out — no data received for {idleTimeoutSeconds}s.");
+                    throw new ProviderFetchException(hardToken.IsCancellationRequested
+                        ? $"Fetch timed out after {hardTimeout.TotalSeconds:F0}s hard ceiling — no data received."
+                        : $"Fetch timed out — no data received for {idleTimeoutSeconds}s.");
                 }
 
                 if (bytesRead == 0)
