@@ -19,7 +19,24 @@ public sealed record XtreamSeriesExpansionJob(
     string Password,
     int TimeoutSeconds,
     IReadOnlyList<XtreamSeriesStub> Series,
-    int Priority = 1);
+    int Priority = 1,
+    /// <summary>
+    /// How many times this job's leftovers have already been automatically re-queued.
+    /// Bounded by <c>MaxRetryGenerations</c> so series that can never succeed (e.g. a provider's
+    /// permanently-missing catalog IDs, which 404 every attempt) stop being retried instead of
+    /// looping forever. Once the cap is hit the leftovers simply wait for the next natural
+    /// refresh, which re-derives them from the cache diff anyway.
+    /// </summary>
+    int RetryGeneration = 0,
+    /// <summary>
+    /// Series successfully expanded by earlier hops of this retry chain. Carried forward so the
+    /// terminal hop still triggers a snapshot refresh covering work done by earlier hops, even
+    /// when the terminal hop itself expands nothing (e.g. its leftovers were all permanent 404s).
+    /// </summary>
+    int ExpandedSoFar = 0);
+
+/// <summary>Result of one background expansion job — what it expanded and what it left behind.</summary>
+internal sealed record XtreamSeriesExpansionOutcome(List<XtreamSeriesStub> Remainder, int Expanded);
 
 public sealed record XtreamSeriesExpansionStatus(
     string ProviderId,
@@ -76,6 +93,7 @@ public sealed class XtreamSeriesExpansionService(
     IServiceScopeFactory scopeFactory,
     IRefreshTrigger refreshTrigger,
     IEventService eventService,
+    HeavyWorkGate heavyWorkGate,
     ILogger<XtreamSeriesExpansionService> logger)
     : BackgroundService, IXtreamSeriesExpansionQueue
 {
@@ -111,6 +129,9 @@ public sealed class XtreamSeriesExpansionService(
             : 24;
 
     private const int SaveBatchSize = 100;
+    // How many times a job's leftovers may be automatically re-queued before they're left for
+    // the next natural refresh. Bounds the retry chain — see XtreamSeriesExpansionJob.RetryGeneration.
+    private const int MaxRetryGenerations = 3;
     // Trigger an intermediate snapshot rebuild every N saved series so episodes
     // appear progressively on very large providers instead of all at the end.
     private const int ProgressRefreshEvery = 2500;
@@ -186,7 +207,9 @@ public sealed class XtreamSeriesExpansionService(
         try
         {
             var deadline = DateTime.UtcNow + budget;
-            (expanded, remainder, _) = await ExpandCoreAsync(job, deadline, progress: null, cancellationToken);
+            // gateRounds: false — inline expansion runs inside the snapshot refresh, which
+            // already holds the heavy-work gate. Acquiring it here would self-deadlock.
+            (expanded, remainder, _) = await ExpandCoreAsync(job, deadline, progress: null, gateRounds: false, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -259,10 +282,10 @@ public sealed class XtreamSeriesExpansionService(
                 var job = next;
                 _ = Task.Run(async () =>
                 {
-                    List<XtreamSeriesStub>? remainder = null;
+                    XtreamSeriesExpansionOutcome? outcome = null;
                     try
                     {
-                        remainder = await ExpandJobAsync(job, stoppingToken);
+                        outcome = await ExpandJobAsync(job, stoppingToken);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -285,20 +308,37 @@ public sealed class XtreamSeriesExpansionService(
 
                     // Re-queue leftover failures/pending immediately instead of waiting for the
                     // next full refresh — the provider slot was just freed above, so this is a
-                    // normal TryEnqueue, not a special-cased bypass.
-                    if (remainder is { Count: > 0 })
+                    // normal TryEnqueue, not a special-cased bypass. Bounded by
+                    // MaxRetryGenerations: leftovers that keep failing (permanently-missing
+                    // catalog IDs 404 on every attempt) would otherwise re-queue forever, and
+                    // each hop also hammers a provider that may already be rate-limiting.
+                    if (outcome is { Remainder.Count: > 0 })
                     {
-                        logger.LogInformation(
-                            "Series expansion job leaving {Remainder} unfinished for provider {ProviderId} — re-queuing immediately.",
-                            remainder.Count, job.ProviderId);
-                        TryEnqueue(job with { Series = remainder });
+                        if (!WillAutoRetry(job, outcome.Remainder.Count))
+                        {
+                            logger.LogInformation(
+                                "Series expansion leaving {Remainder} unfinished for provider {ProviderId} after {Generations} retry generation(s) — deferring to the next refresh.",
+                                outcome.Remainder.Count, job.ProviderId, job.RetryGeneration);
+                        }
+                        else
+                        {
+                            logger.LogInformation(
+                                "Series expansion job leaving {Remainder} unfinished for provider {ProviderId} — re-queuing immediately (generation {Generation}).",
+                                outcome.Remainder.Count, job.ProviderId, job.RetryGeneration + 1);
+                            TryEnqueue(job with
+                            {
+                                Series = outcome.Remainder,
+                                RetryGeneration = job.RetryGeneration + 1,
+                                ExpandedSoFar = job.ExpandedSoFar + outcome.Expanded,
+                            });
+                        }
                     }
                 }, stoppingToken);
             }
         }
     }
 
-    internal async Task<List<XtreamSeriesStub>> ExpandJobAsync(XtreamSeriesExpansionJob job, CancellationToken cancellationToken)
+    internal async Task<XtreamSeriesExpansionOutcome> ExpandJobAsync(XtreamSeriesExpansionJob job, CancellationToken cancellationToken)
     {
         var startedUtc = DateTime.UtcNow;
         logger.LogInformation(
@@ -323,7 +363,7 @@ public sealed class XtreamSeriesExpansionService(
             }
         }
 
-        var (expanded, remainder, failed) = await ExpandCoreAsync(job, deadline: null, OnProgress, cancellationToken);
+        var (expanded, remainder, failed) = await ExpandCoreAsync(job, deadline: null, OnProgress, gateRounds: true, cancellationToken);
 
         var elapsed = DateTime.UtcNow - startedUtc;
         var rate = elapsed.TotalSeconds > 0 ? expanded.Count / elapsed.TotalSeconds : 0;
@@ -331,14 +371,28 @@ public sealed class XtreamSeriesExpansionService(
             "Series expansion finished for provider {ProviderId}: {Completed} expanded, {Failed} failed in {Elapsed:hh\\:mm\\:ss} ({Rate:F1} series/s).",
             job.ProviderId, expanded.Count, failed, elapsed, rate);
 
-        if (expanded.Count > 0)
+        // Publish + refresh only on the terminal hop of a retry chain. Every hop used to trigger
+        // a full snapshot refresh (which re-fetches the provider's entire playlist), so a job
+        // that left leftovers produced a burst of back-to-back full refreshes against a provider
+        // that was often already rate-limiting — confirmed live. ExpandedSoFar carries earlier
+        // hops' work forward so the terminal hop still publishes it even if it expanded nothing.
+        var totalExpanded = job.ExpandedSoFar + expanded.Count;
+        if (totalExpanded > 0 && !WillAutoRetry(job, remainder.Count))
         {
-            await PublishCompletionEventAsync(job, expanded.Count, failed);
+            await PublishCompletionEventAsync(job, totalExpanded, failed);
             await TriggerRefreshWithRetryAsync(cancellationToken);
         }
 
-        return remainder;
+        return new XtreamSeriesExpansionOutcome(remainder, expanded.Count);
     }
+
+    /// <summary>
+    /// Whether <paramref name="job"/>'s leftovers will be automatically re-queued. Single source
+    /// of truth so ExpandJobAsync's "is this the terminal hop?" check and the worker loop's
+    /// re-queue decision can never disagree.
+    /// </summary>
+    private static bool WillAutoRetry(XtreamSeriesExpansionJob job, int remainderCount)
+        => remainderCount > 0 && job.RetryGeneration < MaxRetryGenerations;
 
     // -------------------------------------------------------------------------
     // Expansion core — worker pool shared by inline and background paths.
@@ -346,10 +400,16 @@ public sealed class XtreamSeriesExpansionService(
     // drain); persistence happens off the fetch path under its own gate.
     // -------------------------------------------------------------------------
 
+    /// <param name="gateRounds">
+    /// Whether each round should be run under <see cref="HeavyWorkGate"/>. True for background
+    /// jobs. <b>Must be false for inline expansion</b> — inline runs inside the snapshot refresh,
+    /// which already holds the gate, and the gate is not reentrant.
+    /// </param>
     private async Task<(List<XtreamSeriesExpanded> Expanded, List<XtreamSeriesStub> Remainder, int Failed)> ExpandCoreAsync(
         XtreamSeriesExpansionJob job,
         DateTime? deadline,
         Action<int, int>? progress,
+        bool gateRounds,
         CancellationToken cancellationToken)
     {
         var pending = new ConcurrentQueue<XtreamSeriesStub>(job.Series);
@@ -470,7 +530,18 @@ public sealed class XtreamSeriesExpansionService(
                     }
                 }
 
-                await Task.WhenAll(Enumerable.Range(0, roundConcurrency).Select(i => RoundWorkerAsync(i * WorkerStartStaggerMs)));
+                // Gate per round rather than per job: a refresh waiting to start is delayed by at
+                // most one round instead of a multi-minute job. Inline expansion passes
+                // gateRounds: false because it already runs under the refresh's hold.
+                var heavyWork = gateRounds ? await heavyWorkGate.AcquireAsync(cancellationToken) : null;
+                try
+                {
+                    await Task.WhenAll(Enumerable.Range(0, roundConcurrency).Select(i => RoundWorkerAsync(i * WorkerStartStaggerMs)));
+                }
+                finally
+                {
+                    heavyWork?.Dispose();
+                }
 
                 if (got503ThisRound > 0)
                 {

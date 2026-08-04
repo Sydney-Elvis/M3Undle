@@ -354,6 +354,8 @@ builder.Services.AddSingleton(AppBuildInfo.ForEntryAssembly());
 builder.Services.AddSingleton<AppEventBus>();
 builder.Services.AddSingleton<IEventService, EventService>();
 builder.Services.AddSingleton<RefreshActivityTracker>();
+// Serializes snapshot refreshes against background series-expansion rounds — see HeavyWorkGate.
+builder.Services.AddSingleton<HeavyWorkGate>();
 builder.Services.AddSingleton<XtreamSeriesExpansionService>();
 builder.Services.AddSingleton<IXtreamSeriesExpansionQueue>(sp => sp.GetRequiredService<XtreamSeriesExpansionService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<XtreamSeriesExpansionService>());
