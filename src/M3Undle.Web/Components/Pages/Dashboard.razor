@@ -211,7 +211,6 @@
                                     <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Info" />
                                     <MudText Typo="Typo.body2">
                                         @seriesSync.ProviderName series sync: @seriesSync.Completed.ToString("N0") / @seriesSync.Total.ToString("N0") in background
-                                        @(seriesSync.Failed > 0 ? $"— {seriesSync.Failed:N0} failed (will retry)" : "")
                                     </MudText>
                                 </MudStack>
                             }

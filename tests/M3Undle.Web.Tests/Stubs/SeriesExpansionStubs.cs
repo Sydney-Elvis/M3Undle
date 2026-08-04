@@ -12,6 +12,8 @@ public sealed class NullSeriesExpansionQueue : IXtreamSeriesExpansionQueue
 
     public IReadOnlyList<XtreamSeriesExpansionStatus> ActiveJobs => [];
     public int WaitingJobs => 0;
+
+    public Task RunSeriesCacheWriteAsync(Func<Task> write, CancellationToken cancellationToken) => write();
 }
 
 // Records inline-expansion requests without performing any fetches — the job is
@@ -42,6 +44,8 @@ public sealed class RecordingSeriesExpansionQueue : IXtreamSeriesExpansionQueue
 
     public IReadOnlyList<XtreamSeriesExpansionStatus> ActiveJobs => [];
     public int WaitingJobs => 0;
+
+    public Task RunSeriesCacheWriteAsync(Func<Task> write, CancellationToken cancellationToken) => write();
 }
 
 public sealed class RecordingRefreshTrigger : IRefreshTrigger

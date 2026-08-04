@@ -517,11 +517,17 @@ public sealed class XtreamLineupClient(
     private async Task DeleteStaleCacheAsync(
         string providerId, List<int> staleIds, CancellationToken cancellationToken)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        await db.XtreamSeriesCache
-            .Where(x => x.ProviderId == providerId && staleIds.Contains(x.SeriesId))
-            .ExecuteDeleteAsync(cancellationToken);
+        // Routed through the same gate as XtreamSeriesExpansionService's background-job writes —
+        // this used to write to XtreamSeriesCache completely ungated, and colliding with an
+        // in-progress job's write threw "database table is locked" (confirmed live).
+        await seriesExpansionQueue.RunSeriesCacheWriteAsync(async () =>
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            await db.XtreamSeriesCache
+                .Where(x => x.ProviderId == providerId && staleIds.Contains(x.SeriesId))
+                .ExecuteDeleteAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     // -------------------------------------------------------------------------

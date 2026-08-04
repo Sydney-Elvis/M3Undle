@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -50,6 +52,15 @@ public interface IXtreamSeriesExpansionQueue
 
     /// <summary>Number of jobs waiting for a slot.</summary>
     int WaitingJobs { get; }
+
+    /// <summary>
+    /// Runs <paramref name="write"/> under the same gate that serializes every
+    /// XtreamSeriesCache write made by this service's background jobs. SQLite only tolerates
+    /// one writer at a time — any other code writing to XtreamSeriesCache (e.g.
+    /// XtreamLineupClient's stale-row purge) must go through here too, or it can collide with a
+    /// job's write and throw "database table is locked" (confirmed live).
+    /// </summary>
+    Task RunSeriesCacheWriteAsync(Func<Task> write, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -68,10 +79,37 @@ public sealed class XtreamSeriesExpansionService(
     ILogger<XtreamSeriesExpansionService> logger)
     : BackgroundService, IXtreamSeriesExpansionQueue
 {
-    // Parallel get_series_info calls per provider job. Same code measures ~14.6 series/s on a
-    // fast panel at 4 — if a slow panel's rate doesn't improve at 8, the panel is serializing
-    // per-account and more concurrency won't help (the completion log prints the rate).
-    private const int ExpandConcurrency = 8;
+    // TEMP DIAGNOSTIC (remove once the Onyx/Delta/third-provider concurrency test is done):
+    // starting point for the adaptive concurrency search in ExpandCoreAsync (see RoundBudget /
+    // ConcurrencyStep there) — not a fixed value for the whole job anymore. Overridable via
+    // M3UNDLE_SERIES_EXPAND_CONCURRENCY so each test run can pick a different starting point
+    // without a rebuild. Falls back to 8 when unset or invalid.
+    private static readonly int ExpandConcurrency =
+        int.TryParse(Environment.GetEnvironmentVariable("M3UNDLE_SERIES_EXPAND_CONCURRENCY"), out var expandConcurrencyOverride)
+        && expandConcurrencyOverride > 0
+            ? expandConcurrencyOverride
+            : 8;
+
+    // TEMP DIAGNOSTIC (remove once the Onyx/Delta/third-provider concurrency test is done):
+    // delay between starting each successive worker within a round, so a round's workers don't
+    // all fire their first request in the same instant. Overridable via
+    // M3UNDLE_SERIES_EXPAND_STAGGER_MS.
+    private static readonly int WorkerStartStaggerMs =
+        int.TryParse(Environment.GetEnvironmentVariable("M3UNDLE_SERIES_EXPAND_STAGGER_MS"), out var staggerOverride)
+        && staggerOverride >= 0
+            ? staggerOverride
+            : 75;
+
+    // TEMP DIAGNOSTIC (remove once the Onyx/Delta/third-provider concurrency test is done):
+    // ceiling for the adaptive search in ExpandCoreAsync — Onyx showed diminishing returns above
+    // 24 (32 was measurably worse) even without any 503s, which the 503-based search alone
+    // wouldn't catch. Overridable via M3UNDLE_SERIES_EXPAND_CONCURRENCY_MAX.
+    private static readonly int ExpandConcurrencyMax =
+        int.TryParse(Environment.GetEnvironmentVariable("M3UNDLE_SERIES_EXPAND_CONCURRENCY_MAX"), out var expandConcurrencyMaxOverride)
+        && expandConcurrencyMaxOverride > 0
+            ? expandConcurrencyMaxOverride
+            : 24;
+
     private const int SaveBatchSize = 100;
     // Trigger an intermediate snapshot rebuild every N saved series so episodes
     // appear progressively on very large providers instead of all at the end.
@@ -88,11 +126,36 @@ public sealed class XtreamSeriesExpansionService(
     private readonly SemaphoreSlim _wake = new(0);
     private int _runningCount;
 
+    // Serializes every XtreamSeriesCache write, from any source — this service's own background
+    // jobs (across MaxConcurrentJobs providers) AND XtreamLineupClient's stale-row purge, which
+    // runs on a totally separate refresh path and used to write to the same table completely
+    // ungated. SQLite only tolerates one writer at a time; two of these colliding throws
+    // "database table is locked" (SqliteErrorCode 6) — confirmed live twice: once was jobs
+    // racing each other (fixed by making this gate instance-level instead of per-job-local),
+    // and it still happened after that with a lineup refresh running concurrently with a
+    // background job, which is what RunSeriesCacheWriteAsync below closes.
+    private readonly SemaphoreSlim _persistGate = new(1);
+
+    // TEMP DIAGNOSTIC (remove once the Onyx/Delta/third-provider concurrency test is done):
+    // per-provider concurrency learned by the adaptive search in ExpandCoreAsync. Without this,
+    // every new ExpandCoreAsync call (inline handoff to background, or a later background job
+    // for the same provider) starts the search over from ExpandConcurrency instead of reusing
+    // what was already learned — confirmed wasteful in practice (re-climbed 8→10→12 and re-hit
+    // the same 503 ceiling a second time right after the inline pass had just locked at 10).
+    private readonly ConcurrentDictionary<string, int> _learnedConcurrency = new();
+
     public IReadOnlyList<XtreamSeriesExpansionStatus> ActiveJobs => [.. _running.Values];
 
     public int WaitingJobs
     {
         get { lock (_lock) { return _waiting.Count; } }
+    }
+
+    public async Task RunSeriesCacheWriteAsync(Func<Task> write, CancellationToken cancellationToken)
+    {
+        await _persistGate.WaitAsync(cancellationToken);
+        try { await write(); }
+        finally { _persistGate.Release(); }
     }
 
     public bool TryEnqueue(XtreamSeriesExpansionJob job)
@@ -196,9 +259,10 @@ public sealed class XtreamSeriesExpansionService(
                 var job = next;
                 _ = Task.Run(async () =>
                 {
+                    List<XtreamSeriesStub>? remainder = null;
                     try
                     {
-                        await ExpandJobAsync(job, stoppingToken);
+                        remainder = await ExpandJobAsync(job, stoppingToken);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -218,12 +282,23 @@ public sealed class XtreamSeriesExpansionService(
                         }
                         _wake.Release();
                     }
+
+                    // Re-queue leftover failures/pending immediately instead of waiting for the
+                    // next full refresh — the provider slot was just freed above, so this is a
+                    // normal TryEnqueue, not a special-cased bypass.
+                    if (remainder is { Count: > 0 })
+                    {
+                        logger.LogInformation(
+                            "Series expansion job leaving {Remainder} unfinished for provider {ProviderId} — re-queuing immediately.",
+                            remainder.Count, job.ProviderId);
+                        TryEnqueue(job with { Series = remainder });
+                    }
                 }, stoppingToken);
             }
         }
     }
 
-    internal async Task ExpandJobAsync(XtreamSeriesExpansionJob job, CancellationToken cancellationToken)
+    internal async Task<List<XtreamSeriesStub>> ExpandJobAsync(XtreamSeriesExpansionJob job, CancellationToken cancellationToken)
     {
         var startedUtc = DateTime.UtcNow;
         logger.LogInformation(
@@ -248,7 +323,7 @@ public sealed class XtreamSeriesExpansionService(
             }
         }
 
-        var (expanded, _, failed) = await ExpandCoreAsync(job, deadline: null, OnProgress, cancellationToken);
+        var (expanded, remainder, failed) = await ExpandCoreAsync(job, deadline: null, OnProgress, cancellationToken);
 
         var elapsed = DateTime.UtcNow - startedUtc;
         var rate = elapsed.TotalSeconds > 0 ? expanded.Count / elapsed.TotalSeconds : 0;
@@ -261,6 +336,8 @@ public sealed class XtreamSeriesExpansionService(
             await PublishCompletionEventAsync(job, expanded.Count, failed);
             await TriggerRefreshWithRetryAsync(cancellationToken);
         }
+
+        return remainder;
     }
 
     // -------------------------------------------------------------------------
@@ -280,10 +357,11 @@ public sealed class XtreamSeriesExpansionService(
         var failedStubs = new ConcurrentBag<XtreamSeriesStub>();
         var saveBuffer = new List<XtreamSeriesExpanded>();
         var bufferLock = new Lock();
-        var persistGate = new SemaphoreSlim(1);
         int completed = 0, failed = 0;
 
         using var client = httpClientFactory.CreateClient();
+        // TEMP DIAGNOSTIC (remove after the concurrency test): timestamps the checkpoint log below.
+        var jobStopwatch = Stopwatch.StartNew();
 
         async Task PersistBufferedAsync(bool force)
         {
@@ -299,47 +377,151 @@ public sealed class XtreamSeriesExpansionService(
             if (toSave is null)
                 return;
 
-            await persistGate.WaitAsync(CancellationToken.None);
+            await _persistGate.WaitAsync(CancellationToken.None);
             try { await PersistBatchAsync(job.ProviderId, toSave); }
-            finally { persistGate.Release(); }
+            finally { _persistGate.Release(); }
         }
 
-        async Task WorkerAsync()
-        {
-            while (!cancellationToken.IsCancellationRequested
-                   && (deadline is null || DateTime.UtcNow < deadline)
-                   && pending.TryDequeue(out var stub))
-            {
-                string json;
-                try
-                {
-                    var infoUrl =
-                        $"{job.BaseUrl}/player_api.php?username={Uri.EscapeDataString(job.Username)}" +
-                        $"&password={Uri.EscapeDataString(job.Password)}&action=get_series_info&series_id={stub.SeriesId}";
-                    json = await HttpFetchHelper.FetchStringAsync(client, infoUrl, job.TimeoutSeconds, cancellationToken);
-                }
-                catch (Exception ex) when (ex is HttpRequestException or ProviderFetchException)
-                {
-                    logger.LogDebug("get_series_info failed for series {SeriesId}: {Message}", stub.SeriesId, ex.Message);
-                    failedStubs.Add(stub);
-                    progress?.Invoke(completed, Interlocked.Increment(ref failed));
-                    continue;
-                }
+        // TEMP DIAGNOSTIC (remove once the Onyx/Delta/third-provider concurrency test is done):
+        // adaptive concurrency search, replacing the shared-backoff attempt (which made Delta
+        // worse — see the commit history — because releasing a whole paused pool at once just
+        // recreates the burst that triggered the pause). Runs the job in rounds of up to
+        // RoundBudget dequeued items. A round with zero 503s means this level is fine: record it
+        // as the last known-good level and step up by ConcurrencyStep for the next round. The
+        // first round that sees any 503 locks concurrency at the last known-good level for the
+        // rest of the job — no further probing, no oscillation. If even the starting level fails
+        // before any round succeeds, step down instead, floored at 1.
+        const int RoundBudget = 250;
+        const int ConcurrencyStep = 2;
 
-                var item = new XtreamSeriesExpanded(stub.SeriesId, stub.LastModifiedEpoch, json);
-                lock (bufferLock)
-                {
-                    expanded.Add(item);
-                    saveBuffer.Add(item);
-                }
-                progress?.Invoke(Interlocked.Increment(ref completed), failed);
-                await PersistBufferedAsync(force: false);
-            }
-        }
+        var currentConcurrency = _learnedConcurrency.GetValueOrDefault(job.ProviderId, ExpandConcurrency);
+        int? lastGoodConcurrency = null;
+        var concurrencyLocked = false;
 
         try
         {
-            await Task.WhenAll(Enumerable.Range(0, ExpandConcurrency).Select(_ => WorkerAsync()));
+            while (!cancellationToken.IsCancellationRequested
+                   && (deadline is null || DateTime.UtcNow < deadline)
+                   && !pending.IsEmpty)
+            {
+                var roundConcurrency = currentConcurrency;
+                var roundBudgetRemaining = RoundBudget;
+                var got503ThisRound = 0;
+
+                async Task RoundWorkerAsync(int startDelayMs)
+                {
+                    if (startDelayMs > 0)
+                        await Task.Delay(startDelayMs, cancellationToken);
+
+                    while (!cancellationToken.IsCancellationRequested
+                           && (deadline is null || DateTime.UtcNow < deadline)
+                           && Interlocked.Decrement(ref roundBudgetRemaining) >= 0
+                           && pending.TryDequeue(out var stub))
+                    {
+                        string json;
+                        // TEMP DIAGNOSTIC (remove after the concurrency test): per-request timing so
+                        // a failure log line can show how long the request ran before it failed.
+                        var requestStopwatch = Stopwatch.StartNew();
+                        try
+                        {
+                            var infoUrl =
+                                $"{job.BaseUrl}/player_api.php?username={Uri.EscapeDataString(job.Username)}" +
+                                $"&password={Uri.EscapeDataString(job.Password)}&action=get_series_info&series_id={stub.SeriesId}";
+                            json = await HttpFetchHelper.FetchStringAsync(client, infoUrl, job.TimeoutSeconds, cancellationToken);
+                        }
+                        catch (Exception ex) when (ex is HttpRequestException or ProviderFetchException)
+                        {
+                            // TEMP DIAGNOSTIC (remove after the concurrency test): status code +
+                            // exception type + elapsed time, at Warning so it shows up without
+                            // enabling Debug logging.
+                            var statusCode = (ex as HttpRequestException)?.StatusCode;
+                            logger.LogWarning(
+                                "get_series_info FAILED provider={ProviderId} series={SeriesId} concurrency={Concurrency} elapsedMs={ElapsedMs} exceptionType={ExceptionType} status={StatusCode} message={Message}",
+                                job.ProviderId, stub.SeriesId, roundConcurrency, requestStopwatch.ElapsedMilliseconds,
+                                ex.GetType().Name, statusCode, ex.Message);
+
+                            if (statusCode == HttpStatusCode.ServiceUnavailable)
+                                Interlocked.Increment(ref got503ThisRound);
+
+                            failedStubs.Add(stub);
+                            progress?.Invoke(completed, Interlocked.Increment(ref failed));
+                            continue;
+                        }
+
+                        var item = new XtreamSeriesExpanded(stub.SeriesId, stub.LastModifiedEpoch, json);
+                        lock (bufferLock)
+                        {
+                            expanded.Add(item);
+                            saveBuffer.Add(item);
+                        }
+                        var completedCount = Interlocked.Increment(ref completed);
+                        progress?.Invoke(completedCount, failed);
+
+                        // TEMP DIAGNOSTIC (remove after the concurrency test): periodic checkpoint
+                        // so throughput and failure clustering can be read straight off the log.
+                        if (completedCount % 250 == 0)
+                        {
+                            logger.LogInformation(
+                                "Series expansion checkpoint provider={ProviderId} concurrency={Concurrency} completed={Completed} failed={Failed} elapsedMs={ElapsedMs}",
+                                job.ProviderId, roundConcurrency, completedCount, failed, jobStopwatch.ElapsedMilliseconds);
+                        }
+
+                        await PersistBufferedAsync(force: false);
+                    }
+                }
+
+                await Task.WhenAll(Enumerable.Range(0, roundConcurrency).Select(i => RoundWorkerAsync(i * WorkerStartStaggerMs)));
+
+                if (got503ThisRound > 0)
+                {
+                    if (concurrencyLocked)
+                    {
+                        // Already locked onto a known-good level — nothing to adjust.
+                    }
+                    else if (lastGoodConcurrency is int good)
+                    {
+                        currentConcurrency = good;
+                        concurrencyLocked = true;
+                        logger.LogInformation(
+                            "Series expansion adaptive-concurrency LOCKED provider={ProviderId} concurrency={Concurrency} (round at {RoundConcurrency} saw {Got503}x 503)",
+                            job.ProviderId, currentConcurrency, roundConcurrency, got503ThisRound);
+                    }
+                    else if (roundConcurrency <= 1)
+                    {
+                        currentConcurrency = 1;
+                        concurrencyLocked = true;
+                        logger.LogInformation(
+                            "Series expansion adaptive-concurrency FLOORED provider={ProviderId} concurrency=1 (still saw {Got503}x 503)",
+                            job.ProviderId, got503ThisRound);
+                    }
+                    else
+                    {
+                        currentConcurrency = Math.Max(1, roundConcurrency - ConcurrencyStep);
+                        logger.LogInformation(
+                            "Series expansion adaptive-concurrency STEP DOWN provider={ProviderId} concurrency={Concurrency} (from {RoundConcurrency}, {Got503}x 503)",
+                            job.ProviderId, currentConcurrency, roundConcurrency, got503ThisRound);
+                    }
+                }
+                else if (!concurrencyLocked)
+                {
+                    lastGoodConcurrency = roundConcurrency;
+                    var next = Math.Min(roundConcurrency + ConcurrencyStep, ExpandConcurrencyMax);
+                    if (next != roundConcurrency)
+                    {
+                        currentConcurrency = next;
+                        logger.LogInformation(
+                            "Series expansion adaptive-concurrency STEP UP provider={ProviderId} concurrency={Concurrency} (from {RoundConcurrency} clean)",
+                            job.ProviderId, currentConcurrency, roundConcurrency);
+                    }
+                    // else: already at ExpandConcurrencyMax and still clean — stay there, nothing to log.
+                }
+
+                // TEMP DIAGNOSTIC (remove after the concurrency test): persist whatever the
+                // search currently believes for this provider, so the next call to
+                // ExpandCoreAsync — inline handoff to background, or a later background job —
+                // starts from here instead of re-climbing from ExpandConcurrency every time.
+                _learnedConcurrency[job.ProviderId] = currentConcurrency;
+            }
         }
         finally
         {
