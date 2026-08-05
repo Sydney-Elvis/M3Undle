@@ -132,9 +132,6 @@ public sealed class XtreamSeriesExpansionService(
     // How many times a job's leftovers may be automatically re-queued before they're left for
     // the next natural refresh. Bounds the retry chain — see XtreamSeriesExpansionJob.RetryGeneration.
     private const int MaxRetryGenerations = 3;
-    // Trigger an intermediate snapshot rebuild every N saved series so episodes
-    // appear progressively on very large providers instead of all at the end.
-    private const int ProgressRefreshEvery = 2500;
     // Provider jobs running simultaneously (different panels — no shared rate limit).
     private const int MaxConcurrentJobs = 2;
 
@@ -348,20 +345,19 @@ public sealed class XtreamSeriesExpansionService(
         _running[job.ProviderId] = new XtreamSeriesExpansionStatus(
             job.ProviderId, job.ProviderName, job.Series.Count, 0, 0, startedUtc);
 
-        var savedSinceRefresh = 0;
-
+        // Progress only updates the dashboard status here — it deliberately does not trigger a
+        // snapshot refresh. Publishing newly expanded episodes requires a full FetchAndBuild
+        // (episode channels are materialised at fetch time by XtreamLineupClient's
+        // BuildSeriesChannels, so a cheap BuildOnly would republish the same set), and doing that
+        // mid-job cost far more than it delivered: measured on a 28,988-series provider, an
+        // intermediate refresh every 2,500 series stalled expansion ~4.7 min each time —
+        // ~35 min of real work stretched to ~87 min — and each one re-fetched every provider's
+        // full playlist, not just the one being expanded. The terminal-hop refresh in this method
+        // publishes everything once the job settles; anything interrupted before then is still
+        // persisted in XtreamSeriesCache and publishes on the next refresh's cache diff.
         void OnProgress(int completed, int failed)
-        {
-            _running[job.ProviderId] = new XtreamSeriesExpansionStatus(
+            => _running[job.ProviderId] = new XtreamSeriesExpansionStatus(
                 job.ProviderId, job.ProviderName, job.Series.Count, completed, failed, startedUtc);
-
-            var sinceRefresh = Interlocked.Increment(ref savedSinceRefresh);
-            if (sinceRefresh >= ProgressRefreshEvery)
-            {
-                Interlocked.Exchange(ref savedSinceRefresh, 0);
-                refreshTrigger.TriggerRefresh();
-            }
-        }
 
         var (expanded, remainder, failed) = await ExpandCoreAsync(job, deadline: null, OnProgress, gateRounds: true, cancellationToken);
 
