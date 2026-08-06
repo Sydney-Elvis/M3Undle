@@ -2045,6 +2045,18 @@
             }
         }
 
+        // _channelNumbers only knows about groups expanded/edited this session. Merge in
+        // numbers already assigned profile-wide (from the mapped-channels panel, loaded from
+        // the DB) so a group nobody has opened yet can't get handed a number that's already
+        // live elsewhere in the lineup.
+        foreach (var item in _panelItems)
+        {
+            if (item.ChannelNumber is not { } num) continue;
+            if (skipFilters is not null && skipFilters.Contains(item.FilterId)) continue;
+            if (except.HasValue && except.Value.FilterId == item.FilterId) continue;
+            used.Add(num);
+        }
+
         return used;
     }
 
