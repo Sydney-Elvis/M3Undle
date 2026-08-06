@@ -933,6 +933,12 @@ public sealed class SnapshotBuilder(
 
         int nextOverflow = OverflowRangeStart;
 
+        // Tracks pinned numbers as they're actually placed into the result, so a second
+        // channel pinned to a number that's already been placed gets caught even though
+        // both numbers were present in the upfront `assignedNumbers` seed above (a HashSet
+        // silently collapses duplicate seed values, so that seed alone can't detect this).
+        var placedPinnedNumbers = new HashSet<int>();
+
         // Evaluate output groups in SortOverride order (nulls last), then alphabetical.
         // This determines which group "wins" early numbers when ranges overlap.
         var byOutputGroup = pending
@@ -971,7 +977,26 @@ public sealed class SnapshotBuilder(
                 .ToList();
 
             foreach (var (_, channel, num, tvgIdOverride, displayNameOverride) in withNum)
-                result.Add(BuildEntry(channel, outputName, num, profileId, providerId, tvgIdOverride, displayNameOverride));
+            {
+                var pinnedNum = num!.Value;
+
+                // Two different channels can end up pinned to the same number — stale
+                // client-side auto-numbering, edits made in a group nobody opened this
+                // session, etc. The build must never ship a duplicate: the first channel
+                // placed keeps its pin, later collisions fall through to the overflow range,
+                // the same way an exhausted auto-number range is handled below.
+                if (!placedPinnedNumbers.Add(pinnedNum))
+                {
+                    while (assignedNumbers.Contains(nextOverflow) || placedPinnedNumbers.Contains(nextOverflow))
+                        nextOverflow++;
+                    pinnedNum = nextOverflow;
+                    assignedNumbers.Add(pinnedNum);
+                    placedPinnedNumbers.Add(pinnedNum);
+                    nextOverflow++;
+                }
+
+                result.Add(BuildEntry(channel, outputName, pinnedNum, profileId, providerId, tvgIdOverride, displayNameOverride));
+            }
 
             int? nextNum = parentFilter?.AutoNumStart;
             int? maxNum = parentFilter?.AutoNumEnd;

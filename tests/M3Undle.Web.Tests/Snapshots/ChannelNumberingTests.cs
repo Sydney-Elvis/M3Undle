@@ -341,6 +341,69 @@ public sealed class ChannelNumberingTests
             "Overflow must skip 9000 which is already pinned");
     }
 
+    // -------------------------------------------------------------------------
+    // Duplicate pinned numbers: the build must never ship a collision
+    // -------------------------------------------------------------------------
+
+    [TestMethod]
+    public void PinnedNumbers_DuplicateAcrossGroups_SecondFallsToOverflow()
+    {
+        // Two different channels in different groups both pinned to 100 — e.g. stale
+        // client-side auto-numbering that picked an already-used number because the
+        // colliding group wasn't loaded client-side. The build must never ship a duplicate.
+        var groups = new Dictionary<string, SnapshotBuilder.GroupFilterConfig>(StringComparer.Ordinal)
+        {
+            ["GroupA"] = new("fA", "GroupA", null, null, SortOverride: 1),
+            ["GroupB"] = new("fB", "GroupB", null, null, SortOverride: 2),
+        };
+
+        var chA = LiveChannel("A-Channel", "GroupA");
+        var chB = LiveChannel("B-Channel", "GroupB");
+
+        var overrides = new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal)
+        {
+            ["fA"] = new(StringComparer.Ordinal) { [chA.StreamUrl!] = new(null, 100, null) },
+            ["fB"] = new(StringComparer.Ordinal) { [chB.StreamUrl!] = new(null, 100, null) },
+        };
+
+        var result = SnapshotBuilder.BuildChannelIndex([chA, chB], "p1", groups, overrides, false, false);
+
+        Assert.HasCount(2, result, "Both channels must still be published — a collision must not drop one.");
+        Assert.AreEqual(2, result.Select(r => r.TvgChno).Distinct().Count(),
+            "Channel numbers must be unique — no duplicates allowed in build output.");
+
+        var byName = result.ToDictionary(e => e.DisplayName);
+        Assert.AreEqual(100, byName["A-Channel"].TvgChno, "GroupA processes first (SortOverride=1) and keeps the pin.");
+        Assert.IsGreaterThanOrEqualTo(byName["B-Channel"].TvgChno!.Value, SnapshotBuilder.OverflowRangeStart,
+            $"Colliding pin must fall through to overflow, got {byName["B-Channel"].TvgChno}");
+    }
+
+    [TestMethod]
+    public void PinnedNumbers_DuplicateWithinSameGroup_SecondFallsToOverflow()
+    {
+        var groups = OneGroup("News", "News");
+        var ch1 = LiveChannel("Alpha", "News");
+        var ch2 = LiveChannel("Beta", "News");
+
+        var overrides = new Dictionary<string, Dictionary<string, SnapshotBuilder.ChannelOverride>>(StringComparer.Ordinal)
+        {
+            ["f1"] = new(StringComparer.Ordinal)
+            {
+                [ch1.StreamUrl!] = new(null, 100, null),
+                [ch2.StreamUrl!] = new(null, 100, null),
+            },
+        };
+
+        var result = SnapshotBuilder.BuildChannelIndex([ch1, ch2], "p1", groups, overrides, false, false);
+
+        Assert.HasCount(2, result, "Both channels must still be published — a collision must not drop one.");
+        Assert.AreEqual(2, result.Select(r => r.TvgChno).Distinct().Count(),
+            "Duplicate pins within the same group must still resolve to unique numbers.");
+        Assert.AreEqual(100, result.First(r => r.DisplayName == "Alpha").TvgChno, "First-placed channel keeps the pin.");
+        Assert.IsGreaterThanOrEqualTo(result.First(r => r.DisplayName == "Beta").TvgChno!.Value, SnapshotBuilder.OverflowRangeStart,
+            "Colliding pin must fall through to overflow.");
+    }
+
     [TestMethod]
     public void NoRange_ChannelGetsNoNumber()
     {
