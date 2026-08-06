@@ -20,6 +20,7 @@ public sealed class Profile
     public ICollection<Snapshot> Snapshots { get; set; } = new List<Snapshot>();
     public ICollection<StreamKey> StreamKeys { get; set; } = new List<StreamKey>();
     public ICollection<ProfileGroupFilter> ProfileGroupFilters { get; set; } = new List<ProfileGroupFilter>();
+    public ICollection<ProfileCatalogGroupFilter> ProfileCatalogGroupFilters { get; set; } = new List<ProfileCatalogGroupFilter>();
     public ICollection<ProfileEventInterestRule> EventInterestRules { get; set; } = new List<ProfileEventInterestRule>();
     public ICollection<ProfileCustomGroup> CustomGroups { get; set; } = new List<ProfileCustomGroup>();
     public ICollection<EndpointAccessBinding> ActiveEndpointAccessBindings { get; set; } = new List<EndpointAccessBinding>();

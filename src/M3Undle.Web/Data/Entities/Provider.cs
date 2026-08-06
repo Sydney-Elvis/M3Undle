@@ -38,4 +38,5 @@ public sealed class Provider
     public ICollection<ProviderGroup> ProviderGroups { get; set; } = new List<ProviderGroup>();
     public ICollection<ProviderChannel> ProviderChannels { get; set; } = new List<ProviderChannel>();
     public ICollection<ChannelSource> ChannelSources { get; set; } = new List<ChannelSource>();
+    public ICollection<CatalogItem> CatalogItems { get; set; } = new List<CatalogItem>();
 }

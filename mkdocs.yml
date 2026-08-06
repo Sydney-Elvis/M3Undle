@@ -89,6 +89,7 @@ nav:
   - Guides:
       - Read the Dashboard: guides/dashboard-overview.md
       - Build a Lineup: guides/build-a-lineup.md
+      - Browse the Movies & Series Catalog: guides/browse-catalog.md
       - Map EPG Data: guides/map-epg-data.md
       - Manage Providers: guides/manage-providers.md
       - Manage Profiles: guides/manage-profiles.md

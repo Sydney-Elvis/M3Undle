@@ -10,6 +10,7 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Observability;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 
 namespace M3Undle.Web.Application;
@@ -297,7 +298,14 @@ public sealed class SnapshotBuilder(
         {
             playlistResult = await fetcher.FetchPlaylistAsync(provider, cancellationToken);
         }
-        catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or OperationCanceledException)
+        // HttpRequestException is included deliberately: the Xtream lineup path surfaces a
+        // non-success status (e.g. a panel rate-limiting with 503) as a raw HttpRequestException
+        // rather than wrapping it in ProviderFetchException. Without it here, one provider's
+        // transient 503 escaped this per-provider handler and aborted the entire refresh for
+        // every provider — confirmed live. It is caught here rather than wrapped at the
+        // HttpFetchHelper level because ProviderFetcher's get.php -> player_api.php fallback
+        // filters on `HttpRequestException.StatusCode >= 500` and would stop matching.
+        catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or HttpRequestException or OperationCanceledException)
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider \"{ProviderName}\" after {Elapsed}ms.", provider.Name, sw.ElapsedMilliseconds);
             metrics?.RecordProviderRefresh(provider.ProviderId, success: false, sw.Elapsed);
@@ -334,8 +342,13 @@ public sealed class SnapshotBuilder(
             sw.Restart();
 
             stage = "groups";
-            var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, now, cancellationToken);
+            var groupNameToId = await SyncProviderGroupsAsync(provider.ProviderId, playlistResult.Channels, playlistResult.CatalogItems, now, cancellationToken);
             logger.LogInformation("Groups synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
+            sw.Restart();
+
+            stage = "catalog-items";
+            await SyncCatalogItemsAsync(provider, playlistResult.Channels, playlistResult.CatalogItems, groupNameToId, now, cancellationToken);
+            logger.LogInformation("Catalog browse index synced in {Elapsed}ms for provider {ProviderId}.", sw.ElapsedMilliseconds, provider.ProviderId);
             sw.Restart();
 
             stage = "group-filters";
@@ -343,6 +356,9 @@ public sealed class SnapshotBuilder(
             {
                 var isInitialProfileProviderSync = initialProfileProviderSyncProfileIds.Contains(link.ProfileId);
                 await SyncGroupFiltersAsync(link.ProfileId, provider.ProviderId, !isInitialProfileProviderSync, cancellationToken);
+                // Catalog exclusion decisions are intentionally dormant while their usefulness and
+                // correct granularity are reconsidered. Keep existing rows for upgrade safety, but
+                // do not create more hidden decision state.
             }
             logger.LogInformation("Group filters synced in {Elapsed}ms for {Count} profile(s), provider {ProviderId}.", sw.ElapsedMilliseconds, activeLinks.Count, provider.ProviderId);
             sw.Restart();
@@ -847,7 +863,8 @@ public sealed class SnapshotBuilder(
         IReadOnlyDictionary<string, Dictionary<string, ChannelOverride>> channelOverridesByFilterId,
         bool includeVod,
         bool includeSeries,
-        string? providerId = null)
+        string? providerId = null,
+        IReadOnlySet<ProviderGroupKey>? excludedCatalogGroups = null)
     {
         // No included live groups and no VOD/series passthrough enabled.
         if (includedGroups.Count == 0 && !includeVod && !includeSeries)
@@ -867,8 +884,8 @@ public sealed class SnapshotBuilder(
             var groupName = channel.GroupTitle;
             var hasGroup = !string.IsNullOrWhiteSpace(groupName);
 
-            // VOD/Series bypass group mapping completely.
-            // They are controlled only by provider IncludeVod/IncludeSeries flags.
+            // Catalog content bypasses live channel mapping. Provider type switches are the
+            // only gate while category exclusion is deferred.
             if (contentType == "vod" || contentType == "series")
             {
                 if ((contentType == "vod" && !includeVod) || (contentType == "series" && !includeSeries))
@@ -1510,6 +1527,7 @@ public sealed class SnapshotBuilder(
     private async Task<Dictionary<ProviderGroupKey, string>> SyncProviderGroupsAsync(
         string providerId,
         IReadOnlyList<ParsedProviderChannel> channels,
+        IReadOnlyList<ParsedCatalogItem>? catalogItems,
         DateTime now,
         CancellationToken cancellationToken)
     {
@@ -1522,6 +1540,18 @@ public sealed class SnapshotBuilder(
             // the same name, and would hide catalog items behind a live-labelled row.
             .GroupBy(x => new ProviderGroupKey(x.GroupTitle!, LiveClassifier.ClassifyContent(x.StreamUrl)))
             .ToDictionary(g => g.Key, g => g.Count());
+
+        if (catalogItems is not null)
+        {
+            foreach (var group in catalogItems
+                         .Where(x => !string.IsNullOrWhiteSpace(x.GroupTitle))
+                         .GroupBy(x => new ProviderGroupKey(x.GroupTitle!, x.ContentType)))
+            {
+                // Catalog counts are titles. Series episode expansion is deliberately not
+                // allowed to decide whether a category exists or how large it appears.
+                groupData[group.Key] = group.Count();
+            }
+        }
 
         var existingGroups = await db.ProviderGroups
             .Where(x => x.ProviderId == providerId)
@@ -1593,6 +1623,160 @@ public sealed class SnapshotBuilder(
     /// </summary>
     internal readonly record struct ProviderGroupKey(string RawName, string ContentType);
 
+    private async Task SyncCatalogItemsAsync(
+        Provider provider,
+        IReadOnlyList<ParsedProviderChannel> channels,
+        IReadOnlyList<ParsedCatalogItem>? catalogItems,
+        IReadOnlyDictionary<ProviderGroupKey, string> groupNameToId,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var applicableTypes = new HashSet<string>(StringComparer.Ordinal);
+        if (provider.IncludeVod)
+            applicableTypes.Add("vod");
+        if (provider.IncludeSeries)
+            applicableTypes.Add("series");
+
+        var rows = new Dictionary<(string ProviderGroupId, string ProviderItemKey, string ContentType),
+            (string Title, int EpisodeCount, string? ArtworkUrl)>();
+        for (var index = 0; index < channels.Count; index++)
+        {
+            if ((index & 0x3FFF) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+
+            var channel = channels[index];
+            if (string.IsNullOrWhiteSpace(channel.StreamUrl)
+                || string.IsNullOrWhiteSpace(channel.GroupTitle))
+                continue;
+
+            var contentType = LiveClassifier.ClassifyContent(channel.StreamUrl);
+            if (contentType is not ("vod" or "series"))
+                continue;
+
+            applicableTypes.Add(contentType);
+            if (!groupNameToId.TryGetValue(
+                    new ProviderGroupKey(channel.GroupTitle, contentType),
+                    out var providerGroupId))
+                continue;
+
+            var title = channel.CatalogTitle?.Trim();
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                title = contentType == "series"
+                    ? ExtractSeriesName(channel.DisplayName)
+                    : channel.DisplayName.Trim();
+            }
+            if (string.IsNullOrWhiteSpace(title))
+                continue;
+
+            var providerItemKey = !string.IsNullOrWhiteSpace(channel.CatalogItemId)
+                ? $"id:{channel.CatalogItemId.Trim()}"
+                : $"derived:{HashCatalogIdentity(contentType == "series" ? title : channel.StreamUrl)}";
+            var key = (providerGroupId, providerItemKey, contentType);
+            if (rows.TryGetValue(key, out var existing))
+            {
+                if (contentType == "series")
+                    rows[key] = (existing.Title, existing.EpisodeCount + 1, existing.ArtworkUrl ?? channel.LogoUrl);
+            }
+            else
+            {
+                rows.Add(key, (title, contentType == "series" ? 1 : 0, channel.LogoUrl));
+            }
+        }
+
+        if (catalogItems is not null)
+        {
+            foreach (var item in catalogItems)
+            {
+                if (string.IsNullOrWhiteSpace(item.ProviderItemId)
+                    || string.IsNullOrWhiteSpace(item.Title)
+                    || string.IsNullOrWhiteSpace(item.GroupTitle)
+                    || item.ContentType is not ("vod" or "series")
+                    || !groupNameToId.TryGetValue(new ProviderGroupKey(item.GroupTitle, item.ContentType), out var providerGroupId))
+                    continue;
+
+                applicableTypes.Add(item.ContentType);
+                var key = (providerGroupId, $"id:{item.ProviderItemId.Trim()}", item.ContentType);
+                if (rows.TryGetValue(key, out var expanded))
+                    rows[key] = (item.Title.Trim(), expanded.EpisodeCount, item.ArtworkUrl ?? expanded.ArtworkUrl);
+                else
+                    rows[key] = (item.Title.Trim(), 0, item.ArtworkUrl);
+            }
+        }
+
+        if (applicableTypes.Count == 0)
+            return;
+
+        var connection = (SqliteConnection)db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open)
+            await connection.OpenAsync(cancellationToken);
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var deactivate = connection.CreateCommand())
+        {
+            deactivate.Transaction = (SqliteTransaction)transaction;
+            deactivate.CommandText = applicableTypes.Count == 2
+                ? "UPDATE catalog_items SET active = 0 WHERE provider_id = $providerId AND content_type IN ('vod', 'series')"
+                : "UPDATE catalog_items SET active = 0 WHERE provider_id = $providerId AND content_type = $contentType";
+            deactivate.Parameters.AddWithValue("$providerId", provider.ProviderId);
+            if (applicableTypes.Count == 1)
+                deactivate.Parameters.AddWithValue("$contentType", applicableTypes.Single());
+            await deactivate.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var upsert = connection.CreateCommand();
+        upsert.Transaction = (SqliteTransaction)transaction;
+        upsert.CommandText =
+            """
+            INSERT INTO catalog_items (
+                catalog_item_id, provider_id, provider_group_id, provider_item_key,
+                content_type, title, artwork_url, episode_count, first_seen_utc, last_seen_utc, active)
+            VALUES (
+                $catalogItemId, $providerId, $providerGroupId, $providerItemKey,
+                $contentType, $title, $artworkUrl, $episodeCount, $now, $now, 1)
+            ON CONFLICT(provider_group_id, provider_item_key) DO UPDATE SET
+                content_type = excluded.content_type,
+                title = excluded.title,
+                artwork_url = excluded.artwork_url,
+                episode_count = excluded.episode_count,
+                last_seen_utc = excluded.last_seen_utc,
+                active = 1
+            """;
+        upsert.Parameters.Add("$catalogItemId", SqliteType.Text);
+        upsert.Parameters.Add("$providerId", SqliteType.Text);
+        upsert.Parameters.Add("$providerGroupId", SqliteType.Text);
+        upsert.Parameters.Add("$providerItemKey", SqliteType.Text);
+        upsert.Parameters.Add("$contentType", SqliteType.Text);
+        upsert.Parameters.Add("$title", SqliteType.Text);
+        upsert.Parameters.Add("$artworkUrl", SqliteType.Text);
+        upsert.Parameters.Add("$episodeCount", SqliteType.Integer);
+        upsert.Parameters.Add("$now", SqliteType.Text);
+
+        var nowText = now.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        foreach (var (key, value) in rows)
+        {
+            upsert.Parameters["$catalogItemId"].Value = Guid.NewGuid().ToString();
+            upsert.Parameters["$providerId"].Value = provider.ProviderId;
+            upsert.Parameters["$providerGroupId"].Value = key.ProviderGroupId;
+            upsert.Parameters["$providerItemKey"].Value = key.ProviderItemKey;
+            upsert.Parameters["$contentType"].Value = key.ContentType;
+            upsert.Parameters["$title"].Value = value.Title;
+            upsert.Parameters["$artworkUrl"].Value = (object?)value.ArtworkUrl ?? DBNull.Value;
+            upsert.Parameters["$episodeCount"].Value = value.EpisodeCount;
+            upsert.Parameters["$now"].Value = nowText;
+            await upsert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static string HashCatalogIdentity(string value)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
     private async Task SyncGroupFiltersAsync(
         string profileId,
         string providerId,
@@ -1637,6 +1821,52 @@ public sealed class SnapshotBuilder(
             await db.SaveChangesAsync(cancellationToken);
             logger.LogInformation("Created {Count} new group filter(s) (auto-included) for profile {ProfileId}.", newFilters.Count, profileId);
         }
+    }
+
+    private async Task SyncCatalogGroupFiltersAsync(
+        string profileId,
+        string providerId,
+        bool markNewGroups,
+        CancellationToken cancellationToken)
+    {
+        var catalogGroupIds = await db.ProviderGroups
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId
+                        && x.Active
+                        && (x.ContentType == "vod" || x.ContentType == "series"))
+            .Select(x => x.ProviderGroupId)
+            .ToListAsync(cancellationToken);
+
+        var existingFilterGroupIds = await db.ProfileCatalogGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId)
+            .Select(x => x.ProviderGroupId)
+            .ToHashSetAsync(cancellationToken);
+
+        var now = DateTime.UtcNow;
+        var newFilters = catalogGroupIds
+            .Where(id => !existingFilterGroupIds.Contains(id))
+            .Select(id => new ProfileCatalogGroupFilter
+            {
+                ProfileCatalogGroupFilterId = Guid.NewGuid().ToString(),
+                ProfileId = profileId,
+                ProviderGroupId = id,
+                Decision = LineupReviewSemantics.GroupDecisionInclude,
+                IsNew = markNewGroups,
+                CreatedUtc = now,
+                UpdatedUtc = now,
+            })
+            .ToList();
+
+        if (newFilters.Count == 0)
+            return;
+
+        db.ProfileCatalogGroupFilters.AddRange(newFilters);
+        await db.SaveChangesAsync(cancellationToken);
+        logger.LogInformation(
+            "Created {Count} catalog group filter(s) (auto-included) for profile {ProfileId}.",
+            newFilters.Count,
+            profileId);
     }
 
     private async Task SyncPendingChannelReviewsAsync(

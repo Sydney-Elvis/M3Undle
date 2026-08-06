@@ -18,6 +18,7 @@ public sealed class SnapshotRefreshService(
     IEventService eventService,
     TimeProvider timeProvider,
     RefreshActivityTracker activityTracker,
+    HeavyWorkGate heavyWorkGate,
     ILogger<SnapshotRefreshService> logger)
     : BackgroundService, IRefreshTrigger
 {
@@ -387,6 +388,13 @@ public sealed class SnapshotRefreshService(
         IReadOnlySet<string> affectedProfileIds = new HashSet<string>();
         try
         {
+            // Hold the heavy-work gate for the whole refresh so background series expansion
+            // can't hammer the same provider we're fetching from. Acquired inside the try so a
+            // timeout/shutdown while waiting is handled by the existing cancellation catches.
+            if (heavyWorkGate.IsHeld)
+                logger.LogDebug("Refresh waiting for in-flight background work to yield the heavy-work gate.");
+            using var heavyWork = await heavyWorkGate.AcquireAsync(runCts.Token);
+
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
             var (s, e, channelsByProvider, cc, profileIds) = await builder.RunAsync(runCts.Token);
@@ -532,6 +540,10 @@ public sealed class SnapshotRefreshService(
         IReadOnlySet<string> affectedProfileIds = new HashSet<string>();
         try
         {
+            // Build-only doesn't fetch from providers, but it is still heavy DB work over the
+            // full channel set — gate it too so it doesn't contend with expansion's writes.
+            using var heavyWork = await heavyWorkGate.AcquireAsync(runCts.Token);
+
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
             var (s, e, cc, profileIds) = await builder.BuildOnlyAsync(_cachedChannels, runCts.Token);

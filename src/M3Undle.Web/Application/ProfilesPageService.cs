@@ -17,7 +17,7 @@ internal sealed class ProfilesPageService(
         return await db.Profiles
             .AsNoTracking()
             .OrderBy(p => p.Name)
-            .Select(p => new ProfileStubDto { ProfileId = p.ProfileId, Name = p.Name })
+            .Select(p => new ProfileStubDto { ProfileId = p.ProfileId, Name = p.Name, IsActive = p.IsActive })
             .ToListAsync(ct);
     }
 

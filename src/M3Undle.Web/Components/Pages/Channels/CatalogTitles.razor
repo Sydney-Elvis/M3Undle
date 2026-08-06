@@ -1,0 +1,175 @@
+@page "/channels/catalog/{ProviderGroupId}"
+@using M3Undle.Web.Application
+@using M3Undle.Web.Contracts
+@inject CatalogPageService CatalogPageService
+
+<PageTitle>M3Undle — Catalog Titles</PageTitle>
+
+<MudPaper Class="pa-4 mb-4" Elevation="1">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Wrap="Wrap.Wrap">
+        <MudStack Spacing="0">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                @if (_summary is not null)
+                {
+                    <StatusChip Label="@(_summary.ContentType == "vod" ? "Movies" : "Series")"
+                                Color="Color.Info"
+                                Icon="@(_summary.ContentType == "vod" ? Icons.Material.Filled.Movie : Icons.Material.Filled.Tv)" />
+                }
+                <MudText Typo="Typo.h5">@(_summary?.GroupName ?? "Loading catalog category…")</MudText>
+            </MudStack>
+            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                @if (_summary is not null)
+                {
+                    <span>@(_summary.ContentType == "vod" ? "Movie" : "Series") category · @_summary.ProviderName · @_summary.Total.ToString("N0") titles</span>
+                }
+                else
+                {
+                    <span>Titles discovered during provider refreshes.</span>
+                }
+            </MudText>
+        </MudStack>
+        <MudButton Href="@BackHref"
+                   Variant="Variant.Outlined"
+                   Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.ArrowBack">
+            Back to Catalog
+        </MudButton>
+    </MudStack>
+</MudPaper>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Class="mb-4">@_error</MudAlert>
+}
+
+<MudPaper Elevation="2">
+    <MudTable @ref="_table"
+              T="CatalogItemDto"
+              ServerData="LoadItemsAsync"
+              Dense="true"
+              Hover="true"
+              RowsPerPage="50"
+              Breakpoint="Breakpoint.Sm"
+              Loading="_isLoading">
+        <ToolBarContent>
+            <MudTextField T="string"
+                          Value="_search"
+                          ValueChanged="OnSearchChanged"
+                          Placeholder="Search titles…"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true"
+                          DebounceInterval="350"
+                          OnDebounceIntervalElapsed="ReloadAsync"
+                          Clearable="true"
+                          Margin="Margin.Dense"
+                          Variant="Variant.Outlined"
+                          Style="min-width:280px; max-width:520px;" />
+        </ToolBarContent>
+        <HeaderContent>
+            <MudTh>Title</MudTh>
+            @if (_summary?.ContentType == "series")
+            {
+                <MudTh>Episodes discovered</MudTh>
+            }
+            <MudTh>Last seen</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Title"><MudLink Href="@ItemHref(context)">@context.Title</MudLink></MudTd>
+            @if (context.ContentType == "series")
+            {
+                <MudTd DataLabel="Episodes discovered">@context.EpisodeCount.ToString("N0")</MudTd>
+            }
+            <MudTd DataLabel="Last seen">@context.LastSeenUtc.ToLocalTime().ToString("g")</MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-4" Color="Color.Secondary">
+                No matching titles are indexed yet. Run a provider refresh to populate the title browser.
+            </MudText>
+        </NoRecordsContent>
+        <PagerContent>
+            <MudTablePager PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+    </MudTable>
+</MudPaper>
+
+@code {
+    [Parameter]
+    public string ProviderGroupId { get; set; } = string.Empty;
+
+    [SupplyParameterFromQuery(Name = "profile")]
+    public string? ProfileId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "fromType")]
+    public string? FromType { get; set; }
+
+    private MudTable<CatalogItemDto>? _table;
+    private CatalogItemsResponse? _summary;
+    private string _search = string.Empty;
+    private string? _error;
+    private bool _isLoading;
+
+    private string BackHref =>
+        $"channels/catalog?profile={Uri.EscapeDataString(ProfileId ?? string.Empty)}&type={Uri.EscapeDataString(FromType ?? "all")}";
+
+    private string ItemHref(CatalogItemDto item) =>
+        $"channels/catalog/items/{Uri.EscapeDataString(item.CatalogItemId)}?profile={Uri.EscapeDataString(ProfileId ?? string.Empty)}&fromGroup={Uri.EscapeDataString(ProviderGroupId)}&fromType={Uri.EscapeDataString(FromType ?? "all")}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        ProfileId ??= await CatalogPageService.GetDefaultProfileIdAsync(CancellationToken.None);
+    }
+
+    private async Task<TableData<CatalogItemDto>> LoadItemsAsync(TableState state, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(ProfileId))
+            return new TableData<CatalogItemDto> { Items = [], TotalItems = 0 };
+
+        _isLoading = true;
+        _error = null;
+        try
+        {
+            var result = await CatalogPageService.GetItemsAsync(
+                ProfileId,
+                ProviderGroupId,
+                state.Page + 1,
+                state.PageSize,
+                _search,
+                cancellationToken);
+            if (result is null)
+            {
+                _error = "This catalog category is not available for the selected profile.";
+                return new TableData<CatalogItemDto> { Items = [], TotalItems = 0 };
+            }
+
+            _summary = result;
+            await InvokeAsync(StateHasChanged);
+            return new TableData<CatalogItemDto>
+            {
+                Items = result.Items,
+                TotalItems = result.Total,
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new TableData<CatalogItemDto> { Items = [], TotalItems = 0 };
+        }
+        catch (Exception ex)
+        {
+            _error = $"Catalog titles could not be loaded: {ex.Message}";
+            return new TableData<CatalogItemDto> { Items = [], TotalItems = 0 };
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void OnSearchChanged(string value) => _search = value;
+
+    private async Task ReloadAsync()
+    {
+        if (_table is not null)
+            await _table.ReloadServerData();
+    }
+}

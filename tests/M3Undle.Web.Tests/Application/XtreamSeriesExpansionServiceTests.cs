@@ -179,6 +179,7 @@ public sealed class XtreamSeriesExpansionServiceTests
             scopeFactory,
             refreshTrigger,
             new NullEventService(),
+            new HeavyWorkGate(),
             NullLogger<XtreamSeriesExpansionService>.Instance);
 
         return (service, scopeFactory, refreshTrigger);

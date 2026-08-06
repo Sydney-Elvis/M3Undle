@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+#
+# Locally cached base image for debug builds only (tagged m3undle-base:local).
+# Bakes the OS package layer (curl, ffmpeg) once so debug builds in Dockerfile.dev
+# don't hit apt mirrors on every F5. Not used by Dockerfile (production/CI), which
+# stays self-contained and pulls straight from mcr.microsoft.com.
+#
+# Refresh with the "docker-build: refresh base image" VS Code task to pick up
+# security patches from upstream.
+
+ARG DOTNET_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ffmpeg \
+    && rm -rf /var/lib/apt/lists/*

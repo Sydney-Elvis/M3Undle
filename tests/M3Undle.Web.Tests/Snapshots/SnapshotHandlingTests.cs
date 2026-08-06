@@ -704,7 +704,7 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
-    public async Task SnapshotBuilder_IncludesVodAndSeries_WhenEnabled_EvenIfGroupsPending()
+    public async Task SnapshotBuilder_IgnoresDormantCatalogGroupExclusion_WhenVodAndSeriesEnabled()
     {
         await using var fixture = await CreateFixtureAsync();
 
@@ -731,6 +731,14 @@ public sealed class SnapshotHandlingTests
             {
                 var active1 = await verify1.Snapshots.SingleAsync(x => x.Status == "active");
                 Assert.AreEqual(2, active1.ChannelCountPublished, "First build should publish VOD+series passthrough while live remains unmapped.");
+
+                var catalogItems = await verify1.CatalogItems
+                    .AsNoTracking()
+                    .OrderBy(x => x.ContentType)
+                    .ToListAsync();
+                Assert.HasCount(2, catalogItems);
+                Assert.IsTrue(catalogItems.All(x => !x.ProviderItemKey.Contains("user/pass", StringComparison.Ordinal)));
+                Assert.AreEqual(1, catalogItems.Single(x => x.ContentType == "series").EpisodeCount);
             }
 
             await using (var edit = fixture.CreateDbContext())
@@ -742,12 +750,26 @@ public sealed class SnapshotHandlingTests
                 newsFilter.IsNew = false;
                 newsFilter.UpdatedUtc = DateTime.UtcNow;
 
-                // Catalog-only groups are not mappable, so they get no filter rows at all —
-                // VOD/series are controlled solely by the provider Include flags.
+                // Catalog decisions use their own slim rows rather than the live mapping table.
                 var catalogFilterCount = await edit.ProfileGroupFilters
                     .CountAsync(x => x.ProfileId == "profile-1"
                                   && (x.ProviderGroup.RawName == "Movies" || x.ProviderGroup.RawName == "Series"));
                 Assert.AreEqual(0, catalogFilterCount, "VOD/series groups should not receive group filters.");
+
+                var seriesGroup = await edit.ProviderGroups.SingleAsync(x =>
+                    x.ProviderId == "provider-1"
+                    && x.RawName == "Series"
+                    && x.ContentType == "series");
+                edit.ProfileCatalogGroupFilters.Add(new ProfileCatalogGroupFilter
+                {
+                    ProfileCatalogGroupFilterId = Guid.NewGuid().ToString(),
+                    ProfileId = "profile-1",
+                    ProviderGroupId = seriesGroup.ProviderGroupId,
+                    Decision = LineupReviewSemantics.GroupDecisionExclude,
+                    IsNew = false,
+                    CreatedUtc = DateTime.UtcNow,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
 
                 // Since TrackNewChannels = false by default, no channel rows were auto-created.
                 // Directly insert included rows for the live news channels.
@@ -783,7 +805,17 @@ public sealed class SnapshotHandlingTests
                 .Where(x => x.Status == "active")
                 .OrderByDescending(x => x.CreatedUtc)
                 .FirstAsync();
-            Assert.AreEqual(3, active2.ChannelCountPublished, "Second build should add included live channels while VOD+series remain controlled only by provider Include flags.");
+            Assert.AreEqual(3, active2.ChannelCountPublished,
+                "Dormant catalog decisions must not silently exclude content after their UI is hidden.");
+
+            await using (var db3 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db3, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify3 = fixture.CreateDbContext();
+            Assert.AreEqual(0, await verify3.CatalogItems.CountAsync(x => x.Active),
+                "A successful refresh that no longer returns catalog items must deactivate stale browse rows.");
         }
         finally
         {
