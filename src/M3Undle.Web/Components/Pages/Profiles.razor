@@ -104,34 +104,31 @@ else
                                     </MudStack>
                                 }
                             </MudStack>
-                                                        <StatusChip Label="@(profile.HealthStatus == ProfileHealthStatus.Ok ? "Published"
-                                                                                                    : profile.HealthStatus == ProfileHealthStatus.Degraded ? "Degraded"
-                                                                                                    : "No output")"
-                                                                                Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
-                                                                                                 : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
-                                                                                                 : Color.Default)"
-                                                                                Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
-                                                                                                : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
-                                                                                                : Icons.Material.Filled.RadioButtonUnchecked)" />
+                            @if (profile.IsActive)
+                            {
+                                <StatusChip Label="Active"
+                                            Variant="Variant.Filled"
+                                            Color="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Color.Success
+                                                     : profile.HealthStatus == ProfileHealthStatus.Degraded ? Color.Warning
+                                                     : Color.Error)"
+                                            Icon="@(profile.HealthStatus == ProfileHealthStatus.Ok ? Icons.Material.Filled.CheckCircle
+                                                    : profile.HealthStatus == ProfileHealthStatus.Degraded ? Icons.Material.Filled.Warning
+                                                    : Icons.Material.Filled.ErrorOutline)" />
+                            }
                         </MudStack>
 
                         <MudDivider />
 
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Justify="Justify.FlexEnd">
-                            @if (profile.IsActive)
-                            {
-                                <StatusChip Label="Active"
-                                            Color="Color.Success"
-                                            Variant="Variant.Filled"
-                                            Icon="@Icons.Material.Filled.Star" />
-                            }
-                            else
+                            @if (!profile.IsActive)
                             {
                                 <div @onclick:stopPropagation="true">
-                                    <MudTooltip Text="@(profile.Providers.Count == 0 ? "Add a provider before activating this profile" : "")"
-                                                Disabled="@(profile.Providers.Count > 0)">
+                                    <MudTooltip Text="@(profile.Providers.Count == 0 ? "Add a provider before activating this profile"
+                                                        : profile.LiveCount == 0 ? "Map channels in Channel Mapping before activating this profile"
+                                                        : "")"
+                                                Disabled="@(CanActivate(profile))">
                                         <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
-                                                   Disabled="@(_activatingProfileId is not null || profile.Providers.Count == 0)"
+                                                   Disabled="@(_activatingProfileId is not null || !CanActivate(profile))"
                                                    OnClick="@(() => SetActiveAsync(profile))">
                                             @if (_activatingProfileId == profile.ProfileId)
                                             {
@@ -373,6 +370,9 @@ else
             _isCreating = false;
         }
     }
+
+    private static bool CanActivate(ProfilePageItemDto profile) =>
+        profile.Providers.Count > 0 && profile.LiveCount > 0;
 
     private async Task SetActiveAsync(ProfilePageItemDto profile)
     {
