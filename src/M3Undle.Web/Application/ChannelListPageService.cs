@@ -60,39 +60,8 @@ public sealed class ChannelListPageService(
 
         var term = search?.Trim();
         var groupFilter = group?.Trim();
-        var hasFilters = !string.IsNullOrEmpty(term) || !string.IsNullOrEmpty(groupFilter);
-
-        if (!hasFilters)
-        {
-            var total = snapshot.LiveChannelCount;
-            var skip = (page - 1) * pageSize;
-            var items = new List<ChannelListItemDto>(pageSize);
-            var liveCount = 0;
-
-            await foreach (var e in ChannelIndexStore.StreamAllAsync(snapshot.ChannelIndexPath, cancellationToken))
-            {
-                if (LiveClassifier.ClassifyContent(e.StreamUrl) != "live")
-                    continue;
-
-                liveCount++;
-                if (liveCount <= skip)
-                    continue;
-
-                items.Add(MapEntry(e));
-                if (items.Count >= pageSize)
-                    break;
-            }
-
-            return new ChannelListResponse
-            {
-                Total = total,
-                Page = page,
-                PageSize = pageSize,
-                Items = items,
-            };
-        }
-
         var termUpper = term?.ToUpperInvariant();
+
         var all = new List<ChannelListItemDto>();
 
         await foreach (var e in ChannelIndexStore.StreamAllAsync(snapshot.ChannelIndexPath, cancellationToken))
@@ -113,13 +82,22 @@ public sealed class ChannelListPageService(
             all.Add(MapEntry(e));
         }
 
-        var filteredItems = all.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        // The index is stored in build order (grouped, then pinned/auto-numbered within
+        // each group) — sort by the actual channel number so the list matches lineup order.
+        var ordered = all
+            .OrderBy(x => x.ChannelNumber.HasValue ? 0 : 1)
+            .ThenBy(x => x.ChannelNumber)
+            .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var items = ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+
         return new ChannelListResponse
         {
-            Total = all.Count,
+            Total = ordered.Count,
             Page = page,
             PageSize = pageSize,
-            Items = filteredItems,
+            Items = items,
         };
     }
 
