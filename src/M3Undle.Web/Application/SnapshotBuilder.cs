@@ -488,14 +488,16 @@ public sealed class SnapshotBuilder(
     }
 
     /// <summary>
-    /// Rebuilds VOD/series channels for build-only from persisted catalog data
-    /// (CatalogItem + XtreamSeriesCache) rather than an in-memory fetch result — build-only never
-    /// fetches, so nothing in memory is guaranteed to survive a process restart between the last
-    /// full fetch and this build. CatalogItem.StreamUrl carries the VOD file directly; Xtream
-    /// series episodes are rebuilt from XtreamSeriesCache's persisted get_series_info payload via
-    /// the same URL convention XtreamLineupClient uses. Series sourced from a plain M3U playlist
-    /// (not Xtream) have no per-episode data to rebuild from and are skipped here — a full fetch
-    /// still publishes them directly, this only affects build-only runs.
+    /// Rebuilds VOD/series channels for build-only from persisted catalog data rather than an
+    /// in-memory fetch result — build-only never fetches, so nothing in memory is guaranteed to
+    /// survive a process restart between the last full fetch and this build.
+    /// CatalogItem.StreamUrl carries VOD files directly. Series episodes come from one of two
+    /// places depending on how the provider sourced them: Xtream series are rebuilt from
+    /// XtreamSeriesCache's persisted get_series_info payload via the same URL convention
+    /// XtreamLineupClient uses; M3U-native series (no Xtream series id — each playlist line was
+    /// already a complete episode) are rebuilt from CatalogSeriesEpisode, which stores each
+    /// episode's real StreamUrl directly since there's no provider-side convention to rebuild it
+    /// from.
     /// </summary>
     private async Task<List<ParsedProviderChannel>> LoadCachedCatalogChannelsAsync(
         Provider provider, CancellationToken cancellationToken)
@@ -532,38 +534,79 @@ public sealed class SnapshotBuilder(
             });
         }
 
-        var seriesItems = items
-            .Where(x => x.ContentType == "series")
+        var seriesCatalogItems = items.Where(x => x.ContentType == "series").ToList();
+
+        // Xtream series: reconstructed from XtreamSeriesCache via the credential-based URL
+        // convention (only Xtream-capable providers ever produce an "id:{n}" key here).
+        var xtreamSeriesItems = seriesCatalogItems
             .Select(x => (Item: x, SeriesId: ExtractProviderItemId(x.ProviderItemKey)))
             .Where(x => x.SeriesId.HasValue)
             .ToList();
 
-        if (seriesItems.Count == 0 || !fetcher.TryResolveXtreamCredentials(provider, out var baseUrl, out var username, out var password))
-            return result;
-
-        var seriesIds = seriesItems.Select(x => x.SeriesId!.Value).ToList();
-        var episodesBySeriesId = await db.XtreamSeriesCache
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && seriesIds.Contains(x.SeriesId))
-            .ToDictionaryAsync(x => x.SeriesId, x => x.EpisodesJson, cancellationToken);
-
-        foreach (var (item, seriesId) in seriesItems)
+        if (xtreamSeriesItems.Count > 0
+            && fetcher.TryResolveXtreamCredentials(provider, out var baseUrl, out var username, out var password))
         {
-            if (!episodesBySeriesId.TryGetValue(seriesId!.Value, out var episodesJson) || string.IsNullOrEmpty(episodesJson))
-                continue;
+            var seriesIds = xtreamSeriesItems.Select(x => x.SeriesId!.Value).ToList();
+            var episodesBySeriesId = await db.XtreamSeriesCache
+                .AsNoTracking()
+                .Where(x => x.ProviderId == provider.ProviderId && seriesIds.Contains(x.SeriesId))
+                .ToDictionaryAsync(x => x.SeriesId, x => x.EpisodesJson, cancellationToken);
 
-            var groupTitle = item.ProviderGroup.RawName;
-            foreach (var ep in XtreamEpisodeParser.Parse(item.Title, episodesJson))
+            foreach (var (item, seriesId) in xtreamSeriesItems)
             {
-                var streamUrl = $"{baseUrl}/series/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(password)}/{ep.EpisodeId}.{ep.Extension}";
-                result.Add(new ParsedProviderChannel
+                if (!episodesBySeriesId.TryGetValue(seriesId!.Value, out var episodesJson) || string.IsNullOrEmpty(episodesJson))
+                    continue;
+
+                var groupTitle = item.ProviderGroup.RawName;
+                foreach (var ep in XtreamEpisodeParser.Parse(item.Title, episodesJson))
                 {
-                    DisplayName = ep.DisplayName,
-                    TvgName = item.Title,
-                    LogoUrl = item.ArtworkUrl,
-                    StreamUrl = streamUrl,
-                    GroupTitle = groupTitle,
-                });
+                    var streamUrl = $"{baseUrl}/series/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(password)}/{ep.EpisodeId}.{ep.Extension}";
+                    result.Add(new ParsedProviderChannel
+                    {
+                        DisplayName = ep.DisplayName,
+                        TvgName = item.Title,
+                        LogoUrl = item.ArtworkUrl,
+                        StreamUrl = streamUrl,
+                        GroupTitle = groupTitle,
+                    });
+                }
+            }
+        }
+
+        // M3U-native series: no provider id, so nothing to rebuild a URL from — each episode's
+        // real StreamUrl was persisted directly in CatalogSeriesEpisode instead.
+        var m3uSeriesItems = seriesCatalogItems
+            .Where(x => ExtractProviderItemId(x.ProviderItemKey) is null)
+            .ToList();
+
+        if (m3uSeriesItems.Count > 0)
+        {
+            var episodes = await db.CatalogSeriesEpisodes
+                .AsNoTracking()
+                .Where(x => x.ProviderId == provider.ProviderId && x.Active)
+                .ToListAsync(cancellationToken);
+
+            var episodesByItemKey = episodes
+                .GroupBy(x => (x.ProviderGroupId, x.ProviderItemKey))
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            foreach (var item in m3uSeriesItems)
+            {
+                if (!episodesByItemKey.TryGetValue((item.ProviderGroupId, item.ProviderItemKey), out var itemEpisodes))
+                    continue;
+
+                var groupTitle = item.ProviderGroup.RawName;
+                foreach (var ep in itemEpisodes)
+                {
+                    result.Add(new ParsedProviderChannel
+                    {
+                        DisplayName = ep.Title,
+                        TvgName = item.Title,
+                        LogoUrl = item.ArtworkUrl,
+                        StreamUrl = ep.StreamUrl,
+                        GroupTitle = groupTitle,
+                    });
+                }
             }
         }
 
@@ -1766,6 +1809,12 @@ public sealed class SnapshotBuilder(
 
         var rows = new Dictionary<(string ProviderGroupId, string ProviderItemKey, string ContentType),
             (string Title, int EpisodeCount, string? ArtworkUrl, string? StreamUrl)>();
+
+        // Per-episode StreamUrl for M3U-sourced series only (channel.CatalogItemId empty — no
+        // Xtream series id). Xtream series episodes are already durable via XtreamSeriesCache
+        // (get_series_info), so they don't need a row here.
+        var seriesEpisodeRows = new Dictionary<(string ProviderGroupId, string ProviderItemKey, string EpisodeKey),
+            (string Title, string StreamUrl)>();
         for (var index = 0; index < channels.Count; index++)
         {
             if ((index & 0x3FFF) == 0)
@@ -1808,11 +1857,25 @@ public sealed class SnapshotBuilder(
             else
             {
                 // Series rows aggregate many episodes under one catalog entry, so a single
-                // StreamUrl wouldn't mean anything — episode playback is rebuilt from
-                // XtreamSeriesCache instead. VOD is one file per row, so its StreamUrl is stored
-                // directly and lets build-only rebuild the channel without a live fetch.
+                // StreamUrl wouldn't mean anything there — VOD is one file per row, so its
+                // StreamUrl is stored directly and lets build-only rebuild the channel without a
+                // live fetch.
                 rows.Add(key, (title, contentType == "series" ? 1 : 0, channel.LogoUrl,
                     contentType == "vod" ? channel.StreamUrl : null));
+            }
+
+            // M3U series: this line IS the episode, with its own real StreamUrl — persist it
+            // per-episode (keyed by the same providerGroupId/providerItemKey as the aggregate
+            // row above) so build-only can rebuild it later without a live fetch, the way
+            // XtreamSeriesCache already does for Xtream series.
+            if (contentType == "series" && string.IsNullOrWhiteSpace(channel.CatalogItemId))
+            {
+                var episodeTitle = channel.DisplayName.Trim();
+                if (!string.IsNullOrWhiteSpace(episodeTitle))
+                {
+                    var episodeKey = HashCatalogIdentity(channel.StreamUrl);
+                    seriesEpisodeRows[(providerGroupId, providerItemKey, episodeKey)] = (episodeTitle, channel.StreamUrl);
+                }
             }
         }
 
@@ -1901,6 +1964,58 @@ public sealed class SnapshotBuilder(
             upsert.Parameters["$episodeCount"].Value = value.EpisodeCount;
             upsert.Parameters["$now"].Value = nowText;
             await upsert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (applicableTypes.Contains("series"))
+        {
+            await using (var deactivateEpisodes = connection.CreateCommand())
+            {
+                deactivateEpisodes.Transaction = (SqliteTransaction)transaction;
+                deactivateEpisodes.CommandText = "UPDATE catalog_series_episodes SET active = 0 WHERE provider_id = $providerId";
+                deactivateEpisodes.Parameters.AddWithValue("$providerId", provider.ProviderId);
+                await deactivateEpisodes.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (seriesEpisodeRows.Count > 0)
+            {
+                await using var upsertEpisode = connection.CreateCommand();
+                upsertEpisode.Transaction = (SqliteTransaction)transaction;
+                upsertEpisode.CommandText =
+                    """
+                    INSERT INTO catalog_series_episodes (
+                        catalog_series_episode_id, provider_id, provider_group_id, provider_item_key,
+                        episode_key, title, stream_url, first_seen_utc, last_seen_utc, active)
+                    VALUES (
+                        $catalogSeriesEpisodeId, $providerId, $providerGroupId, $providerItemKey,
+                        $episodeKey, $title, $streamUrl, $now, $now, 1)
+                    ON CONFLICT(provider_group_id, provider_item_key, episode_key) DO UPDATE SET
+                        title = excluded.title,
+                        stream_url = excluded.stream_url,
+                        last_seen_utc = excluded.last_seen_utc,
+                        active = 1
+                    """;
+                upsertEpisode.Parameters.Add("$catalogSeriesEpisodeId", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$providerId", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$providerGroupId", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$providerItemKey", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$episodeKey", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$title", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$streamUrl", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$now", SqliteType.Text);
+
+                foreach (var (key, value) in seriesEpisodeRows)
+                {
+                    upsertEpisode.Parameters["$catalogSeriesEpisodeId"].Value = Guid.NewGuid().ToString();
+                    upsertEpisode.Parameters["$providerId"].Value = provider.ProviderId;
+                    upsertEpisode.Parameters["$providerGroupId"].Value = key.ProviderGroupId;
+                    upsertEpisode.Parameters["$providerItemKey"].Value = key.ProviderItemKey;
+                    upsertEpisode.Parameters["$episodeKey"].Value = key.EpisodeKey;
+                    upsertEpisode.Parameters["$title"].Value = value.Title;
+                    upsertEpisode.Parameters["$streamUrl"].Value = value.StreamUrl;
+                    upsertEpisode.Parameters["$now"].Value = nowText;
+                    await upsertEpisode.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
         }
 
         await transaction.CommitAsync(cancellationToken);

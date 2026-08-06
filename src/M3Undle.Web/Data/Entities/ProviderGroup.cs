@@ -19,5 +19,6 @@ public sealed class ProviderGroup
     public ICollection<ProfileGroupFilter> ProfileGroupFilters { get; set; } = new List<ProfileGroupFilter>();
     public ICollection<ProfileCatalogGroupFilter> ProfileCatalogGroupFilters { get; set; } = new List<ProfileCatalogGroupFilter>();
     public ICollection<CatalogItem> CatalogItems { get; set; } = new List<CatalogItem>();
+    public ICollection<CatalogSeriesEpisode> CatalogSeriesEpisodes { get; set; } = new List<CatalogSeriesEpisode>();
     public ICollection<ProfileCustomGroupProviderLink> CustomGroupProviderLinks { get; set; } = new List<ProfileCustomGroupProviderLink>();
 }

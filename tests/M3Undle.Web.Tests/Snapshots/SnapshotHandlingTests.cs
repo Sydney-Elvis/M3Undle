@@ -825,10 +825,11 @@ public sealed class SnapshotHandlingTests
 
     // Regression for the bug where build-only silently published zero VOD/series channels when
     // it ran after a process restart (nothing survived in SnapshotRefreshService's in-memory
-    // channel cache). VOD now rebuilds from CatalogItem.StreamUrl, which is durable — a brand
-    // new SnapshotBuilder instance with no shared in-memory state must still publish it.
+    // channel cache). VOD rebuilds from CatalogItem.StreamUrl and M3U-native series episodes
+    // rebuild from CatalogSeriesEpisode — both durable — so a brand new SnapshotBuilder instance
+    // with no shared in-memory state must still publish them.
     [TestMethod]
-    public async Task SnapshotBuilder_BuildOnly_RebuildsVodFromCatalogItem_WithNoInMemoryCache()
+    public async Task SnapshotBuilder_BuildOnly_RebuildsVodAndM3uSeries_WithNoInMemoryCache()
     {
         await using var fixture = await CreateFixtureAsync();
 
@@ -846,8 +847,8 @@ public sealed class SnapshotHandlingTests
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         try
         {
-            // Full fetch — populates CatalogItem (with StreamUrl for the VOD row) and publishes
-            // the first snapshot.
+            // Full fetch — populates CatalogItem (with StreamUrl for the VOD row) and
+            // CatalogSeriesEpisode (the M3U series' one episode), then publishes the first snapshot.
             await using (var db1 = fixture.CreateDbContext())
             {
                 await CreateBuilder(db1, HttpStatusCode.OK, SampleMixedM3u, tempDir).RunAsync(CancellationToken.None);
@@ -857,6 +858,10 @@ public sealed class SnapshotHandlingTests
             {
                 var active1 = await verify1.Snapshots.SingleAsync(x => x.Status == "active");
                 Assert.AreEqual(1, active1.VodChannelCount);
+                Assert.AreEqual(1, active1.SeriesChannelCount);
+
+                var episode = await verify1.CatalogSeriesEpisodes.SingleAsync();
+                Assert.AreEqual("http://example.com/series/user/pass/300.mkv", episode.StreamUrl);
             }
 
             // Build-only on a brand new SnapshotBuilder instance — no shared state with the
@@ -875,6 +880,19 @@ public sealed class SnapshotHandlingTests
                 .FirstAsync();
             Assert.AreEqual(1, active2.VodChannelCount,
                 "Build-only must rebuild VOD from persisted CatalogItem data even with no in-memory fetch cache.");
+            Assert.AreEqual(1, active2.SeriesChannelCount,
+                "Build-only must rebuild M3U-native series episodes from CatalogSeriesEpisode even with no in-memory fetch cache.");
+
+            // A subsequent full fetch that no longer returns the episode must deactivate its
+            // CatalogSeriesEpisode row rather than leaving it stale forever.
+            await using (var db3 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db3, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify3 = fixture.CreateDbContext();
+            Assert.AreEqual(0, await verify3.CatalogSeriesEpisodes.CountAsync(x => x.Active),
+                "A successful refresh that no longer returns a series episode must deactivate its stale row.");
         }
         finally
         {
