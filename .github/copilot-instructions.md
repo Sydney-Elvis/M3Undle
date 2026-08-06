@@ -58,6 +58,11 @@ absent.
   create/delete, rebase, amend) without explicit user instruction in that turn.
 - Completing an implementation or test run does not imply a commit should
   follow.
+- Before any force-push or history rewrite (`push --force`/`--force-with-lease`,
+  `reset --hard` on a shared branch, rebase of pushed commits), print the exact
+  refs and remote(s) being force-pushed and state plainly that the operation is
+  irreversible for anyone else who has already pulled. Only proceed after that
+  is acknowledged in the same turn.
 
 ## Code Review — Scope by Change Type
 
