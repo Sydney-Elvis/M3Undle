@@ -62,7 +62,19 @@ public sealed class ChannelListPageService(
         var groupFilter = group?.Trim();
         var termUpper = term?.ToUpperInvariant();
 
-        var all = new List<ChannelListItemDto>();
+        // The index is stored in build order (grouped, then pinned/auto-numbered within
+        // each group) — sort by the actual channel number so the list matches lineup order.
+        // Only the requested page is ever needed, so instead of materializing every matching
+        // entry and sorting the whole thing, keep a bounded max-heap of the smallest
+        // `take` entries seen so far (by sort order) while streaming the index once.
+        var takeLong = (long)page * pageSize;
+        var take = takeLong > int.MaxValue ? int.MaxValue : (int)takeLong;
+
+        var comparer = ChannelOrderComparer.Instance;
+        var maxHeap = new PriorityQueue<ChannelListItemDto, ChannelListItemDto>(
+            Comparer<ChannelListItemDto>.Create((x, y) => comparer.Compare(y, x)));
+
+        var total = 0;
 
         await foreach (var e in ChannelIndexStore.StreamAllAsync(snapshot.ChannelIndexPath, cancellationToken))
         {
@@ -79,22 +91,27 @@ public sealed class ChannelListPageService(
                 && !(e.GroupTitle?.Contains(termUpper, StringComparison.OrdinalIgnoreCase) == true))
                 continue;
 
-            all.Add(MapEntry(e));
+            total++;
+            var item = MapEntry(e);
+
+            if (maxHeap.Count < take)
+            {
+                maxHeap.Enqueue(item, item);
+            }
+            else if (take > 0 && comparer.Compare(item, maxHeap.Peek()) < 0)
+            {
+                maxHeap.DequeueEnqueue(item, item);
+            }
         }
 
-        // The index is stored in build order (grouped, then pinned/auto-numbered within
-        // each group) — sort by the actual channel number so the list matches lineup order.
-        var ordered = all
-            .OrderBy(x => x.ChannelNumber.HasValue ? 0 : 1)
-            .ThenBy(x => x.ChannelNumber)
-            .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var ordered = new List<ChannelListItemDto>(maxHeap.UnorderedItems.Select(x => x.Element));
+        ordered.Sort(comparer);
 
         var items = ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
 
         return new ChannelListResponse
         {
-            Total = ordered.Count,
+            Total = total,
             Page = page,
             PageSize = pageSize,
             Items = items,
@@ -280,5 +297,24 @@ public sealed class ChannelListPageService(
             .Where(x => x.IsActive)
             .Select(x => (string?)x.ProfileId)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private sealed class ChannelOrderComparer : IComparer<ChannelListItemDto>
+    {
+        public static readonly ChannelOrderComparer Instance = new();
+
+        public int Compare(ChannelListItemDto? x, ChannelListItemDto? y)
+        {
+            var rankCompare = (x!.ChannelNumber.HasValue ? 0 : 1)
+                .CompareTo(y!.ChannelNumber.HasValue ? 0 : 1);
+            if (rankCompare != 0)
+                return rankCompare;
+
+            var numberCompare = Nullable.Compare(x.ChannelNumber, y.ChannelNumber);
+            if (numberCompare != 0)
+                return numberCompare;
+
+            return string.Compare(x.DisplayName, y.DisplayName, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

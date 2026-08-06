@@ -2313,8 +2313,8 @@
 
         var result = await DialogService.ShowMessageBoxAsync(
             "Unbuilt mapping changes",
-            "You have mapping changes that haven't been built into the output yet. Build now before leaving, or leave without building?",
-            yesText: "Build & Leave", noText: "Leave Without Building", cancelText: "Cancel");
+            "You have mapping changes that haven't been built into the output yet. Start a build now — it will keep running in the background after you leave — or leave without building?",
+            yesText: "Start Build & Leave", noText: "Leave Without Building", cancelText: "Cancel");
 
         if (result == true)
         {
