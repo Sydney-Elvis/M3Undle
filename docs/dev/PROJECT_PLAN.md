@@ -242,6 +242,7 @@ Status: In progress.
 - [ ] Bug fixes and polish
 - [x] Documentation site launched — delivered in beta.7 with getting started, guides, client notes, troubleshooting, concepts, and a simplified repository README
 - [~] Ad hoc client validation — Jellyfin and NextPVR remain available on srv2 for release/development checks but are not an automated Beta gate (see [BETA_VALIDATION_CHECKLIST.md](BETA_VALIDATION_CHECKLIST.md))
+- [~] Movies & Series catalog browse — read-only category list, title search, and item detail/artwork for Xtream VOD/series content (Catalog page under Channels). Category-level include/exclude decisions are persisted but not yet enforced in snapshot builds — see `profile_catalog_group_filters` in [DB_SCHEMA.md](../design/DB_SCHEMA.md) and the invariant in [PROJECT_BOUNDARIES.md](PROJECT_BOUNDARIES.md).
 
 ### Future — Native media-library export
 

@@ -77,6 +77,7 @@ No provider credentials handy? Use the credential-free IPTV.org example in **[Ad
 ## What it does
 
 - **Catalog cleanup** — exclude provider groups you don't want, filter channels by keyword/glob/regex
+- **Movies & series browsing** — inspect Xtream VOD/series categories and titles, with metadata and artwork, before deciding whether a provider's Movies or Series content is worth including
 - **Custom lineups** — build your own output groups from any provider's channels, control numbering and order
 - **Guide (EPG) mapping** — merge multiple XMLTV sources, set priority, override `tvg-id` per channel
 - **Client outputs** — M3U, XMLTV, HDHomeRun-compatible, and Xtream-compatible endpoints from one managed lineup

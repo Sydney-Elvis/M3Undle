@@ -31,7 +31,7 @@ Every group (including custom and combined groups) has its own settings, opened 
 
 **New channel handling** — what happens when the provider adds channels to this group:
 
-- **Queue for review** — new channels wait in the [Review Queue](#the-four-channel-pages) for your approval before appearing in output.
+- **Queue for review** — new channels wait in the [Review Queue](#the-channel-pages) for your approval before appearing in output.
 - **Notify only** — you're notified when new channels appear; nothing is added automatically.
 - **Auto-add all** — every new channel is added to the output automatically on refresh.
 - **Auto-add (guide data only)** — new channels are added automatically only if they come with EPG guide data; channels with no guide info are skipped.
@@ -61,16 +61,29 @@ Numbering follows a precedence order (highest wins):
 
 If a group's configured range fills up, remaining channels overflow into numbers starting at 9000. Auto-assigned (non-pinned) numbers can shift when the provider reorders or adds channels — pin a channel's number if it must never move.
 
-## The four channel pages
+## The channel pages
 
-Channel work is spread across four pages, all under Channels in the navigation:
+Channel work is spread across several pages, all under Channels in the navigation:
 
 | Page | What it's for |
 |---|---|
 | **Mapping** (Channel Mapping) | Decide: map, exclude, group, and number the provider catalog. |
 | **Channels** (View Channels) | Inspect: the published lineup as your players see it — numbers, logos, names, output groups, EPG IDs — with per-channel edits and the Number Manager. |
+| **Catalog** | Browse: Movies and Series categories and titles discovered from Xtream providers. See [Movies and series catalog](#movies-and-series-catalog) below. |
 | **Review Queue** | Approve: pending channels from groups set to Queue for review, with bulk include/exclude and an **Event card view** that folds multiple quality tiers of the same PPV/sports event into one card. |
 | **What's On** | Discover: upcoming events matched by your Auto-add tracking keywords across all groups. |
+
+## Movies and series catalog
+
+Xtream providers can also expose VOD (movies) and series categories alongside live channels. **Catalog** (Channels → Catalog) lists the categories M3Undle has discovered per provider, lets you search across category names and providers, and — with a title search — find individual movies or series across every visible category. Opening a category shows its titles; opening a title shows provider-supplied plot, genre, cast, rating, and artwork, plus a read-only season/episode breakdown for series.
+
+This is inspection only, separate from Channel Mapping:
+
+- A category's **Status** reflects whether it's currently being refreshed — governed by whether the provider is enabled, whether it's linked to the selected profile, and whether that provider's **Movies**/**Series** toggle is on — not a per-category include/exclude decision. There is currently no way to exclude an individual Movies or Series category from what the provider fetches; the provider-level Movies/Series toggle is the only control.
+- Browsing a category or title never changes the published lineup. There's no equivalent of Build Output for catalog content — a provider's Movies/Series toggle governs Xtream catalog output directly.
+- Counts shown on the Catalog page are **discovered** items, not published-output totals. Published VOD/series totals (from the Movies/Series toggle passthrough) appear on the Dashboard and Profile pages instead.
+
+See [What M3Undle Does](../getting-started/what-it-does.md) and the [Jellyfin client guide](../clients/jellyfin.md) for how published Movies/Series content reaches clients through the Xtream-compatible API.
 
 On the **Channels** page, each row can be edited (pencil icon): override the channel number (empty = auto-numbering), override the output group, or — after unlocking it — set a custom EPG ID in place of the provider's value. Rows can also be removed from the output entirely.
 
