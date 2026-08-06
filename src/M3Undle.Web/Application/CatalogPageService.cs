@@ -3,6 +3,8 @@ using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace M3Undle.Web.Application;
@@ -85,6 +87,7 @@ public sealed class CatalogPageService(
         var group = await db.ProviderGroups
             .AsNoTracking()
             .Where(x => x.ProviderGroupId == providerGroupId
+                        && x.Active
                         && x.Provider.ProfileProviders.Any(link => link.ProfileId == profileId)
                         && (x.ContentType == "vod" || x.ContentType == "series"))
             .Select(x => new
@@ -213,6 +216,52 @@ public sealed class CatalogPageService(
         .Replace("%", "\\%", StringComparison.Ordinal)
         .Replace("_", "\\_", StringComparison.Ordinal);
 
+    // Artwork URLs come from provider-supplied playlist data (channel logos / series covers), so a
+    // malicious or compromised provider can point them at internal/loopback addresses. Resolve the
+    // host and block anything that isn't a public address before letting the server fetch it.
+    private static readonly IPNetwork[] BlockedRanges =
+    [
+        IPNetwork.Parse("0.0.0.0/8"),
+        IPNetwork.Parse("10.0.0.0/8"),
+        IPNetwork.Parse("100.64.0.0/10"),
+        IPNetwork.Parse("127.0.0.0/8"),
+        IPNetwork.Parse("169.254.0.0/16"),
+        IPNetwork.Parse("172.16.0.0/12"),
+        IPNetwork.Parse("192.168.0.0/16"),
+        IPNetwork.Parse("fc00::/7"),
+        IPNetwork.Parse("fe80::/10"),
+    ];
+
+    private static async Task<bool> IsSafeRemoteHostAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(uri.DnsSafeHost, cancellationToken);
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+
+        return addresses.Length > 0 && addresses.All(address => !IsBlockedAddress(address));
+    }
+
+    private static bool IsBlockedAddress(IPAddress address)
+    {
+        var normalized = address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        if (IPAddress.IsLoopback(normalized)
+            || normalized.Equals(IPAddress.Any)
+            || normalized.Equals(IPAddress.IPv6Any)
+            || normalized.IsIPv6LinkLocal
+            || normalized.IsIPv6SiteLocal
+            || normalized.IsIPv6Multicast)
+            return true;
+
+        return BlockedRanges.Any(range => range.BaseAddress.AddressFamily == normalized.AddressFamily
+                                           && range.Contains(normalized));
+    }
+
     public async Task<CatalogItemDetailDto?> GetItemDetailAsync(
         string profileId,
         string catalogItemId,
@@ -226,6 +275,7 @@ public sealed class CatalogPageService(
             .Include(x => x.ProviderGroup)
             .SingleOrDefaultAsync(x => x.CatalogItemId == catalogItemId
                 && x.Active
+                && x.ProviderGroup.Active
                 && x.Provider.ProfileProviders.Any(link => link.ProfileId == profileId), cancellationToken);
         if (item is null)
             return null;
@@ -292,11 +342,15 @@ public sealed class CatalogPageService(
         var artworkUrl = await db.CatalogItems.AsNoTracking()
             .Where(x => x.CatalogItemId == catalogItemId
                 && x.Active
+                && x.ProviderGroup.Active
                 && x.Provider.ProfileProviders.Any(link => link.ProfileId == profileId))
             .Select(x => x.ArtworkUrl)
             .SingleOrDefaultAsync(cancellationToken);
         if (!Uri.TryCreate(artworkUrl, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            return null;
+
+        if (!await IsSafeRemoteHostAsync(uri, cancellationToken))
             return null;
 
         const int maxBytes = 5 * 1024 * 1024;

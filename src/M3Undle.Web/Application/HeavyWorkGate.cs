@@ -31,9 +31,9 @@ public sealed class HeavyWorkGate
     public bool IsHeld => _gate.CurrentCount == 0;
 
     /// <summary>
-    /// Acquires the gate, returning a handle that releases it on dispose. Waiters are served in
-    /// the order they arrived, so a refresh queued while a round is running is granted the gate
-    /// before that job's next round.
+    /// Acquires the gate, returning a handle that releases it on dispose. <see cref="SemaphoreSlim"/>
+    /// does not guarantee FIFO ordering among waiters, so a refresh queued while a round is running
+    /// is usually — but not guaranteed to be — granted the gate before that job's next round.
     /// </summary>
     public async Task<IDisposable> AcquireAsync(CancellationToken cancellationToken)
     {

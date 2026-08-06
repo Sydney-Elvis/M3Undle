@@ -433,7 +433,9 @@ public sealed class XtreamSeriesExpansionService(
             if (toSave is null)
                 return;
 
-            await _persistGate.WaitAsync(CancellationToken.None);
+            // Non-force flushes honor cancellation so a stalled writer can't block shutdown; the
+            // final force:true flush below always uses CancellationToken.None to guarantee it runs.
+            await _persistGate.WaitAsync(force ? CancellationToken.None : cancellationToken);
             try { await PersistBatchAsync(job.ProviderId, toSave); }
             finally { _persistGate.Release(); }
         }
