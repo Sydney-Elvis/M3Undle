@@ -15,7 +15,7 @@
 
 <PageTitle>M3Undle — Channel Mapping</PageTitle>
 
-<NavigationLock ConfirmExternalNavigation="_outputDirty" OnBeforeInternalNavigation="OnBeforeInternalNavigationAsync" />
+<NavigationLock ConfirmExternalNavigation="HasUnbuiltChanges" OnBeforeInternalNavigation="OnBeforeInternalNavigationAsync" />
 
 <div id="channel-mapping-content" style="@ContentMarginStyle">
 
@@ -64,11 +64,11 @@
             </MudButton>
             <MudButton StartIcon="@Icons.Material.Filled.Publish"
                        Variant="Variant.Filled"
-                       Color="@(_outputDirty && !_isRefreshing ? Color.Warning : Color.Primary)"
+                       Color="@(HasUnbuiltChanges && !_isRefreshing ? Color.Warning : Color.Primary)"
                        Size="Size.Small"
                        OnClick="BuildSnapshotAsync"
                        Disabled="@(_isRefreshing || _profileId is null)">
-                @(_isRefreshing ? "Building…" : _outputDirty ? "Build Output •" : "Build Output")
+                @(_isRefreshing ? "Building…" : HasUnbuiltChanges ? "Build Output •" : "Build Output")
             </MudButton>
         </MudStack>
     </MudStack>
@@ -1152,9 +1152,21 @@
         <div id="mapped-panel-handle" class="panel-resize-handle"></div>
         <div class="panel-body-wrapper">
             <div class="panel-header">
-                <MudText Typo="Typo.caption" Style="font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
-                    Mapped (@_panelItems.Count)
-                </MudText>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudText Typo="Typo.caption" Style="font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
+                        Mapped (@_panelItems.Count)
+                    </MudText>
+                    @if (HasUnbuiltChanges && !_isRefreshing)
+                    {
+                        <MudTooltip Text="Mapping changes are pending — click to rebuild output" Arrow="true" Placement="Placement.Bottom">
+                            <MudIconButton Icon="@Icons.Material.Filled.WarningAmber"
+                                           Size="Size.Small"
+                                           Color="Color.Warning"
+                                           OnClick="BuildSnapshotAsync"
+                                           Style="padding:2px; margin:-4px 0;" />
+                        </MudTooltip>
+                    }
+                </MudStack>
                 <MudTooltip Text="Collapse panel" Arrow="true">
                     <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
                                    Size="Size.Small"
@@ -1533,6 +1545,13 @@
     private bool _isRefreshing;
     private bool _outputDirty;
     private string? _error;
+
+    // True when the build output would differ from the current mapping state. Combines two
+    // sources: _outputDirty (a manual "touched" flag for edits the Mapped panel can't see —
+    // decisions, renames, custom groups) and the Mapped panel's own per-row IsLive flag (a
+    // server-computed, reload-safe signal for channel selection/number edits, which self-heals
+    // when a change is reverted since a reverted channel simply drops out of that query).
+    private bool HasUnbuiltChanges => _outputDirty || _panelItems.Any(x => !x.IsLive);
 
     private HashSet<string> _busyFilters = [];
     private HashSet<string> _sessionChangedFilterIds = [];
@@ -2290,7 +2309,7 @@
 
     private async Task OnBeforeInternalNavigationAsync(LocationChangingContext context)
     {
-        if (!_outputDirty) return;
+        if (!HasUnbuiltChanges) return;
 
         var result = await DialogService.ShowMessageBoxAsync(
             "Unbuilt mapping changes",
@@ -3439,7 +3458,12 @@
             }
 
             filter.IsNew = false;
-            MarkOutputDirty();
+            // Not calling MarkOutputDirty() here on purpose — channel selection/number
+            // dirtiness is derived live from the Mapped panel's per-row IsLive flag (see
+            // HasUnbuiltChanges), which is server-computed from UpdatedUtc vs. the last
+            // build. That means it self-heals when a change is reverted (e.g. check then
+            // uncheck a channel) and survives a hard refresh, neither of which a one-way
+            // "was touched" flag can do.
             StateHasChanged();
         }
         catch (Exception ex)
