@@ -38,6 +38,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<StreamChannelHealthEvent> StreamChannelHealthEvents => Set<StreamChannelHealthEvent>();
     public DbSet<XtreamSeriesCache> XtreamSeriesCache => Set<XtreamSeriesCache>();
     public DbSet<CatalogItem> CatalogItems => Set<CatalogItem>();
+    public DbSet<CatalogSeriesEpisode> CatalogSeriesEpisodes => Set<CatalogSeriesEpisode>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

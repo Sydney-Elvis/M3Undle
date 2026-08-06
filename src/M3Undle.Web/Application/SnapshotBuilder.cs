@@ -127,7 +127,7 @@ public sealed class SnapshotBuilder(
         bool IsActiveProfile);
 
     /// <summary>Full refresh: fetch all enabled providers, sync to DB, then build snapshots.</summary>
-    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> ChannelsByProvider, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunAsync(CancellationToken cancellationToken)
+    public async Task<(bool Succeeded, string? ErrorSummary, IReadOnlySet<string> FetchedProviderIds, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> RunAsync(CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
 
@@ -136,13 +136,13 @@ public sealed class SnapshotBuilder(
         if (providers.Count == 0)
         {
             logger.LogInformation("Snapshot refresh skipped — no enabled providers found.");
-            return (false, null, new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>(), null, new HashSet<string>());
+            return (false, null, new HashSet<string>(), null, new HashSet<string>());
         }
 
         bool anySucceeded = false;
         string? lastErrorSummary = null;
         string? aggregateChangeClass = ChangeClasses.None;
-        var channelsByProvider = new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
+        var fetchedProviderIds = new HashSet<string>();
         var aggregateProfileIds = new HashSet<string>();
 
         var scheduleSettings = await refreshScheduleService.GetActiveProfileSettingsAsync(cancellationToken);
@@ -157,17 +157,21 @@ public sealed class SnapshotBuilder(
                 await PublishProviderBackOnlineIfNeededAsync(provider, cancellationToken);
             }
             if (e is not null) lastErrorSummary = e;
-            if (channels.Count > 0) channelsByProvider[provider.ProviderId] = channels;
+            if (channels.Count > 0) fetchedProviderIds.Add(provider.ProviderId);
             aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
             aggregateProfileIds.UnionWith(profileIds);
         }
 
-        return (anySucceeded, lastErrorSummary, channelsByProvider, aggregateChangeClass, aggregateProfileIds);
+        return (anySucceeded, lastErrorSummary, fetchedProviderIds, aggregateChangeClass, aggregateProfileIds);
     }
 
-    /// <summary>Build snapshots from cached channels for all enabled providers — no re-fetch.</summary>
+    /// <summary>
+    /// Builds snapshots for all enabled providers without re-fetching. VOD/series channels are
+    /// rebuilt from persisted catalog data (see LoadCachedCatalogChannelsAsync) rather than an
+    /// in-memory fetch result — so, unlike before, this no longer depends on a full refresh
+    /// having run earlier in the same process lifetime.
+    /// </summary>
     public async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> BuildOnlyAsync(
-        IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> channelsByProvider,
         CancellationToken cancellationToken)
     {
         using var scope = logger.BeginScope(new Dictionary<string, object> { ["EventType"] = "Refresh" });
@@ -187,8 +191,7 @@ public sealed class SnapshotBuilder(
 
         foreach (var provider in providers)
         {
-            channelsByProvider.TryGetValue(provider.ProviderId, out var cachedChannels);
-            var (s, e, cc, profileIds) = await BuildOnlyForProviderAsync(provider, cachedChannels ?? [], cancellationToken);
+            var (s, e, cc, profileIds) = await BuildOnlyForProviderAsync(provider, cancellationToken);
             if (s) anySucceeded = true;
             if (e is not null) lastErrorSummary = e;
             aggregateChangeClass = SnapshotChangeClassifier.Aggregate(aggregateChangeClass, cc);
@@ -413,8 +416,13 @@ public sealed class SnapshotBuilder(
     }
 
     private async Task<(bool Succeeded, string? ErrorSummary, string? ChangeClass, IReadOnlySet<string> AffectedProfileIds)> BuildOnlyForProviderAsync(
-        Provider provider, IReadOnlyList<ParsedProviderChannel> providerChannels, CancellationToken cancellationToken)
+        Provider provider, CancellationToken cancellationToken)
     {
+        // Build-only never fetches, so it has no fresh in-memory VOD/series list — rebuild one
+        // from persisted catalog data instead of relying on the caller's cache (see
+        // LoadCachedCatalogChannelsAsync for why that cache can't be trusted across a restart).
+        var providerChannels = await LoadCachedCatalogChannelsAsync(provider, cancellationToken);
+
         var allProfileLinks = await db.ProfileProviders
             .AsNoTracking()
             .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
@@ -477,6 +485,143 @@ public sealed class SnapshotBuilder(
 
         var builtProfileIds = activeLinks.Select(l => l.ProfileId).ToHashSet();
         return (anySucceeded, lastErrorSummary, aggregateChangeClass, builtProfileIds);
+    }
+
+    /// <summary>
+    /// Rebuilds VOD/series channels for build-only from persisted catalog data rather than an
+    /// in-memory fetch result — build-only never fetches, so nothing in memory is guaranteed to
+    /// survive a process restart between the last full fetch and this build.
+    /// CatalogItem.StreamUrl carries VOD files directly. Series episodes come from one of two
+    /// places depending on how the provider sourced them: Xtream series are rebuilt from
+    /// XtreamSeriesCache's persisted get_series_info payload via the same URL convention
+    /// XtreamLineupClient uses; M3U-native series (no Xtream series id — each playlist line was
+    /// already a complete episode) are rebuilt from CatalogSeriesEpisode, which stores each
+    /// episode's real StreamUrl directly since there's no provider-side convention to rebuild it
+    /// from.
+    /// </summary>
+    private async Task<List<ParsedProviderChannel>> LoadCachedCatalogChannelsAsync(
+        Provider provider, CancellationToken cancellationToken)
+    {
+        var result = new List<ParsedProviderChannel>();
+        if (!provider.IncludeVod && !provider.IncludeSeries)
+            return result;
+
+        var contentTypes = new List<string>();
+        if (provider.IncludeVod) contentTypes.Add("vod");
+        if (provider.IncludeSeries) contentTypes.Add("series");
+
+        var items = await db.CatalogItems
+            .AsNoTracking()
+            .Include(x => x.ProviderGroup)
+            .Where(x => x.ProviderId == provider.ProviderId && x.Active && contentTypes.Contains(x.ContentType))
+            .ToListAsync(cancellationToken);
+
+        if (items.Count == 0)
+            return result;
+
+        foreach (var item in items)
+        {
+            if (item.ContentType != "vod" || string.IsNullOrWhiteSpace(item.StreamUrl))
+                continue;
+
+            result.Add(new ParsedProviderChannel
+            {
+                DisplayName = item.Title,
+                TvgName = item.Title,
+                LogoUrl = item.ArtworkUrl,
+                StreamUrl = item.StreamUrl,
+                GroupTitle = item.ProviderGroup.RawName,
+            });
+        }
+
+        var seriesCatalogItems = items.Where(x => x.ContentType == "series").ToList();
+
+        // Xtream series: reconstructed from XtreamSeriesCache via the credential-based URL
+        // convention (only Xtream-capable providers ever produce an "id:{n}" key here).
+        var xtreamSeriesItems = seriesCatalogItems
+            .Select(x => (Item: x, SeriesId: ExtractProviderItemId(x.ProviderItemKey)))
+            .Where(x => x.SeriesId.HasValue)
+            .ToList();
+
+        if (xtreamSeriesItems.Count > 0
+            && fetcher.TryResolveXtreamCredentials(provider, out var baseUrl, out var username, out var password))
+        {
+            var seriesIds = xtreamSeriesItems.Select(x => x.SeriesId!.Value).ToList();
+            var episodesBySeriesId = await db.XtreamSeriesCache
+                .AsNoTracking()
+                .Where(x => x.ProviderId == provider.ProviderId && seriesIds.Contains(x.SeriesId))
+                .ToDictionaryAsync(x => x.SeriesId, x => x.EpisodesJson, cancellationToken);
+
+            foreach (var (item, seriesId) in xtreamSeriesItems)
+            {
+                if (!episodesBySeriesId.TryGetValue(seriesId!.Value, out var episodesJson) || string.IsNullOrEmpty(episodesJson))
+                    continue;
+
+                var groupTitle = item.ProviderGroup.RawName;
+                foreach (var ep in XtreamEpisodeParser.Parse(item.Title, episodesJson))
+                {
+                    var streamUrl = $"{baseUrl}/series/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(password)}/{ep.EpisodeId}.{ep.Extension}";
+                    result.Add(new ParsedProviderChannel
+                    {
+                        DisplayName = ep.DisplayName,
+                        TvgName = item.Title,
+                        LogoUrl = item.ArtworkUrl,
+                        StreamUrl = streamUrl,
+                        GroupTitle = groupTitle,
+                    });
+                }
+            }
+        }
+
+        // M3U-native series: no provider id, so nothing to rebuild a URL from — each episode's
+        // real StreamUrl was persisted directly in CatalogSeriesEpisode instead.
+        var m3uSeriesItems = seriesCatalogItems
+            .Where(x => ExtractProviderItemId(x.ProviderItemKey) is null)
+            .ToList();
+
+        if (m3uSeriesItems.Count > 0)
+        {
+            var episodes = await db.CatalogSeriesEpisodes
+                .AsNoTracking()
+                .Where(x => x.ProviderId == provider.ProviderId && x.Active)
+                .ToListAsync(cancellationToken);
+
+            var episodesByItemKey = episodes
+                .GroupBy(x => (x.ProviderGroupId, x.ProviderItemKey))
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            foreach (var item in m3uSeriesItems)
+            {
+                if (!episodesByItemKey.TryGetValue((item.ProviderGroupId, item.ProviderItemKey), out var itemEpisodes))
+                    continue;
+
+                var groupTitle = item.ProviderGroup.RawName;
+                foreach (var ep in itemEpisodes)
+                {
+                    result.Add(new ParsedProviderChannel
+                    {
+                        DisplayName = ep.Title,
+                        TvgName = item.Title,
+                        LogoUrl = item.ArtworkUrl,
+                        StreamUrl = ep.StreamUrl,
+                        GroupTitle = groupTitle,
+                    });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // CatalogItem.ProviderItemKey is "id:{n}" for provider-native items (Xtream stream/series
+    // ids) or "derived:{hash}" for M3U-only items with no stable provider id — only the former
+    // maps back to the numeric series id XtreamSeriesCache is keyed by.
+    private static int? ExtractProviderItemId(string providerItemKey)
+    {
+        const string prefix = "id:";
+        if (!providerItemKey.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+        return int.TryParse(providerItemKey.AsSpan(prefix.Length), out var id) ? id : null;
     }
 
     // -------------------------------------------------------------------------
@@ -933,6 +1078,12 @@ public sealed class SnapshotBuilder(
 
         int nextOverflow = OverflowRangeStart;
 
+        // Tracks pinned numbers as they're actually placed into the result, so a second
+        // channel pinned to a number that's already been placed gets caught even though
+        // both numbers were present in the upfront `assignedNumbers` seed above (a HashSet
+        // silently collapses duplicate seed values, so that seed alone can't detect this).
+        var placedPinnedNumbers = new HashSet<int>();
+
         // Evaluate output groups in SortOverride order (nulls last), then alphabetical.
         // This determines which group "wins" early numbers when ranges overlap.
         var byOutputGroup = pending
@@ -971,7 +1122,26 @@ public sealed class SnapshotBuilder(
                 .ToList();
 
             foreach (var (_, channel, num, tvgIdOverride, displayNameOverride) in withNum)
-                result.Add(BuildEntry(channel, outputName, num, profileId, providerId, tvgIdOverride, displayNameOverride));
+            {
+                var pinnedNum = num!.Value;
+
+                // Two different channels can end up pinned to the same number — stale
+                // client-side auto-numbering, edits made in a group nobody opened this
+                // session, etc. The build must never ship a duplicate: the first channel
+                // placed keeps its pin, later collisions fall through to the overflow range,
+                // the same way an exhausted auto-number range is handled below.
+                if (!placedPinnedNumbers.Add(pinnedNum))
+                {
+                    while (assignedNumbers.Contains(nextOverflow) || placedPinnedNumbers.Contains(nextOverflow))
+                        nextOverflow++;
+                    pinnedNum = nextOverflow;
+                    assignedNumbers.Add(pinnedNum);
+                    placedPinnedNumbers.Add(pinnedNum);
+                    nextOverflow++;
+                }
+
+                result.Add(BuildEntry(channel, outputName, pinnedNum, profileId, providerId, tvgIdOverride, displayNameOverride));
+            }
 
             int? nextNum = parentFilter?.AutoNumStart;
             int? maxNum = parentFilter?.AutoNumEnd;
@@ -1638,7 +1808,13 @@ public sealed class SnapshotBuilder(
             applicableTypes.Add("series");
 
         var rows = new Dictionary<(string ProviderGroupId, string ProviderItemKey, string ContentType),
-            (string Title, int EpisodeCount, string? ArtworkUrl)>();
+            (string Title, int EpisodeCount, string? ArtworkUrl, string? StreamUrl)>();
+
+        // Per-episode StreamUrl for M3U-sourced series only (channel.CatalogItemId empty — no
+        // Xtream series id). Xtream series episodes are already durable via XtreamSeriesCache
+        // (get_series_info), so they don't need a row here.
+        var seriesEpisodeRows = new Dictionary<(string ProviderGroupId, string ProviderItemKey, string EpisodeKey),
+            (string Title, string StreamUrl)>();
         for (var index = 0; index < channels.Count; index++)
         {
             if ((index & 0x3FFF) == 0)
@@ -1676,11 +1852,30 @@ public sealed class SnapshotBuilder(
             if (rows.TryGetValue(key, out var existing))
             {
                 if (contentType == "series")
-                    rows[key] = (existing.Title, existing.EpisodeCount + 1, existing.ArtworkUrl ?? channel.LogoUrl);
+                    rows[key] = (existing.Title, existing.EpisodeCount + 1, existing.ArtworkUrl ?? channel.LogoUrl, existing.StreamUrl);
             }
             else
             {
-                rows.Add(key, (title, contentType == "series" ? 1 : 0, channel.LogoUrl));
+                // Series rows aggregate many episodes under one catalog entry, so a single
+                // StreamUrl wouldn't mean anything there — VOD is one file per row, so its
+                // StreamUrl is stored directly and lets build-only rebuild the channel without a
+                // live fetch.
+                rows.Add(key, (title, contentType == "series" ? 1 : 0, channel.LogoUrl,
+                    contentType == "vod" ? channel.StreamUrl : null));
+            }
+
+            // M3U series: this line IS the episode, with its own real StreamUrl — persist it
+            // per-episode (keyed by the same providerGroupId/providerItemKey as the aggregate
+            // row above) so build-only can rebuild it later without a live fetch, the way
+            // XtreamSeriesCache already does for Xtream series.
+            if (contentType == "series" && string.IsNullOrWhiteSpace(channel.CatalogItemId))
+            {
+                var episodeTitle = channel.DisplayName.Trim();
+                if (!string.IsNullOrWhiteSpace(episodeTitle))
+                {
+                    var episodeKey = HashCatalogIdentity(channel.StreamUrl);
+                    seriesEpisodeRows[(providerGroupId, providerItemKey, episodeKey)] = (episodeTitle, channel.StreamUrl);
+                }
             }
         }
 
@@ -1698,9 +1893,9 @@ public sealed class SnapshotBuilder(
                 applicableTypes.Add(item.ContentType);
                 var key = (providerGroupId, $"id:{item.ProviderItemId.Trim()}", item.ContentType);
                 if (rows.TryGetValue(key, out var expanded))
-                    rows[key] = (item.Title.Trim(), expanded.EpisodeCount, item.ArtworkUrl ?? expanded.ArtworkUrl);
+                    rows[key] = (item.Title.Trim(), expanded.EpisodeCount, item.ArtworkUrl ?? expanded.ArtworkUrl, expanded.StreamUrl);
                 else
-                    rows[key] = (item.Title.Trim(), 0, item.ArtworkUrl);
+                    rows[key] = (item.Title.Trim(), 0, item.ArtworkUrl, null);
             }
         }
 
@@ -1731,14 +1926,15 @@ public sealed class SnapshotBuilder(
             """
             INSERT INTO catalog_items (
                 catalog_item_id, provider_id, provider_group_id, provider_item_key,
-                content_type, title, artwork_url, episode_count, first_seen_utc, last_seen_utc, active)
+                content_type, title, artwork_url, stream_url, episode_count, first_seen_utc, last_seen_utc, active)
             VALUES (
                 $catalogItemId, $providerId, $providerGroupId, $providerItemKey,
-                $contentType, $title, $artworkUrl, $episodeCount, $now, $now, 1)
+                $contentType, $title, $artworkUrl, $streamUrl, $episodeCount, $now, $now, 1)
             ON CONFLICT(provider_group_id, provider_item_key) DO UPDATE SET
                 content_type = excluded.content_type,
                 title = excluded.title,
                 artwork_url = excluded.artwork_url,
+                stream_url = excluded.stream_url,
                 episode_count = excluded.episode_count,
                 last_seen_utc = excluded.last_seen_utc,
                 active = 1
@@ -1750,6 +1946,7 @@ public sealed class SnapshotBuilder(
         upsert.Parameters.Add("$contentType", SqliteType.Text);
         upsert.Parameters.Add("$title", SqliteType.Text);
         upsert.Parameters.Add("$artworkUrl", SqliteType.Text);
+        upsert.Parameters.Add("$streamUrl", SqliteType.Text);
         upsert.Parameters.Add("$episodeCount", SqliteType.Integer);
         upsert.Parameters.Add("$now", SqliteType.Text);
 
@@ -1763,9 +1960,62 @@ public sealed class SnapshotBuilder(
             upsert.Parameters["$contentType"].Value = key.ContentType;
             upsert.Parameters["$title"].Value = value.Title;
             upsert.Parameters["$artworkUrl"].Value = (object?)value.ArtworkUrl ?? DBNull.Value;
+            upsert.Parameters["$streamUrl"].Value = (object?)value.StreamUrl ?? DBNull.Value;
             upsert.Parameters["$episodeCount"].Value = value.EpisodeCount;
             upsert.Parameters["$now"].Value = nowText;
             await upsert.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (applicableTypes.Contains("series"))
+        {
+            await using (var deactivateEpisodes = connection.CreateCommand())
+            {
+                deactivateEpisodes.Transaction = (SqliteTransaction)transaction;
+                deactivateEpisodes.CommandText = "UPDATE catalog_series_episodes SET active = 0 WHERE provider_id = $providerId";
+                deactivateEpisodes.Parameters.AddWithValue("$providerId", provider.ProviderId);
+                await deactivateEpisodes.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (seriesEpisodeRows.Count > 0)
+            {
+                await using var upsertEpisode = connection.CreateCommand();
+                upsertEpisode.Transaction = (SqliteTransaction)transaction;
+                upsertEpisode.CommandText =
+                    """
+                    INSERT INTO catalog_series_episodes (
+                        catalog_series_episode_id, provider_id, provider_group_id, provider_item_key,
+                        episode_key, title, stream_url, first_seen_utc, last_seen_utc, active)
+                    VALUES (
+                        $catalogSeriesEpisodeId, $providerId, $providerGroupId, $providerItemKey,
+                        $episodeKey, $title, $streamUrl, $now, $now, 1)
+                    ON CONFLICT(provider_group_id, provider_item_key, episode_key) DO UPDATE SET
+                        title = excluded.title,
+                        stream_url = excluded.stream_url,
+                        last_seen_utc = excluded.last_seen_utc,
+                        active = 1
+                    """;
+                upsertEpisode.Parameters.Add("$catalogSeriesEpisodeId", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$providerId", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$providerGroupId", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$providerItemKey", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$episodeKey", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$title", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$streamUrl", SqliteType.Text);
+                upsertEpisode.Parameters.Add("$now", SqliteType.Text);
+
+                foreach (var (key, value) in seriesEpisodeRows)
+                {
+                    upsertEpisode.Parameters["$catalogSeriesEpisodeId"].Value = Guid.NewGuid().ToString();
+                    upsertEpisode.Parameters["$providerId"].Value = provider.ProviderId;
+                    upsertEpisode.Parameters["$providerGroupId"].Value = key.ProviderGroupId;
+                    upsertEpisode.Parameters["$providerItemKey"].Value = key.ProviderItemKey;
+                    upsertEpisode.Parameters["$episodeKey"].Value = key.EpisodeKey;
+                    upsertEpisode.Parameters["$title"].Value = value.Title;
+                    upsertEpisode.Parameters["$streamUrl"].Value = value.StreamUrl;
+                    upsertEpisode.Parameters["$now"].Value = nowText;
+                    await upsertEpisode.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
         }
 
         await transaction.CommitAsync(cancellationToken);

@@ -4,7 +4,7 @@ For what a profile *is* and how refresh scheduling/credentials relate to it, see
 
 ## The Profiles list
 
-Each profile is a card showing its name, a **Published** / **Degraded** / **No output** health chip, an **Active** badge on the one profile currently serving the shared endpoints, published content counts (live/movies/series), the providers linked to it, and inline alerts for anything needing attention — groups removed from the provider, new groups or channels pending review, or a published-but-empty lineup. Active-profile cards also show which endpoint types are live (M3U, and Xtream/HDHomeRun if enabled).
+Each profile is a card showing its name, published content counts (live/movies/series), the providers linked to it, and inline alerts for anything needing attention — groups removed from the provider, new groups or channels pending review, or a published-but-empty lineup. The one profile currently serving the shared endpoints additionally shows an **Active** badge in the corner — green with a checkmark when it's serving healthy output, amber or red if something's degraded or nothing's actually publishing — plus which endpoint types are live (M3U, and Xtream/HDHomeRun if enabled). Non-active profiles don't show this badge; it only means something once a profile is the one actually being served.
 
 Click anywhere on a card to open that profile's detail page.
 
@@ -14,7 +14,7 @@ Select **New Profile** and give it a unique name. A fresh profile starts with no
 
 ## Activating a profile
 
-Non-active profiles show a **Set Active** button. Activating a profile makes it the one served by the shared, unqualified endpoints (`/m3u/m3undle.m3u`, `/xmltv/m3undle.xml`) — every client pointed at those URLs immediately sees the newly active profile's lineup instead. **Set Active** is disabled until the profile has at least one provider linked.
+Non-active profiles show a **Set Active** button. Activating a profile makes it the one served by the shared, unqualified endpoints (`/m3u/m3undle.m3u`, `/xmltv/m3undle.xml`) — every client pointed at those URLs immediately sees the newly active profile's lineup instead. **Set Active** is disabled (with a tooltip explaining why) until the profile has at least one provider linked *and* at least one channel mapped for output — activating a profile that would publish nothing isn't useful.
 
 Only one profile is active at a time; see [Profiles and Users](../concepts/profiles-and-users.md#one-active-profile) for why, and for the per-profile-endpoint feature that isn't available yet.
 

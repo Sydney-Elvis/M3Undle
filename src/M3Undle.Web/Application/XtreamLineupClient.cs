@@ -338,48 +338,21 @@ public sealed class XtreamLineupClient(
 
             var groupTitle = categories.GetValueOrDefault(series.CategoryId);
 
-            try
+            foreach (var ep in XtreamEpisodeParser.Parse(series.Name, cached.EpisodesJson))
             {
-                using var doc = JsonDocument.Parse(cached.EpisodesJson);
-                if (!doc.RootElement.TryGetProperty("episodes", out var episodesObj)
-                    || episodesObj.ValueKind != JsonValueKind.Object)
-                    continue;
+                var streamUrl = $"{baseUrl}/series/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(password)}/{ep.EpisodeId}.{ep.Extension}";
 
-                foreach (var season in episodesObj.EnumerateObject())
+                channels.Add(new ParsedProviderChannel
                 {
-                    if (season.Value.ValueKind != JsonValueKind.Array)
-                        continue;
-
-                    foreach (var ep in season.Value.EnumerateArray())
-                    {
-                        var epId = ReadInt(ep, "id");
-                        if (epId <= 0) continue;
-
-                        var epTitle = ReadString(ep, "title") ?? string.Empty;
-                        var ext = ReadString(ep, "container_extension") ?? "mkv";
-                        var epNum = ReadInt(ep, "episode_num");
-
-                        var episodeMarker = $"S{season.Name.PadLeft(2, '0')}E{epNum:D2}";
-                        var displayName = string.IsNullOrWhiteSpace(epTitle)
-                            ? $"{series.Name} {episodeMarker}"
-                            : $"{series.Name} {episodeMarker} — {epTitle}";
-
-                        var streamUrl = $"{baseUrl}/series/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(password)}/{epId}.{ext}";
-
-                        channels.Add(new ParsedProviderChannel
-                        {
-                            DisplayName = displayName,
-                            TvgName = series.Name,
-                            LogoUrl = series.Cover,
-                            StreamUrl = streamUrl,
-                            GroupTitle = groupTitle,
-                            CatalogItemId = series.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                            CatalogTitle = series.Name,
-                        });
-                    }
-                }
+                    DisplayName = ep.DisplayName,
+                    TvgName = series.Name,
+                    LogoUrl = series.Cover,
+                    StreamUrl = streamUrl,
+                    GroupTitle = groupTitle,
+                    CatalogItemId = series.SeriesId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    CatalogTitle = series.Name,
+                });
             }
-            catch (JsonException) { }
         }
 
         return channels;

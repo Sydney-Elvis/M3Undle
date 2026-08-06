@@ -10,9 +10,12 @@
 @inject IRefreshTrigger RefreshTrigger
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject IDialogService DialogService
 @implements IAsyncDisposable
 
 <PageTitle>M3Undle — Channel Mapping</PageTitle>
+
+<NavigationLock ConfirmExternalNavigation="HasUnbuiltChanges" OnBeforeInternalNavigation="OnBeforeInternalNavigationAsync" />
 
 <div id="channel-mapping-content" style="@ContentMarginStyle">
 
@@ -61,11 +64,11 @@
             </MudButton>
             <MudButton StartIcon="@Icons.Material.Filled.Publish"
                        Variant="Variant.Filled"
-                       Color="Color.Primary"
+                       Color="@(HasUnbuiltChanges && !_isRefreshing ? Color.Warning : Color.Primary)"
                        Size="Size.Small"
                        OnClick="BuildSnapshotAsync"
                        Disabled="@(_isRefreshing || _profileId is null)">
-                @(_isRefreshing ? "Building…" : "Build Output")
+                @(_isRefreshing ? "Building…" : HasUnbuiltChanges ? "Build Output •" : "Build Output")
             </MudButton>
         </MudStack>
     </MudStack>
@@ -1149,9 +1152,21 @@
         <div id="mapped-panel-handle" class="panel-resize-handle"></div>
         <div class="panel-body-wrapper">
             <div class="panel-header">
-                <MudText Typo="Typo.caption" Style="font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
-                    Mapped (@_panelItems.Count)
-                </MudText>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                    <MudText Typo="Typo.caption" Style="font-weight:600; text-transform:uppercase; letter-spacing:0.05em;">
+                        Mapped (@_panelItems.Count)
+                    </MudText>
+                    @if (HasUnbuiltChanges && !_isRefreshing)
+                    {
+                        <MudTooltip Text="Mapping changes are pending — click to rebuild output" Arrow="true" Placement="Placement.Bottom">
+                            <MudIconButton Icon="@Icons.Material.Filled.WarningAmber"
+                                           Size="Size.Small"
+                                           Color="Color.Warning"
+                                           OnClick="BuildSnapshotAsync"
+                                           Style="padding:2px; margin:-4px 0;" />
+                        </MudTooltip>
+                    }
+                </MudStack>
                 <MudTooltip Text="Collapse panel" Arrow="true">
                     <MudIconButton Icon="@Icons.Material.Filled.ChevronRight"
                                    Size="Size.Small"
@@ -1528,7 +1543,15 @@
     private List<GroupFilterDto> _allFilters = [];
     private bool _isLoading = true;
     private bool _isRefreshing;
+    private bool _outputDirty;
     private string? _error;
+
+    // True when the build output would differ from the current mapping state. Combines two
+    // sources: _outputDirty (a manual "touched" flag for edits the Mapped panel can't see —
+    // decisions, renames, custom groups) and the Mapped panel's own per-row IsLive flag (a
+    // server-computed, reload-safe signal for channel selection/number edits, which self-heals
+    // when a change is reverted since a reverted channel simply drops out of that query).
+    private bool HasUnbuiltChanges => _outputDirty || _panelItems.Any(x => !x.IsLive);
 
     private HashSet<string> _busyFilters = [];
     private HashSet<string> _sessionChangedFilterIds = [];
@@ -2041,6 +2064,18 @@
             }
         }
 
+        // _channelNumbers only knows about groups expanded/edited this session. Merge in
+        // numbers already assigned profile-wide (from the mapped-channels panel, loaded from
+        // the DB) so a group nobody has opened yet can't get handed a number that's already
+        // live elsewhere in the lineup.
+        foreach (var item in _panelItems)
+        {
+            if (item.ChannelNumber is not { } num) continue;
+            if (skipFilters is not null && skipFilters.Contains(item.FilterId)) continue;
+            if (except.HasValue && except.Value.FilterId == item.FilterId) continue;
+            used.Add(num);
+        }
+
         return used;
     }
 
@@ -2093,6 +2128,8 @@
                     await InvokeAsync(async () =>
                     {
                         _isRefreshing = false;
+                        if (evt.Succeeded)
+                            _outputDirty = false;
                         await LoadCoreAsync(showSpinner: false);
                     });
                 }
@@ -2268,6 +2305,28 @@
         }
     }
 
+    private void MarkOutputDirty() => _outputDirty = true;
+
+    private async Task OnBeforeInternalNavigationAsync(LocationChangingContext context)
+    {
+        if (!HasUnbuiltChanges) return;
+
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Unbuilt mapping changes",
+            "You have mapping changes that haven't been built into the output yet. Start a build now — it will keep running in the background after you leave — or leave without building?",
+            yesText: "Start Build & Leave", noText: "Leave Without Building", cancelText: "Cancel");
+
+        if (result == true)
+        {
+            await BuildSnapshotAsync();
+        }
+        else if (result != false)
+        {
+            // Cancelled (result is null) — stay on the page.
+            context.PreventNavigation();
+        }
+    }
+
     private async Task BuildSnapshotAsync()
     {
         if (_isRefreshing) return;
@@ -2327,6 +2386,7 @@
             filter.Decision = decision;
             filter.IsNew = false;
             _sessionChangedFilterIds.Add(filterId);
+            MarkOutputDirty();
             StateHasChanged();
         }
         catch (Exception ex)
@@ -2380,6 +2440,7 @@
             }
 
             RebuildDisplayOrder();
+            MarkOutputDirty();
             Snackbar.Add($"{groupIds.Count} group(s) set to {decision}.", Severity.Success);
         }
         catch (Exception ex)
@@ -2783,6 +2844,7 @@
             mutate(filter);
             if (ShouldClearNewOnInteraction(req))
                 filter.IsNew = false;
+            MarkOutputDirty();
             StateHasChanged();
         }
         catch (Exception ex)
@@ -3396,6 +3458,12 @@
             }
 
             filter.IsNew = false;
+            // Not calling MarkOutputDirty() here on purpose — channel selection/number
+            // dirtiness is derived live from the Mapped panel's per-row IsLive flag (see
+            // HasUnbuiltChanges), which is server-computed from UpdatedUtc vs. the last
+            // build. That means it self-heals when a change is reverted (e.g. check then
+            // uncheck a channel) and survives a hard refresh, neither of which a one-way
+            // "was touched" flag can do.
             StateHasChanged();
         }
         catch (Exception ex)
@@ -3589,6 +3657,7 @@
         {
             _customGroups.Add(result);
             RebuildDisplayOrder();
+            MarkOutputDirty();
             Snackbar.Add($"Custom group \"{result.Name}\" created.", Severity.Success);
         }
         _cgCreating = false;
@@ -3613,6 +3682,7 @@
             if (idx >= 0)
                 _customGroups[idx] = _customGroups[idx] with { Name = _cgEditName.Trim() };
             RebuildDisplayOrder();
+            MarkOutputDirty();
         }
         _cgEditingId = null;
         _cgEditName = string.Empty;
@@ -3633,6 +3703,7 @@
                 var idx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
                 if (idx >= 0)
                     _customGroups[idx] = _customGroups[idx] with { Decision = decision };
+                MarkOutputDirty();
             }
         }
         finally
@@ -3652,6 +3723,7 @@
             var idx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
             if (idx >= 0)
                 _customGroups[idx] = _customGroups[idx] with { ChannelMode = mode };
+            MarkOutputDirty();
         }
         StateHasChanged();
     }
@@ -3666,6 +3738,7 @@
             var idx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
             if (idx >= 0)
                 _customGroups[idx] = _customGroups[idx] with { TrackingPolicy = policy };
+            MarkOutputDirty();
         }
         StateHasChanged();
     }
@@ -3682,6 +3755,7 @@
             var idx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
             if (idx >= 0)
                 _customGroups[idx] = _customGroups[idx] with { AutoNumStart = value };
+            MarkOutputDirty();
         }
         StateHasChanged();
     }
@@ -3700,6 +3774,7 @@
             var idx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
             if (idx >= 0)
                 _customGroups[idx] = _customGroups[idx] with { TrackingKeywords = string.IsNullOrWhiteSpace(value) ? null : value };
+            MarkOutputDirty();
         }
     }
 
@@ -3713,6 +3788,7 @@
             var idx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
             if (idx >= 0)
                 _customGroups[idx] = _customGroups[idx] with { TrackNewChannels = value };
+            MarkOutputDirty();
         }
         StateHasChanged();
     }
@@ -3733,6 +3809,7 @@
                 _cgChannelCache.Remove(cg.CustomGroupId);
                 _cgLinksCache.Remove(cg.CustomGroupId);
                 _displayOrderIds.RemoveAll(id => string.Equals(id, $"cg:{cg.CustomGroupId}", StringComparison.OrdinalIgnoreCase));
+                MarkOutputDirty();
                 Snackbar.Add($"Custom group \"{cg.Name}\" deleted.", Severity.Success);
             }
         }
@@ -3761,6 +3838,7 @@
                 var included = list.Count(c => string.Equals(c.State, "included", StringComparison.OrdinalIgnoreCase));
                 _customGroups[gIdx] = _customGroups[gIdx] with { SelectedChannelCount = included };
             }
+            MarkOutputDirty();
         }
         StateHasChanged();
     }
@@ -3782,6 +3860,7 @@
                     SelectedChannelCount = included,
                 };
             }
+            MarkOutputDirty();
         }
         StateHasChanged();
     }
@@ -3796,6 +3875,7 @@
             var gIdx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
             if (gIdx >= 0)
                 _customGroups[gIdx] = _customGroups[gIdx] with { ProviderLinkCount = list.Count };
+            MarkOutputDirty();
         }
         StateHasChanged();
     }

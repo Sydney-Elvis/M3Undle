@@ -135,7 +135,7 @@ public sealed class ProviderFetcher(
     // Never throws — all failures are swallowed and logged at Debug level.
     public async Task<XtreamAccountInfo?> TryProbeXtreamAsync(Provider provider, CancellationToken cancellationToken)
     {
-        if (!TryResolveXtreamProbeCredentials(provider, out var baseUrl, out var username, out var password))
+        if (!TryResolveXtreamCredentials(provider, out var baseUrl, out var username, out var password))
             return null;
 
         var probeUrl = XtreamProviderUrls.BuildPlayerApiUrl(baseUrl, username, password);
@@ -241,7 +241,11 @@ public sealed class ProviderFetcher(
             Bytes: Encoding.UTF8.GetByteCount(content));
     }
 
-    private bool TryResolveXtreamProbeCredentials(
+    // Resolves the baseUrl/username/password an Xtream-capable provider fetches with — either
+    // its stored Xtream fields, or credentials extracted from a URL-mode get.php playlist URL.
+    // Purely derived from persisted Provider fields, so callers can reuse it without a fetch
+    // (SnapshotBuilder's build-only DB reconstruction relies on this).
+    internal bool TryResolveXtreamCredentials(
         Provider provider,
         out string baseUrl,
         out string username,

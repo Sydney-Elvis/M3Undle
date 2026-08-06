@@ -30,8 +30,8 @@
 - max_concurrent_streams (INTEGER, nullable) -- per-provider concurrent stream limit; null = unlimited
 - force_mpegts (INTEGER, 0/1, default 0) -- force upstream MPEG-TS stream handling regardless of content-type
 - clean_relay_mode (TEXT, default 'auto') -- clean-relay (FFmpeg remux) selection mode for unstable MPEG-TS upstreams
-- include_vod (INTEGER, 0/1, default 0) -- Xtream-capable providers only: include VOD in the lineup
-- include_series (INTEGER, 0/1, default 0) -- Xtream-capable providers only: include series in the lineup
+- include_vod (INTEGER, 0/1, default 0) -- include VOD in the lineup; any provider type (Xtream API or M3U playlist)
+- include_series (INTEGER, 0/1, default 0) -- include series in the lineup; any provider type (Xtream API or M3U playlist)
 - created_utc (TEXT)
 - updated_utc (TEXT)
 
@@ -127,6 +127,10 @@ saved-selection table and is excluded from portable backups.
 - provider_item_key (TEXT) — provider ID when available; otherwise a hash of stable parsed identity
 - content_type (TEXT) — `'vod'` | `'series'`
 - title (TEXT)
+- artwork_url (TEXT, nullable)
+- stream_url (TEXT, nullable) — VOD only; the file's direct stream URL, so build-only can rebuild
+  the channel without a live fetch. Null for series rows, which aggregate many episodes under one
+  row (episode playback is rebuilt from xtream_series_cache or catalog_series_episodes instead)
 - episode_count (INTEGER) — discovered episodes represented by a series row; zero for VOD
 - first_seen_utc (TEXT)
 - last_seen_utc (TEXT)
@@ -139,6 +143,45 @@ Indexes:
 - idx_catalog_items_group_item_unique (provider_group_id, provider_item_key)
 - idx_catalog_items_group_active_title (provider_group_id, active, title)
 - idx_catalog_items_provider_type_active (provider_id, content_type, active)
+
+---
+
+### xtream_series_cache
+Persisted get_series_info payload for Xtream-sourced series — the expensive per-series API call
+XtreamSeriesExpansionService performs so a series' episode list doesn't need re-fetching on every
+refresh. Keyed by the provider's own numeric series ID, not by catalog_items' row ID, so it is
+rebuildable independent of catalog_items row churn. Excluded from portable backups.
+- provider_id (PK part 1, FK providers)
+- series_id (PK part 2, INTEGER) — the Xtream provider's own series ID
+- last_modified_epoch (INTEGER) — provider's own change-timestamp for the series; a mismatch
+  against the freshly-fetched series list means the cached episodes are stale and need re-expanding
+- episodes_json (TEXT) — raw get_series_info response
+
+---
+
+### catalog_series_episodes
+Per-episode playback data for a series whose provider gave no stable per-series ID — i.e. a plain
+M3U playlist, where each line is already a complete episode rather than something requiring a
+separate get_series_info call the way Xtream does (see xtream_series_cache above). Keyed by the
+same (provider_group_id, provider_item_key) identity as its parent catalog_items row, so build-only
+can rebuild M3U-native series episodes without a live fetch. Excluded from portable backups.
+- catalog_series_episode_id (PK, TEXT, uuid)
+- provider_id (FK providers)
+- provider_group_id (FK provider_groups)
+- provider_item_key (TEXT) — matches the parent catalog_items row's key
+- episode_key (TEXT) — hash of the episode's stable parsed identity (its stream URL)
+- title (TEXT)
+- stream_url (TEXT) — the episode's direct stream URL, as parsed from the provider playlist
+- first_seen_utc (TEXT)
+- last_seen_utc (TEXT)
+- active (INTEGER, 0/1)
+
+Unique:
+- (provider_group_id, provider_item_key, episode_key)
+
+Indexes:
+- idx_catalog_series_episodes_group_item_episode_unique (provider_group_id, provider_item_key, episode_key)
+- idx_catalog_series_episodes_provider_active (provider_id, active)
 
 ---
 
