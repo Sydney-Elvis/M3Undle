@@ -31,10 +31,6 @@ public sealed class SnapshotRefreshService(
     private readonly Channel<RefreshMode> _triggerChannel = Channel.CreateBounded<RefreshMode>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
 
-    // Channels from the last full refresh, keyed by providerId — reused by build-only so VOD/series are included without re-fetching
-    private IReadOnlyDictionary<string, IReadOnlyList<ParsedProviderChannel>> _cachedChannels =
-        new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>();
-
     // Current run CTS — cancelled by CancelRefresh(); null when no run is active
     private volatile CancellationTokenSource? _currentRunCts;
     private volatile bool _cancelledByUser;
@@ -397,13 +393,10 @@ public sealed class SnapshotRefreshService(
 
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            var (s, e, channelsByProvider, cc, profileIds) = await builder.RunAsync(runCts.Token);
+            var (s, e, fetchedProviderIds, cc, profileIds) = await builder.RunAsync(runCts.Token);
             (succeeded, errorSummary, changeClass, affectedProfileIds) = (s, e, cc, profileIds);
-            if (channelsByProvider.Count > 0)
-            {
-                _cachedChannels = channelsByProvider;
-                await PurgeStaleProviderDataAsync(channelsByProvider.Keys, stoppingToken);
-            }
+            if (fetchedProviderIds.Count > 0)
+                await PurgeStaleProviderDataAsync(fetchedProviderIds, stoppingToken);
             logger.LogInformation("Snapshot refresh completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
             if (cc == ChangeClasses.Breaking)
             {
@@ -546,7 +539,7 @@ public sealed class SnapshotRefreshService(
 
             await using var scope = scopeFactory.CreateAsyncScope();
             var builder = scope.ServiceProvider.GetRequiredService<SnapshotBuilder>();
-            var (s, e, cc, profileIds) = await builder.BuildOnlyAsync(_cachedChannels, runCts.Token);
+            var (s, e, cc, profileIds) = await builder.BuildOnlyAsync(runCts.Token);
             (succeeded, errorSummary, changeClass, affectedProfileIds) = (s, e, cc, profileIds);
             logger.LogInformation("Snapshot build-only completed (published={Succeeded}, change={ChangeClass}).", succeeded, changeClass ?? "none");
         }

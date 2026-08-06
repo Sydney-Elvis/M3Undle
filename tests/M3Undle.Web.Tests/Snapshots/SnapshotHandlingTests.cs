@@ -823,6 +823,65 @@ public sealed class SnapshotHandlingTests
         }
     }
 
+    // Regression for the bug where build-only silently published zero VOD/series channels when
+    // it ran after a process restart (nothing survived in SnapshotRefreshService's in-memory
+    // channel cache). VOD now rebuilds from CatalogItem.StreamUrl, which is durable — a brand
+    // new SnapshotBuilder instance with no shared in-memory state must still publish it.
+    [TestMethod]
+    public async Task SnapshotBuilder_BuildOnly_RebuildsVodFromCatalogItem_WithNoInMemoryCache()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            var provider = NewProvider("provider-1");
+            provider.IncludeVod = true;
+            provider.IncludeSeries = true;
+            setup.Providers.Add(provider);
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            // Full fetch — populates CatalogItem (with StreamUrl for the VOD row) and publishes
+            // the first snapshot.
+            await using (var db1 = fixture.CreateDbContext())
+            {
+                await CreateBuilder(db1, HttpStatusCode.OK, SampleMixedM3u, tempDir).RunAsync(CancellationToken.None);
+            }
+
+            await using (var verify1 = fixture.CreateDbContext())
+            {
+                var active1 = await verify1.Snapshots.SingleAsync(x => x.Status == "active");
+                Assert.AreEqual(1, active1.VodChannelCount);
+            }
+
+            // Build-only on a brand new SnapshotBuilder instance — no shared state with the
+            // instance above, simulating a process restart between the fetch and this build.
+            await using (var db2 = fixture.CreateDbContext())
+            {
+                var result = await CreateBuilder(db2, HttpStatusCode.OK, SampleMixedM3u, tempDir)
+                    .BuildOnlyAsync(CancellationToken.None);
+                Assert.IsTrue(result.Succeeded, result.ErrorSummary);
+            }
+
+            await using var verify2 = fixture.CreateDbContext();
+            var active2 = await verify2.Snapshots
+                .Where(x => x.Status == "active")
+                .OrderByDescending(x => x.CreatedUtc)
+                .FirstAsync();
+            Assert.AreEqual(1, active2.VodChannelCount,
+                "Build-only must rebuild VOD from persisted CatalogItem data even with no in-memory fetch cache.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     [TestMethod]
     public async Task SnapshotBuilder_SplitsSameNamedGroups_ByContentType()
     {
@@ -1032,24 +1091,13 @@ public sealed class SnapshotHandlingTests
             await setup.SaveChangesAsync();
         }
 
-        var cachedChannel = new ParsedProviderChannel
-        {
-            DisplayName = "Live News",
-            StreamUrl = "http://example.com/live/user/pass/100.ts",
-            GroupTitle = "News",
-        };
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         try
         {
             await using (var db = fixture.CreateDbContext())
             {
                 var result = await CreateBuilder(db, HttpStatusCode.OK, "<tv></tv>", tempDir)
-                    .BuildOnlyAsync(
-                        new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>
-                        {
-                            ["provider-1"] = [cachedChannel],
-                        },
-                        CancellationToken.None);
+                    .BuildOnlyAsync(CancellationToken.None);
                 Assert.IsTrue(result.Succeeded, result.ErrorSummary);
             }
 
@@ -1456,21 +1504,7 @@ public sealed class SnapshotHandlingTests
             await using var db = fixture.CreateDbContext();
             var builder = CreateBuilder(db, HttpStatusCode.OK, emptyGuide, tempDir);
 
-            await builder.BuildOnlyAsync(
-                new Dictionary<string, IReadOnlyList<ParsedProviderChannel>>
-                {
-                    ["provider-1"] =
-                    [
-                        new ParsedProviderChannel
-                        {
-                            DisplayName = "CBS",
-                            StreamUrl = "http://example.com/live/user/pass/cbs.ts",
-                            GroupTitle = "Live",
-                            TvgId = xmltvChannelId,
-                        }
-                    ]
-                },
-                CancellationToken.None);
+            await builder.BuildOnlyAsync(CancellationToken.None);
 
             await using var verify = fixture.CreateDbContext();
             var active = await verify.Snapshots
