@@ -4,6 +4,53 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.8] — 2026-08-06
+
+Beta 8 adds a Movies & Series Catalog you can browse straight from a provider, a live System Resources page for diagnosing CPU/memory/storage pressure, and closes out a run of channel-mapping bugs — duplicate channel numbers, an auto-picker blind to unopened groups, and unbuilt changes that were easy to miss before leaving the page.
+
+### Movies & Series Catalog
+
+- New Catalog page (Channels → Catalog) lets you browse an Xtream provider's Movies and Series categories — titles, poster artwork, plot, cast, and season/episode breakdowns for series — before deciding what's worth including; it's inspection only and doesn't change what's published
+- Search titles across categories and filter by Movies/Series chips; open a series to see its full episode list
+- Series episode data for M3U-sourced providers is now persisted the same way Xtream series already were, fixing series/VOD content that wouldn't reliably persist or resume
+- Hardened series sync against concurrent-write database lockups, capped how often the lineup refreshes during large series imports (previously every 2,500 inserts), and added a hard timeout ceiling to background metadata fetches so a stalled request can no longer wedge an import indefinitely
+
+### Channel Mapping build safety
+
+- The Build Output button now turns amber with a marker, and the Mapped panel shows a warning icon, whenever there are unbuilt changes; navigating away in-app or closing the tab now prompts you to build, leave anyway, or cancel
+- Fixed duplicate channel numbers shipping in build output when two channels ended up pinned to the same number
+- Fixed the channel-number auto-picker to check numbers assigned anywhere in the profile, not just in groups already expanded during the current session
+- The Channels page now sorts by channel number instead of build order
+- Fixed profile chips and a delete dialog that looked hung but was actually still working
+
+### System Resources page
+
+- New System Resources page (linked from the footer) shows CPU, memory, storage, and streaming-capacity readings with a best-effort diagnosis of what's constraining M3Undle, plus rolling graphs and, on Linux hosts with cgroup v2, an advanced-signals card
+- Fixed a regression introduced during development and cleaned up process-handle and cancellation-token-source leaks in the resource sampler
+
+### Security
+
+- Artwork fetching now resolves the image URL's host via DNS and rejects it if any resolved address falls in a loopback, private, link-local, multicast, or CGNAT range, closing an SSRF path
+- Catalog browsing now respects a provider group's Active flag consistently across item listing, item detail, and artwork endpoints
+
+### Other fixes
+
+- Legacy "mixed" content-type groups (from before Live/VOD/Series were split) are now treated as live until the next refresh upgrades them, instead of disappearing from snapshot and EPG output
+- Container images now also publish for arm64
+
+### Testing
+
+- Added coverage for the Catalog page service, Linux resource-fact parsing, resource-constraint diagnosis, the resource-facts service, channel numbering, and the legacy "mixed" group upgrade path
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.8
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.7] — 2026-07-28
 
 Beta 7 lets you back up and restore your entire M3Undle configuration, fixes a subtler kind of playback glitch on reconnect, launches a full documentation site, and makes it much clearer on first run when a profile has no output because setup isn't finished yet.
