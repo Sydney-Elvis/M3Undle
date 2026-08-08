@@ -1,6 +1,50 @@
 # Container Won't Start or Keeps Restarting
 
-If `docker compose ps` shows the container cycling through `Restarting`, or logs show an unhandled exception right after startup, this is almost always a volume or permission problem rather than an M3Undle bug — the checks below isolate it in a couple of minutes.
+Two different symptoms land on this page, with different causes:
+
+- **The container exits or keeps restarting** — almost always a volume or permission problem rather than an M3Undle bug. Work through steps 1–4 below.
+- **The container stays up but never becomes healthy** — the process is alive and simply never finished starting. Start with the section directly below.
+
+## Container runs but never becomes healthy
+
+`docker ps` shows `Up … (unhealthy)`, the log stops a line or two after startup, and there is **no exception and no `Now listening on:`**. The process is alive — it just never finished starting, so nothing is listening on port 8080 for the health check to reach.
+
+A healthy startup reaches `Application started.` within a few seconds:
+
+```text
+Starting M3Undle 1.0.0-beta.8.1 (BuildDateUtc=..., BuildNumber=42)
+Runtime: linux-amd64, .NET 10.0.0, container=True, user=root, timezone=America/New_York
+Storage: data=/data [ext4 at /data, writable, 407.6 GB free of 491.1 GB]; logs=/data/logs [same volume as data, writable]; config=/config [ext4 at /config, writable]
+Database: /data/m3undle.db [2.8 GB + 113.6 MB WAL]
+Checking database /data/m3undle.db for pending migrations.
+Database ready in 1842 ms (6 migration(s) applied).
+Now listening on: http://[::]:8080
+Application started. Press Ctrl+C to shut down.
+```
+
+Whichever line yours stops on narrows the cause considerably. Stopping right after `Checking database …` points at the `/data` volume, and the `Storage:` line immediately above it tells you what that volume actually is:
+
+| Filesystem shown | Verdict |
+|---|---|
+| `ext4`, `xfs`, `btrfs`, `overlay` | Fine |
+| `9p`, `cifs`, `smbfs`, `nfs`, `fuse.*` | **Likely the cause** — SQLite's file locking is unreliable on these |
+| `NOT WRITABLE` instead of `writable` | A permissions problem — see [Permission denied on `/data`](#3-permission-denied-on-data-or-a-subdirectory-of-it) |
+
+The quickest way to confirm a mount problem is to swap `/data` onto a Docker-managed volume and change nothing else:
+
+```bash
+docker volume create m3undle_test
+```
+
+```yaml
+volumes:
+  - ./config:/config
+  - m3undle_test:/data   # was ./data:/data
+```
+
+If it starts cleanly, the filesystem behind your old `/data` was the problem. This is by far the most common cause on **Windows and macOS**, where Docker Desktop reaches host folders through a translation layer that doesn't provide the locking SQLite needs — see [Named volumes vs. bind mounts](../reference/docker-compose.md#named-volumes-vs-bind-mounts).
+
+If the log stops *before* `Checking database`, the mount isn't the issue — collect the output from the sections below and open an issue.
 
 ## 1. Read the actual crash
 
@@ -16,8 +60,20 @@ Docker Compose files drift from the documented examples over time — volumes ge
 
 ```bash
 docker compose config
-docker inspect m3undle --format '{{json .Mounts}}' | python3 -m json.tool
+docker inspect m3undle --format '{{json .Mounts}}'
 ```
+
+Both work identically on Linux, macOS, and Windows. In PowerShell you can pipe the second one through `ConvertFrom-Json | ConvertTo-Json` to pretty-print it; on Linux and macOS, `| python3 -m json.tool` does the same.
+
+To inspect what the container itself sees — useful when `/data` is a named volume and therefore has no host path to look at — run the check inside it:
+
+```bash
+docker exec m3undle df -T /data
+docker exec m3undle ls -la /data
+docker exec m3undle sh -c 'tail -n 200 /data/logs/app-*.log'
+```
+
+These work while the container is hung, since the process is still running.
 
 Compare the result against the [documented volumes](../getting-started/install-with-docker.md#volumes) and [environment variables](../reference/environment-variables.md). A few things worth knowing while you do this:
 
@@ -52,6 +108,9 @@ M3Undle deliberately doesn't swallow this error and fall back to a different dir
    ```
 
 If you're using a named Docker volume rather than a bind mount, this class of problem is much rarer — see [Named volumes vs. bind mounts](../reference/docker-compose.md#named-volumes-vs-bind-mounts).
+
+!!! note "Windows and macOS"
+    Steps 2 and 3 above are Linux-specific — `ls -la`, `chown`, and the `PUID`/`PGID` pattern don't apply on Docker Desktop, which maps host files to the container user for you. If M3Undle reports a `/data` problem there, the fix is almost never ownership; it's the filesystem behind the mount. See [Container runs but never becomes healthy](#container-runs-but-never-becomes-healthy).
 
 ## 4. Container restarts under load, not on startup
 

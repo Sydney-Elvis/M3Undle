@@ -4,12 +4,24 @@ M3Undle is published to GitHub Container Registry as `ghcr.io/sydney-elvis/m3und
 
 ## Quick start
 
+!!! important "Windows: where you put this directory matters"
+    On Docker Desktop your containers run inside a Linux VM, and a folder on `C:\` reaches that VM through a translation layer — 9p on the WSL 2 backend, SMB on the older Hyper-V backend. Neither reliably supports the file locking SQLite needs. Bind-mounting `/data` from a Windows path can make M3Undle **hang during startup with nothing in the log**, rather than fail with a clear error.
+
+    Two safe approaches, in order of preference:
+
+    1. **Keep the named volume for `/data`** — this is what the example below does, and it's why the quick start uses `m3undle_data:/data` rather than `./data:/data`. Docker stores the volume inside the VM on a native Linux filesystem, so the translation layer is never involved.
+    2. **Put the whole project inside the WSL 2 filesystem** — open a WSL shell and work in `~/m3undle` (reachable from Explorer as `\\wsl$\Ubuntu\home\<you>\m3undle`). Do *not* use `/mnt/c/...`, which is the Windows drive seen through the same translation layer.
+
+    Bind-mounting `./config` from a Windows path is fine either way: it holds small text files that M3Undle only ever reads, with no locking involved.
+
 Create a directory for M3Undle:
 
 ```bash
 mkdir m3undle && cd m3undle
 mkdir config
 ```
+
+The same two commands work unchanged in PowerShell.
 
 !!! tip "Prefer a hidden config directory?"
     Use `.config` instead of `config` if you'd rather it not show up in a plain `ls`. Just make sure the `volumes:` line in `compose.yaml` matches whichever name you pick — e.g. `./.config:/config`. The directory name is otherwise arbitrary; only the `:/config` container-side path matters.
@@ -40,6 +52,14 @@ Generate an encryption key (needed only if you plan to use Xtream Codes provider
 
 ```bash
 openssl rand -base64 32
+```
+
+`openssl` isn't installed on Windows by default. In PowerShell, this produces an equivalent cryptographically-random 32-byte key:
+
+```powershell
+$bytes = [byte[]]::new(32)
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+[Convert]::ToBase64String($bytes)
 ```
 
 Paste the generated value into `M3UNDLE_ENCRYPTION_KEY`, then start M3Undle:
@@ -78,9 +98,17 @@ Keep `5004:5004` published if you plan to use any HDHomeRun-compatible client (N
 | `/data` | Yes | SQLite database, snapshots, log files, runtime state, generated browser-playback files |
 | `/m3u_data` (or any path) | No | Local `.m3u` files browsable via the in-app file browser — set `M3UNDLE_M3U_DIR` if you use a different container path |
 
-Bind-mounting `./config` keeps configuration files easy to inspect, edit, and back up outside of Docker. The example above uses a Docker-managed volume for `/data`; a bind mount (`./data:/data`) works too if you'd rather have that on the host as well.
+Bind-mounting `./config` keeps configuration files easy to inspect, edit, and back up outside of Docker. The example above uses a Docker-managed volume for `/data`; on Linux, a bind mount (`./data:/data`) works too if you'd rather have that on the host as well. On Windows and macOS, prefer the named volume — see the [Windows note above](#quick-start) and [Named volumes vs. bind mounts](../reference/docker-compose.md#named-volumes-vs-bind-mounts).
 
-`/data` must be writable by whatever user the container runs as — M3Undle creates its database, logs, and snapshots there on startup and crashes immediately if it can't. If you bind-mount `/data` to a host path instead of using a named volume, **create that directory yourself before the first `docker compose up`**: Docker auto-creates a missing bind-mount source as `root`, which the container often can't write to. See [Container Won't Start](../troubleshooting/container-wont-start.md) if you hit this.
+`/data` must be writable by whatever user the container runs as — M3Undle creates its database, logs, and snapshots there on startup and crashes immediately if it can't. If you bind-mount `/data` to a host path on Linux instead of using a named volume, **create that directory yourself before the first `docker compose up`**: Docker auto-creates a missing bind-mount source as `root`, which the container often can't write to. See [Container Won't Start](../troubleshooting/container-wont-start.md) if you hit this.
+
+M3Undle reports what it found at startup, so you can confirm the mount is healthy without opening the UI:
+
+```text
+Storage: data=/data [ext4 at /data, writable, 407.6 GB free of 491.1 GB]; ...
+```
+
+A filesystem of `ext4`, `xfs`, `btrfs`, or `overlay` is fine. `9p`, `cifs`, `smbfs`, or `nfs` means `/data` is reaching a network or translated filesystem, and SQLite may not behave — that's the situation the Windows note above is about.
 
 ### Config file integration
 

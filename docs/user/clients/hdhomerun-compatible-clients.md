@@ -66,13 +66,19 @@ With `network_mode: host`, the container shares the host's network stack directl
 !!! warning
     `network_mode: host` bypasses Docker network isolation. All container ports are exposed directly on the host. Only use this on a trusted LAN.
 
+!!! important "Option C requires a Linux Docker host"
+    On **Docker Desktop for Windows or macOS**, `network_mode: host` does not do what it does on Linux. Containers run inside a Linux VM, so "the host" is that VM rather than your Windows or Mac machine — the container joins the VM's network, not your LAN, and SSDP multicast still doesn't reach other machines. The container also becomes unreachable on `localhost` because no ports are published.
+
+    On those platforms use **Option A (manual add)** with `AdvertisedBaseUrl` set to the machine's real LAN IP. It works regardless of networking mode and is the recommended path anyway. Auto-discovery across the LAN needs a Linux Docker host, or M3Undle running directly on the LAN via macvlan.
+
 ## Choosing a networking mode
 
 | Setup | Discovery from host? | Discovery from LAN? | Manual add works? |
 |---|---|---|---|
 | Bridge (default) | Sometimes | No | **Yes** |
 | Bridge + UDP ports published | Yes | Unreliable | **Yes** |
-| `network_mode: host` | Yes | **Yes** | **Yes** |
+| `network_mode: host` (Linux host only) | Yes | **Yes** | **Yes** |
+| `network_mode: host` (Docker Desktop) | No | No | No — no ports published |
 | macvlan | Yes | **Yes** | **Yes** |
 
 **Recommendation**: use manual add (Option A) unless you have a specific reason to need auto-discovery — it works with any Docker networking mode and any client application. If you do need auto-discovery, `network_mode: host` (Option C) is the only straightforward option that reliably supports SSDP multicast across the whole LAN, though even then some clients may not follow the advertised base URL — manual add remains the most portable fallback.
