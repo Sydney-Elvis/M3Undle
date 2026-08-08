@@ -22,6 +22,8 @@ volumes:
 
 Named volumes avoid the ownership requirement on Linux and can give better I/O performance, but you can't browse the files directly from the host.
 
+The bind-mount host directory name is arbitrary — `./config`, `./.config` (hidden), or anything else works, as long as the `volumes:` entry's host-side path matches wherever `config.yaml` actually lives. Renaming or moving that directory without updating the corresponding `volumes:` line is a common cause of `config.yaml not found` errors after otherwise-successful startups.
+
 If you bind-mount instead, create the host directory yourself (`mkdir -p ./data`) before the first `docker compose up`. Docker auto-creates a missing bind-mount source as `root`, and M3Undle needs write access to `/data` from the moment it starts — a root-owned directory it can't write to causes an immediate crash. See [Container Won't Start](../troubleshooting/container-wont-start.md).
 
 ## Generated HLS storage sizing

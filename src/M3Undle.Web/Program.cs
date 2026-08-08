@@ -464,6 +464,10 @@ app.Logger.LogInformation(
     buildInfo.BuildDateUtc ?? "unknown",
     buildInfo.BuildNumber ?? "n/a");
 
+// Before the restore and migration work below, not after: both touch /data, and a bad mount
+// stalls them without logging anything of its own.
+StartupEnvironmentLog.Write(app.Logger, runtimePaths);
+
 // Must run before the migration/hosted-service startup below: if a restore is staged, it
 // replaces the live database file first, so migrations then run against the restored database
 // rather than the one about to be discarded.
@@ -480,9 +484,29 @@ List<string> appliedMigrations;
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+    // Microsoft.EntityFrameworkCore is pinned to Warning in appsettings.json, so everything in
+    // this block is otherwise silent. Log before the first database access as well as after it:
+    // a startup that stalls opening the database — SQLite blocking on a /data mount that handles
+    // file locking badly, for instance — is indistinguishable from one that never got this far.
+    app.Logger.LogInformation(
+        "Checking database {DatabasePath} for pending migrations.", runtimePaths.DatabasePath);
+
+    var databaseStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
     appliedMigrations = db.Database.GetPendingMigrations().ToList();
+    if (appliedMigrations.Count > 0)
+        app.Logger.LogInformation(
+            "Applying {MigrationCount} pending database migration(s): {Migrations}",
+            appliedMigrations.Count,
+            string.Join(", ", appliedMigrations));
+
     db.Database.Migrate();
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
+
+    app.Logger.LogInformation(
+        "Database ready in {ElapsedMs} ms ({MigrationCount} migration(s) applied).",
+        (long)System.Diagnostics.Stopwatch.GetElapsedTime(databaseStartedAt).TotalMilliseconds,
+        appliedMigrations.Count);
 
     var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
     await streamingSettings.ClearRestartRequiredAsync();

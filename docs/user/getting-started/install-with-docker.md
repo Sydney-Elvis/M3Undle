@@ -11,6 +11,9 @@ mkdir m3undle && cd m3undle
 mkdir config
 ```
 
+!!! tip "Prefer a hidden config directory?"
+    Use `.config` instead of `config` if you'd rather it not show up in a plain `ls`. Just make sure the `volumes:` line in `compose.yaml` matches whichever name you pick — e.g. `./.config:/config`. The directory name is otherwise arbitrary; only the `:/config` container-side path matters.
+
 Create `compose.yaml`:
 
 ```yaml
@@ -86,13 +89,15 @@ Place a `config.yaml` (and optionally a `.env` credential file) directly in the 
 ```
 m3undle/
   compose.yaml
-  config/
+  config/            ← or `.config/` if you followed the hidden-directory tip above
     config.yaml    ← provider definitions
     .env           ← credentials (never commit this)
   data/            ← managed by the container
 ```
 
 If you have a `config.yaml` already, you can import providers from it directly via the Add Provider dialog — see [Add the First Provider](add-first-provider.md).
+
+If M3Undle logs `config.yaml not found` after startup, double-check that the host directory in your `volumes:` line actually matches the one containing `config.yaml` — a common mistake is renaming/moving the config folder without updating the mount, which leaves Docker bind-mounting an empty directory. Run `docker inspect <container> --format '{{json .Mounts}}'` to see exactly what's mounted.
 
 ## Tags
 

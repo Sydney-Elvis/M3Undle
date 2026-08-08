@@ -103,19 +103,25 @@ public sealed class EnvironmentVariableService
     internal string? GetEnvFileValue(string name) =>
         _variables.TryGetValue(name, out var value) ? value : null;
 
+    // Both early returns below log at Information, not Warning: the .env file is optional, and
+    // GetValue checks the process environment first, so substitution still works without it.
+    // Configuring M3Undle entirely through container environment variables is normal operation,
+    // not a problem worth flagging on every startup.
     private FrozenDictionary<string, string> LoadEnvFile()
     {
         var configDir = GetConfigDir();
         if (string.IsNullOrEmpty(configDir))
         {
-            _logger.LogWarning("M3UNDLE_CONFIG_DIR not set; no .env file will be loaded");
+            _logger.LogInformation("M3UNDLE_CONFIG_DIR is not set; no .env file will be loaded.");
             return FrozenDictionary<string, string>.Empty;
         }
 
         var envPath = Path.Combine(configDir, ".env");
         if (!File.Exists(envPath))
         {
-            _logger.LogWarning("No .env file found at {EnvPath}; environment substitution unavailable", envPath);
+            _logger.LogInformation(
+                "No .env file at {EnvPath}; %VAR% substitution will resolve from process environment variables only.",
+                envPath);
             return FrozenDictionary<string, string>.Empty;
         }
 
