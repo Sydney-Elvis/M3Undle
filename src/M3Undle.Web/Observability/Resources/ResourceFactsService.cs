@@ -279,6 +279,7 @@ public sealed class ResourceFactsService(
     {
         var paths = new (string Label, string Path)[]
         {
+            ("Database", runtimePaths.DataDirectory),
             ("Logs", runtimePaths.LogDirectory),
             ("Generated HLS", generatedHlsOptions.Value.Directory),
         };
@@ -288,11 +289,12 @@ public sealed class ResourceFactsService(
         {
             try
             {
-                var root = Path.GetPathRoot(Path.GetFullPath(path));
-                if (string.IsNullOrEmpty(root))
+                // MountResolver, not Path.GetPathRoot: the latter returns "/" for every Unix
+                // path, which measured the container's overlay filesystem instead of the volume
+                // the files actually live on.
+                var drive = MountResolver.ForPath(path);
+                if (drive is null)
                     continue;
-
-                var drive = new DriveInfo(root);
                 var isCritical = drive.TotalSize > 0
                     && (drive.AvailableFreeSpace < DiskCriticalFreeBytes
                         || (double)drive.AvailableFreeSpace / drive.TotalSize < DiskCriticalFreeFraction);

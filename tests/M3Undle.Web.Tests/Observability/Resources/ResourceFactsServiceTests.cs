@@ -188,9 +188,9 @@ public sealed class ResourceFactsServiceTests
 
         var facts = await service.GetSnapshotAsync();
 
-        Assert.AreEqual(2, facts.DiskVolumes.Count);
+        Assert.AreEqual(3, facts.DiskVolumes.Count);
         CollectionAssert.AreEquivalent(
-            new[] { "Logs", "Generated HLS" },
+            new[] { "Database", "Logs", "Generated HLS" },
             facts.DiskVolumes.Select(v => v.Label).ToArray());
     }
 

@@ -22,7 +22,18 @@ volumes:
 
 Named volumes avoid the ownership requirement on Linux and can give better I/O performance, but you can't browse the files directly from the host.
 
-If you bind-mount instead, create the host directory yourself (`mkdir -p ./data`) before the first `docker compose up`. Docker auto-creates a missing bind-mount source as `root`, and M3Undle needs write access to `/data` from the moment it starts — a root-owned directory it can't write to causes an immediate crash. See [Container Won't Start](../troubleshooting/container-wont-start.md).
+!!! important "On Windows and macOS, use a named volume for `/data`"
+    Docker Desktop runs containers in a Linux VM, and bind mounts from the host reach it through a translation layer — 9p or SMB on Windows, VirtioFS or gRPC-FUSE on macOS. These do not reliably provide the POSIX file locking SQLite depends on. A named volume lives inside the VM on a native Linux filesystem and sidesteps the problem entirely.
+
+    Symptoms of getting this wrong range from `database is locked` errors to M3Undle **hanging during startup with nothing in the log** — the container shows `Up … (unhealthy)` and never begins listening. See [Container runs but never becomes healthy](../troubleshooting/container-wont-start.md#container-runs-but-never-becomes-healthy).
+
+    `/config` is safe to bind-mount on any platform: M3Undle only reads those files, and no locking is involved.
+
+The bind-mount host directory name is arbitrary — `./config`, `./.config` (hidden), or anything else works, as long as the `volumes:` entry's host-side path matches wherever `config.yaml` actually lives. Renaming or moving that directory without updating the corresponding `volumes:` line is a common cause of `config.yaml not found` errors after otherwise-successful startups.
+
+If you bind-mount instead on Linux, create the host directory yourself (`mkdir -p ./data`) before the first `docker compose up`. Docker auto-creates a missing bind-mount source as `root`, and M3Undle needs write access to `/data` from the moment it starts — a root-owned directory it can't write to causes an immediate crash. See [Container Won't Start](../troubleshooting/container-wont-start.md).
+
+This ownership step doesn't apply on Docker Desktop, which maps host files to the container user for you. That convenience is also why the locking problem above is easy to miss there: permissions look fine, and the failure shows up as a hang rather than a permission error.
 
 ## Generated HLS storage sizing
 

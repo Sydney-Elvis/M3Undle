@@ -4,6 +4,34 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.8.1] — 2026-08-08
+
+A diagnostic release prompted by an install that started but never finished coming up, leaving nothing in the log to explain why. It also corrects the storage figures on the System Resources page, which were measuring the wrong filesystem on Linux.
+
+### Startup diagnostics
+
+- M3Undle now writes a three-line environment summary at startup — runtime and architecture, then the filesystem type, writability and free space behind `/data`, the log directory and `/config`, then the database and write-ahead log sizes. It runs *before* the database is opened, so a container that never finishes starting still reports where it got to and what it was working with
+- Database migrations are now logged as they run — how many are pending, which ones, and how long they took. Previously this step was completely silent, so a slow or stalled upgrade was indistinguishable from a container that had failed somewhere else entirely
+
+### Fixed
+
+- The System Resources page reported free space for the wrong filesystem on Linux. It measured the container's root (overlay) filesystem rather than the volume actually holding your data, logs, or generated HLS — so anyone with `/data` on a separate disk, a network share, or a Docker named volume was reading figures for a completely different device. The critically-low-space warning was being evaluated against those wrong numbers too
+- The System Resources page now tracks the database's volume as well. It previously went unmonitored entirely if the log directory had been pointed somewhere other than `/data`
+- A missing `.env` file is no longer reported as a warning. The file is optional, and the old message claimed environment substitution was unavailable when in fact process environment variables continue to work — and take priority over `.env` regardless
+
+### Testing
+
+- Added coverage for mount-point resolution, including the nested-path and shared-name-prefix cases behind the storage fix
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.8.1
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.8] — 2026-08-06
 
 Beta 8 adds a Movies & Series Catalog you can browse straight from a provider, a live System Resources page for diagnosing CPU/memory/storage pressure, and closes out a run of channel-mapping bugs — duplicate channel numbers, an auto-picker blind to unopened groups, and unbuilt changes that were easy to miss before leaving the page.
@@ -504,6 +532,8 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
+[v1.0.0-beta.8.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8...v1.0.0-beta.8.1
+[v1.0.0-beta.8]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [v1.0.0-beta.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.6...v1.0.0-beta.7
 [v1.0.0-beta.3]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [v1.0.0-beta.2]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.1...v1.0.0-beta.2
