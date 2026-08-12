@@ -46,6 +46,27 @@ If it starts cleanly, the filesystem behind your old `/data` was the problem. Th
 
 If the log stops *before* `Checking database`, the mount isn't the issue — collect the output from the sections below and open an issue.
 
+### Stops right after "Applying N pending database migration(s)"
+
+This one has a specific cause. Before applying migrations, Entity Framework records a lock in an internal `__EFMigrationsLock` table. If M3Undle is force-stopped while that lock is held — most often by restarting during a long provider or series import — the row is left behind. Every later start then waits **indefinitely** for a lock that will never be released, with no error and no further output. It's a [documented limitation of EF Core's SQLite provider](https://learn.microsoft.com/ef/core/providers/sqlite/limitations#concurrent-migrations-protection).
+
+**M3Undle clears these automatically from v1.0.0-beta.8.2 onward**, logging:
+
+```text
+[WRN] Removed 1 abandoned EF Core migration lock row(s) (oldest taken ..., 286.6 hours ago).
+```
+
+If you're on an older build, either update, or clear it by hand:
+
+```bash
+docker stop m3undle
+docker run --rm --volumes-from m3undle alpine sh -c \
+  "apk add -q sqlite && sqlite3 /data/m3undle.db 'DELETE FROM __EFMigrationsLock;'"
+docker start m3undle
+```
+
+**Your data is fine.** A stuck lock blocks migrations; it doesn't damage anything. There's no need to rebuild the database or re-import providers — startup typically completes in well under a second once the lock is gone.
+
 ## 1. Read the actual crash
 
 ```bash
