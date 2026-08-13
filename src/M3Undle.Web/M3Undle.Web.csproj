@@ -21,25 +21,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.App.Internal.Assets" Version="10.0.10" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore" Version="10.0.10" />
-    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.10" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
+    <PackageReference Include="Microsoft.AspNetCore.App.Internal.Assets" Version="10.0.11" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.10">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.11">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.OpenApi" Version="2.11.0" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.12.0" />
     <PackageReference Include="MudBlazor" Version="9.8.0" />
     <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.15.3-beta.1" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
-    <PackageReference Include="Scalar.AspNetCore" Version="2.16.17" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.16.19" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
