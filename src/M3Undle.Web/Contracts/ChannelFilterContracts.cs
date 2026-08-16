@@ -22,6 +22,13 @@ public sealed class GroupFilterDto
     public int? AutoNumEnd { get; set; }
     public bool TrackNewChannels { get; set; } // notify (true) | mute (false)
     public int? SortOverride { get; set; }
+
+    /// <summary>
+    /// True once this group has been inactive and empty long enough to be considered
+    /// permanently gone. Only reaches the UI at all when TrackNewChannels kept it from
+    /// being auto-pruned, so this doubles as "user should confirm removal".
+    /// </summary>
+    public bool IsEmptyStale { get; set; }
 }
 
 public sealed class UpdateGroupFilterRequest

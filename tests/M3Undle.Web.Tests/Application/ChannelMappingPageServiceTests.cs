@@ -172,6 +172,121 @@ public sealed class ChannelMappingPageServiceTests
         Assert.AreEqual(1, dto.SelectedChannelCount);
     }
 
+    [TestMethod]
+    public async Task ListGroupFiltersAsync_EmptyGroupPastGracePeriod_FlagsIsEmptyStale()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedBasicMappingGraphAsync(fixture);
+
+        await using (var scope = fixture.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var group = await db.ProviderGroups.SingleAsync(x => x.ProviderGroupId == "group-1");
+            group.Active = false;
+            group.ChannelCount = 0;
+            group.LastSeenUtc = DateTime.UtcNow.AddDays(-(LineupReviewSemantics.EmptyGroupGraceDays + 1));
+            await db.SaveChangesAsync();
+        }
+
+        var service = new ChannelMappingPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var filters = await service.ListGroupFiltersAsync("profile-1", CancellationToken.None);
+        var dto = filters.Single(f => f.ProfileGroupFilterId == "filter-1");
+
+        Assert.IsTrue(dto.IsEmptyStale);
+    }
+
+    [TestMethod]
+    public async Task ListGroupFiltersAsync_EmptyGroupWithinGracePeriod_DoesNotFlagIsEmptyStale()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedBasicMappingGraphAsync(fixture);
+
+        await using (var scope = fixture.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var group = await db.ProviderGroups.SingleAsync(x => x.ProviderGroupId == "group-1");
+            group.Active = false;
+            group.ChannelCount = 0;
+            group.LastSeenUtc = DateTime.UtcNow.AddDays(-1);
+            await db.SaveChangesAsync();
+        }
+
+        var service = new ChannelMappingPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var filters = await service.ListGroupFiltersAsync("profile-1", CancellationToken.None);
+        var dto = filters.Single(f => f.ProfileGroupFilterId == "filter-1");
+
+        Assert.IsFalse(dto.IsEmptyStale, "A recently-vanished group is within the grace period and must not be flagged yet.");
+    }
+
+    [TestMethod]
+    public async Task RemoveEmptyGroupAsync_StaleEmptyGroup_DeletesGroupAndCascadesFilter()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedBasicMappingGraphAsync(fixture);
+
+        await using (var scope = fixture.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var group = await db.ProviderGroups.SingleAsync(x => x.ProviderGroupId == "group-1");
+            group.Active = false;
+            group.ChannelCount = 0;
+            group.LastSeenUtc = DateTime.UtcNow.AddDays(-(LineupReviewSemantics.EmptyGroupGraceDays + 1));
+            await db.SaveChangesAsync();
+        }
+
+        var service = new ChannelMappingPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var removed = await service.RemoveEmptyGroupAsync("profile-1", "filter-1", CancellationToken.None);
+        Assert.IsTrue(removed);
+
+        await using var verifyScope = fixture.Services.CreateAsyncScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        Assert.IsFalse(await verifyDb.ProviderGroups.AnyAsync(x => x.ProviderGroupId == "group-1"));
+        Assert.IsFalse(await verifyDb.ProfileGroupFilters.AnyAsync(x => x.ProfileGroupFilterId == "filter-1"),
+            "Deleting the provider group must cascade-delete its profile group filter.");
+    }
+
+    [TestMethod]
+    public async Task RemoveEmptyGroupAsync_GroupNotYetPastGracePeriod_DoesNotDelete()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await SeedBasicMappingGraphAsync(fixture);
+
+        await using (var scope = fixture.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var group = await db.ProviderGroups.SingleAsync(x => x.ProviderGroupId == "group-1");
+            group.Active = false;
+            group.ChannelCount = 0;
+            group.LastSeenUtc = DateTime.UtcNow.AddDays(-1);
+            await db.SaveChangesAsync();
+        }
+
+        var service = new ChannelMappingPageService(
+            fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+            new TestRefreshTrigger(),
+            new AppEventBus());
+
+        var removed = await service.RemoveEmptyGroupAsync("profile-1", "filter-1", CancellationToken.None);
+        Assert.IsFalse(removed, "A group still inside its grace period must not be removable yet.");
+
+        await using var verifyScope = fixture.Services.CreateAsyncScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.IsTrue(await verifyDb.ProviderGroups.AnyAsync(x => x.ProviderGroupId == "group-1"));
+    }
+
     private static async Task SeedBasicMappingGraphAsync(TestFixture fixture)
     {
         await using var scope = fixture.Services.CreateAsyncScope();

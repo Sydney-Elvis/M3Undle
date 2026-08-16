@@ -23,6 +23,21 @@ internal static class LineupReviewSemantics
     public const string ChannelStateIncluded = "included";
     public const string ChannelStateExcluded = "excluded";
 
+    // How long a provider group can sit inactive with no channels before it's treated as gone
+    // (e.g. a genre category the provider dropped) rather than a transient fetch hiccup.
+    public const int EmptyGroupGraceDays = 14;
+
+    /// <summary>
+    /// True once a provider group has been inactive and empty long enough to be considered
+    /// permanently gone rather than a transient fetch hiccup. Seasonal groups (e.g. NFL between
+    /// seasons) hit this too — callers must separately check for tracked notifications before
+    /// treating that as "safe to remove".
+    /// </summary>
+    public static bool IsEmptyStale(bool providerGroupActive, int? channelCount, DateTime lastSeenUtc, DateTime nowUtc)
+        => !providerGroupActive
+           && channelCount is null or 0
+           && nowUtc - lastSeenUtc >= TimeSpan.FromDays(EmptyGroupGraceDays);
+
     public static bool IsGroupIncluded(string? decision)
         => !IsGroupExcluded(decision);
 

@@ -398,7 +398,15 @@
                                     </MudTooltip>
                                 </div>
 
-                                @if (!filter.ProviderGroupActive)
+                                @if (filter.IsEmptyStale)
+                                {
+                                    <MudTooltip Text="Empty and gone from the provider for a while, but kept because notifications are on — click to remove" Arrow="true">
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined"
+                                                 Style="cursor:pointer;"
+                                                 OnClick="@(() => RemoveEmptyGroupAsync(filter))">empty — remove?</MudChip>
+                                    </MudTooltip>
+                                }
+                                else if (!filter.ProviderGroupActive)
                                 {
                                     <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined">missing</MudChip>
                                 }
@@ -2554,6 +2562,34 @@
         {
             f.IsNew = false;
         });
+    }
+
+    private async Task RemoveEmptyGroupAsync(GroupFilterDto filter)
+    {
+        if (_profileId is null || !filter.IsEmptyStale) return;
+
+        var result = await DialogService.ShowMessageBoxAsync(
+            "Remove empty group",
+            $"\"{filter.OutputName ?? filter.ProviderGroupRawName}\" has been empty and gone from the provider for a while. " +
+            "It's still here because notifications are on for it — if you remove it now, its settings (exclusions, channel numbers, EPG mapping) are deleted. " +
+            "If it's seasonal (e.g. NFL) and due back, you may want to leave it. Remove anyway?",
+            yesText: "Remove", cancelText: "Cancel");
+
+        if (result != true) return;
+
+        var removed = await ChannelMappingPageService.RemoveEmptyGroupAsync(_profileId, filter.ProfileGroupFilterId, _cts.Token);
+        if (_cts.IsCancellationRequested) return;
+
+        if (removed)
+        {
+            _allFilters.Remove(filter);
+            Snackbar.Add($"Removed \"{filter.OutputName ?? filter.ProviderGroupRawName}\".", Severity.Success);
+            StateHasChanged();
+        }
+        else
+        {
+            Snackbar.Add("Could not remove that group.", Severity.Warning);
+        }
     }
 
     private async Task DismissAllNewAsync()

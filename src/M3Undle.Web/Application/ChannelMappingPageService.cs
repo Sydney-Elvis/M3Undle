@@ -141,6 +141,34 @@ public sealed class ChannelMappingPageService(
         return true;
     }
 
+    /// <summary>
+    /// Manually removes a provider group that's empty and past the auto-prune grace period but
+    /// was spared because a filter has notifications on it (e.g. NFL, expected back next
+    /// season). Deletes the shared provider group — cascades to every profile's filter, channel
+    /// selections and custom-group links for it, same as the automatic prune.
+    /// </summary>
+    public async Task<bool> RemoveEmptyGroupAsync(string profileId, string filterId, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var filter = await db.ProfileGroupFilters
+            .Include(x => x.ProviderGroup)
+            .FirstOrDefaultAsync(x => x.ProfileGroupFilterId == filterId && x.ProfileId == profileId, cancellationToken);
+
+        if (filter is null)
+            return false;
+
+        if (!LineupReviewSemantics.IsEmptyStale(
+                filter.ProviderGroup.Active, filter.ProviderGroup.ChannelCount, filter.ProviderGroup.LastSeenUtc, DateTime.UtcNow))
+            return false;
+
+        db.ProviderGroups.Remove(filter.ProviderGroup);
+        await db.SaveChangesAsync(cancellationToken);
+        eventBus.Publish(AppEventKind.GroupFiltersChanged);
+        return true;
+    }
+
     public async Task<int> DismissNewGroupsAsync(string profileId, CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
@@ -413,6 +441,8 @@ public sealed class ChannelMappingPageService(
             SortOverride = f.SortOverride,
             SelectedChannelCount = selectedCount,
             ChannelCount = f.ProviderGroup.ChannelCount,
+            IsEmptyStale = LineupReviewSemantics.IsEmptyStale(
+                f.ProviderGroup.Active, f.ProviderGroup.ChannelCount, f.ProviderGroup.LastSeenUtc, DateTime.UtcNow),
         };
     }
 
