@@ -940,6 +940,8 @@ public static class ChannelFilterApiEndpoints
         AutoNumEnd = f.AutoNumEnd,
         TrackNewChannels = f.TrackNewChannels,
         SortOverride = f.SortOverride,
+        IsEmptyStale = LineupReviewSemantics.IsEmptyStale(
+            f.ProviderGroup.Active, f.ProviderGroup.ChannelCount, f.ProviderGroup.LastSeenUtc, DateTime.UtcNow),
     };
 
     private static string? NormalizeRequestedDecision(string decision)

@@ -1724,6 +1724,7 @@ public sealed class SnapshotBuilder(
         }
 
         var existingGroups = await db.ProviderGroups
+            .Include(x => x.ProfileGroupFilters)
             .Where(x => x.ProviderId == providerId)
             .ToListAsync(cancellationToken);
 
@@ -1778,6 +1779,18 @@ public sealed class SnapshotBuilder(
                 group.ChannelCount = 0;
             }
         }
+
+        // Categories the provider has permanently dropped (e.g. a genre it no longer serves)
+        // are removed rather than left as 0-channel "missing" rows forever. A group someone has
+        // notifications on (e.g. NFL, expected back next season) is deliberately spared here —
+        // see the IsEmptyStale + TrackNewChannels prompt surfaced in the group review UI instead.
+        var staleGroups = existingGroups
+            .Where(g => LineupReviewSemantics.IsEmptyStale(g.Active, g.ChannelCount, g.LastSeenUtc, now)
+                        && !g.ProfileGroupFilters.Any(f => f.TrackNewChannels))
+            .ToList();
+
+        if (staleGroups.Count > 0)
+            db.ProviderGroups.RemoveRange(staleGroups);
 
         await db.SaveChangesAsync(cancellationToken);
 
