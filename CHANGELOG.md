@@ -6,30 +6,7 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ## [v1.0.0-beta.9] — 2026-08-16
 
-Provider categories that vanish for good — a genre a provider stopped serving, a dropped package — used to linger forever in Channel Mapping as 0-channel "missing" rows, cluttering group review with no way to clear them. This release cleans those up automatically, while protecting groups you've asked to be notified about (like NFL between seasons) from being deleted out from under you.
-
-### Channel group cleanup
-
-- A provider group that's been inactive with zero channels for 14+ days is now removed automatically during the next refresh, along with its filter settings, channel selections, and custom-group links
-- A group with notifications turned on is never auto-removed — instead it shows an "empty — remove?" prompt in Channel Mapping, so seasonal groups (e.g. NFL, due back next season) aren't deleted without a chance to keep them
-- Root-caused a related but distinct gap: the earlier "mixed" legacy group upgrade (beta.8) correctly re-links a group to its live successor when one appears, but had no path for groups that never get one — this release closes that gap
-
-### Testing
-
-- Added coverage for the grace-period boundary, automatic-vs-tracked pruning behavior, and the cascade delete on manual removal
-
-**Container images**
-
-```text
-ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.9
-ghcr.io/sydney-elvis/m3undle:beta
-```
-
----
-
-## [v1.0.0-beta.8.2] — 2026-08-11
-
-Fixes a startup hang that could leave M3Undle permanently unable to start after a hard restart, with no error to explain it. If your container has been sitting at "unhealthy" and never coming up, this release very likely fixes it — and your data was never damaged.
+Fixes a startup hang that could leave M3Undle permanently unable to start after a hard restart, with no error to explain it — if your container has been sitting at "unhealthy" and never coming up, this release very likely fixes it, and your data was never damaged. Also cleans up provider categories that vanish for good — a genre a provider stopped serving, a dropped package — which used to linger forever in Channel Mapping as 0-channel "missing" rows, while protecting groups you've asked to be notified about (like NFL between seasons) from being deleted out from under you.
 
 ### Fixed
 
@@ -40,14 +17,21 @@ Fixes a startup hang that could leave M3Undle permanently unable to start after 
 
 - Migrations that run longer than 30 seconds now report progress every 30 seconds, naming the database and the likely cause, instead of going silent
 
+### Channel group cleanup
+
+- A provider group that's been inactive with zero channels for 14+ days is now removed automatically during the next refresh, along with its filter settings, channel selections, and custom-group links
+- A group with notifications turned on is never auto-removed — instead it shows an "empty — remove?" prompt in Channel Mapping, so seasonal groups (e.g. NFL, due back next season) aren't deleted without a chance to keep them
+- Root-caused a related but distinct gap: the earlier "mixed" legacy group upgrade (beta.8) correctly re-links a group to its live successor when one appears, but had no path for groups that never get one — this release closes that gap
+
 ### Testing
 
 - Added regression coverage for the abandoned migration lock, including a stale lock, a lock young enough to still be live, an undated lock, and a full migration run that must complete rather than stall
+- Added coverage for the empty-group grace-period boundary, automatic-vs-tracked pruning behavior, and the cascade delete on manual removal
 
 **Container images**
 
 ```text
-ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.8.2
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.9
 ghcr.io/sydney-elvis/m3undle:beta
 ```
 
@@ -581,8 +565,7 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
-[v1.0.0-beta.9]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8.2...v1.0.0-beta.9
-[v1.0.0-beta.8.2]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8.1...v1.0.0-beta.8.2
+[v1.0.0-beta.9]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8.1...v1.0.0-beta.9
 [v1.0.0-beta.8.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8...v1.0.0-beta.8.1
 [v1.0.0-beta.8]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [v1.0.0-beta.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.6...v1.0.0-beta.7

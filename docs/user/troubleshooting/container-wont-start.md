@@ -50,7 +50,7 @@ If the log stops *before* `Checking database`, the mount isn't the issue — col
 
 This one has a specific cause. Before applying migrations, Entity Framework records a lock in an internal `__EFMigrationsLock` table. If M3Undle is force-stopped while that lock is held — most often by restarting during a long provider or series import — the row is left behind. Every later start then waits **indefinitely** for a lock that will never be released, with no error and no further output. It's a [documented limitation of EF Core's SQLite provider](https://learn.microsoft.com/ef/core/providers/sqlite/limitations#concurrent-migrations-protection).
 
-**M3Undle clears these automatically from v1.0.0-beta.8.2 onward**, logging:
+**M3Undle clears these automatically from v1.0.0-beta.9 onward**, logging:
 
 ```text
 [WRN] Removed 1 abandoned EF Core migration lock row(s) (oldest taken ..., 286.6 hours ago).
