@@ -4,6 +4,32 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.8.2] — 2026-08-11
+
+Fixes a startup hang that could leave M3Undle permanently unable to start after a hard restart, with no error to explain it. If your container has been sitting at "unhealthy" and never coming up, this release very likely fixes it — and your data was never damaged.
+
+### Fixed
+
+- **M3Undle could hang forever on startup after being force-stopped.** Before applying database migrations, Entity Framework records a lock in an internal table. If the container is killed while that lock is held — for example, restarting during a long provider or series import — the lock is left behind, and this is a documented limitation of the SQLite provider. Every later start then waited *indefinitely* for a lock that would never be released: no error, no log output, the container up but never listening. M3Undle now detects a lock older than five minutes and clears it automatically at startup. Locks newer than that are left alone, so the protection against two instances migrating at once still works
+- Databases affected by this were never corrupted, only blocked — nothing needs to be rebuilt or re-imported
+
+### Startup diagnostics
+
+- Migrations that run longer than 30 seconds now report progress every 30 seconds, naming the database and the likely cause, instead of going silent
+
+### Testing
+
+- Added regression coverage for the abandoned migration lock, including a stale lock, a lock young enough to still be live, an undated lock, and a full migration run that must complete rather than stall
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.8.2
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.8.1] — 2026-08-08
 
 A diagnostic release prompted by an install that started but never finished coming up, leaving nothing in the log to explain why. It also corrects the storage figures on the System Resources page, which were measuring the wrong filesystem on Linux.
@@ -532,6 +558,7 @@ ghcr.io/sydney-elvis/m3undle:alpha
 
 ---
 
+[v1.0.0-beta.8.2]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8.1...v1.0.0-beta.8.2
 [v1.0.0-beta.8.1]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.8...v1.0.0-beta.8.1
 [v1.0.0-beta.8]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [v1.0.0-beta.7]: https://github.com/Sydney-Elvis/M3Undle/compare/v1.0.0-beta.6...v1.0.0-beta.7

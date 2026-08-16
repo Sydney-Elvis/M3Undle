@@ -480,6 +480,10 @@ using (var restoreScope = app.Services.CreateScope())
         app.Logger.LogInformation("A staged portable-backup restore was applied during startup.");
 }
 
+// How often the migration watchdog reports that it is still working. Long enough that a normal
+// upgrade (well under a second here) never logs at all, short enough that a stall is obvious.
+var migrationProgressInterval = TimeSpan.FromSeconds(30);
+
 List<string> appliedMigrations;
 using (var scope = app.Services.CreateScope())
 {
@@ -500,7 +504,23 @@ using (var scope = app.Services.CreateScope())
             appliedMigrations.Count,
             string.Join(", ", appliedMigrations));
 
-    db.Database.Migrate();
+    // Must precede Migrate(): an abandoned lock row makes it wait forever rather than fail.
+    MigrationLockGuard.ClearAbandonedLock(db.Database.GetDbConnection(), app.Logger);
+
+    // Migrate() is synchronous and, on a lock it cannot get, silent — so run it off-thread and
+    // report progress while it works. Anything that stalls here now says so instead of leaving
+    // an operator staring at a log that simply stops.
+    var migrateTask = Task.Run(() => db.Database.Migrate());
+    while (await Task.WhenAny(migrateTask, Task.Delay(migrationProgressInterval)) != migrateTask)
+    {
+        app.Logger.LogWarning(
+            "Still applying database migrations after {ElapsedSeconds:F0}s. If this never completes, the usual cause "
+            + "is an abandoned EF Core migration lock in {DatabasePath} — see the troubleshooting guide.",
+            System.Diagnostics.Stopwatch.GetElapsedTime(databaseStartedAt).TotalSeconds,
+            runtimePaths.DatabasePath);
+    }
+
+    await migrateTask; // Surfaces migration failures on the startup path.
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 
     app.Logger.LogInformation(
