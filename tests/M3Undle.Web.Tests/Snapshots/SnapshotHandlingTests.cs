@@ -1391,11 +1391,11 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
-    public async Task SnapshotBuilder_BuildOnly_EmptyCarriedForwardGuide_RecompilesFromCache()
+    public async Task SnapshotBuilder_BuildOnly_RecompilesFromCache_WhenCarriedForwardGuideHasProgrammes()
     {
-        // Regression: build-only was carrying forward the previous snapshot's guide.xml verbatim.
-        // When that guide was an empty stub, the new snapshot also got an empty guide even though
-        // a valid cached EPG file and mappings existed.
+        // Regression: build-only carried forward the previous snapshot's guide.xml verbatim.
+        // After a user selected a new channel, the output changed but that channel was missing
+        // from the guide even when a valid cached EPG file and mapping existed.
         await using var fixture = await CreateFixtureAsync();
 
         var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
@@ -1406,12 +1406,19 @@ public sealed class SnapshotHandlingTests
         const string xmltvChannelId = "CBS.us";
         const string providerChannelId = "ch-cbs";
         const string fetchRunId = "run-1";
+        var lastEpgSuccessUtc = DateTime.UtcNow.AddHours(-2);
+        var programmeStart = DateTime.UtcNow.AddMinutes(-30);
+        var programmeStop = programmeStart.AddHours(1);
 
-        var emptyGuide = "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv generator-info-name=\"M3Undle\"></tv>";
+        var oldGuide =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv>" +
+            "<channel id=\"OLD.us\"><display-name>Old channel</display-name></channel>" +
+            "<programme start=\"20260501060000 +0000\" stop=\"20260501070000 +0000\" channel=\"OLD.us\">" +
+            "<title>Old programme</title></programme></tv>";
         var cachedXmltv =
             "<?xml version=\"1.0\" encoding=\"utf-8\"?><tv>" +
             $"<channel id=\"{xmltvChannelId}\"><display-name>CBS</display-name></channel>" +
-            $"<programme start=\"20260501060000 +0000\" stop=\"20260501070000 +0000\" channel=\"{xmltvChannelId}\">" +
+            $"<programme start=\"{programmeStart:yyyyMMddHHmmss} +0000\" stop=\"{programmeStop:yyyyMMddHHmmss} +0000\" channel=\"{xmltvChannelId}\">" +
             "<title>Morning News</title></programme></tv>";
 
         try
@@ -1422,9 +1429,9 @@ public sealed class SnapshotHandlingTests
             // Write cached EPG (simulates a previously fetched + stored upstream guide)
             await File.WriteAllTextAsync(Path.Combine(epgCacheDir, $"{epgSourceId}.xml"), cachedXmltv);
 
-            // Write the empty guide that the previous snapshot points at
+            // Write a non-empty guide that the previous snapshot points at.
             var oldGuidePath = Path.Combine(oldSnapDir, "guide.xml");
-            await File.WriteAllTextAsync(oldGuidePath, emptyGuide);
+            await File.WriteAllTextAsync(oldGuidePath, oldGuide);
 
             await using (var setup = fixture.CreateDbContext())
             {
@@ -1473,7 +1480,6 @@ public sealed class SnapshotHandlingTests
                     UpdatedUtc = DateTime.UtcNow,
                 });
 
-                // LastSuccessUtc = now + RefreshIntervalHours = 24 → cadence check is fresh → no HTTP fetch
                 setup.EpgSources.Add(new EpgSource
                 {
                     EpgSourceId = epgSourceId,
@@ -1483,7 +1489,7 @@ public sealed class SnapshotHandlingTests
                     UrlOrPath = "http://example.com/xmltv.xml",
                     Priority = 10,
                     Enabled = true,
-                    LastSuccessUtc = DateTime.UtcNow,
+                    LastSuccessUtc = lastEpgSuccessUtc,
                     RefreshIntervalHours = 24,
                     CreatedUtc = DateTime.UtcNow,
                     UpdatedUtc = DateTime.UtcNow,
@@ -1502,7 +1508,7 @@ public sealed class SnapshotHandlingTests
                     UpdatedUtc = DateTime.UtcNow,
                 });
 
-                // Previous active snapshot whose guide is an empty stub — reproduces the bug state
+                // Previous active snapshot whose guide has unrelated programme data.
                 setup.Snapshots.Add(new Snapshot
                 {
                     SnapshotId = "snap-old",
@@ -1520,7 +1526,7 @@ public sealed class SnapshotHandlingTests
             }
 
             await using var db = fixture.CreateDbContext();
-            var builder = CreateBuilder(db, HttpStatusCode.OK, emptyGuide, tempDir);
+            var builder = CreateBuilder(db, HttpStatusCode.OK, oldGuide, tempDir);
 
             await builder.BuildOnlyAsync(CancellationToken.None);
 
@@ -1532,8 +1538,12 @@ public sealed class SnapshotHandlingTests
 
             var guide = await File.ReadAllTextAsync(active.XmltvPath);
             Assert.IsTrue(
-                guide.Contains("<programme"),
-                "build-only must recompile EPG from cached sources when the previous active guide was an empty stub.");
+                guide.Contains("Morning News"),
+                "build-only must recompile EPG from cached sources so selected channels receive guide data.");
+            Assert.IsFalse(guide.Contains("Old programme"));
+            var source = await verify.EpgSources.SingleAsync(x => x.EpgSourceId == epgSourceId);
+            Assert.AreEqual(lastEpgSuccessUtc, source.LastSuccessUtc, "A build-only guide compile must not update EPG source freshness.");
+            Assert.AreEqual(0, await verify.EpgFetchRuns.CountAsync(), "A build-only guide compile must not create EPG fetch history.");
         }
         finally
         {

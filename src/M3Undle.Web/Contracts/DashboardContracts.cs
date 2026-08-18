@@ -40,6 +40,7 @@ public sealed class DashboardStatsDto
     public int GroupsPendingReview { get; set; }
     public List<DashboardProfileSummary> ProfileSummaries { get; set; } = [];
     public DateTime? LastPublishedUtc { get; set; }
+    public DateTime? LastEpgUpdateUtc { get; set; }
     public bool RefreshFailed { get; set; }
     public string? LastChangeClass { get; set; }
     public DateTime? ActiveProfileProviderExpiresUtc { get; set; }

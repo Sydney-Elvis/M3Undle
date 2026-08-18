@@ -17,6 +17,8 @@
 @using M3Undle.Web.Contracts
 @inject M3Undle.Web.Application.ChannelStatsService StatsService
 @inject M3Undle.Web.Application.ISiteSettingsService SiteSettings
+@inject M3Undle.Web.Application.Backup.PortableBackupService BackupService
+@inject M3Undle.Web.Application.Backup.IBackupScheduleService BackupScheduleService
 @inject M3Undle.Core.AppBuildInfo BuildInfo
 @inject ILogger<MainLayout> Logger
 
@@ -168,6 +170,11 @@
                 @CpuFooterLabel
             </MudLink>
         </MudTooltip>
+        <MudTooltip Text="@BackupFooterTooltip" Placement="Placement.Top">
+            <MudLink Href="settings?section=backup" Color="Color.Inherit" Style="font-size:0.70rem; margin-left:8px;">
+                @BackupFooterLabel
+            </MudLink>
+        </MudTooltip>
         <MudTooltip Text="Service health reflects lineup and streaming availability; resource capacity is reported separately by the CPU indicator." Placement="Placement.Top">
             <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="font-size:0.70rem; margin-left:8px;">
                 <MudIcon Icon="@HealthIcon" Color="@HealthColor" Style="font-size:0.85rem; width:14px; height:14px;" />
@@ -193,11 +200,15 @@
     private bool _eventSummaryDelayed;
     private bool _channelStatsDelayed;
     private bool _lineupStatusDelayed;
+    private bool _backupStatusDelayed;
 
     private int _streamCount;
     private int _clientCount;
     private M3Undle.Web.Observability.Resources.ResourceFacts? _resourceFacts;
     private int? _providerMaxStreams;
+    private M3Undle.Web.Application.Backup.PortableBackupSummary? _latestBackup;
+    private M3Undle.Web.Application.Backup.BackupScheduleSettings? _backupSchedule;
+    private DateTime? _nextScheduledBackupUtc;
     private string _lineupStatusCode = string.Empty;
     private bool _activeProfileHasProvider;
     private IDisposable? _eventSubscription;
@@ -241,7 +252,45 @@
         _ => "Unknown"
     };
 
-    private bool HasStatusDelays => _eventSummaryDelayed || _channelStatsDelayed || _lineupStatusDelayed;
+    private bool HasStatusDelays => _eventSummaryDelayed || _channelStatsDelayed || _lineupStatusDelayed || _backupStatusDelayed;
+
+    private string BackupFooterLabel => _latestBackup is { } backup
+        ? $"Backup {backup.CreatedUtc.ToLocalTime():d MMM}"
+        : "Backup none";
+
+    private string BackupFooterTooltip
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (_latestBackup is { } backup)
+            {
+                parts.Add($"Last successful portable backup: {backup.CreatedUtc.ToLocalTime():d MMM yyyy h:mm tt} ({M3Undle.Web.Observability.Resources.ResourceFactsPresentation.FormatBytes(backup.SizeBytes)}).");
+            }
+            else
+            {
+                parts.Add("No locally created portable backup yet.");
+            }
+
+            if (_backupSchedule?.Enabled == true)
+            {
+                parts.Add(_nextScheduledBackupUtc is { } next
+                    ? $"Weekly schedule enabled; next run {next.ToLocalTime():d MMM yyyy h:mm tt}."
+                    : "Weekly schedule enabled.");
+            }
+            else if (_backupSchedule is not null)
+            {
+                parts.Add("Weekly schedule disabled.");
+            }
+            else
+            {
+                parts.Add("Backup status is still loading.");
+            }
+
+            parts.Add("Click to open Backup & Restore settings.");
+            return string.Join(" ", parts);
+        }
+    }
 
     private M3Undle.Web.Observability.Resources.DiskVolumeFact? CriticalDiskVolume =>
         _resourceFacts?.DiskVolumes.FirstOrDefault(v => v.IsCritical);
@@ -271,6 +320,7 @@
             if (_eventSummaryDelayed) delayed.Add("system events");
             if (_channelStatsDelayed) delayed.Add("channel stats");
             if (_lineupStatusDelayed) delayed.Add("lineup status");
+            if (_backupStatusDelayed) delayed.Add("backup status");
             return delayed.Count == 0
                 ? "All status data is up to date."
                 : $"Delayed status data: {string.Join(", ", delayed)}.";
@@ -396,6 +446,7 @@
             {
                 _ = LoadChannelStatsAsync();
                 _ = LoadLineupStatusAsync();
+                _ = LoadBackupStatusAsync();
                 _ = PollStreamAndStatusAsync(_cts.Token);
             }
 
@@ -521,6 +572,29 @@
         catch (OperationCanceledException) { }
     }
 
+    private async Task LoadBackupStatusAsync()
+    {
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+            timeoutCts.CancelAfter(UiQueryTimeout);
+            var ct = timeoutCts.Token;
+            _latestBackup = BackupService.List()
+                .FirstOrDefault(backup => backup.FileName.StartsWith("m3undle-backup-", StringComparison.Ordinal));
+            _backupSchedule = await BackupScheduleService.GetSettingsAsync(ct);
+            _nextScheduledBackupUtc = await BackupScheduleService.GetNextScheduledBackupUtcAsync(ct);
+            _backupStatusDelayed = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+        {
+            _backupStatusDelayed = true;
+            Logger.LogWarning("Timed out loading backup status for layout footer.");
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) { }
+    }
+
     private async Task PollStreamAndStatusAsync(CancellationToken ct)
     {
         try
@@ -608,6 +682,7 @@
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
         _drawerOpen = false;
+        _ = LoadBackupStatusAsync();
         InvokeAsync(StateHasChanged);
     }
 

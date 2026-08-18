@@ -343,6 +343,19 @@
                                 </MudStack>
                             }
 
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">Last EPG Update</MudText>
+                                @if (_dashboardStats?.LastEpgUpdateUtc is { } lastEpgUpdate)
+                                {
+                                    <MudText Typo="Typo.body2">@lastEpgUpdate.ToString("u")</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Latest successful guide-source fetch</MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">No successful guide fetch yet</MudText>
+                                }
+                            </MudStack>
+
                             @* Published version *@
                             <MudStack Spacing="0">
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">Published</MudText>

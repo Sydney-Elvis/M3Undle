@@ -123,6 +123,48 @@ public sealed class DashboardStatsServiceTests
     }
 
     [TestMethod]
+    public async Task GetStatsAsync_LastEpgUpdateUtc_UsesLatestSuccessfulSourceForActiveProfile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+        var earlier = DateTime.UtcNow.AddHours(-4);
+        var later = DateTime.UtcNow.AddHours(-1);
+
+        db.Profiles.Add(NewProfile("profile-1", isActive: true));
+        db.Profiles.Add(NewProfile("other-profile", isActive: false));
+        db.Providers.Add(NewProvider("p1", playlistExpiresUtc: null));
+        db.Providers.Add(NewProvider("p2", playlistExpiresUtc: null));
+        db.ProfileProviders.Add(NewProfileProvider("profile-1", "p1"));
+        db.ProfileProviders.Add(NewProfileProvider("other-profile", "p2"));
+        db.EpgSources.AddRange(
+            NewEpgSource("epg-1", "p1", earlier),
+            NewEpgSource("epg-2", "p1", later),
+            NewEpgSource("epg-other", "p2", DateTime.UtcNow));
+        await db.SaveChangesAsync();
+
+        var stats = await CreateService(fixture).GetStatsAsync(CancellationToken.None);
+
+        Assert.AreEqual(later, stats.LastEpgUpdateUtc);
+    }
+
+    [TestMethod]
+    public async Task GetStatsAsync_LastEpgUpdateUtc_IgnoresUnsuccessfulSources()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+
+        db.Profiles.Add(NewProfile("profile-1", isActive: true));
+        db.Providers.Add(NewProvider("p1", playlistExpiresUtc: null));
+        db.ProfileProviders.Add(NewProfileProvider("profile-1", "p1"));
+        db.EpgSources.Add(NewEpgSource("epg-1", "p1", lastSuccessUtc: null));
+        await db.SaveChangesAsync();
+
+        var stats = await CreateService(fixture).GetStatsAsync(CancellationToken.None);
+
+        Assert.IsNull(stats.LastEpgUpdateUtc);
+    }
+
+    [TestMethod]
     public async Task GetStatsAsync_ProfileWithoutProvider_DoesNotPresentOldSnapshotAsOutput()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -191,6 +233,19 @@ public sealed class DashboardStatsServiceTests
         ProviderId = providerId,
         Priority = 1,
         Enabled = true,
+    };
+
+    private static EpgSource NewEpgSource(string id, string providerId, DateTime? lastSuccessUtc) => new()
+    {
+        EpgSourceId = id,
+        ProviderId = providerId,
+        Name = id,
+        Kind = "xmltv_url",
+        UrlOrPath = "http://example.com/guide.xml",
+        Enabled = true,
+        LastSuccessUtc = lastSuccessUtc,
+        CreatedUtc = DateTime.UtcNow,
+        UpdatedUtc = DateTime.UtcNow,
     };
 
     private static async Task<TestFixture> CreateFixtureAsync()

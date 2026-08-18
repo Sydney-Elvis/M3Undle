@@ -403,8 +403,8 @@ public sealed class SnapshotRefreshService(
                 try
                 {
                     await eventService.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.BreakingLineupChange,
-                        "Breaking lineup change detected",
-                        "More than 20% of channels changed — connected clients may need to rescan.");
+                        "Large lineup change detected",
+                        "More than 20% of channels changed — connected clients may need a lineup refresh or rescan.");
                 }
                 catch (Exception ex) { logger.LogWarning(ex, "Failed to publish BreakingLineupChange event."); }
             }
