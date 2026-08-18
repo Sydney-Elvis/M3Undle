@@ -1073,11 +1073,31 @@
 
                     @if (cgLinksExpanded)
                     {
+                        var linkPickerOpen = _cgLinkPickerOpen.Contains(cg.CustomGroupId);
                         <MudDivider Class="my-2" />
                         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-1">
                             <MudText Typo="Typo.caption" Color="Color.Secondary">Source groups (auto-sync channels from these provider groups)</MudText>
                             <MudSpacer />
+                            <MudTooltip Text="Link a provider group" Arrow="true">
+                                <MudIconButton Icon="@Icons.Material.Filled.AddCircleOutline" Size="Size.Small"
+                                               Color="@(linkPickerOpen ? Color.Primary : Color.Default)"
+                                               OnClick="@(() => ToggleCgLinkPicker(cg))" />
+                            </MudTooltip>
                         </MudStack>
+                        @if (linkPickerOpen)
+                        {
+                            <MudAutocomplete T="GroupFilterDto"
+                                SearchFunc="@((value, token) => SearchLinkableProviderGroupsAsync(cg, value, token))"
+                                ToStringFunc="@(f => f is null ? string.Empty : $"{f.ProviderGroupRawName} ({f.ChannelCount ?? 0} ch)")"
+                                ValueChanged="@(f => f is not null ? AddCgProviderLinkAsync(cg, f) : Task.CompletedTask)"
+                                Clearable="true"
+                                Variant="Variant.Outlined"
+                                Margin="Margin.Dense"
+                                Dense="true"
+                                Placeholder="Search provider groups…"
+                                Class="mb-2"
+                                Style="max-width:360px;" />
+                        }
                         @foreach (var link in cgLinks)
                         {
                             <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined" Class="mr-1 mb-1"
@@ -1087,20 +1107,64 @@
                         }
                         @if (cgLinks.Count == 0)
                         {
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">No source groups linked. Use the group list below to link provider groups to this custom group.</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">No source groups linked. Use the search above to link provider groups to this custom group.</MudText>
                         }
                     }
 
                     @if (cgExpanded)
                     {
+                        var cgSearchTerm = _cgChannelSearchTerm.GetValueOrDefault(cg.CustomGroupId, string.Empty);
+                        var cgSearchBusy = _cgChannelSearchBusy.Contains(cg.CustomGroupId);
+                        var cgSearchResults = _cgChannelSearchResults.GetValueOrDefault(cg.CustomGroupId) ?? [];
+
                         <MudDivider Class="my-2" />
-                        @if (cgChannels.Count == 0)
+                        <MudTextField T="string"
+                            Value="@cgSearchTerm"
+                            ValueChanged="@(v => OnCgChannelSearchChanged(cg, v ?? string.Empty))"
+                            Placeholder="Search channels to add…"
+                            Variant="Variant.Outlined"
+                            Margin="Margin.Dense"
+                            Immediate="true"
+                            Adornment="Adornment.End"
+                            AdornmentIcon="@(cgSearchBusy ? Icons.Material.Filled.HourglassEmpty : Icons.Material.Filled.Search)"
+                            Class="mb-2"
+                            Style="max-width:360px;" />
+
+                        @if (cgSearchResults.Count > 0)
+                        {
+                            <MudStack Spacing="0" Class="mb-2">
+                                @foreach (var result in cgSearchResults)
+                                {
+                                    <div style="display:flex; align-items:center; gap:6px; padding:2px 0;">
+                                        <MudText Typo="Typo.body2" Style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                            @result.DisplayName
+                                        </MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary" Style="white-space:nowrap;">from @result.ProviderGroupRawName</MudText>
+                                        @if (result.AlreadyInGroup)
+                                        {
+                                            <MudTooltip Text="Already in this group" Arrow="true">
+                                                <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Color="Color.Success" />
+                                            </MudTooltip>
+                                        }
+                                        else
+                                        {
+                                            <MudTooltip Text="Add to this group" Arrow="true">
+                                                <MudIconButton Icon="@Icons.Material.Filled.AddCircleOutline" Size="Size.Small" Color="Color.Success"
+                                                               OnClick="@(() => AddCgChannelFromSearchAsync(cg, result))" />
+                                            </MudTooltip>
+                                        }
+                                    </div>
+                                }
+                            </MudStack>
+                        }
+
+                        @if (cgChannels.Count == 0 && cgSearchResults.Count == 0)
                         {
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                No channels yet. Link source groups (above) to auto-populate, or search for channels in the list below and add them here.
+                                No channels yet. Link source groups (above) to auto-populate, or search above for channels to add here.
                             </MudText>
                         }
-                        else
+                        else if (cgChannels.Count > 0)
                         {
                             @foreach (var ch in cgChannels)
                             {
@@ -1623,6 +1687,12 @@
     private string _cgEditName = string.Empty;
     private string? _editingParentOutputName;
     private string _editParentNameText = string.Empty;
+
+    private Dictionary<string, string> _cgChannelSearchTerm = [];
+    private Dictionary<string, List<CustomGroupChannelSearchResultDto>> _cgChannelSearchResults = [];
+    private HashSet<string> _cgChannelSearchBusy = [];
+    private Dictionary<string, CancellationTokenSource> _cgSearchDebounceCts = [];
+    private HashSet<string> _cgLinkPickerOpen = [];
 
     // -------------------------------------------------------------------------
     // Mapped channels panel state
@@ -3913,6 +3983,134 @@
                 _customGroups[gIdx] = _customGroups[gIdx] with { ProviderLinkCount = list.Count };
             MarkOutputDirty();
         }
+        StateHasChanged();
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom group: add channels (cherry-pick search)
+    // -------------------------------------------------------------------------
+
+    private async Task OnCgChannelSearchChanged(CustomGroupDto cg, string value)
+    {
+        _cgChannelSearchTerm[cg.CustomGroupId] = value;
+
+        if (_cgSearchDebounceCts.TryGetValue(cg.CustomGroupId, out var existingCts))
+            existingCts.Cancel();
+
+        if (string.IsNullOrWhiteSpace(value) || value.Trim().Length < 2)
+        {
+            _cgChannelSearchResults.Remove(cg.CustomGroupId);
+            _cgChannelSearchBusy.Remove(cg.CustomGroupId);
+            StateHasChanged();
+            return;
+        }
+
+        _cgChannelSearchBusy.Add(cg.CustomGroupId);
+        StateHasChanged();
+
+        var cts = new CancellationTokenSource();
+        _cgSearchDebounceCts[cg.CustomGroupId] = cts;
+        try
+        {
+            await Task.Delay(400, cts.Token);
+            await ExecuteCgChannelSearchAsync(cg, value.Trim());
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task ExecuteCgChannelSearchAsync(CustomGroupDto cg, string term)
+    {
+        if (_profileId is null) return;
+
+        try
+        {
+            var results = await CustomGroupService.SearchAddableChannelsAsync(_profileId, cg.CustomGroupId, term, _cts.Token);
+            _cgChannelSearchResults[cg.CustomGroupId] = results;
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _cgChannelSearchBusy.Remove(cg.CustomGroupId);
+            StateHasChanged();
+        }
+    }
+
+    private async Task AddCgChannelFromSearchAsync(CustomGroupDto cg, CustomGroupChannelSearchResultDto result)
+    {
+        if (_profileId is null) return;
+        var added = await CustomGroupService.AddChannelsAsync(_profileId, cg.CustomGroupId, [result.ProviderChannelId], _cts.Token);
+        if (added > 0)
+        {
+            await LoadCgChannelsAsync(cg);
+
+            var gIdx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
+            if (gIdx >= 0 && _cgChannelCache.TryGetValue(cg.CustomGroupId, out var list))
+            {
+                var included = list.Count(c => string.Equals(c.State, "included", StringComparison.OrdinalIgnoreCase));
+                _customGroups[gIdx] = _customGroups[gIdx] with { ChannelCount = list.Count, SelectedChannelCount = included };
+            }
+
+            if (_cgChannelSearchResults.TryGetValue(cg.CustomGroupId, out var searchList))
+            {
+                var idx = searchList.FindIndex(r => r.ProviderChannelId == result.ProviderChannelId);
+                if (idx >= 0)
+                    searchList[idx] = searchList[idx] with { AlreadyInGroup = true };
+            }
+
+            MarkOutputDirty();
+            Snackbar.Add($"Added \"{result.DisplayName}\" to \"{cg.Name}\".", Severity.Success);
+        }
+        StateHasChanged();
+    }
+
+    // -------------------------------------------------------------------------
+    // Custom group: link a provider group
+    // -------------------------------------------------------------------------
+
+    private void ToggleCgLinkPicker(CustomGroupDto cg)
+    {
+        if (!_cgLinkPickerOpen.Remove(cg.CustomGroupId))
+            _cgLinkPickerOpen.Add(cg.CustomGroupId);
+    }
+
+    private Task<IEnumerable<GroupFilterDto>> SearchLinkableProviderGroupsAsync(CustomGroupDto cg, string? value, CancellationToken token)
+    {
+        var candidates = _allFilters.Where(f => !cg.LinkedProviderGroupIds.Contains(f.ProviderGroupId));
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            candidates = candidates.Where(f =>
+                f.ProviderGroupRawName.Contains(value, StringComparison.OrdinalIgnoreCase));
+        }
+        return Task.FromResult(candidates.OrderBy(f => f.ProviderGroupRawName).Take(50));
+    }
+
+    private async Task AddCgProviderLinkAsync(CustomGroupDto cg, GroupFilterDto filter)
+    {
+        if (_profileId is null) return;
+        var ok = await CustomGroupService.AddProviderLinkAsync(_profileId, cg.CustomGroupId, filter.ProviderGroupId, _cts.Token);
+        if (ok)
+        {
+            await LoadCgLinksAsync(cg);
+            await LoadCgChannelsAsync(cg);
+
+            var gIdx = _customGroups.FindIndex(g => g.CustomGroupId == cg.CustomGroupId);
+            if (gIdx >= 0 && _cgLinksCache.TryGetValue(cg.CustomGroupId, out var links))
+            {
+                var included = _cgChannelCache.TryGetValue(cg.CustomGroupId, out var chList)
+                    ? chList.Count(c => string.Equals(c.State, "included", StringComparison.OrdinalIgnoreCase))
+                    : _customGroups[gIdx].SelectedChannelCount;
+                _customGroups[gIdx] = _customGroups[gIdx] with
+                {
+                    ProviderLinkCount = links.Count,
+                    ChannelCount = _cgChannelCache.TryGetValue(cg.CustomGroupId, out var cl) ? cl.Count : _customGroups[gIdx].ChannelCount,
+                    SelectedChannelCount = included,
+                };
+            }
+
+            MarkOutputDirty();
+            Snackbar.Add($"Linked \"{filter.ProviderGroupRawName}\" — new channels added as pending, review them below.", Severity.Success);
+        }
+        _cgLinkPickerOpen.Remove(cg.CustomGroupId);
         StateHasChanged();
     }
 

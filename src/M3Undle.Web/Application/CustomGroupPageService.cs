@@ -210,6 +210,62 @@ public sealed class CustomGroupPageService(IServiceScopeFactory scopeFactory, Ap
         }).ToList();
     }
 
+    public async Task<List<CustomGroupChannelSearchResultDto>> SearchAddableChannelsAsync(
+        string profileId,
+        string customGroupId,
+        string? q,
+        CancellationToken cancellationToken)
+    {
+        var term = q?.Trim() ?? string.Empty;
+        if (term.Length < 2)
+            return [];
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        var group = await db.ProfileCustomGroups
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.CustomGroupId == customGroupId && x.ProfileId == profileId, cancellationToken);
+
+        if (group is null)
+            return [];
+
+        var providerIds = db.ProfileProviders
+            .Where(pp => pp.ProfileId == profileId)
+            .Select(pp => pp.ProviderId);
+
+        var existingIds = await db.ProfileCustomGroupChannels
+            .AsNoTracking()
+            .Where(x => x.CustomGroupId == customGroupId)
+            .Select(x => x.ProviderChannelId)
+            .ToHashSetAsync(cancellationToken);
+
+        var upperTerm = term.ToUpperInvariant();
+        var matches = await db.ProviderChannels
+            .AsNoTracking()
+            .Include(c => c.ProviderGroup)
+            .Include(c => c.Provider)
+            .Where(c => c.Active
+                        && c.ContentType == "live"
+                        && !c.IsPlaceholder
+                        && providerIds.Contains(c.ProviderId)
+                        && EF.Functions.Like(c.DisplayName.ToUpper(), $"%{upperTerm}%"))
+            .OrderBy(c => c.DisplayName)
+            .Take(50)
+            .ToListAsync(cancellationToken);
+
+        return matches.Select(c => new CustomGroupChannelSearchResultDto
+        {
+            ProviderChannelId = c.ProviderChannelId,
+            DisplayName = c.DisplayName,
+            TvgId = c.TvgId,
+            GroupTitle = c.GroupTitle,
+            ProviderGroupRawName = c.ProviderGroup?.RawName ?? c.GroupTitle ?? string.Empty,
+            ProviderName = c.Provider.Name,
+            AlreadyInGroup = existingIds.Contains(c.ProviderChannelId),
+        }).ToList();
+    }
+
     public async Task<int> AddChannelsAsync(
         string profileId,
         string customGroupId,
@@ -384,11 +440,11 @@ public sealed class CustomGroupPageService(IServiceScopeFactory scopeFactory, Ap
         if (alreadyLinked)
             return true;
 
-        var providerGroupExists = await db.ProviderGroups
+        var providerGroup = await db.ProviderGroups
             .AsNoTracking()
-            .AnyAsync(x => x.ProviderGroupId == providerGroupId, cancellationToken);
+            .FirstOrDefaultAsync(x => x.ProviderGroupId == providerGroupId, cancellationToken);
 
-        if (!providerGroupExists)
+        if (providerGroup is null)
             return false;
 
         db.ProfileCustomGroupProviderLinks.Add(new ProfileCustomGroupProviderLink
@@ -400,6 +456,12 @@ public sealed class CustomGroupPageService(IServiceScopeFactory scopeFactory, Ap
         });
 
         await db.SaveChangesAsync(cancellationToken);
+
+        // Populate this custom group's pending/included channels from the newly
+        // linked provider group immediately, rather than waiting for the next
+        // provider fetch/snapshot run.
+        await SyncPendingChannelReviewsAsync(profileId, providerGroup.ProviderId, DateTime.UtcNow, cancellationToken);
+
         return true;
     }
 

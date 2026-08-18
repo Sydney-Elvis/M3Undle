@@ -19,6 +19,7 @@ public static class CustomGroupApiEndpoints
         groups.MapDelete("/{customGroupId}", DeleteAsync).WithSummary("Delete a custom group");
 
         groups.MapGet("/{customGroupId}/channels", ListChannelsAsync).WithSummary("List channels in a custom group");
+        groups.MapGet("/{customGroupId}/channel-search", SearchChannelsAsync).WithSummary("Search channels addable to a custom group");
         groups.MapPost("/{customGroupId}/channels", AddChannelsAsync).WithSummary("Add channels to a custom group");
         groups.MapDelete("/{customGroupId}/channels/{providerChannelId}", RemoveChannelAsync).WithSummary("Remove channel from a custom group");
         groups.MapPatch("/{customGroupId}/channels/{providerChannelId}", UpdateChannelAsync).WithSummary("Update custom group channel");
@@ -82,6 +83,14 @@ public static class CustomGroupApiEndpoints
         var channels = await svc.ListChannelsAsync(profileId, customGroupId, cancellationToken);
         return TypedResults.Ok(channels);
     }
+
+    private static async Task<Ok<List<CustomGroupChannelSearchResultDto>>> SearchChannelsAsync(
+        string profileId,
+        string customGroupId,
+        string? q,
+        CustomGroupPageService svc,
+        CancellationToken cancellationToken)
+        => TypedResults.Ok(await svc.SearchAddableChannelsAsync(profileId, customGroupId, q, cancellationToken));
 
     private static async Task<Results<Ok<int>, NotFound>> AddChannelsAsync(
         string profileId,

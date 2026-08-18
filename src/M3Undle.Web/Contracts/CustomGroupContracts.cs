@@ -87,3 +87,14 @@ public sealed class AddCustomGroupProviderLinkRequest
 {
     public string ProviderGroupId { get; set; } = string.Empty;
 }
+
+public sealed record CustomGroupChannelSearchResultDto
+{
+    public string ProviderChannelId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string? TvgId { get; set; }
+    public string? GroupTitle { get; set; }
+    public string ProviderGroupRawName { get; set; } = string.Empty;
+    public string ProviderName { get; set; } = string.Empty;
+    public bool AlreadyInGroup { get; set; }
+}
