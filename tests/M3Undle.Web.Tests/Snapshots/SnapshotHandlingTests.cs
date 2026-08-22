@@ -1391,7 +1391,7 @@ public sealed class SnapshotHandlingTests
     }
 
     [TestMethod]
-    public async Task SnapshotBuilder_BuildOnly_RecompilesFromCache_WhenCarriedForwardGuideHasProgrammes()
+    public async Task SnapshotBuilder_BuildOnly_RecompilesFromCache_AndFetchesOnlyCacheMissingSources()
     {
         // Regression: build-only carried forward the previous snapshot's guide.xml verbatim.
         // After a user selected a new channel, the output changed but that channel was missing
@@ -1526,7 +1526,9 @@ public sealed class SnapshotHandlingTests
             }
 
             await using var db = fixture.CreateDbContext();
-            var builder = CreateBuilder(db, HttpStatusCode.OK, oldGuide, tempDir);
+            // The first build must use the disk cache only. The second build deletes that cache
+            // and uses this response, modelling an EPG source added after the last full refresh.
+            var builder = CreateBuilder(db, HttpStatusCode.OK, cachedXmltv, tempDir);
 
             await builder.BuildOnlyAsync(CancellationToken.None);
 
@@ -1544,6 +1546,19 @@ public sealed class SnapshotHandlingTests
             var source = await verify.EpgSources.SingleAsync(x => x.EpgSourceId == epgSourceId);
             Assert.AreEqual(lastEpgSuccessUtc, source.LastSuccessUtc, "A build-only guide compile must not update EPG source freshness.");
             Assert.AreEqual(0, await verify.EpgFetchRuns.CountAsync(), "A build-only guide compile must not create EPG fetch history.");
+
+            File.Delete(Path.Combine(epgCacheDir, $"{epgSourceId}.xml"));
+
+            await builder.BuildOnlyAsync(CancellationToken.None);
+
+            await using var fetchedVerify = fixture.CreateDbContext();
+            var fetchedSource = await fetchedVerify.EpgSources.SingleAsync(x => x.EpgSourceId == epgSourceId);
+            Assert.AreNotEqual(lastEpgSuccessUtc, fetchedSource.LastSuccessUtc,
+                "A build-only publish must fetch an EPG source once when no cache payload exists.");
+            Assert.AreEqual(1, await fetchedVerify.EpgFetchRuns.CountAsync(),
+                "Fetching a cache-missing EPG source must record its normal fetch history.");
+            Assert.IsTrue(File.Exists(Path.Combine(epgCacheDir, $"{epgSourceId}.xml")),
+                "The first build-only fetch must populate the source cache for future cache-only builds.");
         }
         finally
         {
