@@ -79,6 +79,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
         var activeProfileId = profiles.FirstOrDefault(x => x.IsActive)?.ProfileId;
 
         DateTime? activeProfileProviderExpiresUtc = null;
+        DateTime? lastEpgUpdateUtc = null;
         if (activeProfileId is not null)
         {
             activeProfileProviderExpiresUtc = await db.ProfileProviders
@@ -91,6 +92,21 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                     (pp, p) => p.PlaylistExpiresUtc)
                 .OrderBy(expiresUtc => expiresUtc)
                 .FirstOrDefaultAsync(ct);
+
+            var activeProfileProviderIds = profileProviders
+                .Where(pp => pp.ProfileId == activeProfileId && pp.Enabled)
+                .Select(pp => pp.ProviderId)
+                .ToList();
+
+            if (activeProfileProviderIds.Count > 0)
+            {
+                lastEpgUpdateUtc = await db.EpgSources
+                    .AsNoTracking()
+                    .Where(source => activeProfileProviderIds.Contains(source.ProviderId!)
+                                     && source.Enabled
+                                     && source.LastSuccessUtc != null)
+                    .MaxAsync(source => (DateTime?)source.LastSuccessUtc, ct);
+            }
         }
 
         int publishedLive = 0, publishedMovie = 0, publishedSeries = 0;
@@ -188,6 +204,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             GroupsPendingReview = groupsPendingReview,
             ProfileSummaries = summaries,
             LastPublishedUtc = lastPublishedUtc,
+            LastEpgUpdateUtc = lastEpgUpdateUtc,
             RefreshFailed = refreshFailed,
             LastChangeClass = lastChangeClass,
             ActiveProfileProviderExpiresUtc = activeProfileProviderExpiresUtc,

@@ -211,7 +211,7 @@ public static class ChangeClasses
         None      => "No changes",
         GuideOnly => "Guide updated",
         Lineup    => "Lineup updated",
-        Breaking  => "Breaking change",
+        Breaking  => "Large lineup change",
         _         => "Full refresh",
     };
 }

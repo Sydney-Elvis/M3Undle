@@ -15,6 +15,8 @@ public sealed class CreateBackupResponse
     public string? SchemaVersion { get; set; }
     public IReadOnlyDictionary<string, int> RowsRemovedByTable { get; set; } = new Dictionary<string, int>();
     public double DurationSeconds { get; set; }
+    public string Scope { get; set; } = "full";
+    public IReadOnlyList<string> SettingsEntities { get; set; } = [];
 }
 
 public sealed class ValidateBackupResponse
@@ -51,6 +53,18 @@ public sealed class SetBackupScheduleRequest
 public sealed class StageRestoreRequest
 {
     public string FileName { get; set; } = string.Empty;
+}
+
+public sealed class ApplySettingsRestoreRequest
+{
+    public string FileName { get; set; } = string.Empty;
+}
+
+public sealed class ApplySettingsRestoreResponse
+{
+    public bool Success { get; set; }
+    public IReadOnlyList<string> Errors { get; set; } = [];
+    public IReadOnlyDictionary<string, int> AppliedCounts { get; set; } = new Dictionary<string, int>();
 }
 
 public sealed class RestoreStatusResponse

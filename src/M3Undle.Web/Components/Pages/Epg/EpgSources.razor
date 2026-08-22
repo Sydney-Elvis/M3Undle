@@ -42,6 +42,16 @@
             <MudText Typo="Typo.body2" Color="Color.Secondary">
                 Manage guide data sources and channel mappings per provider.
             </MudText>
+            @if (LatestEpgUpdateUtc is { } lastEpgUpdate)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+                    Last EPG update: <strong>@lastEpgUpdate.ToString("u")</strong>
+                </MudText>
+            }
+            else if (_selectedProvider is not null && !_isLoading)
+            {
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">No successful guide fetch yet</MudText>
+            }
             @if (_nextRefreshUtc.HasValue)
             {
                 <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
@@ -412,6 +422,10 @@ else
 
     private DateTime? _nextRefreshUtc;
     private string _refreshScheduleKind = "6h";
+    private DateTime? LatestEpgUpdateUtc => _sources
+        .Where(source => source.LastSuccessUtc.HasValue)
+        .Select(source => source.LastSuccessUtc)
+        .Max();
 
     private readonly CancellationTokenSource _cts = new();
     private IDisposable? _eventSubscription;

@@ -452,28 +452,10 @@ public sealed class SnapshotBuilder(
         string? lastErrorSummary = null;
         string? aggregateChangeClass = ChangeClasses.None;
 
-        var scheduleSettings = await refreshScheduleService.GetActiveProfileSettingsAsync(cancellationToken);
-        var defaultIntervalHours = scheduleSettings?.Settings.IntervalHours;
-
         foreach (var link in activeLinks)
         {
-            var xmltvContent = EmptyXmltvDocument;
-            var latestSnapshot = await db.Snapshots
-                .AsNoTracking()
-                .Where(x => x.ProfileId == link.ProfileId && x.Status == "active")
-                .OrderByDescending(x => x.CreatedUtc)
-                .FirstOrDefaultAsync(cancellationToken);
-
-            if (latestSnapshot is not null && !string.IsNullOrEmpty(latestSnapshot.XmltvPath) && File.Exists(latestSnapshot.XmltvPath))
-                xmltvContent = await File.ReadAllTextAsync(latestSnapshot.XmltvPath, cancellationToken);
-
-            // If the carried-forward guide has no programme data, recompile from cached EPG sources.
-            // Covers the case where a prior empty-guide snapshot is carried forward after a selection change.
-            if (!xmltvContent.Contains("<programme", StringComparison.Ordinal))
-            {
-                logger.LogInformation("Carried-forward guide is empty — recompiling EPG from cache for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
-                xmltvContent = await FetchAndCompileEpgAsync(provider, link.ProfileId, Stopwatch.StartNew(), defaultIntervalHours, cancellationToken);
-            }
+            logger.LogInformation("Recompiling EPG from cache for changed lineup for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
+            var xmltvContent = await CompileEpgFromCacheAsync(provider, link.ProfileId, cancellationToken);
 
             logger.LogInformation("Starting snapshot build-only for provider {ProviderId}, profile {ProfileId}.", provider.ProviderId, link.ProfileId);
 
@@ -1311,16 +1293,7 @@ public sealed class SnapshotBuilder(
         int? globalIntervalHours,
         CancellationToken cancellationToken)
     {
-        // Load (or lazy-create) enabled EPG sources for this provider
-        var sources = await db.EpgSources
-            .AsNoTracking()
-            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
-            .OrderBy(x => x.Priority)
-            .ToListAsync(cancellationToken);
-
-        // Lazy backfill: if no sources exist yet, create one from provider.XmltvUrl / Xtream config
-        if (sources.Count == 0)
-            sources = await BackfillEpgSourceAsync(provider, cancellationToken);
+        var sources = await GetEnabledEpgSourcesAsync(provider, cancellationToken);
 
         if (sources.Count == 0)
         {
@@ -1380,7 +1353,82 @@ public sealed class SnapshotBuilder(
 
         await db.SaveChangesAsync(cancellationToken);
 
-        // Run auto-mapping (non-blocking on failure)
+        return await CompileEpgAsync(
+            provider,
+            profileId,
+            sources,
+            catalogues,
+            recordRefreshMetrics: fetchResults.Any(x => x.Result.Status is "ok" or "not_modified"),
+            sw,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Recompiles a profile's published guide from already-fetched XMLTV data. This deliberately
+    /// does not fetch sources, create fetch runs, or update source freshness timestamps.
+    /// </summary>
+    private async Task<string> CompileEpgFromCacheAsync(
+        Provider provider,
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        var sources = await GetEnabledEpgSourcesAsync(provider, cancellationToken);
+        if (sources.Count == 0)
+        {
+            logger.LogDebug("No EPG sources configured for provider {ProviderId} — using empty guide.", provider.ProviderId);
+            return EmptyXmltvDocument;
+        }
+
+        var epgCacheDir = Path.Combine(runtimePaths.DataDirectory, "epg-cache");
+        var catalogues = new Dictionary<string, EpgCatalogue>(StringComparer.Ordinal);
+        foreach (var source in sources)
+        {
+            var cacheFile = Path.Combine(epgCacheDir, $"{source.EpgSourceId}.xml");
+            var xml = File.Exists(cacheFile)
+                ? await File.ReadAllTextAsync(cacheFile, cancellationToken)
+                : null;
+
+            catalogues[source.EpgSourceId] = string.IsNullOrWhiteSpace(xml)
+                ? EpgCatalogue.Empty(source.EpgSourceId)
+                : xmltvParser.Parse(source.EpgSourceId, xml);
+        }
+
+        return await CompileEpgAsync(
+            provider,
+            profileId,
+            sources,
+            catalogues,
+            recordRefreshMetrics: null,
+            Stopwatch.StartNew(),
+            cancellationToken);
+    }
+
+    private async Task<List<EpgSource>> GetEnabledEpgSourcesAsync(
+        Provider provider,
+        CancellationToken cancellationToken)
+    {
+        var sources = await db.EpgSources
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Enabled)
+            .OrderBy(x => x.Priority)
+            .ToListAsync(cancellationToken);
+
+        return sources.Count == 0
+            ? await BackfillEpgSourceAsync(provider, cancellationToken)
+            : sources;
+    }
+
+    private async Task<string> CompileEpgAsync(
+        Provider provider,
+        string profileId,
+        IReadOnlyList<EpgSource> sources,
+        IReadOnlyDictionary<string, EpgCatalogue> catalogues,
+        bool? recordRefreshMetrics,
+        Stopwatch sw,
+        CancellationToken cancellationToken)
+    {
+        // Run auto-mapping (non-blocking on failure). This also maps channels selected after
+        // the last fetch so a build-only publish can include their cached guide data.
         try
         {
             await epgChannelMapper.AutoMapAsync(profileId, provider.ProviderId, [.. catalogues.Values], cancellationToken);
@@ -1508,11 +1556,14 @@ public sealed class SnapshotBuilder(
 
         // Compile
         var (compiledXml, report) = epgCompiler.Compile(outputChannels, sources, catalogues, mappingLookup);
-        metrics?.RecordEpgRefresh(
-            success: fetchResults.Any(x => x.Result.Status is "ok" or "not_modified"),
-            channels: report.TotalChannels,
-            programs: report.TotalProgrammes,
-            unmatchedChannels: Math.Max(0, report.TotalChannels - report.MappedChannels));
+        if (recordRefreshMetrics.HasValue)
+        {
+            metrics?.RecordEpgRefresh(
+                success: recordRefreshMetrics.Value,
+                channels: report.TotalChannels,
+                programs: report.TotalProgrammes,
+                unmatchedChannels: Math.Max(0, report.TotalChannels - report.MappedChannels));
+        }
 
         // "Don't regress" guard: if compiled guide is empty and we have a previous active snapshot,
         // re-use the previous guide rather than publishing an empty one.
