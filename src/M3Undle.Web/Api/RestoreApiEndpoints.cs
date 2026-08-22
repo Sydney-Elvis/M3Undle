@@ -18,6 +18,8 @@ public static class RestoreApiEndpoints
             .RequireRateLimiting(BackupApiEndpoints.RateLimitPolicyName);
         restore.MapPost("/confirm", ConfirmAsync).WithSummary("Restart the application to apply the staged restore")
             .RequireRateLimiting(BackupApiEndpoints.RateLimitPolicyName);
+        restore.MapPost("/apply-settings", ApplySettingsAsync).WithSummary("Apply a settings archive to a clean instance")
+            .RequireRateLimiting(BackupApiEndpoints.RateLimitPolicyName);
         restore.MapDelete("/stage", CancelStaged).WithSummary("Cancel a staged restore so it will not apply on the next restart");
         restore.MapGet("/status", Status).WithSummary("Get the current/last restore status");
 
@@ -55,6 +57,24 @@ public static class RestoreApiEndpoints
 
         await restartService.RequestRestartAsync(cancellationToken);
         return TypedResults.Ok();
+    }
+
+    private static async Task<Results<Ok<ApplySettingsRestoreResponse>, BadRequest<ApplySettingsRestoreResponse>, NotFound>> ApplySettingsAsync(
+        ApplySettingsRestoreRequest request, PortableBackupService backupService, SettingsArchiveService settingsArchiveService,
+        CancellationToken cancellationToken)
+    {
+        var archivePath = backupService.ResolvePath(request.FileName);
+        if (archivePath is null)
+            return TypedResults.NotFound();
+
+        var result = await settingsArchiveService.ApplyAsync(archivePath, cancellationToken);
+        var response = new ApplySettingsRestoreResponse
+        {
+            Success = result.Success,
+            Errors = result.Errors,
+            AppliedCounts = result.AppliedCounts,
+        };
+        return result.Success ? TypedResults.Ok(response) : TypedResults.BadRequest(response);
     }
 
     private static Ok<RestoreStatusResponse> Status(PortableRestoreService restoreService)

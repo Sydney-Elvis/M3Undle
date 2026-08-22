@@ -43,9 +43,29 @@ public static class BackupApiEndpoints
         return TypedResults.Ok<IReadOnlyList<BackupSummaryResponse>>(summaries);
     }
 
-    private static async Task<Results<Ok<CreateBackupResponse>, Conflict<string>>> CreateAsync(
-        PortableBackupService backupService, CancellationToken cancellationToken)
+    private static async Task<Results<Ok<CreateBackupResponse>, Conflict<string>, BadRequest<string>>> CreateAsync(
+        string? scope, PortableBackupService backupService, SettingsArchiveService settingsArchiveService, CancellationToken cancellationToken)
     {
+        if (string.Equals(scope, "settings", StringComparison.OrdinalIgnoreCase))
+        {
+            var settingsResult = await settingsArchiveService.CreateAsync(cancellationToken);
+            if (!settingsResult.Success)
+                return TypedResults.Conflict(settingsResult.ErrorMessage ?? "Settings archive creation failed.");
+
+            return TypedResults.Ok(new CreateBackupResponse
+            {
+                FileName = Path.GetFileName(settingsResult.FilePath!),
+                SizeBytes = new FileInfo(settingsResult.FilePath!).Length,
+                AppVersion = settingsResult.Manifest!.AppVersion,
+                SchemaVersion = settingsResult.Manifest.SchemaVersion,
+                Scope = "settings",
+                SettingsEntities = settingsResult.Manifest.SettingsEntities,
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(scope) && !string.Equals(scope, "full", StringComparison.OrdinalIgnoreCase))
+            return TypedResults.BadRequest("scope must be 'full' or 'settings'.");
+
         var result = await backupService.CreateAsync(cancellationToken);
         if (!result.Success)
             return TypedResults.Conflict(result.ErrorMessage ?? "Backup creation failed.");
@@ -58,6 +78,7 @@ public static class BackupApiEndpoints
             SchemaVersion = result.Manifest.SchemaVersion,
             RowsRemovedByTable = result.Report.RowsRemovedByTable,
             DurationSeconds = result.Report.DurationSeconds,
+            Scope = "full",
         });
     }
 
@@ -98,7 +119,8 @@ public static class BackupApiEndpoints
     // produce. CSRF is covered by requiring a custom header instead — cross-site form posts
     // can't set one, while curl/scripts trivially can.
     private static async Task<Results<Ok<UploadBackupResponse>, BadRequest<string>>> UploadAsync(
-        HttpContext context, PortableBackupService backupService, PortableRestoreService restoreService, CancellationToken cancellationToken)
+        HttpContext context, PortableBackupService backupService, PortableRestoreService restoreService,
+        SettingsArchiveService settingsArchiveService, CancellationToken cancellationToken)
     {
         if (!context.Request.Headers.ContainsKey("X-Requested-With"))
             return TypedResults.BadRequest("Missing required X-Requested-With header.");
@@ -130,7 +152,11 @@ public static class BackupApiEndpoints
 
         // Validate immediately so a corrupt or incompatible upload is flagged now, not at
         // restore time. The file is kept either way — the caller decides whether to delete it.
-        var preflight = await restoreService.PreflightAsync(backupService.ResolvePath(savedFileName)!, cancellationToken);
+        var archivePath = backupService.ResolvePath(savedFileName)!;
+        var settingsPreflight = await settingsArchiveService.PreflightAsync(archivePath, cancellationToken);
+        var preflight = settingsPreflight.IsSettingsArchive
+            ? (Success: settingsPreflight.Success, Errors: settingsPreflight.Errors)
+            : await ReadFullPreflightAsync(restoreService, archivePath, cancellationToken);
         var summary = backupService.List().First(s => s.FileName == savedFileName);
 
         return TypedResults.Ok(new UploadBackupResponse
@@ -141,6 +167,13 @@ public static class BackupApiEndpoints
             Valid = preflight.Success,
             ValidationErrors = preflight.Errors,
         });
+    }
+
+    private static async Task<(bool Success, IReadOnlyList<string> Errors)> ReadFullPreflightAsync(
+        PortableRestoreService restoreService, string archivePath, CancellationToken cancellationToken)
+    {
+        var preflight = await restoreService.PreflightAsync(archivePath, cancellationToken);
+        return (preflight.Success, preflight.Errors);
     }
 
     private static async Task<Ok<BackupScheduleResponse>> GetScheduleAsync(IBackupScheduleService scheduleService, CancellationToken cancellationToken)
