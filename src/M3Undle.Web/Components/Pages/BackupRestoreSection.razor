@@ -2,6 +2,7 @@
 @using M3Undle.Web.Application.Backup
 @inject PortableBackupService BackupService
 @inject PortableRestoreService RestoreService
+@inject SettingsArchiveService SettingsArchiveService
 @inject IBackupScheduleService ScheduleService
 @inject IApplicationRestartService ApplicationRestart
 @inject IDialogService DialogService
@@ -14,10 +15,19 @@
                OnClick="CreateBackupAsync">
         @(_creatingBackup ? "Creating..." : "Back Up Now")
     </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.SettingsBackupRestore"
+               Disabled="@(_creatingSettingsArchive || _restoreInProgress)"
+               OnClick="CreateSettingsArchiveAsync">
+        @(_creatingSettingsArchive ? "Exporting..." : "Export Settings")
+    </MudButton>
 </MudStack>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
     Backs up configuration, mappings, users, and credentials (still encrypted under this host's key).
     Provider/EPG history, logs, and caches are excluded — they rebuild automatically after a restore.
+</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    Export Settings creates a smaller archive for a clean instance: connection settings, profiles, profile links, and downstream integrations. It does not include users, channel curation, history, or caches.
 </MudText>
 
 @if (_pendingRestoreMarker is { State: RestoreState.Requested })
@@ -125,6 +135,7 @@ else
     private bool _loadingBackups = true;
     private List<PortableBackupSummary> _backups = [];
     private bool _creatingBackup;
+    private bool _creatingSettingsArchive;
     private string? _backupError;
     private string? _backupSuccess;
     private bool _restoreInProgress;
@@ -185,6 +196,30 @@ else
         finally
         {
             _creatingBackup = false;
+        }
+    }
+
+    private async Task CreateSettingsArchiveAsync()
+    {
+        _creatingSettingsArchive = true;
+        _backupError = null;
+        _backupSuccess = null;
+        try
+        {
+            var result = await SettingsArchiveService.CreateAsync(CancellationToken.None);
+            if (result.Success)
+            {
+                _backupSuccess = "Settings archive created.";
+                LoadBackups();
+            }
+            else
+            {
+                _backupError = result.ErrorMessage;
+            }
+        }
+        finally
+        {
+            _creatingSettingsArchive = false;
         }
     }
 
@@ -312,6 +347,13 @@ else
             return;
         }
 
+        var settingsPreflight = await SettingsArchiveService.PreflightAsync(path, CancellationToken.None);
+        if (settingsPreflight.IsSettingsArchive)
+        {
+            await ImportSettingsAsync(fileName, settingsPreflight);
+            return;
+        }
+
         var preflight = await RestoreService.PreflightAsync(path, CancellationToken.None);
         if (!preflight.Success)
         {
@@ -346,6 +388,41 @@ else
         catch (Exception ex)
         {
             _backupError = $"Failed to start restore: {ex.Message}";
+            _restoreInProgress = false;
+        }
+    }
+
+    private async Task ImportSettingsAsync(string fileName, SettingsArchivePreflightResult preflight)
+    {
+        if (!preflight.Success)
+        {
+            await DialogService.ShowMessageBoxAsync("Cannot Import Settings", string.Join("\n", preflight.Errors));
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Import Settings",
+            $"Import '{fileName}' into this clean instance? Providers, profiles, profile links, and downstream integrations must not already exist. Existing site settings will be updated.",
+            yesText: "Import Settings", cancelText: "Cancel");
+        if (confirmed != true)
+            return;
+
+        _restoreInProgress = true;
+        try
+        {
+            var result = await SettingsArchiveService.ApplyAsync(BackupService.ResolvePath(fileName)!, CancellationToken.None);
+            if (result.Success)
+            {
+                _backupSuccess = "Settings imported: " + string.Join(", ", result.AppliedCounts.Select(x => $"{x.Key}={x.Value}")) + ".";
+                LoadBackups();
+            }
+            else
+            {
+                _backupError = string.Join(" ", result.Errors);
+            }
+        }
+        finally
+        {
             _restoreInProgress = false;
         }
     }

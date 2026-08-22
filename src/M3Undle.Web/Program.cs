@@ -178,6 +178,7 @@ builder.Services.AddScoped<EncryptionRotationService>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Backup.RestoreStateStore>();
 builder.Services.AddScoped<M3Undle.Web.Application.Backup.PortableBackupService>();
 builder.Services.AddScoped<M3Undle.Web.Application.Backup.PortableRestoreService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Backup.SettingsArchiveService>();
 builder.Services.AddScoped<M3Undle.Web.Application.Backup.IBackupScheduleService, M3Undle.Web.Application.Backup.BackupScheduleService>();
 builder.Services.AddHostedService<M3Undle.Web.Application.Backup.BackupScheduleBackgroundService>();
 builder.Services.AddScoped<ConfigYamlService>();
