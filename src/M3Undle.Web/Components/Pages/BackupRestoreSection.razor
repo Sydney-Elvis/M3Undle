@@ -27,8 +27,10 @@
     Provider/EPG history, logs, and caches are excluded — they rebuild automatically after a restore.
 </MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-    Export Settings creates a smaller archive for a clean instance: connection settings, profiles, profile links, and downstream integrations. It does not include users, channel curation, history, or caches.
+    Export Settings creates an encrypted archive for a clean instance: connection settings, profiles, profile links, and downstream integrations. It does not include users, channel curation, history, or caches.
 </MudText>
+<MudTextField T="string" @bind-Value="_settingsPassphrase" Label="Settings archive passphrase" InputType="InputType.Password"
+              HelperText="At least 12 characters. Required to export or import settings archives." Immediate="false" Class="mb-3" />
 
 @if (_pendingRestoreMarker is { State: RestoreState.Requested })
 {
@@ -136,6 +138,7 @@ else
     private List<PortableBackupSummary> _backups = [];
     private bool _creatingBackup;
     private bool _creatingSettingsArchive;
+    private string? _settingsPassphrase;
     private string? _backupError;
     private string? _backupSuccess;
     private bool _restoreInProgress;
@@ -206,7 +209,7 @@ else
         _backupSuccess = null;
         try
         {
-            var result = await SettingsArchiveService.CreateAsync(CancellationToken.None);
+            var result = await SettingsArchiveService.CreateAsync(_settingsPassphrase ?? string.Empty, CancellationToken.None);
             if (result.Success)
             {
                 _backupSuccess = "Settings archive created.";
@@ -220,6 +223,7 @@ else
         finally
         {
             _creatingSettingsArchive = false;
+            _settingsPassphrase = null;
         }
     }
 
@@ -252,11 +256,26 @@ else
             }
 
             // Validate immediately so a bad archive is flagged now, not at restore time.
-            var preflight = await RestoreService.PreflightAsync(BackupService.ResolvePath(savedFileName)!, CancellationToken.None);
-            if (preflight.Success)
+            var archivePath = BackupService.ResolvePath(savedFileName)!;
+            var settingsPreflight = await SettingsArchiveService.PreflightAsync(archivePath, null, CancellationToken.None);
+            var validationSucceeded = false;
+            IReadOnlyList<string> validationErrors;
+            if (settingsPreflight.IsSettingsArchive)
+            {
+                validationErrors = settingsPreflight.Errors;
+            }
+            else
+            {
+                var preflight = await RestoreService.PreflightAsync(archivePath, CancellationToken.None);
+                validationSucceeded = preflight.Success;
+                validationErrors = preflight.Errors;
+            }
+            if (validationSucceeded)
                 _backupSuccess = "Archive uploaded and validated.";
             else
-                _backupError = $"Archive uploaded, but it failed validation and cannot be restored: {string.Join(" ", preflight.Errors)}";
+                _backupError = settingsPreflight.IsSettingsArchive
+                    ? "Settings archive uploaded. Enter its passphrase, then choose Restore to validate and import it."
+                    : $"Archive uploaded, but it failed validation and cannot be restored: {string.Join(" ", validationErrors)}";
 
             LoadBackups();
         }
@@ -282,6 +301,17 @@ else
         var path = BackupService.ResolvePath(fileName);
         if (path is null)
             return;
+
+        var settingsPreflight = await SettingsArchiveService.PreflightAsync(path, _settingsPassphrase, CancellationToken.None);
+        if (settingsPreflight.IsSettingsArchive)
+        {
+            await DialogService.ShowMessageBoxAsync(
+                settingsPreflight.Success ? "Settings Archive Is Valid" : "Settings Archive Needs Attention",
+                settingsPreflight.Success
+                    ? $"'{fileName}' passed all preflight checks and can be imported into a clean instance."
+                    : string.Join("\n", settingsPreflight.Errors));
+            return;
+        }
 
         var preflight = await RestoreService.PreflightAsync(path, CancellationToken.None);
         await DialogService.ShowMessageBoxAsync(
@@ -347,7 +377,7 @@ else
             return;
         }
 
-        var settingsPreflight = await SettingsArchiveService.PreflightAsync(path, CancellationToken.None);
+        var settingsPreflight = await SettingsArchiveService.PreflightAsync(path, _settingsPassphrase, CancellationToken.None);
         if (settingsPreflight.IsSettingsArchive)
         {
             await ImportSettingsAsync(fileName, settingsPreflight);
@@ -410,7 +440,7 @@ else
         _restoreInProgress = true;
         try
         {
-            var result = await SettingsArchiveService.ApplyAsync(BackupService.ResolvePath(fileName)!, CancellationToken.None);
+            var result = await SettingsArchiveService.ApplyAsync(BackupService.ResolvePath(fileName)!, _settingsPassphrase ?? string.Empty, CancellationToken.None);
             if (result.Success)
             {
                 _backupSuccess = "Settings imported: " + string.Join(", ", result.AppliedCounts.Select(x => $"{x.Key}={x.Value}")) + ".";
@@ -424,6 +454,7 @@ else
         finally
         {
             _restoreInProgress = false;
+            _settingsPassphrase = null;
         }
     }
 

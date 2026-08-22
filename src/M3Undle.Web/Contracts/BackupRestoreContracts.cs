@@ -19,6 +19,11 @@ public sealed class CreateBackupResponse
     public IReadOnlyList<string> SettingsEntities { get; set; } = [];
 }
 
+public sealed class CreateBackupRequest
+{
+    public string? Passphrase { get; set; }
+}
+
 public sealed class ValidateBackupResponse
 {
     public bool Success { get; set; }
@@ -58,6 +63,7 @@ public sealed class StageRestoreRequest
 public sealed class ApplySettingsRestoreRequest
 {
     public string FileName { get; set; } = string.Empty;
+    public string? Passphrase { get; set; }
 }
 
 public sealed class ApplySettingsRestoreResponse

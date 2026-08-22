@@ -3,16 +3,34 @@ namespace M3Undle.Web.Application.Backup;
 public static class SettingsArchiveFormat
 {
     public const string Identifier = "m3undle-settings";
-    public const string CurrentVersion = "1";
+    public const int CurrentVersion = 2;
     public const int CurrentDocumentVersion = 1;
-    public const string ManifestEntryName = "manifest.json";
-    public const string DocumentEntryName = "settings.json";
+}
+
+public sealed record SettingsArchiveHeader
+{
+    public required string FormatIdentifier { get; init; }
+    public required int FormatVersion { get; init; }
+    public required string Scope { get; init; }
+    public required string Kdf { get; init; }
+    public required int MemoryKiB { get; init; }
+    public required int Iterations { get; init; }
+    public required int Parallelism { get; init; }
+    public required string Salt { get; init; }
+    public required string Nonce { get; init; }
+}
+
+public sealed record EncryptedSettingsArchive
+{
+    public required SettingsArchiveHeader Header { get; init; }
+    public required string Ciphertext { get; init; }
+    public required string Tag { get; init; }
 }
 
 public sealed record SettingsArchiveManifest
 {
     public required string FormatIdentifier { get; init; }
-    public required string FormatVersion { get; init; }
+    public required int FormatVersion { get; init; }
     public required int DocumentVersion { get; init; }
     public required string Scope { get; init; }
     public required string AppVersion { get; init; }
@@ -22,7 +40,12 @@ public sealed record SettingsArchiveManifest
     public required string? EncryptionKeyId { get; init; }
     public required string? EncryptionKeyFingerprint { get; init; }
     public required IReadOnlyList<string> SettingsEntities { get; init; }
-    public required string SettingsSha256 { get; init; }
+}
+
+public sealed record SettingsArchivePayload
+{
+    public required SettingsArchiveManifest Manifest { get; init; }
+    public required SettingsDocument Document { get; init; }
 }
 
 public sealed record SettingsDocument

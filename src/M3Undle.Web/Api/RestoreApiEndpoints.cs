@@ -32,8 +32,23 @@ public static class RestoreApiEndpoints
             : TypedResults.Conflict("No restore is currently staged.");
 
     private static async Task<Results<Ok<ValidateBackupResponse>, BadRequest<ValidateBackupResponse>>> StageAsync(
-        StageRestoreRequest request, PortableRestoreService restoreService, CancellationToken cancellationToken)
+        StageRestoreRequest request, PortableRestoreService restoreService, SettingsArchiveService settingsArchiveService,
+        PortableBackupService backupService, CancellationToken cancellationToken)
     {
+        var archivePath = backupService.ResolvePath(request.FileName);
+        if (archivePath is not null)
+        {
+            var settingsPreflight = await settingsArchiveService.PreflightAsync(archivePath, null, cancellationToken);
+            if (settingsPreflight.IsSettingsArchive)
+            {
+                return TypedResults.BadRequest(new ValidateBackupResponse
+                {
+                    Success = false,
+                    Errors = ["A settings-scoped archive cannot be restored in full mode. Use settings import instead."],
+                });
+            }
+        }
+
         var result = await restoreService.StageAsync(request.FileName, cancellationToken);
         var response = new ValidateBackupResponse
         {
@@ -67,7 +82,16 @@ public static class RestoreApiEndpoints
         if (archivePath is null)
             return TypedResults.NotFound();
 
-        var result = await settingsArchiveService.ApplyAsync(archivePath, cancellationToken);
+        if (string.IsNullOrWhiteSpace(request.Passphrase))
+        {
+            return TypedResults.BadRequest(new ApplySettingsRestoreResponse
+            {
+                Success = false,
+                Errors = ["A passphrase is required to import a settings archive."],
+            });
+        }
+
+        var result = await settingsArchiveService.ApplyAsync(archivePath, request.Passphrase, cancellationToken);
         var response = new ApplySettingsRestoreResponse
         {
             Success = result.Success,

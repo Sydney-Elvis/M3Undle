@@ -138,6 +138,8 @@ public sealed class PortableRestoreService(
                     errors.Add("Archive is not an M3Undle backup.");
                 if (!string.Equals(manifest.FormatVersion, PortableBackupFormat.CurrentVersion, StringComparison.Ordinal))
                     errors.Add($"Unsupported backup format version '{manifest.FormatVersion}'.");
+                if (!string.Equals(manifest.Scope, "full", StringComparison.Ordinal))
+                    errors.Add("A settings-scoped archive cannot be restored in full mode.");
 
                 if (errors.Count > 0)
                     return PortableRestorePreflightResult.Failed(errors, manifest);

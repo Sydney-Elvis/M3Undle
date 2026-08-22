@@ -14,6 +14,8 @@ namespace M3Undle.Web.Tests.Application.Backup;
 [DoNotParallelize]
 public sealed class SettingsArchiveServiceTests
 {
+    private const string Passphrase = "settings-archive-test-passphrase";
+
     [TestMethod]
     public async Task ExportThenImportAsync_RestoresSettingsGraphWithNewTargetIds()
     {
@@ -59,7 +61,7 @@ public sealed class SettingsArchiveServiceTests
 
         await using var sourceDbForService = source.CreateContext();
         var sourceService = CreateService(sourceDbForService, source.DataDirectory, sourceEncryption);
-        var exported = await sourceService.CreateAsync(CancellationToken.None);
+        var exported = await sourceService.CreateAsync(Passphrase, CancellationToken.None);
 
         Assert.IsTrue(exported.Success, exported.ErrorMessage);
         Assert.AreEqual("settings", exported.Manifest!.Scope);
@@ -68,7 +70,7 @@ public sealed class SettingsArchiveServiceTests
         await using var targetDbForService = target.CreateContext();
         var targetEncryption = CreateEncryption();
         var targetService = CreateService(targetDbForService, target.DataDirectory, targetEncryption);
-        var preflight = await targetService.PreflightAsync(exported.FilePath!, CancellationToken.None);
+        var preflight = await targetService.PreflightAsync(exported.FilePath!, Passphrase, CancellationToken.None);
         Assert.IsTrue(preflight.Success, string.Join(" ", preflight.Errors));
 
         await using (var targetSetup = target.CreateContext())
@@ -81,7 +83,7 @@ public sealed class SettingsArchiveServiceTests
             await targetSetup.SaveChangesAsync();
         }
 
-        var imported = await targetService.ApplyAsync(exported.FilePath!, CancellationToken.None);
+        var imported = await targetService.ApplyAsync(exported.FilePath!, Passphrase, CancellationToken.None);
         Assert.IsTrue(imported.Success, string.Join(" ", imported.Errors));
         Assert.AreEqual(1, imported.AppliedCounts["Providers"]);
         Assert.AreEqual(1, imported.AppliedCounts["DownstreamIntegrations"]);
@@ -124,7 +126,7 @@ public sealed class SettingsArchiveServiceTests
 
         await using var sourceDbForService = source.CreateContext();
         var sourceService = CreateService(sourceDbForService, source.DataDirectory, CreateEncryption());
-        var exported = await sourceService.CreateAsync(CancellationToken.None);
+        var exported = await sourceService.CreateAsync(Passphrase, CancellationToken.None);
         Assert.IsTrue(exported.Success, exported.ErrorMessage);
 
         await using (var targetSetup = target.CreateContext())
@@ -139,7 +141,7 @@ public sealed class SettingsArchiveServiceTests
 
         await using var targetDbForService = target.CreateContext();
         var targetService = CreateService(targetDbForService, target.DataDirectory, CreateEncryption());
-        var imported = await targetService.ApplyAsync(exported.FilePath!, CancellationToken.None);
+        var imported = await targetService.ApplyAsync(exported.FilePath!, Passphrase, CancellationToken.None);
 
         Assert.IsFalse(imported.Success);
         Assert.IsTrue(imported.Errors.Single().Contains("downstream integrations", StringComparison.OrdinalIgnoreCase));
@@ -167,7 +169,7 @@ public sealed class SettingsArchiveServiceTests
         using var activeScope = new EncryptionKeyScope(keys: $"active:{activeKey},old:{oldKey}");
         await using var sourceDbForService = source.CreateContext();
         var sourceService = CreateService(sourceDbForService, source.DataDirectory, CreateEncryption());
-        var exported = await sourceService.CreateAsync(CancellationToken.None);
+        var exported = await sourceService.CreateAsync(Passphrase, CancellationToken.None);
         Assert.IsTrue(exported.Success, exported.ErrorMessage);
         Assert.AreEqual("active", exported.Manifest!.EncryptionKeyId);
 
@@ -176,11 +178,46 @@ public sealed class SettingsArchiveServiceTests
         await using var targetDbForService = target.CreateContext();
         var targetEncryption = CreateEncryption();
         var targetService = CreateService(targetDbForService, target.DataDirectory, targetEncryption);
-        var imported = await targetService.ApplyAsync(exported.FilePath!, CancellationToken.None);
+        var imported = await targetService.ApplyAsync(exported.FilePath!, Passphrase, CancellationToken.None);
 
         Assert.IsTrue(imported.Success, string.Join(" ", imported.Errors));
         await using var verification = target.CreateContext();
         Assert.AreEqual("old-secret", targetEncryption.Decrypt((await verification.Providers.SingleAsync()).XtreamEncryptedPassword!));
+    }
+
+    [TestMethod]
+    public async Task PreflightAsync_WrongPassphraseAndTamperingFailWithTheSameMessage()
+    {
+        await using var source = await TestDatabase.CreateAsync();
+        await using (var setup = source.CreateContext())
+        {
+            var provider = SimpleProvider("source");
+            provider.HeadersJson = "{\"Authorization\":\"Bearer synthetic-secret\"}";
+            setup.Providers.Add(provider);
+            await setup.SaveChangesAsync();
+        }
+
+        await using var sourceDb = source.CreateContext();
+        var service = CreateService(sourceDb, source.DataDirectory, CreateEncryption());
+        var exported = await service.CreateAsync(Passphrase, CancellationToken.None);
+        Assert.IsTrue(exported.Success, exported.ErrorMessage);
+        var archiveText = await File.ReadAllTextAsync(exported.FilePath!);
+        Assert.IsFalse(archiveText.Contains("synthetic-secret", StringComparison.Ordinal));
+        Assert.IsFalse(archiveText.Contains("SettingsEntities", StringComparison.Ordinal));
+
+        var wrongPassphrase = await service.PreflightAsync(exported.FilePath!, "different-settings-archive-passphrase", CancellationToken.None);
+        Assert.IsFalse(wrongPassphrase.Success);
+        Assert.AreEqual("Unable to decrypt settings archive.", wrongPassphrase.Errors.Single());
+
+        var archive = System.Text.Json.JsonSerializer.Deserialize<EncryptedSettingsArchive>(archiveText)!;
+        var tamperedCiphertext = archive.Ciphertext[0] == 'A'
+            ? "B" + archive.Ciphertext[1..]
+            : "A" + archive.Ciphertext[1..];
+        await File.WriteAllTextAsync(exported.FilePath!, System.Text.Json.JsonSerializer.Serialize(archive with { Ciphertext = tamperedCiphertext }));
+
+        var tampered = await service.PreflightAsync(exported.FilePath!, Passphrase, CancellationToken.None);
+        Assert.IsFalse(tampered.Success);
+        Assert.AreEqual(wrongPassphrase.Errors.Single(), tampered.Errors.Single());
     }
 
     private static SettingsArchiveService CreateService(ApplicationDbContext db, string dataDirectory, SecretEncryptionService encryption)

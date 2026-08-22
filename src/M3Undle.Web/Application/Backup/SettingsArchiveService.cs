@@ -1,11 +1,13 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using M3Undle.Core;
 using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Org.BouncyCastle.Crypto.Generators;
+using Org.BouncyCastle.Crypto.Parameters;
 
 namespace M3Undle.Web.Application.Backup;
 
@@ -22,13 +24,19 @@ public sealed class SettingsArchiveService(
     ILogger<SettingsArchiveService> logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private const int SaltBytes = 16;
+    private const int NonceBytes = 12;
+    private const int TagBytes = 16;
+    private const int KeyBytes = 32;
+    private const int ArgonMemoryKiB = 65_536;
+    private const int ArgonIterations = 3;
+    private const int ArgonParallelism = 1;
 
-    public async Task<SettingsArchiveResult> CreateAsync(CancellationToken cancellationToken)
+    public async Task<SettingsArchiveResult> CreateAsync(string passphrase, CancellationToken cancellationToken)
     {
         try
         {
             var document = await CreateDocumentAsync(cancellationToken);
-            var documentBytes = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
             var backupId = Guid.NewGuid().ToString("N");
             var createdUtc = DateTime.UtcNow;
             var hasEncryptedValues = document.Providers.Any(x => x.XtreamEncryptedPassword is not null)
@@ -48,8 +56,8 @@ public sealed class SettingsArchiveService(
                 EncryptionKeyId = hasEncryptedValues ? encryption.ActiveKeyId : null,
                 EncryptionKeyFingerprint = hasEncryptedValues ? encryption.ActiveKeyFingerprint : null,
                 SettingsEntities = ["SiteSettings", "Providers", "Profiles", "ProfileProviders", "DownstreamIntegrations"],
-                SettingsSha256 = Convert.ToHexString(SHA256.HashData(documentBytes)).ToLowerInvariant(),
             };
+            var archiveBytes = EncryptPayload(new SettingsArchivePayload { Manifest = manifest, Document = document }, passphrase);
 
             var backupsDir = Path.Combine(runtimePaths.DataDirectory, "backups");
             Directory.CreateDirectory(backupsDir);
@@ -61,11 +69,7 @@ public sealed class SettingsArchiveService(
                 var temporaryPath = Path.Combine(workDir, fileName);
                 var finalPath = Path.Combine(backupsDir, fileName);
 
-                using (var archive = ZipFile.Open(temporaryPath, ZipArchiveMode.Create))
-                {
-                    WriteEntry(archive, SettingsArchiveFormat.ManifestEntryName, JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions));
-                    WriteEntry(archive, SettingsArchiveFormat.DocumentEntryName, documentBytes);
-                }
+                await File.WriteAllBytesAsync(temporaryPath, archiveBytes, cancellationToken);
 
                 SetOwnerOnlyPermissions(temporaryPath);
                 File.Move(temporaryPath, finalPath, overwrite: false);
@@ -74,6 +78,7 @@ public sealed class SettingsArchiveService(
             }
             finally
             {
+                CryptographicOperations.ZeroMemory(archiveBytes);
                 if (Directory.Exists(workDir))
                     Directory.Delete(workDir, recursive: true);
             }
@@ -85,68 +90,59 @@ public sealed class SettingsArchiveService(
         }
     }
 
-    public async Task<SettingsArchivePreflightResult> PreflightAsync(string archivePath, CancellationToken cancellationToken)
+    public async Task<SettingsArchivePreflightResult> PreflightAsync(string archivePath, string? passphrase, CancellationToken cancellationToken)
     {
         if (!File.Exists(archivePath))
             return SettingsArchivePreflightResult.NotSettingsArchive();
-        if (new FileInfo(archivePath).Length > PortableBackupFormat.MaxArchiveSizeBytes)
+        if (new FileInfo(archivePath).Length > PortableBackupFormat.MaxMetadataEntrySizeBytes)
             return SettingsArchivePreflightResult.Failed(["Settings archive exceeds the configured size limit."]);
 
         try
         {
-            using var archive = ZipFile.OpenRead(archivePath);
-            if (archive.Entries.Count > 2)
-                return SettingsArchivePreflightResult.Failed(["Settings archive contains too many entries."]);
-            if (archive.Entries.Any(x => x.FullName is not SettingsArchiveFormat.ManifestEntryName and not SettingsArchiveFormat.DocumentEntryName))
-                return SettingsArchivePreflightResult.Failed(["Settings archive contains an unexpected entry."]);
-            var manifestBytes = await ReadEntryAsync(archive, SettingsArchiveFormat.ManifestEntryName, cancellationToken);
-            if (manifestBytes is null)
-                return SettingsArchivePreflightResult.NotSettingsArchive();
-
-            SettingsArchiveManifest? manifest;
+            var archiveBytes = await File.ReadAllBytesAsync(archivePath, cancellationToken);
             try
             {
-                manifest = JsonSerializer.Deserialize<SettingsArchiveManifest>(manifestBytes, JsonOptions);
-            }
-            catch (JsonException)
-            {
-                return SettingsArchivePreflightResult.NotSettingsArchive();
-            }
-
-            if (manifest is null || !string.Equals(manifest.FormatIdentifier, SettingsArchiveFormat.Identifier, StringComparison.Ordinal))
-                return SettingsArchivePreflightResult.NotSettingsArchive();
-
-            var errors = new List<string>();
-            if (!string.Equals(manifest.FormatVersion, SettingsArchiveFormat.CurrentVersion, StringComparison.Ordinal))
-                errors.Add($"Unsupported settings archive format version '{manifest.FormatVersion}'.");
-            if (manifest.DocumentVersion != SettingsArchiveFormat.CurrentDocumentVersion)
-                errors.Add($"Unsupported settings document version '{manifest.DocumentVersion}'.");
-            if (!string.Equals(manifest.Scope, "settings", StringComparison.Ordinal))
-                errors.Add("Settings archive scope must be 'settings'.");
-
-            var documentBytes = await ReadEntryAsync(archive, SettingsArchiveFormat.DocumentEntryName, cancellationToken);
-            if (documentBytes is null)
-                errors.Add("Settings archive is missing settings.json.");
-            else if (!string.Equals(Convert.ToHexString(SHA256.HashData(documentBytes)).ToLowerInvariant(), manifest.SettingsSha256, StringComparison.Ordinal))
-                errors.Add("Settings archive checksum does not match the manifest.");
-
-            SettingsDocument? document = null;
-            if (documentBytes is not null)
-            {
+                EncryptedSettingsArchive? archive;
                 try
                 {
-                    document = JsonSerializer.Deserialize<SettingsDocument>(documentBytes, JsonOptions);
+                    archive = JsonSerializer.Deserialize<EncryptedSettingsArchive>(archiveBytes, JsonOptions);
                 }
                 catch (JsonException)
                 {
-                    errors.Add("settings.json could not be parsed.");
+                    return SettingsArchivePreflightResult.NotSettingsArchive();
                 }
-            }
 
-            if (document is null)
-                errors.Add("Settings archive does not contain a valid settings document.");
-            else
-            {
+                if (archive?.Header is null || !string.Equals(archive.Header.FormatIdentifier, SettingsArchiveFormat.Identifier, StringComparison.Ordinal))
+                    return SettingsArchivePreflightResult.NotSettingsArchive();
+                if (!ValidateHeader(archive.Header))
+                    return SettingsArchivePreflightResult.Failed(["Settings archive has an unsupported encryption header."]);
+                if (string.IsNullOrWhiteSpace(passphrase))
+                    return SettingsArchivePreflightResult.Failed(["A passphrase is required to read a settings archive."]);
+
+                SettingsArchivePayload payload;
+                try
+                {
+                    payload = DecryptPayload(archive, passphrase);
+                }
+                catch (Exception ex) when (ex is CryptographicException or FormatException or JsonException or ArgumentException)
+                {
+                    return SettingsArchivePreflightResult.Failed(["Unable to decrypt settings archive."]);
+                }
+
+                if (payload.Manifest is null || payload.Document is null)
+                    return SettingsArchivePreflightResult.Failed(["Settings archive does not contain a valid settings payload."]);
+
+                var manifest = payload.Manifest;
+                var document = payload.Document;
+                var errors = new List<string>();
+                if (!string.Equals(manifest.FormatIdentifier, SettingsArchiveFormat.Identifier, StringComparison.Ordinal)
+                    || manifest.FormatVersion != SettingsArchiveFormat.CurrentVersion
+                    || !string.Equals(manifest.Scope, "settings", StringComparison.Ordinal))
+                {
+                    errors.Add("Settings archive payload has an unsupported format.");
+                }
+                if (manifest.DocumentVersion != SettingsArchiveFormat.CurrentDocumentVersion)
+                    errors.Add($"Unsupported settings document version '{manifest.DocumentVersion}'.");
                 try
                 {
                     errors.AddRange(ValidateDocument(document));
@@ -158,27 +154,27 @@ public sealed class SettingsArchiveService(
                 {
                     errors.Add("Settings archive contains an invalid null entity section.");
                 }
-            }
 
-            if (manifest.EncryptionKeyId is not null)
+                if (manifest.EncryptionKeyId is not null)
+                {
+                    var fingerprint = encryption.GetKeyFingerprint(manifest.EncryptionKeyId);
+                    if (fingerprint is null)
+                        errors.Add($"Required encryption key '{manifest.EncryptionKeyId}' is not present in the current key ring.");
+                    else if (!string.Equals(fingerprint, manifest.EncryptionKeyFingerprint, StringComparison.Ordinal))
+                        errors.Add($"Encryption key '{manifest.EncryptionKeyId}' is present but its key material does not match this settings archive.");
+                }
+
+                if (errors.Count == 0)
+                    errors.AddRange(ValidateEncryptedValues(document, manifest));
+
+                return errors.Count == 0
+                    ? SettingsArchivePreflightResult.Succeeded(manifest, document)
+                    : SettingsArchivePreflightResult.Failed(errors, manifest);
+            }
+            finally
             {
-                var fingerprint = encryption.GetKeyFingerprint(manifest.EncryptionKeyId);
-                if (fingerprint is null)
-                    errors.Add($"Required encryption key '{manifest.EncryptionKeyId}' is not present in the current key ring.");
-                else if (!string.Equals(fingerprint, manifest.EncryptionKeyFingerprint, StringComparison.Ordinal))
-                    errors.Add($"Encryption key '{manifest.EncryptionKeyId}' is present but its key material does not match this settings archive.");
+                CryptographicOperations.ZeroMemory(archiveBytes);
             }
-
-            if (document is not null && errors.Count == 0)
-                errors.AddRange(ValidateEncryptedValues(document, manifest));
-
-            return errors.Count == 0 && document is not null
-                ? SettingsArchivePreflightResult.Succeeded(manifest, document)
-                : SettingsArchivePreflightResult.Failed(errors, manifest);
-        }
-        catch (InvalidDataException)
-        {
-            return SettingsArchivePreflightResult.NotSettingsArchive();
         }
         catch (IOException ex)
         {
@@ -186,11 +182,11 @@ public sealed class SettingsArchiveService(
         }
     }
 
-    public async Task<SettingsImportResult> ApplyAsync(string archivePath, CancellationToken cancellationToken)
+    public async Task<SettingsImportResult> ApplyAsync(string archivePath, string passphrase, CancellationToken cancellationToken)
     {
-        var preflight = await PreflightAsync(archivePath, cancellationToken);
+        var preflight = await PreflightAsync(archivePath, passphrase, cancellationToken);
         if (!preflight.IsSettingsArchive)
-            return SettingsImportResult.Failed("Archive is not a settings archive.");
+            return SettingsImportResult.Failed("Settings-mode import accepts only settings-scoped archives; importing settings from a full archive is not yet supported.");
         if (!preflight.Success)
             return new SettingsImportResult(false, preflight.Errors, new Dictionary<string, int>());
 
@@ -383,32 +379,125 @@ public sealed class SettingsArchiveService(
             errors.Add($"Settings document contains blank or duplicate {entityName} names.");
     }
 
-    private static async Task<byte[]?> ReadEntryAsync(ZipArchive archive, string entryName, CancellationToken cancellationToken)
+    private static byte[] EncryptPayload(SettingsArchivePayload payload, string passphrase)
     {
-        var entry = archive.GetEntry(entryName);
-        if (entry is null || entry.Length > PortableBackupFormat.MaxMetadataEntrySizeBytes)
-            return null;
-
-        await using var stream = entry.Open();
-        using var buffer = new MemoryStream();
-        var contents = new byte[81920];
-        long total = 0;
-        int read;
-        while ((read = await stream.ReadAsync(contents, cancellationToken)) > 0)
+        ValidatePassphrase(passphrase);
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
+        var salt = RandomNumberGenerator.GetBytes(SaltBytes);
+        var nonce = RandomNumberGenerator.GetBytes(NonceBytes);
+        var header = new SettingsArchiveHeader
         {
-            total += read;
-            if (total > PortableBackupFormat.MaxMetadataEntrySizeBytes)
-                return null;
-            await buffer.WriteAsync(contents.AsMemory(0, read), cancellationToken);
+            FormatIdentifier = SettingsArchiveFormat.Identifier,
+            FormatVersion = SettingsArchiveFormat.CurrentVersion,
+            Scope = "settings",
+            Kdf = "argon2id",
+            MemoryKiB = ArgonMemoryKiB,
+            Iterations = ArgonIterations,
+            Parallelism = ArgonParallelism,
+            Salt = Convert.ToBase64String(salt),
+            Nonce = Convert.ToBase64String(nonce),
+        };
+        var aad = SerializeHeader(header);
+        var key = DeriveKey(passphrase, salt, header);
+        var ciphertext = new byte[plaintext.Length];
+        var tag = new byte[TagBytes];
+
+        try
+        {
+            using var cipher = new AesGcm(key, TagBytes);
+            cipher.Encrypt(nonce, plaintext, ciphertext, tag, aad);
+            return JsonSerializer.SerializeToUtf8Bytes(new EncryptedSettingsArchive
+            {
+                Header = header,
+                Ciphertext = Convert.ToBase64String(ciphertext),
+                Tag = Convert.ToBase64String(tag),
+            }, JsonOptions);
         }
-        return buffer.ToArray();
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(salt);
+            CryptographicOperations.ZeroMemory(nonce);
+            CryptographicOperations.ZeroMemory(aad);
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(ciphertext);
+            CryptographicOperations.ZeroMemory(tag);
+        }
     }
 
-    private static void WriteEntry(ZipArchive archive, string entryName, byte[] contents)
+    private static SettingsArchivePayload DecryptPayload(EncryptedSettingsArchive archive, string passphrase)
     {
-        var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
-        using var stream = entry.Open();
-        stream.Write(contents);
+        var salt = Convert.FromBase64String(archive.Header.Salt);
+        var nonce = Convert.FromBase64String(archive.Header.Nonce);
+        var ciphertext = Convert.FromBase64String(archive.Ciphertext);
+        var tag = Convert.FromBase64String(archive.Tag);
+        if (salt.Length != SaltBytes || nonce.Length != NonceBytes || tag.Length != TagBytes)
+            throw new CryptographicException("Settings archive cryptographic material has an invalid length.");
+
+        var aad = SerializeHeader(archive.Header);
+        var key = DeriveKey(passphrase, salt, archive.Header);
+        var plaintext = new byte[ciphertext.Length];
+        try
+        {
+            using var cipher = new AesGcm(key, TagBytes);
+            cipher.Decrypt(nonce, ciphertext, tag, plaintext, aad);
+            return JsonSerializer.Deserialize<SettingsArchivePayload>(plaintext, JsonOptions)
+                ?? throw new JsonException("Settings archive payload is empty.");
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(salt);
+            CryptographicOperations.ZeroMemory(nonce);
+            CryptographicOperations.ZeroMemory(ciphertext);
+            CryptographicOperations.ZeroMemory(tag);
+            CryptographicOperations.ZeroMemory(aad);
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(plaintext);
+        }
+    }
+
+    private static bool ValidateHeader(SettingsArchiveHeader header)
+        => string.Equals(header.FormatIdentifier, SettingsArchiveFormat.Identifier, StringComparison.Ordinal)
+            && header.FormatVersion == SettingsArchiveFormat.CurrentVersion
+            && string.Equals(header.Scope, "settings", StringComparison.Ordinal)
+            && string.Equals(header.Kdf, "argon2id", StringComparison.Ordinal)
+            && header.MemoryKiB == ArgonMemoryKiB
+            && header.Iterations == ArgonIterations
+            && header.Parallelism == ArgonParallelism;
+
+    private static byte[] SerializeHeader(SettingsArchiveHeader header) =>
+        JsonSerializer.SerializeToUtf8Bytes(header, JsonOptions);
+
+    private static byte[] DeriveKey(string passphrase, byte[] salt, SettingsArchiveHeader header)
+    {
+        var password = Encoding.UTF8.GetBytes(passphrase);
+        var key = new byte[KeyBytes];
+        var parameters = new Argon2Parameters.Builder(Argon2Parameters.Argon2id)
+            .WithVersion(Argon2Parameters.Version13)
+            .WithSalt(salt)
+            .WithMemoryAsKB(header.MemoryKiB)
+            .WithIterations(header.Iterations)
+            .WithParallelism(header.Parallelism)
+            .Build();
+
+        try
+        {
+            var generator = new Argon2BytesGenerator();
+            generator.Init(parameters);
+            generator.GenerateBytes(password, key);
+            return key;
+        }
+        finally
+        {
+            parameters.Clear();
+            CryptographicOperations.ZeroMemory(password);
+        }
+    }
+
+    private static void ValidatePassphrase(string passphrase)
+    {
+        if (string.IsNullOrWhiteSpace(passphrase) || passphrase.Length < 12)
+            throw new InvalidOperationException("A settings archive passphrase must contain at least 12 characters.");
     }
 
     private static SettingsSiteSettings ToSettingsSiteSettings(SiteSettings source) => new()

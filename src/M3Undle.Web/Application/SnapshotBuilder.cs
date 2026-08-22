@@ -1364,8 +1364,9 @@ public sealed class SnapshotBuilder(
     }
 
     /// <summary>
-    /// Recompiles a profile's published guide from already-fetched XMLTV data. This deliberately
-    /// does not fetch sources, create fetch runs, or update source freshness timestamps.
+    /// Recompiles a profile's published guide from cached XMLTV data. Cached sources remain
+    /// cache-only, but a source without a cache file is fetched once so a newly added source can
+    /// contribute to a build-only publish. This does not refresh the provider playlist.
     /// </summary>
     private async Task<string> CompileEpgFromCacheAsync(
         Provider provider,
@@ -1381,17 +1382,37 @@ public sealed class SnapshotBuilder(
 
         var epgCacheDir = Path.Combine(runtimePaths.DataDirectory, "epg-cache");
         var catalogues = new Dictionary<string, EpgCatalogue>(StringComparer.Ordinal);
+        var fetchedMissingCache = false;
         foreach (var source in sources)
         {
             var cacheFile = Path.Combine(epgCacheDir, $"{source.EpgSourceId}.xml");
-            var xml = File.Exists(cacheFile)
-                ? await File.ReadAllTextAsync(cacheFile, cancellationToken)
-                : null;
+            if (File.Exists(cacheFile))
+            {
+                var cachedXml = await File.ReadAllTextAsync(cacheFile, cancellationToken);
+                catalogues[source.EpgSourceId] = string.IsNullOrWhiteSpace(cachedXml)
+                    ? EpgCatalogue.Empty(source.EpgSourceId)
+                    : xmltvParser.Parse(source.EpgSourceId, cachedXml);
+                continue;
+            }
 
-            catalogues[source.EpgSourceId] = string.IsNullOrWhiteSpace(xml)
+            logger.LogInformation(
+                "EPG source {EpgSourceId} ({Name}) has no cached payload; fetching it for build-only compilation.",
+                source.EpgSourceId, source.Name);
+            var startedUtc = timeProvider.GetUtcNow().UtcDateTime;
+            var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
+            var catalogue = string.IsNullOrWhiteSpace(xml)
                 ? EpgCatalogue.Empty(source.EpgSourceId)
                 : xmltvParser.Parse(source.EpgSourceId, xml);
+            catalogues[source.EpgSourceId] = catalogue;
+
+            await PersistEpgFetchRunAsync(source, result, catalogue, startedUtc, cancellationToken);
+            if (catalogue.Channels.Count > 0)
+                await UpsertEpgSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
+            fetchedMissingCache = true;
         }
+
+        if (fetchedMissingCache)
+            await db.SaveChangesAsync(cancellationToken);
 
         return await CompileEpgAsync(
             provider,
