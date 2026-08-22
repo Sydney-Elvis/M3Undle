@@ -15,6 +15,8 @@ public sealed record PortableBackupManifest
     public required DateTime CreatedUtc { get; init; }
     public required string? EncryptionKeyId { get; init; }
     public required string? EncryptionKeyFingerprint { get; init; }
+    public string Scope { get; init; } = "full";
+    public IReadOnlyList<string> SettingsEntities { get; init; } = [];
     public required IReadOnlyList<string> ExcludedTables { get; init; }
     public required string DatabaseSha256 { get; init; }
 }

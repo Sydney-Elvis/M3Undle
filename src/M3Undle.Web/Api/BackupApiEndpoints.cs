@@ -44,11 +44,12 @@ public static class BackupApiEndpoints
     }
 
     private static async Task<Results<Ok<CreateBackupResponse>, Conflict<string>, BadRequest<string>>> CreateAsync(
-        string? scope, PortableBackupService backupService, SettingsArchiveService settingsArchiveService, CancellationToken cancellationToken)
+        string? scope, CreateBackupRequest? request, PortableBackupService backupService,
+        SettingsArchiveService settingsArchiveService, CancellationToken cancellationToken)
     {
         if (string.Equals(scope, "settings", StringComparison.OrdinalIgnoreCase))
         {
-            var settingsResult = await settingsArchiveService.CreateAsync(cancellationToken);
+            var settingsResult = await settingsArchiveService.CreateAsync(request?.Passphrase ?? string.Empty, cancellationToken);
             if (!settingsResult.Success)
                 return TypedResults.Conflict(settingsResult.ErrorMessage ?? "Settings archive creation failed.");
 
@@ -92,11 +93,22 @@ public static class BackupApiEndpoints
     }
 
     private static async Task<Results<Ok<ValidateBackupResponse>, NotFound>> ValidateAsync(
-        string fileName, PortableBackupService backupService, PortableRestoreService restoreService, CancellationToken cancellationToken)
+        string fileName, PortableBackupService backupService, PortableRestoreService restoreService,
+        SettingsArchiveService settingsArchiveService, CancellationToken cancellationToken)
     {
         var path = backupService.ResolvePath(fileName);
         if (path is null)
             return TypedResults.NotFound();
+
+        var settingsPreflight = await settingsArchiveService.PreflightAsync(path, null, cancellationToken);
+        if (settingsPreflight.IsSettingsArchive)
+        {
+            return TypedResults.Ok(new ValidateBackupResponse
+            {
+                Success = false,
+                Errors = settingsPreflight.Errors,
+            });
+        }
 
         var preflight = await restoreService.PreflightAsync(path, cancellationToken);
         return TypedResults.Ok(new ValidateBackupResponse
@@ -153,7 +165,7 @@ public static class BackupApiEndpoints
         // Validate immediately so a corrupt or incompatible upload is flagged now, not at
         // restore time. The file is kept either way — the caller decides whether to delete it.
         var archivePath = backupService.ResolvePath(savedFileName)!;
-        var settingsPreflight = await settingsArchiveService.PreflightAsync(archivePath, cancellationToken);
+        var settingsPreflight = await settingsArchiveService.PreflightAsync(archivePath, null, cancellationToken);
         var preflight = settingsPreflight.IsSettingsArchive
             ? (Success: settingsPreflight.Success, Errors: settingsPreflight.Errors)
             : await ReadFullPreflightAsync(restoreService, archivePath, cancellationToken);

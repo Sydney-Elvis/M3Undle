@@ -77,6 +77,8 @@ public sealed class PortableBackupService(
                 CreatedUtc = DateTime.UtcNow,
                 EncryptionKeyId = encryption.ActiveKeyId,
                 EncryptionKeyFingerprint = encryption.ActiveKeyFingerprint,
+                Scope = "full",
+                SettingsEntities = [],
                 ExcludedTables = PortableBackupExcludedTables.TableNames,
                 DatabaseSha256 = databaseSha256,
             };
