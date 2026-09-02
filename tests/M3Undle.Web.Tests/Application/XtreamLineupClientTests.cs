@@ -357,6 +357,59 @@ public sealed class XtreamLineupClientTests
         Assert.AreEqual("http://panel.test:8080/series/user/pass/1.mkv", result.Channels[0].StreamUrl);
     }
 
+    [TestMethod]
+    public async Task BuildLineup_SeriesWithMalformedEpisodesJson_SkipsThatSeriesWithoutFailingBuild()
+    {
+        var handler = new MultiRouteHandler
+        {
+            ["/player_api.php"] = AuthOk(),
+            ["/player_api.php?action=get_live_categories"] = """[{"category_id":"1","category_name":"News"}]""",
+            ["/player_api.php?action=get_live_streams"] = """[{"stream_id":100,"name":"CNN","epg_channel_id":"cnn.us","stream_icon":"","category_id":"1"}]""",
+            ["/player_api.php?action=get_series_categories"] = """[{"category_id":"5","category_name":"Drama"}]""",
+            ["/player_api.php?action=get_series"] = """[{"series_id":1001,"name":"Breaking Bad","cover":"","category_id":"5","last_modified":"1000"},{"series_id":1002,"name":"Empty Show","cover":"","category_id":"5","last_modified":"1000"}]""",
+        };
+
+        var provider = SimpleProvider("p1");
+        provider.IncludeSeries = true;
+
+        var (client, scopeFactory, _) = CreateClient(handler, seedProviderId: "p1");
+
+        await using (var scope = scopeFactory.CreateAsyncScope())
+        {
+            var ctx = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            ctx.XtreamSeriesCache.AddRange(
+                new XtreamSeriesCache
+                {
+                    ProviderId = "p1",
+                    SeriesId = 1001,
+                    LastModifiedEpoch = 1000L,
+                    EpisodesJson = SeriesInfoJson(1001, "Breaking Bad",
+                        season: "1", episodes: [("1", 1, "Pilot", "mkv")]),
+                },
+                new XtreamSeriesCache
+                {
+                    ProviderId = "p1",
+                    SeriesId = 1002,
+                    LastModifiedEpoch = 1000L,
+                    // Some providers return a bare "[]" instead of the expected
+                    // {"episodes": {...}} object for a series with no data — this
+                    // must degrade to zero episodes for THIS series, not crash the
+                    // whole refresh (production incident 2026-09: took VOD down too).
+                    EpisodesJson = "[]",
+                });
+            await ctx.SaveChangesAsync();
+        }
+
+        var result = await client.BuildLineupFromCredentialsAsync(
+            provider, "http://panel.test:8080", "user", "pass", CancellationToken.None);
+
+        // Live + the one valid series episode both survive; the malformed series
+        // contributes nothing but doesn't take the rest of the build down with it.
+        Assert.HasCount(2, result.Channels);
+        Assert.IsTrue(result.Channels.Any(c => c.DisplayName == "CNN"));
+        Assert.IsTrue(result.Channels.Any(c => c.StreamUrl == "http://panel.test:8080/series/user/pass/1.mkv"));
+    }
+
     // -------------------------------------------------------------------------
     // AccountInfo
     // -------------------------------------------------------------------------
