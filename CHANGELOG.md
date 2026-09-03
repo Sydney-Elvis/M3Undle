@@ -4,6 +4,39 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.9.1] — 2026-09-02
+
+A focused follow-up release that makes it easier to move a M3Undle setup to a clean instance and keeps the published guide aligned when you rebuild a changed channel lineup.
+
+### Settings-only backup and restore
+
+- New **Export Settings** option creates a passphrase-protected archive containing connection settings, profiles, profile links, and downstream integrations — without users, channel curation, history, or cached data
+- Settings archives can be uploaded, validated, and imported directly into a clean M3Undle instance, making it possible to transfer configuration without restoring a complete database backup
+- Import checks the archive's encryption material and refuses to proceed when the target already has providers, profiles, profile links, or downstream integrations, protecting an existing setup from being overwritten accidentally
+
+### Channel lineup and EPG
+
+- Building output after changing a channel lineup now recompiles the guide from cached XMLTV data, so newly selected channels receive their available guide listings instead of carrying forward an outdated guide
+- A build-only publish fetches an EPG source only when its cache is missing; it does not refresh the provider playlist or otherwise ignore the configured EPG cadence
+- The dashboard now shows the latest successful EPG update for the active profile
+
+### Channel mapping
+
+- Custom groups now support searching the active channels available to add, and linking a provider group immediately populates its pending channel reviews
+
+### Testing
+
+- Added coverage for settings archive creation, validation, encryption, import safeguards, and the build-only EPG cache behavior
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.9.1
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.9] — 2026-08-16
 
 Fixes a startup hang that could leave M3Undle permanently unable to start after a hard restart, with no error to explain it — if your container has been sitting at "unhealthy" and never coming up, this release very likely fixes it, and your data was never damaged. Also cleans up provider categories that vanish for good — a genre a provider stopped serving, a dropped package — which used to linger forever in Channel Mapping as 0-channel "missing" rows, while protecting groups you've asked to be notified about (like NFL between seasons) from being deleted out from under you.
