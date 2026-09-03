@@ -301,14 +301,14 @@ public sealed class SnapshotBuilder(
         {
             playlistResult = await fetcher.FetchPlaylistAsync(provider, cancellationToken);
         }
-        // HttpRequestException is included deliberately: the Xtream lineup path surfaces a
-        // non-success status (e.g. a panel rate-limiting with 503) as a raw HttpRequestException
-        // rather than wrapping it in ProviderFetchException. Without it here, one provider's
-        // transient 503 escaped this per-provider handler and aborted the entire refresh for
-        // every provider — confirmed live. It is caught here rather than wrapped at the
-        // HttpFetchHelper level because ProviderFetcher's get.php -> player_api.php fallback
-        // filters on `HttpRequestException.StatusCode >= 500` and would stop matching.
-        catch (Exception ex) when (ex is ProviderFetchException or ProviderParseException or HttpRequestException or OperationCanceledException)
+        // Deliberately catches every exception type, not just the anticipated
+        // ProviderFetchException/ProviderParseException/HttpRequestException/OperationCanceledException
+        // set: an unanticipated exception (e.g. malformed provider JSON hitting an unguarded
+        // TryGetProperty deep in the Xtream lineup path) previously escaped a narrower filter here
+        // and aborted the entire refresh for every provider, not just the one with bad data —
+        // confirmed live. This handler's whole purpose is "one provider's fetch/parse blowing up
+        // must never take other providers down with it," so it can't afford to be selective.
+        catch (Exception ex)
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider \"{ProviderName}\" after {Elapsed}ms.", provider.Name, sw.ElapsedMilliseconds);
             metrics?.RecordProviderRefresh(provider.ProviderId, success: false, sw.Elapsed);
