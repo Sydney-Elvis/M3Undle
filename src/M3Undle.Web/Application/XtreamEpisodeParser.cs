@@ -18,8 +18,7 @@ internal static class XtreamEpisodeParser
         try
         {
             using var doc = JsonDocument.Parse(episodesJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty("episodes", out var episodesObj)
+            if (!doc.RootElement.TryGetProperty("episodes", out var episodesObj)
                 || episodesObj.ValueKind != JsonValueKind.Object)
                 return result;
 
@@ -46,12 +45,7 @@ internal static class XtreamEpisodeParser
                 }
             }
         }
-        // Deliberately catches everything, not just JsonException: providers occasionally send
-        // episode entries in shapes TryGetProperty can't handle (e.g. a season or episode value
-        // that isn't an object), which throws InvalidOperationException rather than JsonException.
-        // A single series with malformed data must degrade to "no episodes," never take down the
-        // whole snapshot refresh.
-        catch (Exception) { }
+        catch (JsonException) { }
         return result;
     }
 
