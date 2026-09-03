@@ -36,7 +36,12 @@ public static class MountResolver
         {
             drives = DriveInfo.GetDrives();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        // Broad catch deliberate: GetDrives() enumerates every OS mount, including ones this
+        // process doesn't control (e.g. a synthetic APFS/Docker Desktop volume with an empty
+        // name), and can throw types beyond IOException/UnauthorizedAccessException — observed
+        // as ArgumentException ("Drive name must not be empty") on macOS. This is best-effort
+        // startup diagnostics; any failure here should degrade to "unknown mount," never crash.
+        catch (Exception)
         {
             return null;
         }
