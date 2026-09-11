@@ -1086,7 +1086,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         bool hasKnownH264VideoStream,
         bool suppressSelection = false)
     {
-        var fallbackBytes = ResolveRecoverySafeStartSearchLimitBytes();
+        // Once the whole-outage catch-up deadline has expired, freshness is no longer
+        // required at all (see EvaluateRecoveryCatchUpExpiry) -- waiting out the normal,
+        // multi-hundred-KB/MB patience budget here before accepting a packet-boundary
+        // fallback would silently re-impose the same unbounded wait the deadline exists to
+        // cut off, especially against a throttled/slow-arriving upstream. Use a small,
+        // fixed budget instead so the fallback fires on essentially the next eligible batch.
+        var fallbackBytes = _recoveryCatchUpDeadlineExpired
+            ? RecoveryPostDeadlineSafeStartSearchLimitBytes
+            : ResolveRecoverySafeStartSearchLimitBytes();
 
         if (kind == MpegTsStartupKind.PatPmt)
         {
@@ -1910,6 +1918,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryBytesSuppressed = 0;
         Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
     }
+
+    // Deliberately tiny and fixed (not derived from policy): once the catch-up deadline
+    // has expired, any decoder-safe boundary is acceptable, so this only needs to survive
+    // one packet-boundary scan, not gate on a meaningful amount of "patience."
+    private const int RecoveryPostDeadlineSafeStartSearchLimitBytes = MpegTsBoundaryScanner.PacketSize * 4;
 
     private int ResolveRecoverySafeStartSearchLimitBytes()
     {
