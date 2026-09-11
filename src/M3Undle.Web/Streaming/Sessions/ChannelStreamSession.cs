@@ -112,6 +112,16 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     // _recoveryBytesSuppressed (the whole-hold cumulative total used for reporting), so a
     // long genuine catch-up chase doesn't leave no budget left for the final search.
     private long _recoveryPostDeadlineSuppressedBytes;
+    // Position of the first batch written to the ring buffer after this hold began (set
+    // once, by the first batch, and cleared on the next BeginRecoveryOutputHold). A stale
+    // resume (deadline expired) marks its safe start here instead of at the triggering
+    // batch's own position, so the published snapshot is the whole bounded post-reconnect
+    // backlog rather than a single, easily-missed batch -- otherwise the "deliberate,
+    // logged jump" RecoveryStaleResumeAccepted promises is invisible to anything that isn't
+    // watching diagnostics in real time, since a fresh subscriber would just see output
+    // resume with no discontinuity in the bytes themselves.
+    private int? _recoveryHoldFirstLeaseGeneration;
+    private long? _recoveryHoldFirstLeaseSequence;
     // Set by BeginRecoveryOutputHold when a trim was abandoned within the retry cooldown:
     // skip the tight, precisely-scanning trim sub-phase and go straight to the looser,
     // deadline-bounded catch-up chase (freshness is still required either way).
@@ -754,6 +764,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             var rewindSignal = DetectInProcessTimelineRewind(batch);
             using var published = _buffer.Write(batch.Data);
 
+            if (_recoveryOutputHoldActive && _recoveryHoldFirstLeaseGeneration is null)
+            {
+                _recoveryHoldFirstLeaseGeneration = published.Generation;
+                _recoveryHoldFirstLeaseSequence = published.Sequence;
+            }
+
             if (rewindSignal == TimelineRewindSignal.Candidate)
             {
                 // Corroborating evidence for a clamped DTS ramp is still accumulating
@@ -1127,7 +1143,20 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         var safeStartKind = fallback ? "FallbackPacketBoundary" : kind.ToString();
 
-        if (kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt
+        if (_recoveryCatchUpDeadlineExpired
+            && _recoveryHoldFirstLeaseGeneration is { } holdGeneration
+            && _recoveryHoldFirstLeaseSequence is { } holdSequence)
+        {
+            // A stale resume is only "deliberate" (per RecoveryStaleResumeAccepted's own
+            // description) if it is actually visible downstream: marking the triggering
+            // batch's own (current) position, as a fresh resume does, would publish just
+            // that one small batch and discard the whole bounded post-reconnect backlog --
+            // functionally indistinguishable from a clean resume to anything watching the
+            // byte stream rather than diagnostics. Marking the hold's first position instead
+            // flushes that whole (small, deadline-bounded) backlog in one shot.
+            _buffer.MarkSafeStart(holdGeneration, holdSequence);
+        }
+        else if (kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt
             && _mpegTsCandidateSafeStartGeneration is { } generation
             && _mpegTsCandidateSafeStartSequence is { } sequence)
             _buffer.MarkSafeStart(generation, sequence);
@@ -1165,6 +1194,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldActive = true;
         _recoveryOutputHoldStartedUtc = holdStartedUtc;
         _lastRecoveryStartedUtc = holdStartedUtc;
+        _recoveryHoldFirstLeaseGeneration = null;
+        _recoveryHoldFirstLeaseSequence = null;
         _recoveryBytesSuppressed = 0;
         _recoveryHoldTriggeredByClampedRamp = false;
         _clampedDtsRampAbandoned = false;
