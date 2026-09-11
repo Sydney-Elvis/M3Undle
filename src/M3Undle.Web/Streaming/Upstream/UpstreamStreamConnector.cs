@@ -111,6 +111,18 @@ public sealed class UpstreamStreamConnector(
                 "FFmpeg clean relay startup failed for '{DisplayName}'. Falling back to direct HTTP relay.",
                 source.DisplayName);
         }
+        else if (recoveryPolicy is not null && recoveryPolicy.Profile != StreamChannelHealthProfile.Stable)
+        {
+            // Symmetric to the "Clean remux selected" log above — only logged when the
+            // profile isn't Stable (the common case would otherwise be noise on every
+            // healthy reconnect), so a relay-mode transition or an unexpectedly-still-
+            // Direct degraded channel is visible without inferring it from absence.
+            logger.LogInformation(
+                "Direct relay selected for '{DisplayName}'. ProviderRelayPolicy={ProviderRelayPolicy} Reason={RelayDecisionReason}",
+                source.DisplayName,
+                relayDecision.ProviderRelayPolicy,
+                relayDecision.Reason);
+        }
 
         var client = httpClientFactory.CreateClient("stream-relay");
         ProviderFetcher.ApplyHeadersFromJson(client, provider.HeadersJson);

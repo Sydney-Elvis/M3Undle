@@ -57,9 +57,12 @@ public sealed class ReconnectOptions
     public bool EnableRecoveryOverlapTrim { get; set; } = true;
 
     /// <summary>
-    /// Wall-clock budget for an active overlap trim. Rewind bursts arrive far faster
-    /// than real time; a provider replaying at 1x would never catch up, so on expiry
-    /// the trim is abandoned and recovery falls back to the standard first-IDR resume.
+    /// Wall-clock budget for the tight, precisely-scanning overlap trim sub-phase only.
+    /// On expiry the trim is abandoned and recovery falls back to the looser, deadline-
+    /// bounded catch-up chase governed by <see cref="RecoveryReplayCatchUpMinDuration"/>/
+    /// <see cref="RecoveryReplayCatchUpMaxDuration"/> — a source replaying at 1x real time
+    /// can still reach the pre-failure position within roughly the rewind span, it just
+    /// cannot do it within this tight a window while also being scanned precisely.
     /// </summary>
     public TimeSpan RecoveryOverlapTrimHoldLimit { get; set; } = TimeSpan.FromSeconds(6);
 
@@ -72,14 +75,43 @@ public sealed class ReconnectOptions
     public int RecoveryOverlapTrimMaxRewindSeconds { get; set; } = 180;
 
     /// <summary>
-    /// After a trim is abandoned, no new trim is armed for this long. A source that
-    /// fails faster than its replay can catch up (FFmpeg relay restarts produce a
-    /// rewound-looking timeline on every reconnect) would otherwise re-enter a fresh
-    /// trim with a fresh budget on every failure, suppressing output indefinitely;
-    /// the cooldown degrades such sources to the plain first-IDR resume instead.
-    /// Zero disables the cooldown.
+    /// After a trim is abandoned, no new precise trim scan is armed for this long — a
+    /// source that fails faster than its replay can catch up (FFmpeg relay restarts
+    /// produce a rewound-looking timeline on every reconnect) would otherwise re-enter
+    /// the tight scanning sub-phase on every failure. Freshness is never disabled by this
+    /// cooldown: recovery still requires the pre-failure timestamp, just via the looser,
+    /// deadline-bounded catch-up chase (see <see cref="RecoveryReplayCatchUpMaxDuration"/>)
+    /// instead of re-running the precise scan. Zero disables the cooldown.
     /// </summary>
     public TimeSpan RecoveryOverlapTrimRetryCooldown { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// How much longer than the measured rewind to allow a source that keeps making
+    /// genuine forward progress toward the pre-failure position, once the precise trim
+    /// scan has been abandoned (or skipped via <see cref="RecoveryOverlapTrimRetryCooldown"/>).
+    /// A source replaying at roughly 1x real time needs about the rewind span itself to
+    /// catch up; this multiplier gives it headroom above that before recovery gives up on
+    /// freshness. Spans the whole outage (all reconnects within it), not reset per attempt.
+    /// </summary>
+    public double RecoveryReplayCatchUpMultiplier { get; set; } = 1.5;
+
+    /// <summary>Floor for the computed catch-up deadline, so small rewinds are not penalized.</summary>
+    public TimeSpan RecoveryReplayCatchUpMinDuration { get; set; } = TimeSpan.FromSeconds(6);
+
+    /// <summary>
+    /// Hard ceiling for the computed catch-up deadline, so a pathologically large rewind
+    /// cannot hold a session's downstream output indefinitely across repeated reconnects.
+    /// </summary>
+    public TimeSpan RecoveryReplayCatchUpMaxDuration { get; set; } = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// While chasing the pre-failure position (freshness required, precise trim already
+    /// abandoned/skipped), give up early if no forward DTS progress toward the target is
+    /// observed for this long — distinguishes a source that is genuinely still replaying
+    /// real backlog (worth waiting for, up to the catch-up deadline) from one that has
+    /// simply stalled or is looping the same content.
+    /// </summary>
+    public TimeSpan RecoveryReplayStallTimeout { get; set; } = TimeSpan.FromSeconds(8);
 
     /// <summary>
     /// For clean-remux FFmpeg relay: a real backward DTS jump never reaches the

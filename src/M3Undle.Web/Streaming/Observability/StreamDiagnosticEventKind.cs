@@ -35,4 +35,11 @@ public enum StreamDiagnosticEventKind
     RecoveryOverlapTrimAbandoned = 30,
     InProcessRelayTimelineRewind = 31,
     ClampedDtsRampRecoveryAbandoned = 32,
+
+    /// <summary>
+    /// A recovery gave up requiring a fresh restart point (whole-outage catch-up deadline
+    /// or DTS-progress stall expired) and resumed on the best decoder-safe boundary
+    /// available instead — a deliberate, logged discontinuity rather than a silent one.
+    /// </summary>
+    RecoveryStaleResumeAccepted = 33,
 }

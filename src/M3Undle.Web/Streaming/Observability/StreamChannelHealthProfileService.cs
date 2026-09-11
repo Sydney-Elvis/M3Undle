@@ -18,6 +18,14 @@ public sealed class StreamChannelHealthProfileService(
     private static readonly TimeSpan UnstableHoldLimit = TimeSpan.FromSeconds(5);
     private const int UnstableSearchLimitBytes = 2 * 1024 * 1024;
 
+    // A channel with this many genuinely-recovered upstream failures within
+    // TrendRecentWindow (1h) is chronically flapping even though each individual
+    // recovery succeeds cleanly — such a channel should still reach Unstable rather than
+    // being stuck at Cautious forever. Deliberately conservative (more than one failure
+    // per ~10 minutes sustained); needs field calibration against real watched-duration
+    // and provider behavior before tightening.
+    private const int FrequencyUnstableThreshold = 6;
+
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
 
@@ -66,7 +74,15 @@ public sealed class StreamChannelHealthProfileService(
             CleanRelayModes.On => StreamRelayPolicyDecision.CleanRemux(
                 normalizedPolicy,
                 "Provider relay policy is On; clean remux is forced for this provider."),
-            CleanRelayModes.Auto when recoveryPolicy.Profile == StreamChannelHealthProfile.Unstable =>
+            // A channel that fails and cleanly recovers arbitrarily many times can sit at
+            // Cautious forever (DeriveProfile only reaches Unstable on severity evidence,
+            // not raw failure frequency), so Cautious must also get clean remux's tolerance
+            // under Auto or such a channel never leaves Direct's fragile stall timeout.
+            // BuildPolicy's severity-gated recovery settings (hold limit, search bytes,
+            // packet-boundary fallback) intentionally stay Unstable-only — this only
+            // changes relay-mode selection, not recovery budgets.
+            CleanRelayModes.Auto when recoveryPolicy.Profile is StreamChannelHealthProfile.Cautious
+                or StreamChannelHealthProfile.Unstable =>
                 StreamRelayPolicyDecision.CleanRemux(
                     normalizedPolicy,
                     $"Provider relay policy is Auto and channel health is {recoveryPolicy.Profile}; clean remux selected. {recoveryPolicy.Reason}"),
@@ -87,7 +103,7 @@ public sealed class StreamChannelHealthProfileService(
     {
         var now = _timeProvider.GetUtcNow();
         var rows = await LoadRowsAsync(providerId, providerChannelId, now.UtcDateTime - ObservationWindow, ct);
-        var summary = BuildSummaryFromRows(rows);
+        var summary = BuildSummaryFromRows(rows, now.UtcDateTime);
         var trend = ComputeTrendFromRows(rows, now.UtcDateTime);
         _cache[$"{providerId}:{providerChannelId}"] = new CacheEntry(now, summary);
         var policy = BuildPolicy(summary, reconnectOptions);
@@ -133,11 +149,12 @@ public sealed class StreamChannelHealthProfileService(
                 e.ClientAbortAfterRecovery,
                 e.ForcedRetune,
                 e.TsSyncLoss,
-                e.CleanWatchDurationMs))
+                e.CleanWatchDurationMs,
+                e.UpstreamFailureKind))
             .ToListAsync(ct);
     }
 
-    private static HealthSummary BuildSummaryFromRows(List<HealthEventRow> rows)
+    private static HealthSummary BuildSummaryFromRows(List<HealthEventRow> rows, DateTime nowUtc)
     {
         if (rows.Count == 0)
             return HealthSummary.Empty;
@@ -154,6 +171,18 @@ public sealed class StreamChannelHealthProfileService(
             .Select(e => (DateTime?)e.EventUtc)
             .Max();
 
+        // A genuine rolling-hour count, distinct from the 24h aggregate below — a channel
+        // that fails and cleanly recovers frequently enough must still be able to reach
+        // Unstable even though raw UpstreamFailure count alone isn't otherwise a severity
+        // signal. StartupFatal rows are excluded: those are the terminal artifact of a
+        // recovery that already failed and is separately captured by ForcedRetunes —
+        // counting them again here would double-motivate the same incident.
+        var recentCutoffUtc = nowUtc - TrendRecentWindow;
+        var recentUpstreamFailures = rows.Count(e =>
+            e.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure)
+            && e.EventUtc >= recentCutoffUtc
+            && !string.Equals(e.UpstreamFailureKind, "StartupFatal", StringComparison.Ordinal));
+
         return new HealthSummary(
             rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.UpstreamFailure)),
             rows.Count(e => e.EventKind == nameof(StreamDiagnosticEventKind.RecoveryOutputResumed)),
@@ -165,7 +194,8 @@ public sealed class StreamChannelHealthProfileService(
             cleanRows.Count,
             TimeSpan.FromMilliseconds(cleanWatchMs),
             lastAdverseEventUtc,
-            lastCleanWatchUtc);
+            lastCleanWatchUtc,
+            recentUpstreamFailures);
     }
 
     private async Task<HealthSummary> LoadSummaryAsync(
@@ -175,7 +205,7 @@ public sealed class StreamChannelHealthProfileService(
         CancellationToken ct)
     {
         var rows = await LoadRowsAsync(providerId, providerChannelId, nowUtc - ObservationWindow, ct);
-        return BuildSummaryFromRows(rows);
+        return BuildSummaryFromRows(rows, nowUtc);
     }
 
     private static StreamChannelHealthTrendResult ComputeTrendFromRows(
@@ -331,7 +361,8 @@ public sealed class StreamChannelHealthProfileService(
         StreamChannelHealthProfile profile;
         if (summary.ForcedRetunes > 0
             || summary.FallbackRecoveryResumes >= 2
-            || summary.TsSyncLoss >= 2)
+            || summary.TsSyncLoss >= 2
+            || summary.RecentUpstreamFailures >= FrequencyUnstableThreshold)
         {
             profile = StreamChannelHealthProfile.Unstable;
         }
@@ -359,9 +390,9 @@ public sealed class StreamChannelHealthProfileService(
         => profile switch
         {
             StreamChannelHealthProfile.Unstable =>
-                $"Recent health events classify channel as unstable: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}, cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}.",
+                $"Recent health events classify channel as unstable: upstreamFailures={summary.UpstreamFailures}, recentUpstreamFailures={summary.RecentUpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, forcedRetunes={summary.ForcedRetunes}, tsSyncLoss={summary.TsSyncLoss}, cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}.",
             StreamChannelHealthProfile.Cautious =>
-                $"Recent health events classify channel as cautious: upstreamFailures={summary.UpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, tsSyncLoss={summary.TsSyncLoss}, cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}.",
+                $"Recent health events classify channel as cautious: upstreamFailures={summary.UpstreamFailures}, recentUpstreamFailures={summary.RecentUpstreamFailures}, recoveries={summary.RecoveryResumes}, fallbackRecoveries={summary.FallbackRecoveryResumes}, abortsAfterRecovery={summary.ClientAbortAfterRecovery}, tsSyncLoss={summary.TsSyncLoss}, cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}.",
             _ => summary.CleanWatchDuration > TimeSpan.Zero
                 ? $"Recent clean watch evidence relaxed channel health: cleanWatchSeconds={summary.CleanWatchDuration.TotalSeconds:F0}."
                 : "No recent recovery failures or post-recovery aborts were found.",
@@ -382,7 +413,8 @@ public sealed class StreamChannelHealthProfileService(
         bool ClientAbortAfterRecovery,
         bool ForcedRetune,
         bool TsSyncLoss,
-        double? CleanWatchDurationMs);
+        double? CleanWatchDurationMs,
+        string? UpstreamFailureKind);
 
     private sealed record HealthSummary(
         int UpstreamFailures,
@@ -395,8 +427,9 @@ public sealed class StreamChannelHealthProfileService(
         int CleanWatchEvents,
         TimeSpan CleanWatchDuration,
         DateTime? LastAdverseEventUtc,
-        DateTime? LastCleanWatchUtc)
+        DateTime? LastCleanWatchUtc,
+        int RecentUpstreamFailures)
     {
-        public static HealthSummary Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, TimeSpan.Zero, null, null);
+        public static HealthSummary Empty { get; } = new(0, 0, 0, 0, 0, 0, 0, 0, TimeSpan.Zero, null, null, 0);
     }
 }

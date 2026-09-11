@@ -43,6 +43,91 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
+    public async Task GetRecoveryPolicyAsync_SixRecentCleanlyRecoveredFailures_DerivesUnstablePolicy()
+    {
+        // A channel that fails and cleanly recovers via H264Idr arbitrarily many times
+        // could previously never reach Unstable — DeriveProfile only looked at severity
+        // signals, never raw failure frequency. Six genuinely-recovered failures within
+        // the last hour (well under the daily-count threshold this is deliberately NOT
+        // the same as) must still promote the channel.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var events = Enumerable.Range(0, 6)
+            .Select(i => CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(5 + i)))
+            .ToArray();
+        await fixture.SeedAsync(events);
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_FewRecentUpstreamFailures_StaysBelowFrequencyThreshold()
+    {
+        // Below the frequency threshold and below the existing severity/count triggers —
+        // must not spuriously promote to Unstable.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        await fixture.SeedAsync(
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(5)),
+            CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromMinutes(10)));
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreEqual(StreamChannelHealthProfile.Cautious, policy.Profile);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_StartupFatalFailures_ExcludedFromFrequencyCount()
+    {
+        // StartupFatal-kind UpstreamFailure rows are the terminal artifact of a recovery
+        // that already failed and is separately captured by ForcedRetunes — counting them
+        // again toward the frequency threshold would double-motivate the same incident.
+        // None of these are marked ForcedRetune, isolating the frequency-count exclusion
+        // itself rather than the (already-covered) severity trigger.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var events = Enumerable.Range(0, 6)
+            .Select(i => CreateHealthEvent(
+                "UpstreamFailure",
+                age: TimeSpan.FromMinutes(5 + i),
+                upstreamFailureKind: "StartupFatal"))
+            .ToArray();
+        await fixture.SeedAsync(events);
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreNotEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
+    }
+
+    [TestMethod]
+    public async Task GetRecoveryPolicyAsync_UpstreamFailuresOutsideRecentWindow_DoNotCountTowardFrequency()
+    {
+        // Six failures, but all outside the 1h recent window — the 24h aggregate
+        // UpstreamFailures count alone must not satisfy the frequency threshold; only
+        // rows within the rolling window do.
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var events = Enumerable.Range(0, 6)
+            .Select(i => CreateHealthEvent("UpstreamFailure", age: TimeSpan.FromHours(2) + TimeSpan.FromMinutes(i)))
+            .ToArray();
+        await fixture.SeedAsync(events);
+
+        var policy = await fixture.Service.GetRecoveryPolicyAsync(
+            "provider-1",
+            "channel-1",
+            new ReconnectOptions());
+
+        Assert.AreNotEqual(StreamChannelHealthProfile.Unstable, policy.Profile);
+    }
+
+    [TestMethod]
     public async Task GetRecoveryPolicyAsync_RepeatedClientAbortAfterRecovery_StaysStable()
     {
         // Regression guard for issue #128: ClientAbortAfterRecovery must never drive the
@@ -128,8 +213,12 @@ public sealed class StreamChannelHealthProfileServiceTests
     }
 
     [TestMethod]
-    public async Task GetRelayPolicyDecision_AutoCautious_SelectsDirect()
+    public async Task GetRelayPolicyDecision_AutoCautious_SelectsCleanRemux()
     {
+        // A channel that fails and cleanly recovers arbitrarily many times can sit at
+        // Cautious forever (DeriveProfile only reaches Unstable on severity evidence, not
+        // raw failure frequency) — Cautious must also get clean remux's tolerance under
+        // Auto, or such a channel never leaves Direct's fragile stall timeout.
         await using var fixture = await ProfileFixture.CreateAsync();
         var policy = new StreamChannelRecoveryPolicy(
             StreamChannelHealthProfile.Cautious,
@@ -140,7 +229,7 @@ public sealed class StreamChannelHealthProfileServiceTests
 
         var decision = fixture.Service.GetRelayPolicyDecision("auto", policy);
 
-        Assert.AreEqual(UpstreamRelayModes.Direct, decision.SelectedRelayMode);
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, decision.SelectedRelayMode);
         StringAssert.Contains(decision.Reason, "Cautious");
     }
 
@@ -276,7 +365,10 @@ public sealed class StreamChannelHealthProfileServiceTests
         Assert.AreEqual(1, evidence.CleanWatchEvents);
         Assert.AreEqual(TimeSpan.FromMinutes(30), evidence.CleanWatchDuration);
         Assert.AreEqual(StreamChannelHealthProfile.Cautious, evidence.RecoveryPolicy.Profile);
-        Assert.AreEqual(UpstreamRelayModes.Direct, evidence.AutoRelayDecision.SelectedRelayMode);
+        // Decayed from Unstable to Cautious, not all the way to Stable — Cautious still
+        // gets clean remux's relay protection under Auto (only BuildPolicy's severity-gated
+        // recovery *budgets* relax back to the configured defaults at this level).
+        Assert.AreEqual(UpstreamRelayModes.FfmpegCleanRemux, evidence.AutoRelayDecision.SelectedRelayMode);
     }
 
     [TestMethod]
@@ -437,7 +529,8 @@ public sealed class StreamChannelHealthProfileServiceTests
         bool tsSyncLoss = false,
         string? safeStartKind = null,
         double? cleanWatchDurationMs = null,
-        TimeSpan? age = null)
+        TimeSpan? age = null,
+        string? upstreamFailureKind = null)
         => new()
         {
             StreamChannelHealthEventId = Guid.NewGuid().ToString("N"),
@@ -451,6 +544,7 @@ public sealed class StreamChannelHealthProfileServiceTests
             TsSyncLoss = tsSyncLoss,
             SafeStartKind = safeStartKind,
             CleanWatchDurationMs = cleanWatchDurationMs,
+            UpstreamFailureKind = upstreamFailureKind,
         };
 
     private sealed class ProfileFixture : IAsyncDisposable
