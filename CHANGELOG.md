@@ -4,6 +4,32 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.10] — 2026-09-12
+
+Fixes streams that could drop mid-recovery instead of catching back up after a reconnect, and lets you split a provider group's channels across two or more custom groups.
+
+### Fixed
+
+- **Streams could drop mid-recovery instead of catching up.** When a reconnect produced a rewound timeline, the only fallback after the precise overlap-trim scan was abandoned used to be an immediate first-IDR resume — a source still legitimately replaying its backlog at roughly real-time speed had no chance to reach the pre-failure position before recovery gave up on it. Recovery now gives such a source a deadline-bounded catch-up window (scaled to the size of the rewind, with a floor and a ceiling) and bails out early only if forward progress actually stalls, instead of cutting it off on a fixed, tight budget
+- Fixed a related bug where, after a stale resume was accepted, the next video frame's timestamp could still be compared against the pre-reconnect epoch — immediately re-triggering the same rewind hold it had just recovered from
+
+### Channel mapping
+
+- Selected channels in a provider group (including a merged/virtual group spanning several provider groups) can now be moved directly into a custom group, with the option to create the new group inline — making it possible to split one provider group's channels across two or more separate custom groups
+
+### Testing
+
+- Expanded stream session recovery test coverage for the catch-up deadline, stall detection, and the stale-resume DTS reset
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.10
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.9.1] — 2026-09-02
 
 A focused follow-up release that makes it easier to move a M3Undle setup to a clean instance and keeps the published guide aligned when you rebuild a changed channel lineup.
