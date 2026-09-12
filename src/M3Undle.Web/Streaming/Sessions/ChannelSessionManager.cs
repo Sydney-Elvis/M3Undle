@@ -209,10 +209,17 @@ public sealed class ChannelSessionManager : IHostedService, IDisposable
 
                 if (preemptionTask is null)
                 {
+                    // "Uncapped" is worth seeing at admission time, not just inferring from an
+                    // absent ProviderLimit rejection later — a provider whose real account has
+                    // a concurrent-stream limit but no configured MaxConcurrentStreams gets no
+                    // admission protection at all (the provider's own backend silently kills
+                    // overflow connections instead), which otherwise only shows up as confusing
+                    // downstream recovery failures.
                     _logger.LogInformation(
-                        "Opening new stream session for '{DisplayName}' ({ActiveSessions} session(s) now active).",
+                        "Opening new stream session for '{DisplayName}' ({ActiveSessions} session(s) now active). ProviderCap={ProviderCap}",
                         source.DisplayName,
-                        _sessions.Count + 1);
+                        _sessions.Count + 1,
+                        effectiveProviderCap is { } cap ? cap.ToString() : "uncapped");
 
                     var session = new ChannelStreamSession(
                         source,

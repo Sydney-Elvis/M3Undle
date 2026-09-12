@@ -7,6 +7,7 @@ namespace M3Undle.Web.Streaming.Observability;
 
 public sealed class StreamChannelHealthEventRecorder(
     IServiceScopeFactory scopeFactory,
+    IStreamChannelHealthProfileService healthProfileService,
     ILogger<StreamChannelHealthEventRecorder> logger) : BackgroundService, IStreamChannelHealthEventRecorder
 {
     private static readonly TimeSpan PurgeInterval = TimeSpan.FromHours(4);
@@ -116,6 +117,12 @@ public sealed class StreamChannelHealthEventRecorder(
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         db.StreamChannelHealthEvents.Add(healthEvent);
         await db.SaveChangesAsync(ct);
+
+        // A reconnect immediately following this event (e.g. RunAsync refreshing the
+        // policy before the next ConnectAsync) must see this row, not a cached summary
+        // from up to CacheTtl ago — otherwise relay-mode selection can lag the actual
+        // classification by as much as 30s during a fast reconnect loop.
+        healthProfileService.Invalidate(healthEvent.ProviderId, healthEvent.ProviderChannelId);
     }
 
     private static StreamChannelHealthEvent? Map(StreamDiagnosticEvent diagnosticEvent)
@@ -125,14 +132,17 @@ public sealed class StreamChannelHealthEventRecorder(
             || string.IsNullOrWhiteSpace(diagnosticEvent.DisplayName))
             return null;
 
-        var isRecoveryFailure = diagnosticEvent.Kind is StreamDiagnosticEventKind.RecoveryHoldLimitExceeded
-            or StreamDiagnosticEventKind.RecoveryFailedUnsafe;
         // ControlledDownstreamRetune is a deliberate policy action, not new evidence of stream
         // instability. Including it in ForcedRetune would keep DeriveProfile at Unstable (ForcedRetunes > 0)
         // for the entire 24-hour observation window, causing every subsequent recovery to trigger
         // another controlled retune — a self-reinforcing loop. Only genuine scan failures count.
-        var isForcedRetune = diagnosticEvent.Kind == StreamDiagnosticEventKind.RecoveryForcedRetune
-            || isRecoveryFailure;
+        //
+        // FailRecoveryOutputAsync always records RecoveryHoldLimitExceeded/RecoveryFailedUnsafe
+        // *and* a dedicated RecoveryForcedRetune event for the same single incident — attribute
+        // ForcedRetune only to the dedicated event, or every forced retune would persist as two
+        // rows and be double-counted anywhere ForcedRetunes gets summed (DeriveProfile's own
+        // `> 0` check is unaffected, but per-incident counts elsewhere were not).
+        var isForcedRetune = diagnosticEvent.Kind == StreamDiagnosticEventKind.RecoveryForcedRetune;
         var isAbortAfterRecovery = diagnosticEvent.Kind == StreamDiagnosticEventKind.ClientAbortAfterRecovery;
         var isTsSyncLoss = diagnosticEvent.Kind == StreamDiagnosticEventKind.MpegTsSyncLost;
 
@@ -173,5 +183,6 @@ public sealed class StreamChannelHealthEventRecorder(
             or StreamDiagnosticEventKind.MpegTsSyncLost
             or StreamDiagnosticEventKind.ControlledDownstreamRetune
             or StreamDiagnosticEventKind.CleanWatchCompleted
-            or StreamDiagnosticEventKind.SubscriberQueueFull;
+            or StreamDiagnosticEventKind.SubscriberQueueFull
+            or StreamDiagnosticEventKind.RecoveryStaleResumeAccepted;
 }

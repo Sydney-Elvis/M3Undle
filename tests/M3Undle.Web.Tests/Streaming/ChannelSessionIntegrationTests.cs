@@ -2282,12 +2282,19 @@ public sealed class ChannelSessionIntegrationTests
     {
         // After a trim is abandoned because the upstream failed mid-replay, a source that
         // keeps flapping with a rewound-looking timeline (an FFmpeg relay restart produces
-        // one on every reconnect) must not re-arm the trim during the retry cooldown:
-        // recovery degrades to the plain first-IDR resume so output keeps flowing.
+        // one on every reconnect) must not re-arm the *precise, tightly-budgeted* trim scan
+        // during the retry cooldown — but freshness itself is never disabled by the cooldown.
+        // Recovery instead chases the pre-failure position via the looser, whole-outage
+        // catch-up deadline (see ArmRecoveryCatchUpDeadline/EvaluateRecoveryCatchUpExpiry):
+        // a still-rewound IDR arriving during that chase must NOT be trusted as a resume
+        // point, but a subsequent IDR that actually reaches the pre-failure position must be.
+        // (Separate tests cover what happens when the chase's deadline/stall genuinely
+        // expires with no fresh content ever arriving.)
         const long preFailureDts = 102L * 90000;
         var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF1], 43L * 90000);
         var freshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF2], 200L * 90000);
         var secondRewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF3], 150L * 90000);
+        var thirdFreshIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF4], 203L * 90000);
 
         var preFailureSequence = new[]
         {
@@ -2319,8 +2326,15 @@ public sealed class ChannelSessionIntegrationTests
         };
 
         // Third recovery rewinds again (50 s behind the fresh position) — within the trim
-        // window, but the cooldown from the abandoned trim must keep the trim disarmed.
-        var thirdRecoverySequence = new[]
+        // window, but the cooldown from the abandoned trim must keep the precise scan
+        // disarmed. secondRewoundIdr must not be trusted (still behind the target). A real
+        // 1 s wall-clock gap separates it from thirdFreshIdr — comfortably longer than the
+        // old flat 2 MiB / effectively-instant-at-test-throughput safe-start search limit
+        // (set deliberately tiny below) would ever have tolerated, proving the new
+        // whole-outage, time-based catch-up deadline — not a byte count — governs this
+        // phase. thirdFreshIdr, arriving after the gap at/after the target, must still
+        // resume correctly.
+        var thirdRecoveryPrefix = new byte[][]
         {
             PatPacket(100),
             PmtPacket(100, 256),
@@ -2328,20 +2342,34 @@ public sealed class ChannelSessionIntegrationTests
             TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xC4], 150L * 90000),
             secondRewoundIdr,
         };
+        var thirdRecoverySuffix = new byte[][]
+        {
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xC5], 203L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xC6], 203L * 90000),
+            thirdFreshIdr,
+        };
 
         var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
         var handler = FakeStreamingHandler.StreamForever(filler);
         handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
         handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(rewoundThenStallSequence, ct));
         handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(secondRecoverySequence, ct));
-        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(thirdRecoverySequence, filler, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
+            thirdRecoveryPrefix, thirdRecoverySuffix, filler, TimeSpan.FromSeconds(1), ct));
 
         await using var fixture = await SessionFixture.CreateAsync(
             handler,
             reconnectOptions: new ReconnectOptions
             {
-                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                // Longer than the 1 s mid-connection pause above, so that gap reads as the
+                // source still being connected but quiet — not a stall requiring a fresh
+                // reconnect (and a fresh, undesired abandon/cooldown cycle).
+                ReadStallTimeout = TimeSpan.FromSeconds(2),
                 RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                // Deliberately tiny: proves the wait through the 1 s gap is governed by the
+                // new time-based catch-up deadline (defaults are generous relative to 1 s),
+                // not by this byte count, which a handful of packets would exceed instantly.
+                RecoverySafeStartSearchLimitBytes = 4 * 188,
                 OutageWindow = TimeSpan.FromSeconds(30),
                 ConnectTimeout = TimeSpan.FromSeconds(5),
                 FixedStepBackoffSeconds = [0],
@@ -2349,10 +2377,10 @@ public sealed class ChannelSessionIntegrationTests
 
         var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
         var capture = CreateResponseCaptureContext();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
 
-        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), secondRewoundIdr) >= 0, TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => IndexOf(capture.Body.ToArray(), thirdFreshIdr) >= 0, TimeSpan.FromSeconds(15));
 
         cts.Cancel();
         await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
@@ -2362,8 +2390,8 @@ public sealed class ChannelSessionIntegrationTests
         Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, freshIdr), "The recovery after the abandoned trim must resume output.");
         Assert.IsGreaterThanOrEqualTo(
             0,
-            IndexOf(data, secondRewoundIdr),
-            "A rewound recovery during the trim cooldown must resume plainly and relay its content.");
+            IndexOf(data, thirdFreshIdr),
+            "A recovery during the trim cooldown must still reach and resume at the actual pre-failure position, not just skip the precise scan and trust whatever arrives.");
 
         Assert.HasCount(1, fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOverlapTrimAbandoned));
@@ -2582,10 +2610,14 @@ public sealed class ChannelSessionIntegrationTests
         //   5. Session must survive until the second safe-start fires (idle-grace must NOT win).
         //   6. A late subscriber attaching after reconnect must receive 0x47-aligned bytes.
         //
-        // Previously this scenario killed the session during the FFmpeg reconnect path because
-        // Bug 2B caused Cautious→FfmpegCleanRemux, which blocked ConnectAsync for up to 10 s
-        // while idle-grace (15 s) expired. With Cautious→Direct the reconnect is near-instant
-        // and the session survives well within the idle-grace window.
+        // Historically this scenario could kill the session during the FFmpeg reconnect path
+        // (Bug 2B: an in-session escalation to Cautious→FfmpegCleanRemux blocked ConnectAsync
+        // for up to 10 s while idle-grace (15 s) expired). With only a single failure here,
+        // the channel stays Stable (Cautious needs >= 2 persisted failures) and the direct
+        // reconnect is near-instant, so the session survives well within the idle-grace window
+        // regardless. See Session_MpegTsReconnect_TwoFailuresEscalateToCautious_SessionSurvivesFfmpegStartup
+        // for the scenario that actually drives the channel to Cautious and exercises whether
+        // clean-remux startup is safe against idle-grace today.
         var safeSequence = MpegTsSafeStartupSequence();
 
         // Connection 2+ (default): cycle through the safe-start sequence forever so the
@@ -2672,20 +2704,21 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
-    public async Task Session_MpegTsReconnect_AutoRelayWithCautiousEscalation_UsesDirectNotCleanRemux()
+    public async Task Session_MpegTsReconnect_SingleFailure_StaysStableAndDirect()
     {
-        // Pins the load-bearing relay-mode decision that fixed Bug 1 / TS-SAFE-02:
-        // when a session's first upstream fails (in-session escalation: Stable→Cautious),
-        // Auto relay must select Direct, not FfmpegCleanRemux.
+        // A single upstream failure alone never crosses DeriveProfile's Cautious threshold
+        // (UpstreamFailures >= 2, among other signals) — a session's very first reconnect
+        // must not overreact into FFmpeg clean remux from one blip.
         //
-        // If Cautious incorrectly maps to FfmpegCleanRemux (the pre-fix Bug 2B state),
-        // ConnectAsync blocks waiting for FFmpeg startup output. With no FFmpeg configured
-        // this falls back to direct but records FfmpegRelayFallbackToDirect. With a real
-        // FFmpeg path on a stalling provider the block can outlast idle-grace, killing the
-        // session before the reconnect delivers any data — the Bug 1 root cause.
-        //
-        // After the fix Cautious→Direct is selected by policy: no FFmpeg is attempted,
-        // no FfmpegRelayFallbackToDirect event is emitted, and RelayMode is Direct.
+        // Historical note (originally "Bug 1 / TS-SAFE-02" / Bug 2B): before #129 removed
+        // BuildEffectiveConnectPolicy, a *different* mechanism used to immediately escalate
+        // an in-session failure to Cautious in memory, without waiting for a DB round trip —
+        // that immediate escalation plus Cautious→remux (05-21..06-25) could make ConnectAsync
+        // block on FFmpeg startup for a fast in-session reconnect, racing a short idle-grace.
+        // That specific in-memory escalation path no longer exists; the only way a channel now
+        // reaches Cautious is via genuinely persisted health evidence, which a single failure
+        // does not provide. See Session_MpegTsReconnect_TwoFailuresEscalateToCautious_SessionSurvivesFfmpegStartup
+        // for the scenario that actually exercises Cautious→clean remux safety today.
         var chunk = FakeStreamingHandler.ValidTsPacket();
         var handler = FakeStreamingHandler.StreamForever(chunk);
         handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
@@ -2712,7 +2745,7 @@ public sealed class ChannelSessionIntegrationTests
                 kind: StreamDiagnosticEventKind.ReconnectRecovered).Count > 0,
             TimeSpan.FromSeconds(8));
 
-        // Cautious in-session escalation must not route the reconnect through FFmpeg clean remux.
+        // A single failure must stay Stable and must not route the reconnect through FFmpeg.
         var fallbackEvents = fixture.DiagnosticsStore.Query(
             sessionId: session.SessionId,
             kind: StreamDiagnosticEventKind.FfmpegRelayFallbackToDirect);
@@ -2721,17 +2754,79 @@ public sealed class ChannelSessionIntegrationTests
             kind: StreamDiagnosticEventKind.FfmpegRelayStarted);
 
         Assert.IsFalse(fallbackEvents.Any(),
-            "FfmpegRelayFallbackToDirect must not be emitted: Cautious Auto must select Direct by policy, not by FFmpeg fallback.");
+            "FfmpegRelayFallbackToDirect must not be emitted: a single failure stays Stable and selects Direct by policy, not by FFmpeg fallback.");
         Assert.IsFalse(ffmpegStartedEvents.Any(),
-            "FfmpegRelayStarted must not be emitted for a Cautious Auto channel — only Unstable triggers clean remux.");
+            "FfmpegRelayStarted must not be emitted for a Stable Auto channel — only Cautious/Unstable trigger clean remux.");
 
         // Direct HTTP must be confirmed as the relay path after reconnect.
         var snapshot = fixture.Registry.TryGetSession(session.SessionId);
         Assert.IsNotNull(snapshot);
         Assert.AreEqual(UpstreamRelayModes.Direct, snapshot.RelayMode,
-            "Relay mode after reconnect must be Direct for a Cautious Auto channel.");
+            "Relay mode after reconnect must be Direct for a still-Stable Auto channel.");
         Assert.IsGreaterThan(0, handler.ConnectionCount,
             "Direct HTTP upstream must have been opened.");
+
+        cts.Cancel();
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_TwoFailuresEscalateToCautious_SessionSurvivesFfmpegStartup()
+    {
+        // Restoring Cautious->clean remux (see GetRelayPolicyDecision) reopens the class of
+        // risk Bug 1 / Bug 2B originally described: FFmpeg clean-remux startup takes real
+        // wall-clock time, and if that blocks a reconnect for longer than idle-grace, the
+        // session could die before ever delivering fresh data. The in-memory immediate
+        // escalation that made this dangerous (BuildEffectiveConnectPolicy) is gone, but two
+        // genuinely persisted upstream failures within a short window now legitimately reach
+        // Cautious via a real DB round trip, which can still land right before a fast reconnect.
+        // This proves the session survives a real (if fake) FFmpeg startup delay in that window.
+        var chunk = FakeStreamingHandler.ValidTsPacket();
+        var handler = FakeStreamingHandler.StreamForever(chunk);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteNChunksThenStall(chunk, 3, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            proxyOptions: new StreamProxyOptions
+            {
+                StreamingEnabled = true,
+                IdleGrace = TimeSpan.FromSeconds(3),
+            },
+            cleanRelayMode: "auto",
+            ffmpegPath: FakeFfmpegBinary.LocateExecutable(),
+            streamUrl: "http://fake/stream?ffmpegMode=relay-ts-sequence&delayMs=800",
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await session.AttachSubscriberAsync(new DefaultHttpContext(), cts.Token);
+
+        // Two reconnects must both recover — the second one on whatever relay mode the
+        // now-Cautious classification selects — without the session faulting or idle-grace
+        // winning the race against FFmpeg startup.
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.ReconnectRecovered).Count >= 2,
+            TimeSpan.FromSeconds(15));
+
+        var recoveredCount = fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.ReconnectRecovered).Count;
+        Assert.IsGreaterThanOrEqualTo(2, recoveredCount,
+            "Both reconnects must recover — the session must survive FFmpeg clean-remux startup racing idle-grace after escalating to Cautious.");
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe));
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+        Assert.AreNotEqual(SessionState.Faulted, session.State);
 
         cts.Cancel();
         await session.DisposeAsync();
@@ -2780,6 +2875,184 @@ public sealed class ChannelSessionIntegrationTests
         var data = capture.Body.ToArray();
         Assert.AreEqual(188 * 3, data.Length, "Only pre-reconnect bytes should reach the existing subscriber.");
         Assert.AreEqual(-1, IndexOf(data, FakeStreamingHandler.ValidTsPacket(0xDD)));
+    }
+
+    [TestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    public async Task Session_MpegTsReconnect_DeadlineResume_UsesLaterSafeStartOrFailsWithinTimeBound(
+        bool safeStartArrives, bool allowPacketFallback)
+    {
+        var suppressedIdr = TimestampedVideoPacket(256, [0, 0, 1, 0x65, 0xF1], 43L * 90000);
+        var resumedIdr = TimestampedVideoPacket(256, [0, 0, 1, 0x65, 0xF2], 44L * 90000 + 7200);
+        var initial = new[]
+        {
+            PatPacket(100), PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x65, 0x93], 102L * 90000),
+        };
+        var prefix = new[]
+        {
+            PatPacket(100), PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x68, 0xA2], 42L * 90000),
+            suppressedIdr,
+        };
+        var suffix = new[]
+        {
+            PatPacket(100), PmtPacket(100, 256),
+            FakeStreamingHandler.ValidTsPacket(0xD1),
+            FakeStreamingHandler.ValidTsPacket(0xD2),
+            FakeStreamingHandler.ValidTsPacket(0xD3),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x67, 0xB1], 44L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x68, 0xB2], 44L * 90000 + 3600),
+            safeStartArrives ? resumedIdr : FakeStreamingHandler.ValidTsPacket(0xDD),
+        };
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(initial, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
+            prefix, suffix, filler, TimeSpan.FromMilliseconds(600), ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(handler,
+            bufferOptions: new BufferOptions
+            {
+                ReadChunkSizeBytes = 188,
+                SubscriberQueueCapacity = 128,
+                MaxBytesPerSession = 1024 * 1024,
+                MaxBytesHardCap = 4 * 1024 * 1024,
+            },
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(1),
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoveryReplayCatchUpMinDuration = TimeSpan.FromMilliseconds(300),
+                RecoveryReplayCatchUpMaxDuration = TimeSpan.FromMilliseconds(300),
+                RecoveryReplayStallTimeout = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 1024 * 1024,
+                RecoveryOutputHoldLimit = TimeSpan.FromMilliseconds(300),
+                AllowPacketBoundaryRecoveryFallback = allowPacketFallback,
+                FixedStepBackoffSeconds = [0],
+            });
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+        await WaitUntilAsync(() => safeStartArrives
+            ? IndexOf(capture.Body.ToArray(), resumedIdr) >= 0
+            : session.State == SessionState.Faulted, TimeSpan.FromSeconds(6));
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        if (safeStartArrives)
+            Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumedIdr), "The deadline must resume at the later available IDR.");
+        else
+            Assert.AreEqual(SessionState.Faulted, session.State, "The final safe-start search must have a wall-clock bound even below its byte limit.");
+        Assert.AreEqual(-1, IndexOf(data, suppressedIdr), "A stale resume must not release earlier suppressed GOPs.");
+        Assert.HasCount(safeStartArrives ? 1 : 0, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryStaleResumeAccepted));
+        Assert.HasCount(safeStartArrives ? 1 : 0, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOutputResumed));
+        if (allowPacketFallback)
+            Assert.AreEqual("FallbackPacketBoundary", fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Single().SafeStartKind);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind),
+            "The accepted timestamp epoch must not immediately trigger another recovery hold.");
+        Assert.HasCount(safeStartArrives ? 0 : 1, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+    }
+
+    [TestMethod]
+    public async Task Session_MpegTsReconnect_RewindNeverCatchesUp_FailsRecoveryInBoundedTime()
+    {
+        // A source that rewinds and then genuinely never delivers fresh content (no forward
+        // DTS progress at all — distinct from the "still slowly catching up" case covered by
+        // Session_MpegTsReconnect_FlappingSourceAfterAbandonedTrim_SkipsTrimDuringCooldown)
+        // must still fail the recovery and close the session in bounded time — the whole-
+        // outage catch-up deadline (A3) must never turn into an indefinite hold. Catch-up/
+        // stall settings are deliberately tiny so this resolves in about a second instead of
+        // the real default's up-to-45s ceiling.
+        const long preFailureDts = 102L * 90000;
+        var rewoundIdr = TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0xF1], 43L * 90000);
+
+        var preFailureSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x65, 0x93], preFailureDts),
+        };
+
+        // First reconnect: a rewind is detected and the precise trim starts, but the
+        // connection stalls (short of reaching the target) — forcing the abandon that arms
+        // the retry cooldown for the next reconnect.
+        var rewoundThenStallSequence = new[]
+        {
+            PatPacket(100),
+            PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0x00, 0x00, 0x01, 0x68, 0xA2], 42L * 90000),
+            rewoundIdr,
+        };
+
+        // Second reconnect: on the retry cooldown, skips straight to the deadline-bounded
+        // chase — but then delivers only pure filler forever. No further video DTS ever
+        // arrives, so the liveness/stall check must expire the deadline early rather than
+        // waiting out the full (tiny, here) catch-up window, and no decoder-safe boundary
+        // (fallback disabled) ever arrives to rescue it either.
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(preFailureSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(rewoundThenStallSequence, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenForever(
+            [PatPacket(100), PmtPacket(100, 256)], filler, ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(
+            handler,
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromMilliseconds(200),
+                RecoveryOutputHoldLimit = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 4 * 188,
+                AllowPacketBoundaryRecoveryFallback = false,
+                RecoveryReplayCatchUpMinDuration = TimeSpan.FromMilliseconds(300),
+                RecoveryReplayCatchUpMaxDuration = TimeSpan.FromMilliseconds(500),
+                RecoveryReplayStallTimeout = TimeSpan.FromMilliseconds(300),
+                OutageWindow = TimeSpan.FromSeconds(30),
+                ConnectTimeout = TimeSpan.FromSeconds(5),
+                FixedStepBackoffSeconds = [0],
+            });
+
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await WaitUntilAsync(
+            () => fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId,
+                kind: StreamDiagnosticEventKind.RecoveryForcedRetune).Count > 0,
+            TimeSpan.FromSeconds(8));
+        stopwatch.Stop();
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.AreEqual(SessionState.Faulted, session.State);
+        Assert.IsTrue(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId,
+            kind: StreamDiagnosticEventKind.RecoveryFailedUnsafe).Any());
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryStaleResumeAccepted),
+            "A source with no forward DTS progress at all must never be accepted as a stale-but-live resume.");
+        Assert.IsLessThan(TimeSpan.FromSeconds(5), stopwatch.Elapsed,
+            "The whole-outage catch-up deadline must bound this, not hold output indefinitely.");
     }
 
     [TestMethod]

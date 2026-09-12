@@ -182,6 +182,9 @@ public sealed class StreamChannelHealthEventRecorderTests
 
             var recorder = new StreamChannelHealthEventRecorder(
                 serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+                new StreamChannelHealthProfileService(
+                    serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+                    NullLogger<StreamChannelHealthProfileService>.Instance),
                 NullLogger<StreamChannelHealthEventRecorder>.Instance);
 
             return new RecorderFixture(connection, serviceProvider, options, recorder);

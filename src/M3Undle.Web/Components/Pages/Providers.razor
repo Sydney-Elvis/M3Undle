@@ -116,7 +116,20 @@
                         }
                     }
                 </MudTd>
-                <MudTd>@(context.MaxConcurrentStreams?.ToString() ?? "—")</MudTd>
+                <MudTd>
+                    @if (context.MaxConcurrentStreams is { } limit)
+                    {
+                        @limit
+                    }
+                    else
+                    {
+                        <MudTooltip Text="No concurrent-stream limit configured — M3Undle will open as many upstream connections as clients request, relying entirely on the provider's own enforcement. If the account has a real limit, set it here to get a clean rejection/retry instead of the provider silently killing overflow connections." Placement="Placement.Top">
+                            <span>
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text">Unlimited</MudChip>
+                            </span>
+                        </MudTooltip>
+                    }
+                </MudTd>
                 <MudTd>
                     <MudTooltip Text="@FormatRefreshTooltip(context)">
                         <span>@FormatRefresh(context.LastRefresh)</span>

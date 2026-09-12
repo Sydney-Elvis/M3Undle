@@ -97,6 +97,26 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private string _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.NotApplicable;
     private double? _lastRecoveryTrimRewindSeconds;
     private DateTimeOffset? _lastRecoveryTrimAbandonedUtc;
+    // Spans the whole outage (trim phase, one or more abandon/reconnect cycles, and the
+    // post-abandon catch-up chase) rather than resetting per reconnect attempt, so a
+    // source that is genuinely still replaying real backlog gets time proportional to how
+    // far behind it actually is instead of a flat ~6s+2MiB slice per retry. Cleared only
+    // when the outage actually ends (a resume, fresh or stale-accepted).
+    private DateTimeOffset? _recoveryOutageFirstRewindDetectedUtc;
+    private DateTimeOffset? _recoveryCatchUpDeadlineUtc;
+    private long? _recoveryCatchUpLastObservedDts90k;
+    private DateTimeOffset? _recoveryCatchUpLastProgressUtc;
+    private bool _recoveryCatchUpDeadlineExpired;
+    private DateTimeOffset? _recoveryPostDeadlineSearchStartedUtc;
+    // Once the deadline (or stall) has expired, this is its own small, fresh byte budget
+    // for finding ANY decoder-safe boundary at all — deliberately separate from
+    // _recoveryBytesSuppressed (the whole-hold cumulative total used for reporting), so a
+    // long genuine catch-up chase doesn't leave no budget left for the final search.
+    private long _recoveryPostDeadlineSuppressedBytes;
+    // Set by BeginRecoveryOutputHold when a trim was abandoned within the retry cooldown:
+    // skip the tight, precisely-scanning trim sub-phase and go straight to the looser,
+    // deadline-bounded catch-up chase (freshness is still required either way).
+    private bool _recoverySkipPreciseTrimPhase;
     private CancellationTokenSource? _idleCts;
     private string? _lastIdleGraceRemoteIp;
 
@@ -378,15 +398,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                         StreamDiagnosticEventKind.UpstreamConnectStarted,
                         reconnectAttempt: reconnectAttempt,
                         message: "Opening upstream stream connection.");
-                    if (_currentRecoveryPolicy is null || reconnectAttempt == 0)
-                    {
-                        _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
-                            _source.ProviderId,
-                            _source.ProviderChannelId,
-                            _reconnectOptions,
-                            _sessionCts.Token);
-                        PublishSnapshots();
-                    }
+                    // Refreshed on every attempt, not just the first — RelayMode is chosen
+                    // from this policy inside ConnectAsync below, so a reconnect that used a
+                    // stale (pre-classification-update) policy could pick Direct for a channel
+                    // that has just become Cautious/Unstable. GetRecoveryPolicyAsync caches for
+                    // CacheTtl (30s) and is invalidated as soon as new health events are
+                    // persisted, so this is cheap in the common case.
+                    _currentRecoveryPolicy = await _healthProfileService.GetRecoveryPolicyAsync(
+                        _source.ProviderId,
+                        _source.ProviderChannelId,
+                        _reconnectOptions,
+                        _sessionCts.Token);
+                    PublishSnapshots();
 
                     await using var upstream = await _upstreamConnector.ConnectAsync(_source, _currentRecoveryPolicy, _sessionCts.Token);
                     _lastUpstreamStatusCode = upstream.StatusCode;
@@ -769,6 +792,8 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 // was genuinely replayed content; it must never be published.
                 DiscardPendingClampedDtsRampBatches();
                 _recoveryBytesSuppressed += batch.Data.Length;
+                if (_recoveryCatchUpDeadlineExpired)
+                    _recoveryPostDeadlineSuppressedBytes += batch.Data.Length;
                 if (safeStart.Selected)
                 {
                     await ResumeRecoveryOutputAsync(safeStart.Kind);
@@ -1062,7 +1087,15 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         bool hasKnownH264VideoStream,
         bool suppressSelection = false)
     {
-        var fallbackBytes = ResolveRecoverySafeStartSearchLimitBytes();
+        // Once the whole-outage catch-up deadline has expired, freshness is no longer
+        // required at all (see EvaluateRecoveryCatchUpExpiry) -- waiting out the normal,
+        // multi-hundred-KB/MB patience budget here before accepting a packet-boundary
+        // fallback would silently re-impose the same unbounded wait the deadline exists to
+        // cut off, especially against a throttled/slow-arriving upstream. Use a small,
+        // fixed budget instead so the fallback fires on essentially the next eligible batch.
+        var fallbackBytes = _recoveryCatchUpDeadlineExpired
+            ? RecoveryPostDeadlineSafeStartSearchLimitBytes
+            : ResolveRecoverySafeStartSearchLimitBytes();
 
         if (kind == MpegTsStartupKind.PatPmt)
         {
@@ -1144,13 +1177,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _clampedDtsRampEvidence = 0;
         var trimOnRetryCooldown = _lastRecoveryTrimAbandonedUtc is { } lastAbandonedUtc
             && holdStartedUtc - lastAbandonedUtc < _reconnectOptions.RecoveryOverlapTrimRetryCooldown;
-        _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim && !trimOnRetryCooldown
+        // Freshness is required whenever overlap trim is enabled at all, cooldown or not —
+        // only the tight precise-scan sub-phase is skipped during cooldown (below), never
+        // the freshness requirement itself. Disabling freshness entirely during cooldown
+        // was the actual cause of visibly stale/repeated content on a fast-flapping source.
+        _recoveryTrimTargetDts90k = _reconnectOptions.EnableRecoveryOverlapTrim
             ? _lastRelayedVideoDts90k
             : null;
+        _recoverySkipPreciseTrimPhase = trimOnRetryCooldown;
         if (trimOnRetryCooldown && _reconnectOptions.EnableRecoveryOverlapTrim && _lastRelayedVideoDts90k is not null)
         {
             _logger.LogInformation(
-                "Recovery overlap trim on retry cooldown: SessionId={SessionId} DisplayName={DisplayName} a trim was abandoned {SecondsSinceAbandoned:F1}s ago; using the standard safe-start resume for this recovery.",
+                "Recovery overlap trim on retry cooldown: SessionId={SessionId} DisplayName={DisplayName} a trim was abandoned {SecondsSinceAbandoned:F1}s ago; skipping the precise scan and chasing the catch-up deadline directly.",
                 _sessionId,
                 _source.DisplayName,
                 (holdStartedUtc - _lastRecoveryTrimAbandonedUtc!.Value).TotalSeconds);
@@ -1257,6 +1295,42 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             _lastRecoveryTrimOutcome,
             _lastRecoveryTrimRewindSeconds,
             _recoveryTrimmedBytes);
+
+        if (_recoveryCatchUpDeadlineExpired)
+        {
+            // A packet-boundary fallback may contain no timestamp. Do not compare the
+            // next PES against the old epoch and immediately hold the accepted rewind again.
+            _lastRelayedVideoDts90k = null;
+            ResetClampedDtsRampEvidence();
+            // Resumed only because freshness was no longer required, not because the
+            // pre-failure position was actually reached — a deliberate, logged
+            // discontinuity rather than the silent one the old cooldown bypass produced.
+            RecordDiagnostic(
+                StreamDiagnosticEventKind.RecoveryStaleResumeAccepted,
+                outputHeld: heldDuration,
+                recoveryDuration: recoveryDuration,
+                safeStartKind: safeStartKind,
+                bytesSuppressed: _recoveryBytesSuppressed,
+                message: $"Stale restart accepted: catch-up expired after an observed rewind of {_lastRecoveryTrimRewindSeconds:F1}s without reaching the pre-failure position; resuming at the selected recovery boundary.");
+            _logger.LogWarning(
+                "Recovery stale resume accepted: SessionId={SessionId} DisplayName={DisplayName} SafeStartKind={SafeStartKind} RewindSeconds={RewindSeconds:F1} OutputHeldMs={OutputHeldMs}",
+                _sessionId,
+                _source.DisplayName,
+                safeStartKind,
+                _lastRecoveryTrimRewindSeconds,
+                heldDuration.TotalMilliseconds);
+        }
+
+        // The outage is over — clear the whole-outage catch-up tracking so the next
+        // failure starts a fresh deadline anchored to its own rewind, not this one's.
+        _recoveryOutageFirstRewindDetectedUtc = null;
+        _recoveryCatchUpDeadlineUtc = null;
+        _recoveryCatchUpLastObservedDts90k = null;
+        _recoveryCatchUpLastProgressUtc = null;
+        _recoveryCatchUpDeadlineExpired = false;
+        _recoveryPostDeadlineSearchStartedUtc = null;
+        _recoveryPostDeadlineSuppressedBytes = 0;
+
         PublishSnapshots();
     }
 
@@ -1337,13 +1411,18 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         // An abandoned trim gave up on precisely scanning to the pre-failure position within
         // its own (already-spent) budget, but ShouldSuppressSafeStartForOverlapTrim keeps
-        // chasing the same target DTS via a looser fallback afterward — that catch-up can
-        // easily take longer than the generic wall-clock hold limit (the trim's own budget
-        // was tuned for "give up scanning precisely", not "give up entirely"). Only the
-        // byte-based ceiling applies during that phase; it still bounds a stream that never
-        // actually reaches the target.
+        // requiring freshness via a whole-outage, proportional-to-the-rewind deadline
+        // afterward (EvaluateRecoveryCatchUpExpiry) — never fault while genuinely still
+        // within that bounded wait. Once the deadline (or a DTS-progress stall) has expired,
+        // freshness is no longer required and any batch with a decoder-safe boundary resumes
+        // immediately. The final search has its own byte and wall-clock budgets, since
+        // the catch-up wait already spent the original hold budget. The clock also bounds
+        // a slow source that cannot exhaust the byte budget in a reasonable time.
         if (_recoveryTrimAbandoned)
-            return _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
+            return _recoveryCatchUpDeadlineExpired
+                && (_recoveryPostDeadlineSuppressedBytes >= ResolveRecoverySafeStartSearchLimitBytes()
+                    || (_recoveryPostDeadlineSearchStartedUtc is { } searchStartedUtc
+                        && DateTimeOffset.UtcNow - searchStartedUtc >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit));
 
         return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
@@ -1679,33 +1758,51 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 return false;
             }
 
-            _recoveryTrimActive = true;
-            _lastRecoveryTrimRewindSeconds = -deltaSeconds;
-            _logger.LogInformation(
-                "Recovery overlap detected: SessionId={SessionId} DisplayName={DisplayName} reconnected stream is {RewindSeconds:F1}s behind the pre-failure position; holding output through the replayed span.",
-                _sessionId,
-                _source.DisplayName,
-                -deltaSeconds);
+            var rewindSeconds = -deltaSeconds;
+            _lastRecoveryTrimRewindSeconds = rewindSeconds;
+            ArmRecoveryCatchUpDeadline(rewindSeconds);
+
+            if (_recoverySkipPreciseTrimPhase)
+            {
+                // On the trim-retry cooldown: go straight to the deadline-bounded chase
+                // below rather than re-arming the tight, precisely-scanning sub-phase.
+                _recoveryTrimAbandoned = true;
+                _lastRecoveryTrimOutcome = RecoveryTrimOutcomes.Abandoned;
+                _logger.LogInformation(
+                    "Recovery overlap detected during trim retry cooldown: SessionId={SessionId} DisplayName={DisplayName} reconnected stream is {RewindSeconds:F1}s behind the pre-failure position; chasing the catch-up deadline directly.",
+                    _sessionId,
+                    _source.DisplayName,
+                    rewindSeconds);
+            }
+            else
+            {
+                _recoveryTrimActive = true;
+                _logger.LogInformation(
+                    "Recovery overlap detected: SessionId={SessionId} DisplayName={DisplayName} reconnected stream is {RewindSeconds:F1}s behind the pre-failure position; holding output through the replayed span.",
+                    _sessionId,
+                    _source.DisplayName,
+                    rewindSeconds);
+            }
         }
 
         if (!_recoveryTrimActive)
         {
-            // Never needed a trim (the initial delta already showed fresh content) — nothing
-            // more to check. An abandoned trim is different: this span is positively known to
-            // still be replayed content until a fresh IDR at/after the target actually shows
-            // up. Trusting whatever IDR happens to arrive next (the prior behavior) resumed
-            // output on content already known to be stale — keep applying the same DTS test
-            // the trim itself used; the generic RecoveryOutputHoldLimit / RecoverySafeStartSearchLimitBytes
-            // budgets (see IsRecoveryHoldLimitExceeded's own exemption for this phase) remain
-            // the outer bound if fresh content never arrives.
-            return _recoveryTrimAbandoned && !HasReachedRecoveryTrimTarget(batch, target);
+            if (!_recoveryTrimAbandoned)
+                return false; // never needed a trim/chase at all — the initial delta was already fresh
+
+            // This span is positively known to still be replayed content until a fresh IDR
+            // at/after the target actually shows up, or the whole-outage catch-up deadline
+            // (or a stall in forward DTS progress) expires — at which point we stop
+            // requiring freshness and accept the best decoder-safe boundary available
+            // (see EvaluateRecoveryCatchUpExpiry / IsRecoveryHoldLimitExceeded).
+            return !HasReachedRecoveryTrimTarget(batch, target) && !EvaluateRecoveryCatchUpExpiry(batch);
         }
 
         if (GetRecoveryHoldDuration() >= _reconnectOptions.RecoveryOverlapTrimHoldLimit
             || _recoveryTrimmedBytes >= _reconnectOptions.RecoveryOverlapTrimMaxBytes)
         {
             AbandonRecoveryOverlapTrim("without reaching the pre-failure position within the trim budget");
-            return !HasReachedRecoveryTrimTarget(batch, target);
+            return !HasReachedRecoveryTrimTarget(batch, target) && !EvaluateRecoveryCatchUpExpiry(batch);
         }
 
         if (HasReachedRecoveryTrimTarget(batch, target) && batch.IdrDts90k is { } idrDts)
@@ -1715,6 +1812,69 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         }
 
         _recoveryTrimmedBytes += batch.Data.Length;
+        return true;
+    }
+
+    /// <summary>
+    /// Sets the whole-outage catch-up deadline the first time a rewind is detected, or
+    /// extends it (never shortens it) if a later reconnect within the same still-unresolved
+    /// outage measures a larger rewind. Anchored to the outage's first detection, not the
+    /// current connection attempt, so repeated reconnects against the same stale target
+    /// share one proportional budget instead of each getting its own reset window.
+    /// </summary>
+    private void ArmRecoveryCatchUpDeadline(double rewindSeconds)
+    {
+        var now = DateTimeOffset.UtcNow;
+        _recoveryOutageFirstRewindDetectedUtc ??= now;
+
+        var budget = TimeSpan.FromSeconds(rewindSeconds * _reconnectOptions.RecoveryReplayCatchUpMultiplier);
+        if (budget < _reconnectOptions.RecoveryReplayCatchUpMinDuration)
+            budget = _reconnectOptions.RecoveryReplayCatchUpMinDuration;
+        if (budget > _reconnectOptions.RecoveryReplayCatchUpMaxDuration)
+            budget = _reconnectOptions.RecoveryReplayCatchUpMaxDuration;
+
+        var candidateDeadline = _recoveryOutageFirstRewindDetectedUtc.Value + budget;
+        if (_recoveryCatchUpDeadlineUtc is not { } existingDeadline || candidateDeadline > existingDeadline)
+            _recoveryCatchUpDeadlineUtc = candidateDeadline;
+
+        _recoveryCatchUpLastProgressUtc ??= now;
+    }
+
+    /// <summary>
+    /// Returns whether the catch-up phase has given up on requiring fresh content — either
+    /// the whole-outage deadline passed, or forward DTS progress toward the target stalled
+    /// for RecoveryReplayStallTimeout. On the transition into "expired," arms a fresh, small
+    /// byte budget (see IsRecoveryHoldLimitExceeded) for finding any decoder-safe boundary
+    /// at all, since the whole-hold _recoveryBytesSuppressed total was spent on the catch-up
+    /// wait itself.
+    /// </summary>
+    private bool EvaluateRecoveryCatchUpExpiry(MpegTsPacketBatch batch)
+    {
+        if (_recoveryCatchUpDeadlineExpired)
+            return true;
+
+        var now = DateTimeOffset.UtcNow;
+        if (batch.LatestVideoDts90k is { } dts
+            && (_recoveryCatchUpLastObservedDts90k is not { } lastDts || MpegTsTimestamp.Delta(lastDts, dts) > 0))
+        {
+            _recoveryCatchUpLastObservedDts90k = dts;
+            _recoveryCatchUpLastProgressUtc = now;
+        }
+
+        var deadlineExpired = _recoveryCatchUpDeadlineUtc is { } deadline && now >= deadline;
+        var stalled = _recoveryCatchUpLastProgressUtc is { } lastProgress
+            && now - lastProgress >= _reconnectOptions.RecoveryReplayStallTimeout;
+        if (!deadlineExpired && !stalled)
+            return false;
+
+        _recoveryCatchUpDeadlineExpired = true;
+        _recoveryPostDeadlineSearchStartedUtc = now;
+        _recoveryPostDeadlineSuppressedBytes = 0;
+        _logger.LogWarning(
+            "Recovery catch-up deadline expired: SessionId={SessionId} DisplayName={DisplayName} Reason={Reason}; no longer requiring a fresh restart point, accepting the next decoder-safe boundary available.",
+            _sessionId,
+            _source.DisplayName,
+            deadlineExpired ? "deadline" : "stalled");
         return true;
     }
 
@@ -1767,6 +1927,11 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryBytesSuppressed = 0;
         Interlocked.Exchange(ref _mpegTsBytesSinceReset, 0);
     }
+
+    // Deliberately tiny and fixed (not derived from policy): once the catch-up deadline
+    // has expired, any decoder-safe boundary is acceptable, so this only needs to survive
+    // one packet-boundary scan, not gate on a meaningful amount of "patience."
+    private const int RecoveryPostDeadlineSafeStartSearchLimitBytes = MpegTsBoundaryScanner.PacketSize * 4;
 
     private int ResolveRecoverySafeStartSearchLimitBytes()
     {
