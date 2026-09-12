@@ -574,6 +574,14 @@
                                 </MudStack>
                             }
 
+                            @if (!isExcluded && !isAutoMode && GetSelectedChannelCount(filter) > 0)
+                            {
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+                                    <MoveToCustomGroupPicker CustomGroupNames="@_customGroups.Select(g => g.Name).ToList()"
+                                                              OnCommit="@(name => MoveSelectedChannelsToGroupAsync(name, new() { [filterId] = channels.Where(c => selections.GetValueOrDefault(c.ProviderChannelId)).Select(c => c.ProviderChannelId).ToList() }))" />
+                                </MudStack>
+                            }
+
                             <!-- Channel list -->
                             @if (channels.Count == 0)
                             {
@@ -879,6 +887,14 @@
                                 <MudLink Typo="Typo.caption" OnClick="@(() => SelectVisibleParentChannelsAsync(parent, filteredParentChs))" Style="cursor:pointer;">All</MudLink>
                                 <MudLink Typo="Typo.caption" OnClick="@(() => DeselectAllParentChannelsAsync(parent))" Style="cursor:pointer;">None</MudLink>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@totalSelected of @selectableCount selected</MudText>
+                            </MudStack>
+                        }
+
+                        @if (anySelectable && totalSelected > 0)
+                        {
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="mb-2">
+                                <MoveToCustomGroupPicker CustomGroupNames="@_customGroups.Select(g => g.Name).ToList()"
+                                                          OnCommit="@(name => MoveSelectedChannelsToGroupAsync(name, GetSelectedChannelIdsByMember(parent)))" />
                             </MudStack>
                         }
 
@@ -3446,6 +3462,79 @@
 
         StateHasChanged();
         await ScheduleSaveChannelSelectionsAsync(filterId);
+    }
+
+    private Dictionary<string, List<string>> GetSelectedChannelIdsByMember(VirtualParent parent)
+    {
+        var result = new Dictionary<string, List<string>>();
+        foreach (var member in parent.Members.Where(m => !IsExcluded(m) && IsManualMode(m)))
+        {
+            var mfid = member.ProfileGroupFilterId;
+            var selections = _channelSelections.GetValueOrDefault(mfid);
+            if (selections is null) continue;
+
+            var ids = selections.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
+            if (ids.Count > 0)
+                result[mfid] = ids;
+        }
+        return result;
+    }
+
+    private async Task MoveSelectedChannelsToGroupAsync(
+        string targetGroupName,
+        Dictionary<string, List<string>> channelIdsBySourceFilterId)
+    {
+        if (_profileId is null) return;
+
+        var allChannelIds = channelIdsBySourceFilterId.Values.SelectMany(x => x).Distinct().ToList();
+        if (allChannelIds.Count == 0) return;
+
+        var target = _customGroups.FirstOrDefault(g => string.Equals(g.Name, targetGroupName, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+        {
+            target = await CustomGroupService.CreateAsync(_profileId, targetGroupName, _cts.Token);
+            if (target is null)
+            {
+                Snackbar.Add("Failed to create custom group.", Severity.Error);
+                return;
+            }
+            _customGroups.Add(target);
+            RebuildDisplayOrder();
+        }
+
+        await CustomGroupService.AddChannelsAsync(_profileId, target.CustomGroupId, allChannelIds, _cts.Token);
+
+        foreach (var (filterId, ids) in channelIdsBySourceFilterId)
+        {
+            if (ids.Count == 0) continue;
+
+            var selections = _channelSelections.GetValueOrDefault(filterId);
+            var numbers    = _channelNumbers.GetValueOrDefault(filterId);
+
+            foreach (var channelId in ids)
+            {
+                selections?.Remove(channelId);
+                if (numbers is not null && numbers.TryGetValue(channelId, out var num))
+                {
+                    numbers.Remove(channelId);
+                    RemoveNumberIndexEntry(num);
+                }
+            }
+
+            await ScheduleSaveChannelSelectionsAsync(filterId);
+        }
+
+        await LoadCgChannelsAsync(target);
+        var gIdx = _customGroups.FindIndex(g => g.CustomGroupId == target.CustomGroupId);
+        if (gIdx >= 0 && _cgChannelCache.TryGetValue(target.CustomGroupId, out var list))
+        {
+            var included = list.Count(c => string.Equals(c.State, "included", StringComparison.OrdinalIgnoreCase));
+            _customGroups[gIdx] = _customGroups[gIdx] with { ChannelCount = list.Count, SelectedChannelCount = included };
+        }
+
+        MarkOutputDirty();
+        Snackbar.Add($"Moved {allChannelIds.Count} channel(s) to \"{target.Name}\".", Severity.Success);
+        StateHasChanged();
     }
 
     private async Task OnChannelNumberChanged(string filterId, string channelId, int? value)
