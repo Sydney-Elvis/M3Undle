@@ -107,21 +107,12 @@ public sealed class ChannelStreamSession : IAsyncDisposable
     private long? _recoveryCatchUpLastObservedDts90k;
     private DateTimeOffset? _recoveryCatchUpLastProgressUtc;
     private bool _recoveryCatchUpDeadlineExpired;
+    private DateTimeOffset? _recoveryPostDeadlineSearchStartedUtc;
     // Once the deadline (or stall) has expired, this is its own small, fresh byte budget
     // for finding ANY decoder-safe boundary at all — deliberately separate from
     // _recoveryBytesSuppressed (the whole-hold cumulative total used for reporting), so a
     // long genuine catch-up chase doesn't leave no budget left for the final search.
     private long _recoveryPostDeadlineSuppressedBytes;
-    // Position of the first batch written to the ring buffer after this hold began (set
-    // once, by the first batch, and cleared on the next BeginRecoveryOutputHold). A stale
-    // resume (deadline expired) marks its safe start here instead of at the triggering
-    // batch's own position, so the published snapshot is the whole bounded post-reconnect
-    // backlog rather than a single, easily-missed batch -- otherwise the "deliberate,
-    // logged jump" RecoveryStaleResumeAccepted promises is invisible to anything that isn't
-    // watching diagnostics in real time, since a fresh subscriber would just see output
-    // resume with no discontinuity in the bytes themselves.
-    private int? _recoveryHoldFirstLeaseGeneration;
-    private long? _recoveryHoldFirstLeaseSequence;
     // Set by BeginRecoveryOutputHold when a trim was abandoned within the retry cooldown:
     // skip the tight, precisely-scanning trim sub-phase and go straight to the looser,
     // deadline-bounded catch-up chase (freshness is still required either way).
@@ -764,12 +755,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             var rewindSignal = DetectInProcessTimelineRewind(batch);
             using var published = _buffer.Write(batch.Data);
 
-            if (_recoveryOutputHoldActive && _recoveryHoldFirstLeaseGeneration is null)
-            {
-                _recoveryHoldFirstLeaseGeneration = published.Generation;
-                _recoveryHoldFirstLeaseSequence = published.Sequence;
-            }
-
             if (rewindSignal == TimelineRewindSignal.Candidate)
             {
                 // Corroborating evidence for a clamped DTS ramp is still accumulating
@@ -1143,20 +1128,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         var safeStartKind = fallback ? "FallbackPacketBoundary" : kind.ToString();
 
-        if (_recoveryCatchUpDeadlineExpired
-            && _recoveryHoldFirstLeaseGeneration is { } holdGeneration
-            && _recoveryHoldFirstLeaseSequence is { } holdSequence)
-        {
-            // A stale resume is only "deliberate" (per RecoveryStaleResumeAccepted's own
-            // description) if it is actually visible downstream: marking the triggering
-            // batch's own (current) position, as a fresh resume does, would publish just
-            // that one small batch and discard the whole bounded post-reconnect backlog --
-            // functionally indistinguishable from a clean resume to anything watching the
-            // byte stream rather than diagnostics. Marking the hold's first position instead
-            // flushes that whole (small, deadline-bounded) backlog in one shot.
-            _buffer.MarkSafeStart(holdGeneration, holdSequence);
-        }
-        else if (kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt
+        if (kind is MpegTsStartupKind.H264Idr or MpegTsStartupKind.PatPmt
             && _mpegTsCandidateSafeStartGeneration is { } generation
             && _mpegTsCandidateSafeStartSequence is { } sequence)
             _buffer.MarkSafeStart(generation, sequence);
@@ -1194,8 +1166,6 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryOutputHoldActive = true;
         _recoveryOutputHoldStartedUtc = holdStartedUtc;
         _lastRecoveryStartedUtc = holdStartedUtc;
-        _recoveryHoldFirstLeaseGeneration = null;
-        _recoveryHoldFirstLeaseSequence = null;
         _recoveryBytesSuppressed = 0;
         _recoveryHoldTriggeredByClampedRamp = false;
         _clampedDtsRampAbandoned = false;
@@ -1328,6 +1298,10 @@ public sealed class ChannelStreamSession : IAsyncDisposable
 
         if (_recoveryCatchUpDeadlineExpired)
         {
+            // A packet-boundary fallback may contain no timestamp. Do not compare the
+            // next PES against the old epoch and immediately hold the accepted rewind again.
+            _lastRelayedVideoDts90k = null;
+            ResetClampedDtsRampEvidence();
             // Resumed only because freshness was no longer required, not because the
             // pre-failure position was actually reached — a deliberate, logged
             // discontinuity rather than the silent one the old cooldown bypass produced.
@@ -1337,7 +1311,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
                 recoveryDuration: recoveryDuration,
                 safeStartKind: safeStartKind,
                 bytesSuppressed: _recoveryBytesSuppressed,
-                message: $"Stale restart accepted: the whole-outage catch-up deadline/stall expired {_lastRecoveryTrimRewindSeconds:F1}s of rewind after the pre-failure position without reaching it; resuming at the best available decoder-safe boundary instead of failing the session.");
+                message: $"Stale restart accepted: catch-up expired after an observed rewind of {_lastRecoveryTrimRewindSeconds:F1}s without reaching the pre-failure position; resuming at the selected recovery boundary.");
             _logger.LogWarning(
                 "Recovery stale resume accepted: SessionId={SessionId} DisplayName={DisplayName} SafeStartKind={SafeStartKind} RewindSeconds={RewindSeconds:F1} OutputHeldMs={OutputHeldMs}",
                 _sessionId,
@@ -1354,6 +1328,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         _recoveryCatchUpLastObservedDts90k = null;
         _recoveryCatchUpLastProgressUtc = null;
         _recoveryCatchUpDeadlineExpired = false;
+        _recoveryPostDeadlineSearchStartedUtc = null;
         _recoveryPostDeadlineSuppressedBytes = 0;
 
         PublishSnapshots();
@@ -1440,12 +1415,14 @@ public sealed class ChannelStreamSession : IAsyncDisposable
         // afterward (EvaluateRecoveryCatchUpExpiry) — never fault while genuinely still
         // within that bounded wait. Once the deadline (or a DTS-progress stall) has expired,
         // freshness is no longer required and any batch with a decoder-safe boundary resumes
-        // immediately; this only guards the case where even that never arrives, using its
-        // own fresh, small byte budget rather than the whole-hold suppressed total (which by
-        // then has already been spent on the catch-up wait itself).
+        // immediately. The final search has its own byte and wall-clock budgets, since
+        // the catch-up wait already spent the original hold budget. The clock also bounds
+        // a slow source that cannot exhaust the byte budget in a reasonable time.
         if (_recoveryTrimAbandoned)
             return _recoveryCatchUpDeadlineExpired
-                && _recoveryPostDeadlineSuppressedBytes >= ResolveRecoverySafeStartSearchLimitBytes();
+                && (_recoveryPostDeadlineSuppressedBytes >= ResolveRecoverySafeStartSearchLimitBytes()
+                    || (_recoveryPostDeadlineSearchStartedUtc is { } searchStartedUtc
+                        && DateTimeOffset.UtcNow - searchStartedUtc >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit));
 
         return GetRecoveryHoldDuration() >= ResolveRecoveryPolicy().RecoveryOutputHoldLimit
             || _recoveryBytesSuppressed >= ResolveRecoverySafeStartSearchLimitBytes();
@@ -1891,6 +1868,7 @@ public sealed class ChannelStreamSession : IAsyncDisposable
             return false;
 
         _recoveryCatchUpDeadlineExpired = true;
+        _recoveryPostDeadlineSearchStartedUtc = now;
         _recoveryPostDeadlineSuppressedBytes = 0;
         _logger.LogWarning(
             "Recovery catch-up deadline expired: SessionId={SessionId} DisplayName={DisplayName} Reason={Reason}; no longer requiring a fresh restart point, accepting the next decoder-safe boundary available.",

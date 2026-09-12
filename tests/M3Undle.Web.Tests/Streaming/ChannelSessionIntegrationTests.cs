@@ -2878,6 +2878,96 @@ public sealed class ChannelSessionIntegrationTests
     }
 
     [TestMethod]
+    [DataRow(true, false)]
+    [DataRow(false, false)]
+    [DataRow(true, true)]
+    public async Task Session_MpegTsReconnect_DeadlineResume_UsesLaterSafeStartOrFailsWithinTimeBound(
+        bool safeStartArrives, bool allowPacketFallback)
+    {
+        var suppressedIdr = TimestampedVideoPacket(256, [0, 0, 1, 0x65, 0xF1], 43L * 90000);
+        var resumedIdr = TimestampedVideoPacket(256, [0, 0, 1, 0x65, 0xF2], 44L * 90000 + 7200);
+        var initial = new[]
+        {
+            PatPacket(100), PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x67, 0x91], 100L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x68, 0x92], 100L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x65, 0x93], 102L * 90000),
+        };
+        var prefix = new[]
+        {
+            PatPacket(100), PmtPacket(100, 256),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x67, 0xA1], 42L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x68, 0xA2], 42L * 90000),
+            suppressedIdr,
+        };
+        var suffix = new[]
+        {
+            PatPacket(100), PmtPacket(100, 256),
+            FakeStreamingHandler.ValidTsPacket(0xD1),
+            FakeStreamingHandler.ValidTsPacket(0xD2),
+            FakeStreamingHandler.ValidTsPacket(0xD3),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x67, 0xB1], 44L * 90000),
+            TimestampedVideoPacket(256, [0, 0, 1, 0x68, 0xB2], 44L * 90000 + 3600),
+            safeStartArrives ? resumedIdr : FakeStreamingHandler.ValidTsPacket(0xDD),
+        };
+        var filler = FakeStreamingHandler.ValidTsPacket(0xCC);
+        var handler = FakeStreamingHandler.StreamForever(filler);
+        handler.QueueNext(ct => FakeStreamingHandler.WriteSequenceThenStall(initial, ct));
+        handler.QueueNext(ct => FakeStreamingHandler.WritePhasedSequenceThenForever(
+            prefix, suffix, filler, TimeSpan.FromMilliseconds(600), ct));
+
+        await using var fixture = await SessionFixture.CreateAsync(handler,
+            bufferOptions: new BufferOptions
+            {
+                ReadChunkSizeBytes = 188,
+                SubscriberQueueCapacity = 128,
+                MaxBytesPerSession = 1024 * 1024,
+                MaxBytesHardCap = 4 * 1024 * 1024,
+            },
+            reconnectOptions: new ReconnectOptions
+            {
+                ReadStallTimeout = TimeSpan.FromSeconds(1),
+                RecoveryOverlapTrimHoldLimit = TimeSpan.FromMilliseconds(100),
+                RecoveryReplayCatchUpMinDuration = TimeSpan.FromMilliseconds(300),
+                RecoveryReplayCatchUpMaxDuration = TimeSpan.FromMilliseconds(300),
+                RecoveryReplayStallTimeout = TimeSpan.FromSeconds(2),
+                RecoverySafeStartSearchLimitBytes = 8 * 1024 * 1024,
+                RecoveryOutputHoldLimit = TimeSpan.FromMilliseconds(300),
+                AllowPacketBoundaryRecoveryFallback = allowPacketFallback,
+                FixedStepBackoffSeconds = [0],
+            });
+        var session = await fixture.Manager.GetOrCreateAsync(fixture.Source, CancellationToken.None);
+        var capture = CreateResponseCaptureContext();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var subscriber = await session.AttachSubscriberAsync(capture.Context, cts.Token);
+        await WaitUntilAsync(() => safeStartArrives
+            ? IndexOf(capture.Body.ToArray(), resumedIdr) >= 0
+            : session.State == SessionState.Faulted, TimeSpan.FromSeconds(6));
+        cts.Cancel();
+        await subscriber.CompleteAsync(SubscriberDisconnectReason.ClientAborted);
+        await subscriber.Completion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var data = capture.Body.ToArray();
+        if (safeStartArrives)
+            Assert.IsGreaterThanOrEqualTo(0, IndexOf(data, resumedIdr), "The deadline must resume at the later available IDR.");
+        else
+            Assert.AreEqual(SessionState.Faulted, session.State, "The final safe-start search must have a wall-clock bound even below its byte limit.");
+        Assert.AreEqual(-1, IndexOf(data, suppressedIdr), "A stale resume must not release earlier suppressed GOPs.");
+        Assert.HasCount(safeStartArrives ? 1 : 0, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryStaleResumeAccepted));
+        Assert.HasCount(safeStartArrives ? 1 : 0, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOutputResumed));
+        if (allowPacketFallback)
+            Assert.AreEqual("FallbackPacketBoundary", fixture.DiagnosticsStore.Query(
+                sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryOutputResumed).Single().SafeStartKind);
+        Assert.IsEmpty(fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.InProcessRelayTimelineRewind),
+            "The accepted timestamp epoch must not immediately trigger another recovery hold.");
+        Assert.HasCount(safeStartArrives ? 0 : 1, fixture.DiagnosticsStore.Query(
+            sessionId: session.SessionId, kind: StreamDiagnosticEventKind.RecoveryForcedRetune));
+    }
+
+    [TestMethod]
     public async Task Session_MpegTsReconnect_RewindNeverCatchesUp_FailsRecoveryInBoundedTime()
     {
         // A source that rewinds and then genuinely never delivers fresh content (no forward
