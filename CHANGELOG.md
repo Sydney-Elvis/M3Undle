@@ -4,6 +4,34 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [v1.0.0-beta.10.1] — 2026-10-03
+
+Makes failed guide updates visible when M3Undle falls back to cached EPG data, and fixes provider downloads that redirect from HTTPS to HTTP.
+
+### EPG health and recovery
+
+- The dashboard now warns when an enabled EPG source's latest fetch failed, showing the last successful update and available error details, with a link to EPG Sources
+- Providers show an **EPG stale** warning, and profiles identify linked providers whose guide updates are failing
+- Failed guide fetches during snapshot builds now raise warning events for provider-linked sources; a subsequent successful fetch raises a recovery event and clears the provider's failure event
+- Cached guide data remains available during fetch failures, while the warnings make clear that it is no longer updating
+
+### Fixed
+
+- Provider playlist and XMLTV downloads now follow redirects from HTTPS to HTTP, including relative redirect targets, with a five-hop limit to stop redirect loops
+
+### Testing
+
+- Added regression coverage for dashboard EPG failure reporting, failure/recovery event handling, and provider redirects, including relative locations and redirect loops
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.10.1
+ghcr.io/sydney-elvis/m3undle:beta
+```
+
+---
+
 ## [v1.0.0-beta.10] — 2026-09-12
 
 Fixes streams that could drop mid-recovery instead of catching back up after a reconnect, and lets you split a provider group's channels across two or more custom groups.
