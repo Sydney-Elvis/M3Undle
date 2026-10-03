@@ -158,6 +158,12 @@
                             <span><MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled">Published</MudChip></span>
                         </MudTooltip>
                     }
+                    @if (context.Enabled && context.EpgFailure is { } epgFailure)
+                    {
+                        <MudTooltip Text="@EpgFailTooltip(epgFailure)" Placement="Placement.Top">
+                            <span><MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled" Icon="@Icons.Material.Filled.EventBusy" Href="epg">EPG stale</MudChip></span>
+                        </MudTooltip>
+                    }
                 </MudTd>
                 <MudTd>
                     <MudStack Row="true" Spacing="1">
@@ -539,6 +545,13 @@
 
     private static string FailTooltip(string baseMessage, string? errorSummary)
         => string.IsNullOrWhiteSpace(errorSummary) ? baseMessage : $"{baseMessage}\n\n{errorSummary}";
+
+    private static string EpgFailTooltip(EpgProviderHealthDto epg)
+    {
+        var age = M3Undle.Web.Application.Epg.EpgHealth.DescribeStale(epg.LastSuccessUtc, DateTime.UtcNow);
+        var message = $"Guide (EPG) source '{epg.SourceName}' is failing to update ({age}). Channels still play, but guide data is stale.";
+        return string.IsNullOrWhiteSpace(epg.ErrorSummary) ? message : $"{message}\n\n{epg.ErrorSummary}";
+    }
 
     private static string FormatRefresh(ProviderLastRefreshDto? refresh)
     {

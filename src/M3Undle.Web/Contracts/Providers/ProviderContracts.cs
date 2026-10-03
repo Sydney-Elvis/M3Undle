@@ -59,6 +59,7 @@ public sealed class ProviderDto
     public bool XtreamIncludeXmltv { get; set; }
     public bool XtreamDetectedCapable { get; set; }
     public DateTime? PlaylistExpiresUtc { get; set; }
+    public EpgProviderHealthDto? EpgFailure { get; set; }
     public bool IsXtreamProvider => XtreamBaseUrl is not null;
 }
 
@@ -260,4 +261,13 @@ public sealed class SelectAllChannelsResult
 {
     public int GroupsUpdated { get; set; }
     public int ChannelsSelected { get; set; }
+}
+
+/// <summary>Latest EPG fetch failure for a provider; the guide is being served from stale cache.</summary>
+public sealed class EpgProviderHealthDto
+{
+    public string SourceName { get; set; } = string.Empty;
+    public DateTime? LastSuccessUtc { get; set; }
+    public DateTime LastFailureUtc { get; set; }
+    public string? ErrorSummary { get; set; }
 }

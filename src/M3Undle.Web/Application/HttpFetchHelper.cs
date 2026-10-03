@@ -12,6 +12,44 @@ internal static class HttpFetchHelper
     // tight hard cap for a large response that's still making steady progress.
     private static readonly TimeSpan MinHardTimeout = TimeSpan.FromMinutes(5);
 
+    private const int MaxRedirects = 5;
+
+    /// <summary>
+    /// GETs <paramref name="url"/>, following redirects manually. HttpClient's built-in redirect
+    /// handling refuses HTTPS→HTTP hops (it surfaces the bare 302 as an error), but providers do
+    /// redirect their XMLTV/playlist endpoints to plain-HTTP CDN hosts. The redirect target is
+    /// fully specified by the provider, so following it adds no credential exposure beyond what
+    /// the provider chose. Hops are capped to avoid redirect loops.
+    /// </summary>
+    internal static async Task<HttpResponseMessage> SendFollowingRedirectsAsync(
+        HttpClient client,
+        string url,
+        CancellationToken cancellationToken)
+    {
+        var current = new Uri(url, UriKind.Absolute);
+        for (var hop = 0; ; hop++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, current);
+            var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+            if (!IsRedirect(response.StatusCode) || response.Headers.Location is not { } location)
+                return response;
+
+            var next = location.IsAbsoluteUri ? location : new Uri(current, location);
+            response.Dispose();
+
+            if (hop >= MaxRedirects)
+                throw new ProviderFetchException($"Too many redirects (more than {MaxRedirects}); last target host: {next.Host}.");
+
+            current = next;
+        }
+    }
+
+    private static bool IsRedirect(System.Net.HttpStatusCode status) => status is
+        System.Net.HttpStatusCode.MovedPermanently or System.Net.HttpStatusCode.Found
+        or System.Net.HttpStatusCode.SeeOther or System.Net.HttpStatusCode.TemporaryRedirect
+        or System.Net.HttpStatusCode.PermanentRedirect;
+
     internal static async Task<string> FetchStringAsync(
         HttpClient client,
         string url,
@@ -33,11 +71,7 @@ internal static class HttpFetchHelper
             connectCts.CancelAfter(idleTimeout);
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                response = await client.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    connectCts.Token);
+                response = await SendFollowingRedirectsAsync(client, url, connectCts.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {

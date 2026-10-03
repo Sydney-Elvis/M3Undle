@@ -32,6 +32,21 @@ public sealed class EventService(
                     .ExecuteDeleteAsync(CancellationToken.None);
             }
 
+            if (eventType == SystemEventTypes.EpgFetchFailed && providerId is not null)
+            {
+                await db.SystemEvents
+                    .Where(e => e.EventType == SystemEventTypes.EpgBackOnline && e.ProviderId == providerId)
+                    .ExecuteDeleteAsync(CancellationToken.None);
+            }
+
+            // Recovery clears the outstanding failure so the footer badge stops warning.
+            if (eventType == SystemEventTypes.EpgBackOnline && providerId is not null)
+            {
+                await db.SystemEvents
+                    .Where(e => e.EventType == SystemEventTypes.EpgFetchFailed && e.ProviderId == providerId)
+                    .ExecuteDeleteAsync(CancellationToken.None);
+            }
+
             if (eventType == SystemEventTypes.ProviderStreamUnstable && providerId is not null)
             {
                 await db.SystemEvents

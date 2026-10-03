@@ -123,6 +123,48 @@ public sealed class DashboardStatsServiceTests
     }
 
     [TestMethod]
+    public async Task GetStatsAsync_EpgFailures_ReportsOnlyFailingEnabledSourcesOfActiveProfile()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using var db = fixture.CreateDbContext();
+        var success = DateTime.UtcNow.AddDays(-3);
+        var failure = DateTime.UtcNow.AddHours(-1);
+
+        db.Profiles.Add(NewProfile("profile-1", isActive: true));
+        db.Profiles.Add(NewProfile("other-profile", isActive: false));
+        db.Providers.Add(NewProvider("p1", playlistExpiresUtc: null));
+        db.Providers.Add(NewProvider("p2", playlistExpiresUtc: null));
+        db.Providers.Add(NewProvider("p3", playlistExpiresUtc: null));
+        db.ProfileProviders.Add(NewProfileProvider("profile-1", "p1"));
+        db.ProfileProviders.Add(NewProfileProvider("profile-1", "p2"));
+        db.ProfileProviders.Add(NewProfileProvider("other-profile", "p3"));
+
+        var failing = NewEpgSource("failing", "p1", success);
+        failing.LastFailureUtc = failure;
+        var recovered = NewEpgSource("recovered", "p2", failure);
+        recovered.LastFailureUtc = success;
+        var otherProfile = NewEpgSource("other", "p3", success);
+        otherProfile.LastFailureUtc = failure;
+        db.EpgSources.AddRange(failing, recovered, otherProfile);
+        db.EpgFetchRuns.Add(new EpgFetchRun
+        {
+            EpgFetchRunId = "run-1",
+            EpgSourceId = "failing",
+            StartedUtc = failure,
+            Status = "fail",
+            ErrorSummary = "302 (Found)",
+        });
+        await db.SaveChangesAsync();
+
+        var stats = await CreateService(fixture).GetStatsAsync(CancellationToken.None);
+
+        var single = Assert.ContainsSingle(stats.EpgFailures);
+        Assert.AreEqual("failing", single.EpgSourceId);
+        Assert.AreEqual("302 (Found)", single.ErrorSummary);
+        Assert.AreEqual(success, single.LastSuccessUtc);
+    }
+
+    [TestMethod]
     public async Task GetStatsAsync_LastEpgUpdateUtc_UsesLatestSuccessfulSourceForActiveProfile()
     {
         await using var fixture = await CreateFixtureAsync();

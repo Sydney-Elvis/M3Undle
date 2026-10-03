@@ -1664,6 +1664,7 @@ public sealed class SnapshotBuilder(
                 tracked.LastSuccessUtc = finishedUtc;
                 tracked.ETag = result.ETag ?? tracked.ETag;
                 tracked.LastModifiedUtc = result.LastModifiedUtc ?? tracked.LastModifiedUtc;
+                await PublishEpgBackOnlineIfNeededAsync(tracked, cancellationToken);
             }
             else
             {
@@ -1671,6 +1672,7 @@ public sealed class SnapshotBuilder(
                 logger.LogWarning(
                     "EPG source {EpgSourceId} ({Name}) fetch failed: {Error}",
                     source.EpgSourceId, source.Name, result.ErrorSummary ?? "unknown error");
+                await PublishEpgFetchFailedAsync(tracked, result.ErrorSummary, cancellationToken);
             }
             tracked.UpdatedUtc = finishedUtc;
         }
@@ -2580,6 +2582,51 @@ public sealed class SnapshotBuilder(
         fetchRun.ErrorSummary = errorSummary;
         // Use CancellationToken.None — must persist even if run was cancelled
         await db.SaveChangesAsync(CancellationToken.None);
+    }
+
+    // The guide silently falls back to the cached payload when a source fails, so raise an event
+    // (events panel + footer badge) — otherwise a broken source is invisible. Global sources
+    // without a provider are skipped: events are de-duplicated per provider.
+    private async Task PublishEpgFetchFailedAsync(EpgSource source, string? error, CancellationToken cancellationToken)
+    {
+        if (source.ProviderId is null)
+            return;
+
+        var providerName = await db.Providers
+            .AsNoTracking()
+            .Where(p => p.ProviderId == source.ProviderId)
+            .Select(p => p.Name)
+            .FirstOrDefaultAsync(cancellationToken) ?? source.ProviderId;
+
+        var staleness = EpgHealth.DescribeStale(source.LastSuccessUtc, DateTime.UtcNow);
+        await PublishSystemEventBestEffortAsync(
+            SystemEventSeverity.Warning,
+            SystemEventTypes.EpgFetchFailed,
+            $"Guide update failed for '{providerName}' — serving cached guide data",
+            $"{source.Name}: {error ?? "unknown error"} ({staleness}).",
+            providerId: source.ProviderId);
+    }
+
+    private async Task PublishEpgBackOnlineIfNeededAsync(EpgSource source, CancellationToken cancellationToken)
+    {
+        if (source.ProviderId is null)
+            return;
+
+        try
+        {
+            if (!await eventService.HasEventAsync(SystemEventTypes.EpgFetchFailed, providerId: source.ProviderId, ct: cancellationToken))
+                return;
+
+            await eventService.PublishAsync(
+                SystemEventSeverity.Info,
+                SystemEventTypes.EpgBackOnline,
+                $"Guide updates recovered for source '{source.Name}'",
+                providerId: source.ProviderId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to publish EpgBackOnline event for source {EpgSourceId}.", source.EpgSourceId);
+        }
     }
 
     private async Task PublishProviderBackOnlineIfNeededAsync(Provider provider, CancellationToken cancellationToken)

@@ -193,6 +193,14 @@ else
                             }
                         </MudStack>
 
+                        @foreach (var epgProvider in profile.EpgFailingProviders)
+                        {
+                            <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                                Guide (EPG) for "@epgProvider.Name" is not updating
+                                (@M3Undle.Web.Application.Epg.EpgHealth.DescribeStale(epgProvider.EpgLastSuccessUtc, DateTime.UtcNow)) —
+                                <MudLink Href="epg" @onclick:stopPropagation="true">check EPG Sources</MudLink>
+                            </MudAlert>
+                        }
                         @if (profile.GroupsRemovedFromProvider > 0)
                         {
                             <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">

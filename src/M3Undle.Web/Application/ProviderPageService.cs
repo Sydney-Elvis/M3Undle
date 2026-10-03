@@ -1,4 +1,5 @@
 using M3Undle.Core.M3u;
+using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Contracts.Providers;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -972,10 +973,15 @@ public sealed class ProviderPageService(
                 x => x.Key,
                 x => x.OrderBy(y => y.Priority).ThenBy(y => y.ProfileId).Select(y => y.ProfileId).ToList());
 
+        var epgFailureLookup = (await EpgHealth.GetFailingSourcesAsync(db, providerIds, cancellationToken))
+            .GroupBy(x => x.ProviderId!)
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.LastSuccessUtc ?? DateTime.MinValue).First());
+
         return providers
             .OrderBy(x => x.Name)
             .Select(provider =>
             {
+                epgFailureLookup.TryGetValue(provider.ProviderId, out var epgFailure);
                 linkLookup.TryGetValue(provider.ProviderId, out var associatedProfileIds);
                 associatedProfileIds ??= [];
 
@@ -1016,6 +1022,15 @@ public sealed class ProviderPageService(
                     XtreamIncludeXmltv = provider.XtreamIncludeXmltv,
                     XtreamDetectedCapable = provider.XtreamDetectedCapable,
                     PlaylistExpiresUtc = provider.PlaylistExpiresUtc,
+                    EpgFailure = epgFailure is null
+                        ? null
+                        : new EpgProviderHealthDto
+                        {
+                            SourceName = epgFailure.SourceName,
+                            LastSuccessUtc = epgFailure.LastSuccessUtc,
+                            LastFailureUtc = epgFailure.LastFailureUtc,
+                            ErrorSummary = epgFailure.ErrorSummary,
+                        },
                     LastRefresh = latestRefresh is null
                         ? null
                         : new ProviderLastRefreshDto
