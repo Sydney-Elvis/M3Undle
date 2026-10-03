@@ -1,3 +1,4 @@
+using M3Undle.Web.Application.Epg;
 namespace M3Undle.Web.Contracts;
 
 public enum ProfileHealthStatus
@@ -41,6 +42,7 @@ public sealed class DashboardStatsDto
     public List<DashboardProfileSummary> ProfileSummaries { get; set; } = [];
     public DateTime? LastPublishedUtc { get; set; }
     public DateTime? LastEpgUpdateUtc { get; set; }
+    public List<FailingEpgSource> EpgFailures { get; set; } = [];
     public bool RefreshFailed { get; set; }
     public string? LastChangeClass { get; set; }
     public DateTime? ActiveProfileProviderExpiresUtc { get; set; }

@@ -17,6 +17,8 @@ public static class SystemEventTypes
 {
     public const string ProviderFetchFailed = "ProviderFetchFailed";
     public const string ProviderBackOnline = "ProviderBackOnline";
+    public const string EpgFetchFailed = "EpgFetchFailed";
+    public const string EpgBackOnline = "EpgBackOnline";
     public const string ProviderStreamUnstable = "ProviderStreamUnstable";
     public const string ProviderStreamRecovered = "ProviderStreamRecovered";
     public const string BreakingLineupChange = "BreakingLineupChange";

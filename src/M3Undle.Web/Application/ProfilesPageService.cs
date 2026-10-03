@@ -1,3 +1,4 @@
+using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Contracts;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -407,6 +408,11 @@ internal sealed class ProfilesPageService(
         var pendingChannelsByProfileMap = channelsPendingByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
         var removedGroupsByProfileMap = groupsRemovedByProfile.ToDictionary(g => g.ProfileId, g => g.Count);
 
+        var epgFailureByProvider = (await EpgHealth.GetFailingSourcesAsync(db, null, ct))
+            .Where(f => f.ProviderId is not null)
+            .GroupBy(f => f.ProviderId!)
+            .ToDictionary(g => g.Key, g => g.Min(f => f.LastSuccessUtc));
+
         var providersByProfile = profileProviders
             .GroupBy(x => x.ProfileId)
             .ToDictionary(
@@ -420,6 +426,8 @@ internal sealed class ProfilesPageService(
                     PlaylistExpiresUtc = pp.PlaylistExpiresUtc,
                     LastFetchStatus = latestRunsByProvider.GetValueOrDefault(pp.ProviderId),
                     LastFetchErrorSummary = latestRunErrorsByProvider.GetValueOrDefault(pp.ProviderId),
+                    EpgFailing = epgFailureByProvider.ContainsKey(pp.ProviderId),
+                    EpgLastSuccessUtc = epgFailureByProvider.GetValueOrDefault(pp.ProviderId),
                 }).ToList());
 
         var latestSnapshotByProfile = activeSnapshots

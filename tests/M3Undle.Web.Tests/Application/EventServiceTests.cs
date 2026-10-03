@@ -48,6 +48,36 @@ public sealed class EventServiceTests
     }
 
     [TestMethod]
+    public async Task PublishAsync_EpgBackOnlineClearsOutstandingEpgFailure()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = fixture.Services.GetRequiredService<IEventService>();
+
+        await service.PublishAsync(
+            SystemEventSeverity.Warning,
+            SystemEventTypes.EpgFetchFailed,
+            "Guide update failed",
+            providerId: "provider-1");
+        await service.PublishAsync(
+            SystemEventSeverity.Info,
+            SystemEventTypes.EpgBackOnline,
+            "Guide updates recovered",
+            providerId: "provider-1");
+
+        Assert.IsFalse(await service.HasEventAsync(SystemEventTypes.EpgFetchFailed, providerId: "provider-1"));
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.EpgBackOnline, providerId: "provider-1"));
+
+        await service.PublishAsync(
+            SystemEventSeverity.Warning,
+            SystemEventTypes.EpgFetchFailed,
+            "Guide update failed again",
+            providerId: "provider-1");
+
+        Assert.IsFalse(await service.HasEventAsync(SystemEventTypes.EpgBackOnline, providerId: "provider-1"));
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.EpgFetchFailed, providerId: "provider-1"));
+    }
+
+    [TestMethod]
     public async Task PublishAsync_NewProviderFailureClearsPriorBackOnlineEvent()
     {
         await using var fixture = await CreateFixtureAsync();

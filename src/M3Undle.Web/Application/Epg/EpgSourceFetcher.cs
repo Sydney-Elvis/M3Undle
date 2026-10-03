@@ -152,7 +152,7 @@ public sealed class EpgSourceFetcher(
             else if (source.LastModifiedUtc.HasValue)
                 client.DefaultRequestHeaders.IfModifiedSince = source.LastModifiedUtc.Value;
 
-            using var response = await client.GetAsync(resolvedUrl, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+            using var response = await HttpFetchHelper.SendFollowingRedirectsAsync(client, resolvedUrl, timeoutCts.Token);
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
                 return new FetchResult(null, "not_modified", 0, source.ETag, source.LastModifiedUtc, null);

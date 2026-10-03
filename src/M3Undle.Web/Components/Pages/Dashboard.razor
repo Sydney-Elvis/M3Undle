@@ -2,6 +2,7 @@
 @using Microsoft.AspNetCore.Components
 @page "/"
 @using M3Undle.Web.Application
+@using M3Undle.Web.Application.Epg
 @using M3Undle.Web.Contracts
 @inject NavigationManager Nav
 @inject ISnackbar Snackbar
@@ -68,6 +69,19 @@
                         <MudText Typo="Typo.body2">
                             <strong>@_dashboardStats.ChannelsPendingReview new channel@(_dashboardStats.ChannelsPendingReview == 1 ? "" : "s") need review.</strong>
                             Open <MudLink Href="channels/review">Channel Review</MudLink> to approve or dismiss them.
+                        </MudText>
+                    </MudStack>
+                }
+
+                @foreach (var epg in _dashboardStats?.EpgFailures ?? [])
+                {
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Filled.EventBusy" Size="Size.Small" Color="Color.Warning" Class="mt-1" />
+                        <MudText Typo="Typo.body2">
+                            <strong>Guide (EPG) is not updating for "@(epg.ProviderName ?? epg.SourceName)" — @EpgHealth.DescribeStale(epg.LastSuccessUtc, DateTime.UtcNow).</strong>
+                            Channels still play, but guide data is stale.
+                            @if (!string.IsNullOrWhiteSpace(epg.ErrorSummary)) { <span>Last error: @epg.ErrorSummary </span> }
+                            Check <MudLink Href="epg">EPG Sources</MudLink>.
                         </MudText>
                     </MudStack>
                 }
@@ -348,7 +362,17 @@
                                 @if (_dashboardStats?.LastEpgUpdateUtc is { } lastEpgUpdate)
                                 {
                                     <MudText Typo="Typo.body2">@lastEpgUpdate.ToString("u")</MudText>
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">Latest successful guide-source fetch</MudText>
+                                    @if (_dashboardStats?.EpgFailures.Count > 0)
+                                    {
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                            <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" Color="Color.Warning" />
+                                            <MudText Typo="Typo.caption" Color="Color.Warning">Stale — latest guide fetch failed. Using cached guide data.</MudText>
+                                        </MudStack>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">Latest successful guide-source fetch</MudText>
+                                    }
                                 }
                                 else
                                 {
@@ -693,7 +717,8 @@
         (_dashboardStats.ExpiringProviders.Count > 0 ||
          _dashboardStats.GroupsPendingReview > 0 ||
          _dashboardStats.ChannelsPendingReview > 0 ||
-         _dashboardStats.RefreshFailed);
+         _dashboardStats.RefreshFailed ||
+         _dashboardStats.EpgFailures.Count > 0);
 
     private bool HasTodoItems => HasDashboardActionItems;
 

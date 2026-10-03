@@ -16,6 +16,8 @@ public sealed class ProfileProviderInfoDto
     public DateTime? PlaylistExpiresUtc { get; set; }
     public string? LastFetchStatus { get; set; }
     public string? LastFetchErrorSummary { get; set; }
+    public bool EpgFailing { get; set; }
+    public DateTime? EpgLastSuccessUtc { get; set; }
 }
 
 public sealed class ProfilePageItemDto
@@ -36,6 +38,7 @@ public sealed class ProfilePageItemDto
     public int GroupsPendingReview { get; set; }
     public int ChannelsPendingReview { get; set; }
     public int GroupsRemovedFromProvider { get; set; }
+    public List<ProfileProviderInfoDto> EpgFailingProviders => Providers.Where(p => p.Enabled && p.EpgFailing).ToList();
 }
 
 public sealed class ProfileSnapshotHistoryDto

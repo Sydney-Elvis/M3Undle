@@ -1,3 +1,4 @@
+using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Contracts;
 using M3Undle.Web.Data;
 using Microsoft.EntityFrameworkCore;
@@ -80,6 +81,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
         DateTime? activeProfileProviderExpiresUtc = null;
         DateTime? lastEpgUpdateUtc = null;
+        var epgFailures = new List<FailingEpgSource>();
         if (activeProfileId is not null)
         {
             activeProfileProviderExpiresUtc = await db.ProfileProviders
@@ -106,6 +108,8 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
                                      && source.Enabled
                                      && source.LastSuccessUtc != null)
                     .MaxAsync(source => (DateTime?)source.LastSuccessUtc, ct);
+
+                epgFailures = await EpgHealth.GetFailingSourcesAsync(db, activeProfileProviderIds, ct);
             }
         }
 
@@ -205,6 +209,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             ProfileSummaries = summaries,
             LastPublishedUtc = lastPublishedUtc,
             LastEpgUpdateUtc = lastEpgUpdateUtc,
+            EpgFailures = epgFailures,
             RefreshFailed = refreshFailed,
             LastChangeClass = lastChangeClass,
             ActiveProfileProviderExpiresUtc = activeProfileProviderExpiresUtc,
