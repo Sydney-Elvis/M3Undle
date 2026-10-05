@@ -33,6 +33,41 @@ public sealed class PortableBackupServiceTests
             setup.ProviderGroups.Add(SimpleProviderGroup("pg1", "p1"));
             setup.CatalogItems.Add(SimpleCatalogItem("ci1", "p1", "pg1"));
             setup.Snapshots.Add(SimpleSnapshot("sn1", "pr1"));
+
+            // Notification operational state (excluded) next to its configuration (kept).
+            var now = DateTime.UtcNow;
+            setup.NotificationDestinations.Add(new NotificationDestination
+            {
+                DestinationId = "nd1", Kind = NotificationProviderKinds.Smtp, CreatedUtc = now, UpdatedUtc = now,
+                Smtp = new NotificationSmtpSettings { DestinationId = "nd1", Host = "smtp.example.org" },
+            });
+            setup.NotificationIncidents.Add(new NotificationIncident
+            {
+                IncidentId = "ni1", NotificationKey = "epg.fetch_failed", SubjectKind = "EpgSource", SubjectId = "epg1",
+                FirstUnhealthyUtc = now, LastObservedUtc = now, UpdatedUtc = now,
+            });
+            setup.NotificationOccurrences.Add(new NotificationOccurrence
+            {
+                OccurrenceId = "no1", OccurrenceKey = "k1", NotificationKey = "epg.fetch_failed", Title = "t", Body = "b", OccurredUtc = now, CreatedUtc = now,
+            });
+            setup.NotificationConditionObservations.Add(new NotificationConditionObservation
+            {
+                EvidenceKey = "epg.source_check", SubjectKind = "EpgSource", SubjectId = "epg1", Outcome = "failed", CompletedUtc = now,
+            });
+            await setup.SaveChangesAsync();
+            setup.NotificationIncidentTargets.Add(new NotificationIncidentTarget
+            {
+                IncidentTargetId = "nt1", IncidentId = "ni1", Generation = 1, DestinationId = "nd1", TargetId = "r1", DeliveryIdentityRevision = 1, UpdatedUtc = now,
+            });
+            setup.NotificationDeliveries.Add(new NotificationDelivery
+            {
+                DeliveryId = "ndl1", OccurrenceId = "no1", DestinationId = "nd1", ProviderKind = "smtp", TargetId = "r1", TargetLabel = "r1",
+                DeliveryIdentityRevision = 1, PayloadTitle = "t", PayloadBody = "b", MessageId = "<x@y>", DueUtc = now, CreatedUtc = now, UpdatedUtc = now,
+            });
+            setup.EpgNotificationCoverage.Add(new EpgNotificationCoverage
+            {
+                EpgNotificationCoverageId = "nc1", EpgSourceId = "epg1", XmltvChannelId = "c1", IntervalsEncoded = string.Empty, UpdatedUtc = now,
+            });
             await setup.SaveChangesAsync();
         }
 
@@ -43,6 +78,9 @@ public sealed class PortableBackupServiceTests
 
             Assert.IsTrue(result.Success, result.ErrorMessage);
             using var extracted = ExtractDatabase(result.FilePath!);
+
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "notification_destinations"), "Notification configuration is user intent and must survive.");
+            Assert.AreEqual(1, await CountRowsAsync(extracted.DatabasePath, "notification_smtp_settings"));
 
             foreach (var table in PortableBackupExcludedTables.TableNames)
                 Assert.AreEqual(0, await CountRowsAsync(extracted.DatabasePath, table), $"Excluded table '{table}' must be empty after backup.");

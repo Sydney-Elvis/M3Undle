@@ -167,6 +167,62 @@ public sealed class DownstreamNotificationServiceTests
     }
 
     [TestMethod]
+    public async Task RefreshCompleted_StagesDurableOutcomeObservationsWithTheResultCommit()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.DownstreamIntegrations.Add(new DownstreamIntegration
+            {
+                DownstreamIntegrationId = "int-evidence", Name = "Evidence", Kind = "webhook", BaseUrl = "http://localhost/hook",
+                TriggerOnLineupUpdate = true, TriggerOnGuideUpdate = true, Enabled = true, CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow,
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var eventBus = new AppEventBus();
+        var adapter = new ScriptedAdapter("webhook", ["HTTP 401 from http://secret.example/hook", null]);
+        using var service = new DownstreamNotificationService(
+            eventBus, fixture.ScopeFactory, [adapter],
+            new SecretEncryptionService(new EnvironmentVariableService(NullLogger<EnvironmentVariableService>.Instance)),
+            new NullEventService(), NullLogger<DownstreamNotificationService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+        await Task.Delay(50);
+        eventBus.Publish(AppEventKind.RefreshCompleted, succeeded: true, changeClass: ChangeClasses.Lineup);
+        await WaitUntilAsync(async () => await CountObservationsAsync(fixture) == 1, TimeSpan.FromSeconds(3));
+        eventBus.Publish(AppEventKind.RefreshCompleted, succeeded: true, changeClass: ChangeClasses.Lineup);
+        await WaitUntilAsync(async () => await CountObservationsAsync(fixture) == 2, TimeSpan.FromSeconds(3));
+        await service.StopAsync(CancellationToken.None);
+
+        await using var verify = fixture.CreateDbContext();
+        var rows = await verify.NotificationConditionObservations.OrderBy(o => o.ObservationId).ToListAsync();
+        Assert.AreEqual("downstream.command", rows[0].EvidenceKey);
+        Assert.AreEqual("int-evidence", rows[0].SubjectId);
+        Assert.AreEqual("failed", rows[0].Outcome);
+        Assert.AreEqual("auth", rows[0].SafeDetail, "A class of failure, never the integration's response text.");
+        Assert.AreEqual("ok", rows[1].Outcome);
+    }
+
+    private static async Task<int> CountObservationsAsync(TestFixture fixture)
+    {
+        await using var db = fixture.CreateDbContext();
+        return await db.NotificationConditionObservations.CountAsync();
+    }
+
+    private sealed class ScriptedAdapter(string kind, string?[] results) : IDownstreamAdapter
+    {
+        private int _calls;
+        public string Kind => kind;
+
+        public Task<string?> NotifyAsync(string baseUrl, string? apiKey, string? webhookHeadersJson, DownstreamTrigger trigger, CancellationToken ct)
+        {
+            var index = Math.Min(Interlocked.Increment(ref _calls) - 1, results.Length - 1);
+            return Task.FromResult(results[index]);
+        }
+    }
+
+    [TestMethod]
     public async Task RefreshCompleted_WhenApiKeyDecryptFails_WritesDecryptErrorAndSkipsAdapter()
     {
         await using var fixture = await CreateFixtureAsync();
@@ -882,7 +938,7 @@ public sealed class DownstreamNotificationServiceTests
             }
         }
 
-        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null)
         {
             lock (_publishedEvents)
                 _publishedEvents.Add(new PublishedEvent(severity, eventType, title, detail, providerId, integrationId));
@@ -908,7 +964,7 @@ public sealed class DownstreamNotificationServiceTests
         public Task CleanupOldEventsAsync(CancellationToken ct = default)
             => Task.CompletedTask;
 
-        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
             => Task.FromResult(false);
 
         public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)

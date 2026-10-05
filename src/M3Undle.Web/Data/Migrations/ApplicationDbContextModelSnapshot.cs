@@ -15,7 +15,7 @@ namespace M3Undle.Web.Data.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.11");
 
             modelBuilder.Entity("M3Undle.Web.Data.ApplicationUser", b =>
                 {
@@ -754,6 +754,56 @@ namespace M3Undle.Web.Data.Migrations
                     b.ToTable("epg_fetch_runs", (string)null);
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgNotificationCoverage", b =>
+                {
+                    b.Property<string>("EpgNotificationCoverageId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_notification_coverage_id");
+
+                    b.Property<string>("EpgSourceId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_id");
+
+                    b.Property<string>("EvidenceRevision")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("evidence_revision");
+
+                    b.Property<int>("IntervalCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("interval_count");
+
+                    b.Property<string>("IntervalsEncoded")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("intervals_encoded");
+
+                    b.Property<bool>("IsRelevant")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("is_relevant");
+
+                    b.Property<string>("RelevanceContext")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("relevance_context");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.Property<string>("XmltvChannelId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("xmltv_channel_id");
+
+                    b.HasKey("EpgNotificationCoverageId");
+
+                    b.HasIndex("EpgSourceId", "XmltvChannelId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_epg_notification_coverage_channel");
+
+                    b.ToTable("epg_notification_coverage", (string)null);
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSource", b =>
                 {
                     b.Property<string>("EpgSourceId")
@@ -784,6 +834,14 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasDefaultValue("xmltv_url")
                         .HasColumnName("kind");
+
+                    b.Property<string>("LastCheckStatus")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_check_status");
+
+                    b.Property<DateTime?>("LastCheckedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_checked_utc");
 
                     b.Property<DateTime?>("LastFailureUtc")
                         .HasColumnType("TEXT")
@@ -1000,6 +1058,747 @@ namespace M3Undle.Web.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("metrics_tokens", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationConditionObservation", b =>
+                {
+                    b.Property<long>("ObservationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("observation_id");
+
+                    b.Property<DateTime>("CompletedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("completed_utc");
+
+                    b.Property<bool>("Consumed")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("consumed");
+
+                    b.Property<DateTime?>("ConsumedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("consumed_utc");
+
+                    b.Property<string>("EvidenceKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("evidence_key");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("outcome");
+
+                    b.Property<string>("SafeDetail")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_detail");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_id");
+
+                    b.Property<string>("SubjectKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_kind");
+
+                    b.HasKey("ObservationId");
+
+                    b.HasIndex("Consumed", "ObservationId")
+                        .HasDatabaseName("ix_notification_observations_unconsumed");
+
+                    b.HasIndex("EvidenceKey", "SubjectId", "ObservationId")
+                        .HasDatabaseName("ix_notification_observations_subject");
+
+                    b.ToTable("notification_condition_observations", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationDelivery", b =>
+                {
+                    b.Property<string>("DeliveryId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("delivery_id");
+
+                    b.Property<DateTime?>("AcceptedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("accepted_utc");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<DateTime?>("ClaimExpiresUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("claim_expires_utc");
+
+                    b.Property<string>("ClaimOwner")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("claim_owner");
+
+                    b.Property<int>("ConfigRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("config_revision");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<int>("CycleNumber")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("cycle_number");
+
+                    b.Property<int>("DeliveryIdentityRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("delivery_identity_revision");
+
+                    b.Property<string>("DestinationId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<DateTime?>("DismissedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("dismissed_utc");
+
+                    b.Property<DateTime>("DueUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("due_utc");
+
+                    b.Property<string>("ErrorCode")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("error_code");
+
+                    b.Property<string>("ErrorText")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("error_text");
+
+                    b.Property<string>("MessageId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("message_id");
+
+                    b.Property<string>("OccurrenceId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("occurrence_id");
+
+                    b.Property<string>("PayloadBody")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("payload_body");
+
+                    b.Property<string>("PayloadLinkPath")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("payload_link_path");
+
+                    b.Property<string>("PayloadTitle")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("payload_title");
+
+                    b.Property<string>("ProviderKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_kind");
+
+                    b.Property<string>("RemoteReference")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("remote_reference");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<int>("RouteRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("route_revision");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<string>("SuppressedReason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("suppressed_reason");
+
+                    b.Property<string>("TargetId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("target_id");
+
+                    b.Property<string>("TargetLabel")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("target_label");
+
+                    b.Property<DateTime?>("TransportStartedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("transport_started_utc");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("DeliveryId");
+
+                    b.HasIndex("DestinationId");
+
+                    b.HasIndex("State", "ProviderKind", "DueUtc")
+                        .HasDatabaseName("ix_notification_deliveries_due");
+
+                    b.HasIndex("OccurrenceId", "DestinationId", "TargetId", "DeliveryIdentityRevision")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_deliveries_identity");
+
+                    b.ToTable("notification_deliveries", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationDestination", b =>
+                {
+                    b.Property<string>("DestinationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<int>("ConfigRevision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("config_revision");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<int>("DeliveryIdentityRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("delivery_identity_revision");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("kind");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.Property<string>("VerificationDetail")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("verification_detail");
+
+                    b.Property<string>("VerificationStatus")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("verification_status");
+
+                    b.Property<int?>("VerifiedRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("verified_revision");
+
+                    b.Property<DateTime?>("VerifiedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("verified_utc");
+
+                    b.HasKey("DestinationId");
+
+                    b.HasIndex("Kind")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_destinations_kind");
+
+                    b.ToTable("notification_destinations", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationEmailRecipient", b =>
+                {
+                    b.Property<string>("RecipientId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("recipient_id");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("address");
+
+                    b.Property<string>("CanonicalKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("canonical_key");
+
+                    b.Property<string>("DestinationId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("sort_order");
+
+                    b.HasKey("RecipientId");
+
+                    b.HasIndex("DestinationId", "CanonicalKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_email_recipients_identity");
+
+                    b.ToTable("notification_email_recipients", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationIncident", b =>
+                {
+                    b.Property<string>("IncidentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("incident_id");
+
+                    b.Property<int>("ConsecutiveHealthy")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("consecutive_healthy");
+
+                    b.Property<DateTime>("FirstUnhealthyUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("first_unhealthy_utc");
+
+                    b.Property<int>("Generation")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generation");
+
+                    b.Property<DateTime>("LastObservedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_observed_utc");
+
+                    b.Property<DateTime?>("LastReminderUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("last_reminder_utc");
+
+                    b.Property<string>("NotificationKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("notification_key");
+
+                    b.Property<DateTime?>("OpenedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("opened_utc");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reason");
+
+                    b.Property<int>("ReminderSequence")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("reminder_sequence");
+
+                    b.Property<DateTime?>("ResolvedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resolved_utc");
+
+                    b.Property<string>("SafeDetail")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("safe_detail");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("severity");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<string>("SubjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_id");
+
+                    b.Property<string>("SubjectKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_kind");
+
+                    b.Property<string>("SubjectLabel")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_label");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("IncidentId");
+
+                    b.HasIndex("NotificationKey", "SubjectId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_incidents_active")
+                        .HasFilter("\"state\" = 'Active'");
+
+                    b.HasIndex("NotificationKey", "SubjectId", "Generation")
+                        .HasDatabaseName("ix_notification_incidents_generation");
+
+                    b.ToTable("notification_incidents", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationIncidentTarget", b =>
+                {
+                    b.Property<string>("IncidentTargetId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("incident_target_id");
+
+                    b.Property<int>("DeliveryIdentityRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("delivery_identity_revision");
+
+                    b.Property<string>("DestinationId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<int>("Generation")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generation");
+
+                    b.Property<string>("IncidentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("incident_id");
+
+                    b.Property<int>("LastReminderSequence")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_reminder_sequence");
+
+                    b.Property<DateTime?>("OpeningAcceptedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("opening_accepted_utc");
+
+                    b.Property<bool>("OpeningUncertain")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("opening_uncertain");
+
+                    b.Property<DateTime?>("RecoveryAcceptedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("recovery_accepted_utc");
+
+                    b.Property<DateTime?>("RecoveryQueuedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("recovery_queued_utc");
+
+                    b.Property<string>("TargetId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("target_id");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("IncidentTargetId");
+
+                    b.HasIndex("IncidentId", "Generation", "DestinationId", "TargetId", "DeliveryIdentityRevision")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_incident_targets_identity");
+
+                    b.ToTable("notification_incident_targets", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationMatrixSettings", b =>
+                {
+                    b.Property<string>("DestinationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<string>("AccessTokenEncrypted")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("access_token_encrypted");
+
+                    b.Property<bool>("AllowInsecureHttp")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("allow_insecure_http");
+
+                    b.Property<string>("BotUserId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("bot_user_id");
+
+                    b.Property<string>("DeviceId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("device_id");
+
+                    b.Property<string>("HomeserverUrl")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("homeserver_url");
+
+                    b.Property<string>("RoomId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("room_id");
+
+                    b.HasKey("DestinationId");
+
+                    b.ToTable("notification_matrix_settings", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationOccurrence", b =>
+                {
+                    b.Property<string>("OccurrenceId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("occurrence_id");
+
+                    b.Property<int>("ActivationEpoch")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("activation_epoch");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_utc");
+
+                    b.Property<int?>("Generation")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("generation");
+
+                    b.Property<string>("IncidentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("incident_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("LinkPath")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("link_path");
+
+                    b.Property<DateTime?>("MaterializedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("materialized_utc");
+
+                    b.Property<string>("NotificationKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("notification_key");
+
+                    b.Property<DateTime>("OccurredUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("occurred_utc");
+
+                    b.Property<string>("OccurrenceKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("occurrence_key");
+
+                    b.Property<int>("PolicyRevision")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("policy_revision");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("sequence");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("severity");
+
+                    b.Property<string>("SubjectLabel")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_label");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("title");
+
+                    b.HasKey("OccurrenceId");
+
+                    b.HasIndex("CreatedUtc")
+                        .HasDatabaseName("ix_notification_occurrences_created");
+
+                    b.HasIndex("IncidentId")
+                        .HasDatabaseName("ix_notification_occurrences_incident");
+
+                    b.HasIndex("MaterializedUtc")
+                        .HasDatabaseName("ix_notification_occurrences_materialized");
+
+                    b.HasIndex("OccurrenceKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_notification_occurrences_key");
+
+                    b.ToTable("notification_occurrences", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationRoute", b =>
+                {
+                    b.Property<string>("NotificationKey")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("notification_key");
+
+                    b.Property<string>("DestinationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<int?>("FailureDelayMinutes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("failure_delay_minutes");
+
+                    b.Property<int?>("ReminderIntervalHours")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("reminder_interval_hours");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<bool>("SendRecovery")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("send_recovery");
+
+                    b.Property<bool>("SendReminders")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("send_reminders");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("NotificationKey");
+
+                    b.HasIndex("DestinationId");
+
+                    b.ToTable("notification_routes", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("id");
+
+                    b.Property<int>("ActivationEpoch")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("activation_epoch");
+
+                    b.Property<DateTime?>("CapacitySuppressedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("capacity_suppressed_utc");
+
+                    b.Property<int>("CoverageGapMinutes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("coverage_gap_minutes");
+
+                    b.Property<int>("CoverageRecoverHours")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("coverage_recover_hours");
+
+                    b.Property<int>("CoverageRecoverPercent")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("coverage_recover_percent");
+
+                    b.Property<int>("CoverageWarnHours")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("coverage_warn_hours");
+
+                    b.Property<int>("CoverageWarnPercent")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("coverage_warn_percent");
+
+                    b.Property<int>("FailureDelayMinutes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("failure_delay_minutes");
+
+                    b.Property<string>("IdentifierSalt")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("")
+                        .HasColumnName("identifier_salt");
+
+                    b.Property<int>("OverdueGraceMinutes")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("overdue_grace_minutes");
+
+                    b.Property<bool>("Paused")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("paused");
+
+                    b.Property<int>("ReminderIntervalHours")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("reminder_interval_hours");
+
+                    b.Property<bool>("RequiresActivation")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("requires_activation");
+
+                    b.Property<int>("RetentionDays")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("retention_days");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("revision");
+
+                    b.Property<bool>("SendingEnabled")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("sending_enabled");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_utc");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("notification_settings", (string)null);
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationSmtpSettings", b =>
+                {
+                    b.Property<string>("DestinationId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("destination_id");
+
+                    b.Property<string>("AuthMode")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("auth_mode");
+
+                    b.Property<string>("Host")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("host");
+
+                    b.Property<string>("PasswordEncrypted")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("password_encrypted");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("port");
+
+                    b.Property<string>("SenderAddress")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sender_address");
+
+                    b.Property<string>("SenderName")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("sender_name");
+
+                    b.Property<string>("TlsMode")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tls_mode");
+
+                    b.Property<string>("Username")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("username");
+
+                    b.HasKey("DestinationId");
+
+                    b.ToTable("notification_smtp_settings", (string)null);
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Profile", b =>
@@ -2315,6 +3114,10 @@ namespace M3Undle.Web.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("detail");
 
+                    b.Property<string>("EpgSourceId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("epg_source_id");
+
                     b.Property<string>("EventType")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -2352,6 +3155,10 @@ namespace M3Undle.Web.Data.Migrations
 
                     b.HasIndex("OccurredAt")
                         .HasDatabaseName("ix_system_events_occurred_at");
+
+                    b.HasIndex("EventType", "EpgSourceId")
+                        .HasDatabaseName("ix_system_events_event_type_epg_source_id")
+                        .HasFilter("\"epg_source_id\" IS NOT NULL");
 
                     b.HasIndex("EventType", "IntegrationId")
                         .HasDatabaseName("ix_system_events_event_type_integration_id")
@@ -2723,6 +3530,15 @@ namespace M3Undle.Web.Data.Migrations
                     b.Navigation("EpgSource");
                 });
 
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgNotificationCoverage", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.EpgSource", null)
+                        .WithMany()
+                        .HasForeignKey("EpgSourceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("M3Undle.Web.Data.Entities.EpgSource", b =>
                 {
                     b.HasOne("M3Undle.Web.Data.Entities.Provider", "Provider")
@@ -2753,6 +3569,79 @@ namespace M3Undle.Web.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Provider");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationDelivery", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationDestination", "Destination")
+                        .WithMany()
+                        .HasForeignKey("DestinationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationOccurrence", "Occurrence")
+                        .WithMany()
+                        .HasForeignKey("OccurrenceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Destination");
+
+                    b.Navigation("Occurrence");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationEmailRecipient", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationDestination", "Destination")
+                        .WithMany("Recipients")
+                        .HasForeignKey("DestinationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Destination");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationIncidentTarget", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationIncident", "Incident")
+                        .WithMany()
+                        .HasForeignKey("IncidentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Incident");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationMatrixSettings", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationDestination", "Destination")
+                        .WithOne("Matrix")
+                        .HasForeignKey("M3Undle.Web.Data.Entities.NotificationMatrixSettings", "DestinationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Destination");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationRoute", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationDestination", "Destination")
+                        .WithMany()
+                        .HasForeignKey("DestinationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Destination");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationSmtpSettings", b =>
+                {
+                    b.HasOne("M3Undle.Web.Data.Entities.NotificationDestination", "Destination")
+                        .WithOne("Smtp")
+                        .HasForeignKey("M3Undle.Web.Data.Entities.NotificationSmtpSettings", "DestinationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Destination");
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.ProfileCatalogGroupFilter", b =>
@@ -3113,6 +4002,15 @@ namespace M3Undle.Web.Data.Migrations
             modelBuilder.Entity("M3Undle.Web.Data.Entities.FetchRun", b =>
                 {
                     b.Navigation("ProviderChannels");
+                });
+
+            modelBuilder.Entity("M3Undle.Web.Data.Entities.NotificationDestination", b =>
+                {
+                    b.Navigation("Matrix");
+
+                    b.Navigation("Recipients");
+
+                    b.Navigation("Smtp");
                 });
 
             modelBuilder.Entity("M3Undle.Web.Data.Entities.Profile", b =>

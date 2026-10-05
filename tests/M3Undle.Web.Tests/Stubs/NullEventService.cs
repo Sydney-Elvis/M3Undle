@@ -5,7 +5,7 @@ namespace M3Undle.Web.Tests.Stubs;
 
 public sealed class NullEventService : IEventService
 {
-    public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+    public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null)
         => Task.CompletedTask;
 
     public Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default)
@@ -26,7 +26,7 @@ public sealed class NullEventService : IEventService
     public Task CleanupOldEventsAsync(CancellationToken ct = default)
         => Task.CompletedTask;
 
-    public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+    public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
         => Task.FromResult(false);
 
     public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)

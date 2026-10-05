@@ -9,6 +9,8 @@ public sealed class EncryptionStatusResponse
     public int ProvidersOnOtherKey { get; set; }
     public int DownstreamIntegrationsOnActiveKey { get; set; }
     public int DownstreamIntegrationsOnOtherKey { get; set; }
+    public int NotificationSecretsOnActiveKey { get; set; }
+    public int NotificationSecretsOnOtherKey { get; set; }
 }
 
 public sealed class RotateEncryptionResponse
@@ -22,5 +24,6 @@ public sealed class RotateEncryptionResponse
     public string? BackupFileName { get; set; }
     public int ProvidersMigrated { get; set; }
     public int DownstreamIntegrationsMigrated { get; set; }
+    public int NotificationSecretsMigrated { get; set; }
     public int RowsAlreadyCurrent { get; set; }
 }

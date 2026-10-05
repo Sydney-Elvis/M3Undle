@@ -24,6 +24,7 @@ Precise, living specs — kept in sync with the code, not simplified for an end-
 - [HTTP_COMPATIBILITY.md](../design/HTTP_COMPATIBILITY.md) — the external HTTP contract (M3U/XMLTV/stream/HDHR/Xtream endpoints)
 - [LINEUP_RULES.md](../design/LINEUP_RULES.md) — group review states, event tracking policies, placeholder suppression
 - [NUMBERING_RULES.md](../design/NUMBERING_RULES.md) — channel numbering precedence, conflict avoidance, overflow behavior
+- [NOTIFICATIONS.md](../design/NOTIFICATIONS.md) — administrator notifications (Matrix/SMTP): capture, incident lifecycle, durable delivery, provider contract, configuration and restore behaviour
 
 ## Release process and package specs
 

@@ -10,6 +10,7 @@
 @inject UserManager<ApplicationUser> UserManager
 @inject IAdaptiveLockoutService AdaptiveLockoutService
 @inject IEventService EventService
+@inject M3Undle.Web.Application.Notifications.NotificationSecurityRecorder SecurityRecorder
 @inject ILogger<Login> Logger
 @inject NavigationManager NavigationManager
 @inject IdentityRedirectManager RedirectManager
@@ -202,6 +203,8 @@
                         remoteIp,
                         (int)lockout.LockoutDuration.GetValueOrDefault().TotalSeconds,
                         lockout.Escalated);
+                    await CaptureBestEffortAsync(() => SecurityRecorder.RecordAccountLockedAsync(
+                        userName, DateTime.UtcNow.Add(lockout.LockoutDuration.GetValueOrDefault()), HttpContext.RequestAborted));
                     await PublishSystemEventBestEffortAsync(
                         SystemEventSeverity.Error,
                         SystemEventTypes.AccountLocked,
@@ -213,12 +216,26 @@
             }
 
             Logger.LogWarning("UI login failed due to invalid credentials. client={Client}", remoteIp);
+            await CaptureBestEffortAsync(() => SecurityRecorder.RecordFailedLoginAsync(userName, HttpContext.RequestAborted));
             await PublishSystemEventBestEffortAsync(
                 SystemEventSeverity.Warning,
                 SystemEventTypes.LoginFailed,
                 "Login failed",
                 $"Invalid credentials from {remoteIp}.");
             errorMessage = "Error: Invalid username or password.";
+        }
+    }
+
+    // Capturing an outcome for administrator notification must never get in the way of signing in.
+    private async Task CaptureBestEffortAsync(Func<Task> capture)
+    {
+        try
+        {
+            await capture();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "Failed to capture a sign-in outcome for notifications.");
         }
     }
 

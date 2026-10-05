@@ -554,6 +554,72 @@ New columns added to the existing `site_settings` table:
 
 ### epg_sources additions
 - refresh_interval_hours (INTEGER, nullable) -- per-source cadence override; null = follow global schedule
+- last_checked_utc (TEXT, nullable) -- completion of the last **real** upstream check (download, HTTP 304, local file read, or failure). Reusing the on-disk cache because the cadence window has not elapsed never updates it. Not backfilled from `last_success_utc`: historical `last_success_utc` values include cache-only reads (see below), so a source shows Unknown until its next real check
+- last_check_status (TEXT, nullable) -- 'ok' | 'not_modified' | 'fail' for the check in `last_checked_utc`
+
+`last_success_utc` keeps its name but now means "last successful real check". Before this change a cadence-skipped cache read was recorded as a synthetic `not_modified` success, which renewed `last_success_utc` (and so the cadence baseline) on every refresh that arrived more often than the source's cadence. The `epg_fetch_runs.status` value `not_modified` now only ever means a genuine HTTP 304.
+
+### system_events additions
+- epg_source_id (TEXT, nullable) -- EPG failure/recovery events are keyed by source, so two sources under one provider and standalone sources fail and recover independently. Existing provider-keyed `EpgFetchFailed`/`EpgBackOnline` rows could not be attributed to a source and were retired by the migration; current failures are rebuilt from the next real check. Index `ix_system_events_event_type_epg_source_id` (partial, `epg_source_id IS NOT NULL`)
+
+---
+
+## Notifications
+
+Administrator notifications (Matrix and SMTP email). See [NOTIFICATIONS.md](NOTIFICATIONS.md) for behaviour; this section is the schema. All timestamps are UTC. `revision` columns are application-managed concurrency tokens because SQLite has no row version.
+
+Configuration (user intent; included in settings archives and portable backups):
+
+### notification_settings
+Singleton, `id = 1`.
+- sending_enabled (INTEGER, 0/1), paused (INTEGER, 0/1), requires_activation (INTEGER, 0/1) -- set by restore/import; sending stays held until the administrator resumes
+- activation_epoch (INTEGER) -- bumped on enable, resume, route change and verification so a refreshed current-state occurrence gets its own identity
+- failure_delay_minutes, overdue_grace_minutes, reminder_interval_hours, coverage_warn_hours, coverage_warn_percent, coverage_recover_hours, coverage_recover_percent, coverage_gap_minutes, retention_days (INTEGER) -- policy defaults (ranges are validated together)
+- identifier_salt (TEXT) -- per-instance secret for hashing failed-sign-in identifiers; never exported
+- capacity_suppressed_utc (TEXT, nullable) -- set while the nonterminal-delivery ceiling is rejecting new work
+- revision (INTEGER, concurrency token), updated_utc
+
+### notification_destinations
+One row per provider kind (`matrix`, `smtp`; unique `kind`).
+- destination_id (PK), kind, enabled
+- config_revision (INTEGER, concurrency token) -- bumped by any change that affects configuration, targets or verification
+- delivery_identity_revision (INTEGER) -- bumped only when the real delivery identity changes (homeserver, room, device, host, port, security, credential, sender address). Recipient edits bump `config_revision` but not this, because recipient identity is the stable recipient ID; re-encrypting the same secret bumps neither
+- verified_revision (INTEGER, nullable), verified_utc, verification_status ('Unverified'|'Verified'|'Partial'|'Failed'|'Uncertain'), verification_detail -- a destination is usable only when `verified_revision = config_revision`
+
+### notification_matrix_settings / notification_smtp_settings
+One row per destination (PK = FK `destination_id`).
+- Matrix: homeserver_url, room_id, access_token_encrypted, bot_user_id, device_id (found when tested), allow_insecure_http (honoured only when the runtime lab gate is also set)
+- SMTP: host, port, tls_mode ('starttls'|'tls'), auth_mode ('none'|'password'), username, password_encrypted, sender_address, sender_name
+Secrets use the same AES-256-GCM key ring as other credentials and are covered by key status and rotation.
+
+### notification_email_recipients
+destination_id, recipient_id (PK), address (case preserved), canonical_key (local part as typed, domain lower-cased; unique per destination), sort_order. One to ten per setup.
+
+### notification_routes
+One row per catalog key (`notification_key`, PK). destination_id (nullable FK, null = Off), revision (concurrency token), send_recovery, send_reminders, failure_delay_minutes and reminder_interval_hours (nullable overrides).
+
+Operational state (regenerable; **excluded from portable backups** and discarded on restore, deleted in this order):
+
+### notification_deliveries
+delivery_id (PK), occurrence_id (FK, cascade), destination_id (FK, restrict), provider_kind, target_id, target_label, delivery_identity_revision, config_revision, route_revision, state ('Pending'|'Claimed'|'RetryScheduled'|'Accepted'|'Failed'|'Uncertain'|'Suppressed'|'Dismissed'), attempt_count, cycle_number, due_utc, claim_owner, claim_expires_utc, transport_started_utc, accepted_utc, remote_reference, error_code, error_text, suppressed_reason, payload_title, payload_body, payload_link_path, message_id (stable, correlation only), dismissed_utc, revision (concurrency token). Unique: occurrence + destination + target + delivery identity revision. Index on (state, provider_kind, due_utc).
+
+### notification_incident_targets
+Whether an opening was accepted for a given target and generation, and whether its recovery was queued/accepted. Survives ordinary history cleanup while a recovery could still be owed. Unique: incident + generation + destination + target + delivery identity revision. FK to `notification_incidents` is restrict.
+
+### notification_occurrences
+occurrence_id (PK), occurrence_key (unique producer identity), notification_key, incident_id, generation, kind ('Opening'|'Reminder'|'Recovery'|'OneTime'|'ResolvedSummary'), sequence, policy_revision, activation_epoch, severity, title, body (safe, immutable), subject_label, link_path, occurred_utc, created_utc, materialized_utc (one-time occurrences are closed out once routing has been applied).
+
+### notification_incidents
+Condition per subject: notification_key, subject_kind, subject_id, generation, state ('Active'|'Resolved'|'Closed'), severity, first_unhealthy_utc, last_observed_utc, resolved_utc, reason, safe_detail, consecutive_healthy (hysteresis), opened_utc (condition first counted as sustained), last_reminder_utc, reminder_sequence. A partial unique index allows at most one `Active` incident per (notification_key, subject_id); generations survive recurrence.
+
+### notification_condition_observations
+Ordered, immutable evidence staged in the **same commit** as the outcome it describes: observation_id (monotonic integer primary key — consumption order is by id, never wall-clock time), evidence_key (`epg.source_check`, `provider.fetch`, `downstream.command`, `security.login`), subject_kind, subject_id, completed_utc, outcome ('ok'|'unchanged'|'failed'), safe_detail (a class of failure, never upstream text), consumed, consumed_utc.
+
+### epg_notification_coverage
+Bounded per-channel facts for future-window coverage: epg_source_id (FK, cascade), xmltv_channel_id (unique per source), is_relevant, relevance_context (profile names), intervals_encoded (merged "startUnix-stopUnix;…", at most 400 intervals within about a week), interval_count, evidence_revision, updated_utc. Intervals are written when a source is downloaded; relevance is derived from each profile's committed active publication plus its EPG mappings.
+
+### Retention and capacity
+Terminal deliveries, consumed observations and finished incidents older than `retention_days` are deleted in batches. Pending, claimed, failed and uncertain deliveries, active incidents, and acceptance records still needed for a recovery are never deleted by retention. At most 10,000 nonterminal deliveries are held.
 
 ---
 

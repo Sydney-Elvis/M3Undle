@@ -105,7 +105,7 @@ This is scriptable — the steps below are what an automation job would run, wit
 
    If UI Authentication is enabled, this needs an authenticated session — pass your login cookie (e.g. `curl -X POST -b cookies.txt ...`) rather than a bare call.
 
-   This takes a database backup (`VACUUM INTO`, saved under `/data/backups/`) and re-encrypts every stored Xtream password and downstream integration API key under the new active key, inside a single transaction — it either fully succeeds or changes nothing. Calling it again once everything is migrated is a cheap no-op.
+   This takes a database backup (`VACUUM INTO`, saved under `/data/backups/`) and re-encrypts every stored Xtream password, downstream integration API key, and [notification](notifications.md) credential (SMTP password and Matrix token) under the new active key, inside a single transaction — it either fully succeeds or changes nothing. Calling it again once everything is migrated is a cheap no-op.
 
 3. **Confirm nothing is left on the old key:**
 

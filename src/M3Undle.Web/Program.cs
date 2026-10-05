@@ -364,6 +364,32 @@ builder.Services.AddSingleton<XtreamLineupClient>();
 builder.Services.AddSingleton<ProviderFetcher>();
 builder.Services.AddSingleton<M3Undle.Core.Epg.XmltvParser>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgSourceFetcher>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationOccurrenceWriter>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationConfigurationService>();
+M3Undle.Web.Application.Notifications.Providers.NotificationProviderRegistration.AddNotificationProviders(builder.Services);
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationProviderRegistry>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationDestinationAdapters>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationRouting>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationDeliveryProcessor>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationRuntimeState>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationRuntimeOptions>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationActionThrottle>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.NotificationSignal>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationDeliveryService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationIncidentService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.EpgCoverageFacts>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.EpgNotificationEvaluator>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.OperationalNotificationEvaluator>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.SecurityNotificationEvaluator>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationSecurityRecorder>();
+builder.Services.AddSingleton<M3Undle.Web.Application.Notifications.IActiveStreamSource, M3Undle.Web.Application.Notifications.RegistryActiveStreamSource>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationReconciler>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationDeliveryActions>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationsPageService>();
+builder.Services.AddScoped<M3Undle.Web.Application.Notifications.NotificationRetention>();
+builder.Services.AddHostedService<M3Undle.Web.Application.Notifications.NotificationReconciliationWorker>();
+builder.Services.AddHostedService<M3Undle.Web.Application.Notifications.NotificationDeliveryWorker>();
+builder.Services.AddScoped<M3Undle.Web.Application.Epg.EpgSourceOutcomeRecorder>();
 builder.Services.AddScoped<M3Undle.Web.Application.Epg.EpgChannelMapper>();
 builder.Services.AddSingleton<M3Undle.Web.Application.Epg.EpgCompiler>();
 builder.Services.AddScoped<SnapshotBuilder>();
@@ -531,10 +557,14 @@ using (var scope = app.Services.CreateScope())
 
     var streamingSettings = scope.ServiceProvider.GetRequiredService<IStreamingSettingsService>();
     await streamingSettings.ClearRestartRequiredAsync();
+
+    await M3Undle.Web.Application.Notifications.NotificationConfigurationService
+        .EnsureSeededAsync(db, DateTime.UtcNow, CancellationToken.None);
 }
 
 _ = app.Services.GetRequiredService<M3UndleMetrics>();
 
+await CaptureStartupNotificationsAsync(app, buildInfo, appliedMigrations);
 await PublishStartupEventsAsync(app, buildInfo, appliedMigrations);
 
 await SeedAdminAccountIfNeededAsync(app.Services);
@@ -597,6 +627,7 @@ app.MapRazorComponents<App>()
 // Add additional endpoints required by the Identity /Account Razor components.
 app.MapAdditionalIdentityEndpoints();
 app.MapProviderApiEndpoints();
+app.MapNotificationApiEndpoints();
 app.MapChannelFilterApiEndpoints();
 app.MapCustomGroupApiEndpoints();
 app.MapChannelListApiEndpoints();
@@ -833,6 +864,22 @@ static void EnsureWebRootExists()
             // Ignore non-fatal path issues here and let normal host startup surface
             // a real error if no usable web root can be established.
         }
+    }
+}
+
+static async Task CaptureStartupNotificationsAsync(WebApplication app, AppBuildInfo buildInfo, IReadOnlyCollection<string> appliedMigrations)
+{
+    try
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        await M3Undle.Web.Application.Notifications.NotificationStartupCapture.CaptureAsync(
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>(),
+            scope.ServiceProvider.GetRequiredService<M3Undle.Web.Application.Notifications.NotificationOccurrenceWriter>(),
+            buildInfo.Version, appliedMigrations, M3Undle.Web.Application.Notifications.NotificationBoot.Id, DateTime.UtcNow, CancellationToken.None);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Failed to capture startup notifications.");
     }
 }
 

@@ -19,6 +19,16 @@ public sealed class EpgSource
     public DateTime? LastModifiedUtc { get; set; }
     public DateTime? LastSuccessUtc { get; set; }
     public DateTime? LastFailureUtc { get; set; }
+
+    /// <summary>
+    /// Completion time of the most recent real upstream check (download, HTTP 304, local file read, or failure).
+    /// Cache reuse never updates it. Null until genuine evidence arrives; it is not backfilled from
+    /// <see cref="LastSuccessUtc"/> because historical values include cache-only reads.
+    /// </summary>
+    public DateTime? LastCheckedUtc { get; set; }
+
+    /// <summary>ok | not_modified | fail for the check recorded in <see cref="LastCheckedUtc"/>.</summary>
+    public string? LastCheckStatus { get; set; }
     // null = follow the global refresh schedule; 6 | 12 | 24 | 48 | 168 = override in hours
     public int? RefreshIntervalHours { get; set; }
     public DateTime CreatedUtc { get; set; }

@@ -2,8 +2,8 @@
 
 ## Project Context
 
-- Runtime: .NET 10, C# 13, ASP.NET Core 10
-- UI: Blazor Server with Interactive Server rendering and MudBlazor 8.x
+- Runtime: .NET 10 (SDK 10.0.100; ASP.NET Core and EF Core packages 10.0.11), C# 13
+- UI: Blazor Server with Interactive Server rendering and MudBlazor 9.x (9.8.0 installed)
 - Database: SQLite via EF Core 10, with migrations in `src/M3Undle.Web`
 - Architecture: single process hosting the Blazor UI, REST API, compatibility endpoints, and background services
 
@@ -92,3 +92,8 @@ These are load-bearing facts about the running system. Breaking one silently is 
 - Importing a provider auto-creates a profile with the same name. Use `GetUniqueProfileNameAsync` if the name is taken.
 - `profile_catalog_group_filters` decisions (`CatalogPageService.UpdateDecisionAsync`) are persisted but **not enforced**. `SnapshotBuilder.BuildChannelIndex` gates VOD/series passthrough only on the provider's `IncludeVod`/`IncludeSeries` switches (`excludedCatalogGroups` is accepted but currently unused) — do not assume saving a catalog group decision changes published output until the build-loop check is wired up.
 - `CatalogPageService.GetArtworkAsync` is a security contract like the stream proxy: it resolves the artwork URL's host via DNS and rejects loopback/private/link-local/multicast/CGNAT-range addresses (`IsSafeRemoteHostAsync`/`IsBlockedAddress`) before fetching, caps response size at 5 MB, requires an `image/*` content type, and is scoped to catalog items linked to the requesting profile. Any change to this fetch path must preserve that SSRF guard — the endpoint takes a catalog item ID, never an arbitrary URL, specifically so a raw provider/attacker URL can never reach the fetch.
+- Administrator notifications never sit on the refresh, publication or streaming path. Producers only stage observations/occurrences in the same commit as their result; sending happens in background workers, and a transport outage must never delay or fail a refresh, a publish or a stream. See [NOTIFICATIONS.md](../design/NOTIFICATIONS.md).
+- Notification secrets (SMTP password, Matrix token) are write-only: never returned by an API or page contract, never logged, always encrypted with the key ring, and covered by key rotation. SMTP always requires TLS with normal certificate validation (revocation included), and a Matrix homeserver must use HTTPS except in an isolated lab that sets `M3UNDLE_NOTIFICATIONS_ALLOW_INSECURE_MATRIX_HTTP`.
+- A restored or imported instance must not send notifications until its methods are re-tested and sending is explicitly resumed, and operational notification state (deliveries, incidents, observations, coverage facts) is excluded from portable backups.
+- Only a real upstream EPG check is health evidence. Reusing the on-disk cache because the cadence window has not elapsed must not update `last_checked_utc`/`last_success_utc`, clear a failure, or publish a recovery.
+

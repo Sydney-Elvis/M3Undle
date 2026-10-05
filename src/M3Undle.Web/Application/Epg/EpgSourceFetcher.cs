@@ -7,6 +7,18 @@ namespace M3Undle.Web.Application.Epg;
 /// Supports xmltv_url (HTTP with ETag caching), xmltv_file, and provider_xmltv kinds.
 /// Caches the last successful payload to disk so it survives restarts and source failures.
 /// </summary>
+/// <summary>
+/// What a source "fetch" actually did. Only <see cref="CacheReused"/> consults nothing upstream, so it must
+/// never count as a check, renew freshness, or clear a failure.
+/// </summary>
+public enum EpgFetchDisposition
+{
+    Downloaded,
+    Unchanged,
+    Failed,
+    CacheReused,
+}
+
 public sealed class EpgSourceFetcher(
     IHttpClientFactory httpClientFactory,
     ProviderFetcher providerFetcher,
@@ -19,11 +31,26 @@ public sealed class EpgSourceFetcher(
 
     public sealed record FetchResult(
         string? Xml,              // null = use cached (not_modified)
-        string Status,            // ok | fail | not_modified
+        string Status,            // ok | fail | not_modified | cache_reused
         long Bytes,
         string? ETag,
         DateTime? LastModifiedUtc,
-        string? ErrorSummary);
+        string? ErrorSummary)
+    {
+        public EpgFetchDisposition Disposition { get; init; } = Status switch
+        {
+            "ok" => EpgFetchDisposition.Downloaded,
+            "not_modified" => EpgFetchDisposition.Unchanged,
+            "cache_reused" => EpgFetchDisposition.CacheReused,
+            _ => EpgFetchDisposition.Failed,
+        };
+
+        /// <summary>True when the upstream source was actually consulted, so the result is health evidence.</summary>
+        public bool IsRealCheck => Disposition != EpgFetchDisposition.CacheReused;
+
+        public static FetchResult CacheReused(string? etag, DateTime? lastModifiedUtc) =>
+            new(null, "cache_reused", 0, etag, lastModifiedUtc, null);
+    }
 
     /// <summary>
     /// Fetch the XMLTV payload for <paramref name="source"/>.

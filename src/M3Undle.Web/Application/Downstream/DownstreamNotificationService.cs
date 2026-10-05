@@ -1,4 +1,5 @@
 using M3Undle.Web.Application;
+using M3Undle.Web.Application.Notifications;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -172,6 +173,12 @@ public sealed class DownstreamNotificationService(
             row.LastNotifyError = error;
             row.UpdatedUtc = DateTime.UtcNow;
 
+            // The outcome evidence commits with the integration's own result, so it can never disagree with it.
+            new NotificationOccurrenceWriter(db, TimeProvider.System).StageObservation(
+                NotificationEvidenceKeys.DownstreamCommand, NotificationSubjectKinds.DownstreamIntegration, id,
+                error is null ? NotificationObservationOutcomes.Ok : NotificationObservationOutcomes.Failed,
+                DateTime.UtcNow, error is null ? null : ClassifyFailure(error));
+
             await db.SaveChangesAsync(CancellationToken.None);
         }
         catch (Exception ex)
@@ -182,6 +189,22 @@ public sealed class DownstreamNotificationService(
         {
             _writeLock.Release();
         }
+    }
+
+    // Observations may leave the instance, so they carry a class of failure and never the integration's response text.
+    internal static string ClassifyFailure(string error)
+    {
+        if (error.StartsWith("Failed to decrypt", StringComparison.OrdinalIgnoreCase))
+            return "credential";
+        if (error.Contains("timed out", StringComparison.OrdinalIgnoreCase) || error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+            return "timeout";
+        if (error.Contains("401", StringComparison.Ordinal) || error.Contains("403", StringComparison.Ordinal)
+            || error.Contains("unauthorized", StringComparison.OrdinalIgnoreCase) || error.Contains("forbidden", StringComparison.OrdinalIgnoreCase))
+            return "auth";
+        if (error.Contains("refused", StringComparison.OrdinalIgnoreCase) || error.Contains("resolve", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("connect", StringComparison.OrdinalIgnoreCase))
+            return "network";
+        return "error";
     }
 
     private sealed class AsyncDisposableWrapper(IDisposable inner) : IAsyncDisposable

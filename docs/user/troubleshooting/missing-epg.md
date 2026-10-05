@@ -44,3 +44,5 @@ It should return XML containing `<channel>` and `<programme>` elements for the p
 ## 5. Refresh the client
 
 After correcting the source or mapping, trigger a guide refresh in the client. M3Undle can be serving updated XML while the client still displays its cached guide.
+
+To be told when a guide source keeps failing, has not been checked on schedule, or no longer covers the coming hours, turn on the EPG rows in [Administrator Notifications](../guides/notifications.md).

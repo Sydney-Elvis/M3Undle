@@ -39,6 +39,18 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<XtreamSeriesCache> XtreamSeriesCache => Set<XtreamSeriesCache>();
     public DbSet<CatalogItem> CatalogItems => Set<CatalogItem>();
     public DbSet<CatalogSeriesEpisode> CatalogSeriesEpisodes => Set<CatalogSeriesEpisode>();
+    public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
+    public DbSet<NotificationDestination> NotificationDestinations => Set<NotificationDestination>();
+    public DbSet<NotificationMatrixSettings> NotificationMatrixSettings => Set<NotificationMatrixSettings>();
+    public DbSet<NotificationSmtpSettings> NotificationSmtpSettings => Set<NotificationSmtpSettings>();
+    public DbSet<NotificationEmailRecipient> NotificationEmailRecipients => Set<NotificationEmailRecipient>();
+    public DbSet<NotificationRoute> NotificationRoutes => Set<NotificationRoute>();
+    public DbSet<NotificationConditionObservation> NotificationConditionObservations => Set<NotificationConditionObservation>();
+    public DbSet<NotificationIncident> NotificationIncidents => Set<NotificationIncident>();
+    public DbSet<NotificationOccurrence> NotificationOccurrences => Set<NotificationOccurrence>();
+    public DbSet<NotificationIncidentTarget> NotificationIncidentTargets => Set<NotificationIncidentTarget>();
+    public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
+    public DbSet<EpgNotificationCoverage> EpgNotificationCoverage => Set<EpgNotificationCoverage>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

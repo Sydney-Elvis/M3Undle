@@ -2,6 +2,7 @@ using M3Undle.Core.M3u;
 using M3Undle.Web.Api;
 using M3Undle.Web.Application;
 using M3Undle.Web.Tests.Stubs;
+using M3Undle.Web.Tests.Notifications;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
@@ -1567,6 +1568,382 @@ public sealed class SnapshotHandlingTests
     }
 
     // -------------------------------------------------------------------------
+    // EPG evidence: only real upstream checks are health evidence
+    // -------------------------------------------------------------------------
+
+    [TestMethod]
+    public async Task RunAsync_CadenceReusedEpgCache_DoesNotRenewEvidenceOrPublishRecovery()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var lastSuccess = DateTime.UtcNow.AddHours(-2);
+        var lastFailure = DateTime.UtcNow.AddHours(-1);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "epg-cache"));
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "epg-cache", "src-1.xml"), "<tv></tv>");
+            await SeedEpgScenarioAsync(fixture, ("src-1", "provider-1", lastSuccess, lastFailure, null, 24));
+
+            var handler = new EpgEvidenceHandler(HttpStatusCode.OK);
+            var events = new CapturingEventService();
+            for (var i = 0; i < 2; i++)
+            {
+                await using var db = fixture.CreateDbContext();
+                await CreateBuilder(db, HttpStatusCode.OK, "", tempDir, events, handler).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var source = await verify.EpgSources.SingleAsync();
+            Assert.AreEqual(0, handler.XmltvRequests, "A fresh cadence window must not contact the upstream source.");
+            Assert.AreEqual(lastSuccess, source.LastSuccessUtc, "Cache reuse must not renew last success.");
+            Assert.AreEqual(lastFailure, source.LastFailureUtc);
+            Assert.IsNull(source.LastCheckedUtc, "Cache reuse is not a real check.");
+            Assert.AreEqual(0, await verify.EpgFetchRuns.CountAsync(), "Cache reuse must not create fetch history.");
+            Assert.IsFalse(events.Published.Any(e => e.EventType == SystemEventTypes.EpgBackOnline),
+                "Cache reuse must not publish a recovery.");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RunAsync_ElapsedCadence_PerformsRealCheckEvenWhenRefreshesAreFrequent()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "epg-cache"));
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "epg-cache", "src-1.xml"), "<tv></tv>");
+            await SeedEpgScenarioAsync(fixture, ("src-1", "provider-1", DateTime.UtcNow.AddHours(-25), null, null, 24));
+
+            var handler = new EpgEvidenceHandler(HttpStatusCode.OK);
+            for (var i = 0; i < 3; i++)
+            {
+                await using var db = fixture.CreateDbContext();
+                await CreateBuilder(db, HttpStatusCode.OK, "", tempDir, handler: handler).RunAsync(CancellationToken.None);
+            }
+
+            await using var verify = fixture.CreateDbContext();
+            var source = await verify.EpgSources.SingleAsync();
+            Assert.AreEqual(1, handler.XmltvRequests, "Only the first run is past cadence; later runs reuse the cache.");
+            Assert.IsNotNull(source.LastCheckedUtc);
+            Assert.AreEqual("ok", source.LastCheckStatus);
+            Assert.AreEqual(1, await verify.EpgFetchRuns.CountAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RunAsync_Genuine304_RecordsRealCheckEvenWhenCachedProgrammesAreExpired()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(tempDir, "epg-cache"));
+            await File.WriteAllTextAsync(Path.Combine(tempDir, "epg-cache", "src-1.xml"),
+                "<tv><channel id=\"old\"><display-name>Old</display-name></channel>" +
+                "<programme start=\"20200101000000 +0000\" stop=\"20200101010000 +0000\" channel=\"old\"><title>Expired</title></programme></tv>");
+            await SeedEpgScenarioAsync(fixture, ("src-1", "provider-1", DateTime.UtcNow.AddHours(-30), null, "\"v1\"", 24));
+
+            var handler = new EpgEvidenceHandler(HttpStatusCode.NotModified);
+            await using var db = fixture.CreateDbContext();
+            var builder = CreateBuilder(db, HttpStatusCode.OK, "", tempDir, handler: handler);
+
+            await builder.RunAsync(CancellationToken.None);
+
+            await using var verify = fixture.CreateDbContext();
+            var source = await verify.EpgSources.SingleAsync();
+            Assert.AreEqual(1, handler.XmltvRequests);
+            Assert.IsNotNull(source.LastCheckedUtc, "A real 304 renews check evidence even though the cached guide is stale.");
+            Assert.AreEqual("not_modified", source.LastCheckStatus);
+            var run = await verify.EpgFetchRuns.SingleAsync();
+            Assert.AreEqual("not_modified", run.Status);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RunAsync_TwoSourcesUnderOneProvider_FailAndRecoverIndependently()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await SeedEpgScenarioAsync(
+                fixture,
+                ("src-a", "provider-1", null, null, null, null),
+                ("src-b", "provider-1", null, null, null, null));
+
+            var handler = new EpgEvidenceHandler(HttpStatusCode.OK) { FailingPathSuffix = "/xmltv-a.xml" };
+            await using var db = fixture.CreateDbContext();
+            var events = new CapturingEventService();
+            var builder = CreateBuilder(db, HttpStatusCode.OK, "", tempDir, events, handler);
+            await builder.RunAsync(CancellationToken.None);
+
+            await using var verify = fixture.CreateDbContext();
+            var a = await verify.EpgSources.SingleAsync(x => x.EpgSourceId == "src-a");
+            var b = await verify.EpgSources.SingleAsync(x => x.EpgSourceId == "src-b");
+            Assert.IsNotNull(a.LastFailureUtc);
+            Assert.AreEqual("fail", a.LastCheckStatus);
+            Assert.IsNull(b.LastFailureUtc);
+            Assert.AreEqual("ok", b.LastCheckStatus);
+
+            var failures = events.Published.Where(e => e.EventType == SystemEventTypes.EpgFetchFailed).ToList();
+            Assert.HasCount(1, failures);
+            Assert.AreEqual("src-a", failures[0].EpgSourceId, "The failure belongs to the failing source, not the provider.");
+            Assert.IsFalse(events.Published.Any(e => e.EventType == SystemEventTypes.EpgBackOnline && e.EpgSourceId == "src-a"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task EpgSourceOutcomeRecorder_StandaloneSource_RecordsFailureWithSourceIdentity()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.EpgSources.Add(new EpgSource
+            {
+                EpgSourceId = "standalone",
+                ProviderId = null,
+                Name = "Standalone guide",
+                Kind = "xmltv_url",
+                UrlOrPath = "http://example.com/guide.xml",
+                CreatedUtc = DateTime.UtcNow,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var events = new CapturingEventService();
+        await using var db = fixture.CreateDbContext();
+        var recorder = new M3Undle.Web.Application.Epg.EpgSourceOutcomeRecorder(
+            db, new M3Undle.Web.Application.Notifications.NotificationOccurrenceWriter(db, TimeProvider.System),
+            NotificationTestFactories.Facts(db), events, TimeProvider.System,
+            NullLogger<M3Undle.Web.Application.Epg.EpgSourceOutcomeRecorder>.Instance);
+        var source = await db.EpgSources.AsNoTracking().SingleAsync();
+        var failed = new M3Undle.Web.Application.Epg.EpgSourceFetcher.FetchResult(null, "fail", 0, null, null, "boom");
+
+        await recorder.RecordAsync(source, failed, M3Undle.Core.Epg.EpgCatalogue.Empty("standalone"), DateTime.UtcNow, CancellationToken.None);
+
+        await using var verify = fixture.CreateDbContext();
+        Assert.IsNotNull((await verify.EpgSources.SingleAsync()).LastFailureUtc);
+        var published = events.Published.Single();
+        Assert.AreEqual(SystemEventTypes.EpgFetchFailed, published.EventType);
+        Assert.AreEqual("standalone", published.EpgSourceId);
+        Assert.IsNull(published.ProviderId);
+    }
+
+    private static async Task SeedEpgScenarioAsync(
+        TestFixture fixture,
+        params (string Id, string ProviderId, DateTime? LastSuccess, DateTime? LastFailure, string? ETag, int? IntervalHours)[] sources)
+    {
+        await using var setup = fixture.CreateDbContext();
+        setup.Profiles.Add(NewProfile("profile-1"));
+        setup.Providers.Add(NewProvider("provider-1"));
+        setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+        var priority = 10;
+        foreach (var s in sources)
+        {
+            setup.EpgSources.Add(new EpgSource
+            {
+                EpgSourceId = s.Id,
+                ProviderId = s.ProviderId,
+                Name = s.Id,
+                Kind = "xmltv_url",
+                UrlOrPath = s.Id == "src-a" ? "http://example.com/xmltv-a.xml" : "http://example.com/xmltv.xml",
+                Priority = priority++,
+                Enabled = true,
+                LastSuccessUtc = s.LastSuccess,
+                LastFailureUtc = s.LastFailure,
+                ETag = s.ETag,
+                RefreshIntervalHours = s.IntervalHours,
+                CreatedUtc = DateTime.UtcNow,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+        }
+        await setup.SaveChangesAsync();
+    }
+
+    private sealed record CapturedEvent(string EventType, string? ProviderId, string? EpgSourceId);
+
+    private sealed class CapturingEventService : IEventService
+    {
+        private readonly List<CapturedEvent> _published = [];
+        public IReadOnlyList<CapturedEvent> Published { get { lock (_published) return [.. _published]; } }
+
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null)
+        {
+            lock (_published) _published.Add(new CapturedEvent(eventType, providerId, epgSourceId));
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<SystemEvent>>([]);
+        public Task<int> GetCountAsync(CancellationToken ct = default) => Task.FromResult(0);
+        public Task<SystemEventSummary> GetSummaryAsync(CancellationToken ct = default) => Task.FromResult(new SystemEventSummary(0, null));
+        public Task DismissAsync(string eventId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task DismissAllAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task CleanupOldEventsAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
+        {
+            lock (_published)
+                return Task.FromResult(_published.Any(e => e.EventType == eventType && (epgSourceId is null || e.EpgSourceId == epgSourceId)));
+        }
+
+        public Task<int> GetRetentionDaysAsync(CancellationToken ct = default) => Task.FromResult(SystemEventSettings.DefaultRetentionDays);
+        public Task SetRetentionDaysAsync(int days, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class EpgEvidenceHandler(HttpStatusCode xmltvStatus) : HttpMessageHandler
+    {
+        private int _xmltvRequests;
+        public int XmltvRequests => _xmltvRequests;
+        public string? FailingPathSuffix { get; init; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+
+            if (path.EndsWith("/playlist.m3u", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(SampleM3u) });
+
+            Interlocked.Increment(ref _xmltvRequests);
+            if (FailingPathSuffix is not null && path.EndsWith(FailingPathSuffix, StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+            return Task.FromResult(new HttpResponseMessage(xmltvStatus)
+            {
+                Content = new StringContent("<?xml version=\"1.0\" encoding=\"utf-8\"?><tv></tv>"),
+            });
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Notification producers staged by the builder
+    // -------------------------------------------------------------------------
+
+    private static string News(int count) =>
+        "#EXTM3U\n" + string.Concat(Enumerable.Range(1, count).Select(i =>
+            $"#EXTINF:-1 tvg-id=\"a{i}\" tvg-name=\"A{i}\" group-title=\"News\",A{i}\nhttp://example.com/stream/a{i}\n"));
+
+    [TestMethod]
+    public async Task ProviderFetchOutcomes_AreStagedWithTheFetchRunCommit_AsClassesNotProviderText()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.InternalServerError, "secret upstream body http://user:pass@host", tempDir).RunAsync(CancellationToken.None);
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.OK, SampleM3u, tempDir).RunAsync(CancellationToken.None);
+
+            await using var verify = fixture.CreateDbContext();
+            var observations = await verify.NotificationConditionObservations
+                .Where(o => o.EvidenceKey == "provider.fetch").OrderBy(o => o.ObservationId).ToListAsync();
+            Assert.HasCount(2, observations);
+            Assert.AreEqual("failed", observations[0].Outcome);
+            Assert.AreEqual("provider-1", observations[0].SubjectId);
+            Assert.IsNotNull(observations[0].SafeDetail);
+            Assert.DoesNotContain("secret", observations[0].SafeDetail!);
+            Assert.AreEqual("ok", observations[1].Outcome);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task BreakingLineupChange_IsCapturedOncePerPublication_InTheSameCommit_AndOnlyWhenRouted()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.Profiles.Add(NewProfile("profile-1"));
+            setup.Providers.Add(NewProvider("provider-1"));
+            setup.ProfileProviders.Add(NewProfileProvider("provider-1", "profile-1"));
+            // An included group, so every channel the provider lists is published (the lineup, not the review queue, changes).
+            setup.ProviderGroups.Add(new ProviderGroup
+            {
+                ProviderGroupId = "grp-news", ProviderId = "provider-1", RawName = "News", Active = true,
+                FirstSeenUtc = DateTime.UtcNow, LastSeenUtc = DateTime.UtcNow,
+            });
+            setup.ProfileGroupFilters.Add(new ProfileGroupFilter
+            {
+                ProfileGroupFilterId = "pgf-news", ProfileId = "profile-1", ProviderGroupId = "grp-news", Decision = "include",
+                ChannelMode = "all", TrackingPolicy = "review", CreatedUtc = DateTime.UtcNow, UpdatedUtc = DateTime.UtcNow,
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        try
+        {
+            // Rows Off: a breaking change leaves nothing behind.
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.OK, News(5), tempDir).RunAsync(CancellationToken.None);
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.OK, News(1), tempDir).RunAsync(CancellationToken.None);
+            await using (var verify = fixture.CreateDbContext())
+            {
+                Assert.AreEqual("breaking", (await verify.Snapshots.OrderByDescending(s => s.CreatedUtc).FirstAsync()).ChangeClass, "Sanity: the scenario really is breaking.");
+                Assert.AreEqual(0, await verify.NotificationOccurrences.CountAsync(), "Off captures nothing.");
+            }
+
+            await using (var db = fixture.CreateDbContext())
+                await NotificationPolicyHelper.EnableAsync(db, "lineup.breaking_change");
+
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.OK, News(5), tempDir).RunAsync(CancellationToken.None);
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.OK, News(1), tempDir).RunAsync(CancellationToken.None);
+            await using (var db = fixture.CreateDbContext())
+                await CreateBuilder(db, HttpStatusCode.OK, News(1), tempDir).RunAsync(CancellationToken.None); // unchanged
+
+            await using var final = fixture.CreateDbContext();
+            // Growing 1 -> 5 and shrinking 5 -> 1 are both breaking; the unchanged refresh publishes nothing and so announces nothing.
+            var breakingAfterEnable = await final.Snapshots
+                .Where(s => s.ChangeClass == "breaking").OrderByDescending(s => s.CreatedUtc).Take(2).ToListAsync();
+            var occurrences = await final.NotificationOccurrences.Where(o => o.NotificationKey == "lineup.breaking_change").ToListAsync();
+            Assert.HasCount(2, occurrences, "One occurrence per breaking publication; the unchanged refresh adds nothing.");
+            CollectionAssert.AreEquivalent(
+                breakingAfterEnable.Select(b => $"lineup.breaking_change:{b.SnapshotId}").ToArray(),
+                occurrences.Select(o => o.OccurrenceKey).ToArray(),
+                "Each is identified by its snapshot, so a retry cannot announce a publication twice.");
+            Assert.IsTrue(occurrences.All(o => o.Body.Contains("profile-1") && o.Body.Contains("channels")));
+            Assert.IsTrue(occurrences.Any(o => o.Body.Contains("removed")));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Test helpers
     // -------------------------------------------------------------------------
 
@@ -1684,8 +2061,17 @@ public sealed class SnapshotHandlingTests
         var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
         var customGroupService = new CustomGroupPageService(scopeFactory, new AppEventBus());
         var refreshScheduleService = new M3Undle.Web.Tests.Stubs.NullRefreshScheduleService();
+        var epgOutcomeRecorder = new M3Undle.Web.Application.Epg.EpgSourceOutcomeRecorder(
+            db,
+            new M3Undle.Web.Application.Notifications.NotificationOccurrenceWriter(db, TimeProvider.System),
+            new M3Undle.Web.Application.Notifications.EpgCoverageFacts(
+                db, new M3Undle.Web.Application.Notifications.NotificationRuntimeState(), xmltvParser, runtimePaths,
+                TimeProvider.System, NullLogger<M3Undle.Web.Application.Notifications.EpgCoverageFacts>.Instance),
+            eventService ?? new NullEventService(),
+            TimeProvider.System,
+            NullLogger<M3Undle.Web.Application.Epg.EpgSourceOutcomeRecorder>.Instance);
         return new SnapshotBuilder(
-            db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
+            db, fetcher, epgSourceFetcher, epgOutcomeRecorder, new M3Undle.Web.Application.Notifications.NotificationOccurrenceWriter(db, TimeProvider.System), epgChannelMapper, epgCompiler, xmltvParser,
             runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService,
             refreshScheduleService, eventService ?? new NullEventService(), TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
     }
@@ -1758,7 +2144,7 @@ public sealed class SnapshotHandlingTests
 
     private sealed class ThrowingEventService : IEventService
     {
-        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null)
             => throw new InvalidOperationException("event store unavailable");
 
         public Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default)
@@ -1779,7 +2165,7 @@ public sealed class SnapshotHandlingTests
         public Task CleanupOldEventsAsync(CancellationToken ct = default)
             => Task.CompletedTask;
 
-        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
             => Task.FromResult(false);
 
         public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)
@@ -1795,7 +2181,7 @@ public sealed class SnapshotHandlingTests
 
         public int ProviderBackOnlinePublishCount { get; private set; }
 
-        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null)
         {
             if (eventType == SystemEventTypes.ProviderBackOnline)
             {
@@ -1824,7 +2210,7 @@ public sealed class SnapshotHandlingTests
         public Task CleanupOldEventsAsync(CancellationToken ct = default)
             => Task.CompletedTask;
 
-        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
             => Task.FromResult(eventType switch
             {
                 SystemEventTypes.ProviderFetchFailed => true,

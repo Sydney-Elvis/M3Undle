@@ -95,6 +95,7 @@ nav:
       - Manage Profiles: guides/manage-profiles.md
       - Back Up and Restore: guides/back-up-and-restore.md
       - Downstream Integrations: guides/downstream-integrations.md
+      - Administrator Notifications: guides/notifications.md
       - Browser Playback: guides/browser-playback.md
       - Monitor Live Streams: guides/monitor-streams.md
       - Monitor with Prometheus / Grafana: guides/monitor-with-prometheus-grafana.md

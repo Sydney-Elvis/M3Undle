@@ -17,6 +17,7 @@ public sealed class SystemEventConfiguration : IEntityTypeConfiguration<SystemEv
         builder.Property(e => e.Detail).HasColumnName("detail");
         builder.Property(e => e.ProviderId).HasColumnName("provider_id");
         builder.Property(e => e.IntegrationId).HasColumnName("integration_id");
+        builder.Property(e => e.EpgSourceId).HasColumnName("epg_source_id");
         builder.Property(e => e.OccurredAt).HasColumnName("occurred_at");
         builder.Property(e => e.OccurrenceCount).HasColumnName("occurrence_count").HasDefaultValue(1);
 
@@ -25,6 +26,10 @@ public sealed class SystemEventConfiguration : IEntityTypeConfiguration<SystemEv
         builder.HasIndex(e => new { e.EventType, e.ProviderId })
             .HasDatabaseName("ix_system_events_event_type_provider_id")
             .HasFilter("\"provider_id\" IS NOT NULL");
+
+        builder.HasIndex(e => new { e.EventType, e.EpgSourceId })
+            .HasDatabaseName("ix_system_events_event_type_epg_source_id")
+            .HasFilter("\"epg_source_id\" IS NOT NULL");
 
         builder.HasIndex(e => new { e.EventType, e.IntegrationId })
             .HasDatabaseName("ix_system_events_event_type_integration_id")

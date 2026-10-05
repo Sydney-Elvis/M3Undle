@@ -77,6 +77,15 @@ Most stream proxy settings are managed from **Settings → Streaming**, and rest
 | `M3UNDLE_DATA_DIR` | `/data` (in image) | Override the data directory (database, logs, snapshots). Rarely needed with the standard Docker volume layout. |
 | `M3UNDLE_CONFIG_DIR` | `/config` (in image) | Path M3Undle looks in for `config.yaml` and `/config/.env`. |
 
+## Optional — Notifications
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `M3UNDLE_EXTERNAL_BASE_URL` | *(none)* | When set, administrator notifications link back to M3Undle at this address. When unset, messages carry no link — an internal or container address is never used. |
+| `M3UNDLE_NOTIFICATIONS_ALLOW_INSECURE_MATRIX_HTTP` | *(unset)* | **Isolated labs only.** Set to `true` to let a Matrix setup that also ticks *Allow plain HTTP* use an `http://` homeserver. Leave unset in production: a Matrix homeserver must use HTTPS. |
+
+See [Administrator Notifications](../guides/notifications.md). To trust a private certificate authority for your SMTP server, add it to the container's trust store; the authority must publish a CRL or OCSP address because certificate revocation is checked.
+
 ## Optional — HDHomeRun
 
 Most users can skip this entire section. Use **Settings → HDHomeRun** for normal setup and day-to-day changes — see [HDHomeRun Compatibility](../concepts/hdhomerun-compatibility.md). The environment variables below are optional advanced overrides, not required setup.

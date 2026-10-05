@@ -32,14 +32,14 @@ public static class SystemEventTypes
 
 public interface IEventService
 {
-    Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null);
+    Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null);
     Task<IReadOnlyList<SystemEvent>> GetAllAsync(CancellationToken ct = default);
     Task<int> GetCountAsync(CancellationToken ct = default);
     Task<SystemEventSummary> GetSummaryAsync(CancellationToken ct = default);
     Task DismissAsync(string eventId, CancellationToken ct = default);
     Task DismissAllAsync(CancellationToken ct = default);
     Task CleanupOldEventsAsync(CancellationToken ct = default);
-    Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default);
+    Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null);
     Task<int> GetRetentionDaysAsync(CancellationToken ct = default);
     Task SetRetentionDaysAsync(int days, CancellationToken ct = default);
 }

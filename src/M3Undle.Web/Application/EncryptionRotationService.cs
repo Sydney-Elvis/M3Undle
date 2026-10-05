@@ -10,7 +10,9 @@ public sealed record EncryptionStatusResult(
     int ProvidersOnActiveKey,
     int ProvidersOnOtherKey,
     int DownstreamIntegrationsOnActiveKey,
-    int DownstreamIntegrationsOnOtherKey);
+    int DownstreamIntegrationsOnOtherKey,
+    int NotificationSecretsOnActiveKey = 0,
+    int NotificationSecretsOnOtherKey = 0);
 
 public sealed record RotateResult(
     bool Success,
@@ -19,11 +21,12 @@ public sealed record RotateResult(
     string? BackupFilePath,
     int ProvidersMigrated,
     int DownstreamIntegrationsMigrated,
-    int RowsAlreadyCurrent);
+    int RowsAlreadyCurrent,
+    int NotificationSecretsMigrated = 0);
 
 /// <summary>
-/// Bulk re-encrypts stored secrets (Provider Xtream passwords, DownstreamIntegration API keys)
-/// under the active key from SecretEncryptionService's key ring. See docs/DOCKER.md for the
+/// Bulk re-encrypts stored secrets (Provider Xtream passwords, DownstreamIntegration API keys, notification Matrix
+/// tokens and SMTP passwords) under the active key from SecretEncryptionService's key ring. See docs/DOCKER.md for the
 /// operator rotation workflow.
 /// </summary>
 public sealed class EncryptionRotationService(
@@ -49,8 +52,11 @@ public sealed class EncryptionRotationService(
             .Select(d => d.ApiKeyEncrypted!)
             .ToListAsync(cancellationToken);
 
+        var notificationValues = await NotificationSecretValuesAsync(cancellationToken);
+
         var (providersOnActive, providersOnOther) = CountByActiveKey(providerValues, activeKeyId);
         var (downstreamOnActive, downstreamOnOther) = CountByActiveKey(downstreamValues, activeKeyId);
+        var (notificationOnActive, notificationOnOther) = CountByActiveKey(notificationValues, activeKeyId);
 
         return new EncryptionStatusResult(
             EncryptionAvailable: encryption.IsAvailable,
@@ -59,7 +65,9 @@ public sealed class EncryptionRotationService(
             ProvidersOnActiveKey: providersOnActive,
             ProvidersOnOtherKey: providersOnOther,
             DownstreamIntegrationsOnActiveKey: downstreamOnActive,
-            DownstreamIntegrationsOnOtherKey: downstreamOnOther);
+            DownstreamIntegrationsOnOtherKey: downstreamOnOther,
+            NotificationSecretsOnActiveKey: notificationOnActive,
+            NotificationSecretsOnOtherKey: notificationOnOther);
     }
 
     public async Task<RotateResult> RotateAsync(CancellationToken cancellationToken)
@@ -97,6 +105,15 @@ public sealed class EncryptionRotationService(
             .Where(d => d.ApiKeyEncrypted != null)
             .ToListAsync(cancellationToken);
 
+        var matrixRows = await db.NotificationMatrixSettings
+            .Where(m => m.AccessTokenEncrypted != null)
+            .ToListAsync(cancellationToken);
+        var smtpRows = await db.NotificationSmtpSettings
+            .Where(m => m.PasswordEncrypted != null)
+            .ToListAsync(cancellationToken);
+        var matrixToMigrate = matrixRows.Where(m => encryption.Peek(m.AccessTokenEncrypted!).KeyId != activeKeyId).ToList();
+        var smtpToMigrate = smtpRows.Where(m => encryption.Peek(m.PasswordEncrypted!).KeyId != activeKeyId).ToList();
+
         var providersToMigrate = providersNeedingMigration
             .Where(p => encryption.Peek(p.XtreamEncryptedPassword!).KeyId != activeKeyId)
             .ToList();
@@ -105,9 +122,11 @@ public sealed class EncryptionRotationService(
             .ToList();
 
         var rowsAlreadyCurrent = (providersNeedingMigration.Count - providersToMigrate.Count)
-            + (downstreamNeedingMigration.Count - downstreamToMigrate.Count);
+            + (downstreamNeedingMigration.Count - downstreamToMigrate.Count)
+            + (matrixRows.Count - matrixToMigrate.Count)
+            + (smtpRows.Count - smtpToMigrate.Count);
 
-        if (providersToMigrate.Count == 0 && downstreamToMigrate.Count == 0)
+        if (providersToMigrate.Count == 0 && downstreamToMigrate.Count == 0 && matrixToMigrate.Count == 0 && smtpToMigrate.Count == 0)
         {
             return new RotateResult(
                 Success: true,
@@ -138,6 +157,13 @@ public sealed class EncryptionRotationService(
                 integration.UpdatedUtc = DateTime.UtcNow;
             }
 
+            // Re-encrypting the same plaintext is not a credential change: revisions and delivery identity stay put, so
+            // rotation never invalidates a verified destination or duplicates a delivery.
+            foreach (var matrix in matrixToMigrate)
+                matrix.AccessTokenEncrypted = encryption.Encrypt(encryption.Decrypt(matrix.AccessTokenEncrypted!));
+            foreach (var smtp in smtpToMigrate)
+                smtp.PasswordEncrypted = encryption.Encrypt(encryption.Decrypt(smtp.PasswordEncrypted!));
+
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
@@ -156,8 +182,8 @@ public sealed class EncryptionRotationService(
         }
 
         logger.LogInformation(
-            "Encryption key rotation complete: {ProviderCount} provider(s) and {DownstreamCount} downstream integration(s) migrated to key '{ActiveKeyId}'.",
-            providersToMigrate.Count, downstreamToMigrate.Count, activeKeyId);
+            "Encryption key rotation complete: {ProviderCount} provider(s), {DownstreamCount} downstream integration(s) and {NotificationCount} notification secret(s) migrated to key '{ActiveKeyId}'.",
+            providersToMigrate.Count, downstreamToMigrate.Count, matrixToMigrate.Count + smtpToMigrate.Count, activeKeyId);
 
         return new RotateResult(
             Success: true,
@@ -166,7 +192,21 @@ public sealed class EncryptionRotationService(
             BackupFilePath: backupPath,
             ProvidersMigrated: providersToMigrate.Count,
             DownstreamIntegrationsMigrated: downstreamToMigrate.Count,
-            RowsAlreadyCurrent: rowsAlreadyCurrent);
+            RowsAlreadyCurrent: rowsAlreadyCurrent,
+            NotificationSecretsMigrated: matrixToMigrate.Count + smtpToMigrate.Count);
+    }
+
+    private async Task<IReadOnlyList<string>> NotificationSecretValuesAsync(CancellationToken cancellationToken)
+    {
+        var matrix = await db.NotificationMatrixSettings.AsNoTracking()
+            .Where(m => m.AccessTokenEncrypted != null)
+            .Select(m => m.AccessTokenEncrypted!)
+            .ToListAsync(cancellationToken);
+        var smtp = await db.NotificationSmtpSettings.AsNoTracking()
+            .Where(m => m.PasswordEncrypted != null)
+            .Select(m => m.PasswordEncrypted!)
+            .ToListAsync(cancellationToken);
+        return [.. matrix, .. smtp];
     }
 
     private (int OnActive, int OnOther) CountByActiveKey(IReadOnlyList<string> values, string? activeKeyId)

@@ -126,6 +126,39 @@ public sealed class PortableRestoreServiceTests
     }
 
     [TestMethod]
+    public async Task ApplyAsync_RestoredNotificationSetup_IsPausedUnverifiedAndCarriesNoOperationalState()
+    {
+        await using var ctx = await CreateContextAsync();
+        var now = DateTime.UtcNow;
+        var archivePath = await ctx.CreateSourceBackupAsync(db =>
+        {
+            db.NotificationSettings.Add(new NotificationSettings { SendingEnabled = true, ActivationEpoch = 3, UpdatedUtc = now });
+            db.NotificationDestinations.Add(new NotificationDestination
+            {
+                DestinationId = "nd", Kind = NotificationProviderKinds.Smtp, Enabled = true, ConfigRevision = 7, DeliveryIdentityRevision = 2,
+                VerifiedRevision = 7, VerifiedUtc = now, VerificationStatus = NotificationVerificationStates.Verified, CreatedUtc = now, UpdatedUtc = now,
+                Smtp = new NotificationSmtpSettings { DestinationId = "nd", Host = "smtp.example.org" },
+            });
+            db.NotificationRoutes.Add(new NotificationRoute { NotificationKey = "epg.fetch_failed", DestinationId = "nd", UpdatedUtc = now });
+            db.NotificationOccurrences.Add(new NotificationOccurrence
+            {
+                OccurrenceId = "o", OccurrenceKey = "o", NotificationKey = "epg.fetch_failed", Title = "t", Body = "b", OccurredUtc = now, CreatedUtc = now,
+            });
+        });
+
+        var result = await ctx.Restore.ApplyAsync(archivePath, CancellationToken.None);
+
+        Assert.IsTrue(result.Success, result.ErrorMessage);
+        var db = ctx.RuntimePaths.DatabasePath;
+        Assert.AreEqual(1, await CountRowsAsync(db, "notification_settings", "requires_activation = 1 AND sending_enabled = 1 AND activation_epoch = 4"),
+            "A restored instance requires explicit activation; the intent to send is preserved but cannot act.");
+        Assert.AreEqual(1, await CountRowsAsync(db, "notification_destinations", "verified_revision IS NULL AND verification_status = 'Unverified' AND config_revision = 8 AND enabled = 1"),
+            "Verification does not survive a restore.");
+        Assert.AreEqual(1, await CountRowsAsync(db, "notification_routes", "destination_id = 'nd'"), "Routes are user intent and are kept.");
+        Assert.AreEqual(0, await CountRowsAsync(db, "notification_occurrences"), "Copied operational state never replays.");
+    }
+
+    [TestMethod]
     public async Task ApplyAsync_FailureAfterCheckpoint_RollsBackAutomaticallyToOriginalData()
     {
         await using var ctx = await CreateContextAsync();

@@ -9,6 +9,7 @@ public sealed class SystemEvent
     public string? Detail { get; set; }
     public string? ProviderId { get; set; }
     public string? IntegrationId { get; set; }
+    public string? EpgSourceId { get; set; }
     public DateTime OccurredAt { get; set; }
     public int OccurrenceCount { get; set; } = 1;
 }
