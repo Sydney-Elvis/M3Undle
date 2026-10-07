@@ -826,7 +826,7 @@ public sealed class ChannelMappingProtectionTests
 
         public int Count(string eventType) => _published.Count(x => x == eventType);
 
-        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null)
+        public Task PublishAsync(SystemEventSeverity severity, string eventType, string title, string? detail = null, string? providerId = null, string? integrationId = null, string? epgSourceId = null)
         {
             _published.Add(eventType);
             return Task.CompletedTask;
@@ -850,7 +850,7 @@ public sealed class ChannelMappingProtectionTests
         public Task CleanupOldEventsAsync(CancellationToken ct = default)
             => Task.CompletedTask;
 
-        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+        public Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
             => Task.FromResult(false);
 
         public Task<int> GetRetentionDaysAsync(CancellationToken ct = default)
