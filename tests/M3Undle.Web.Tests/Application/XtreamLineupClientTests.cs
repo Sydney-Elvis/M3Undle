@@ -59,6 +59,53 @@ public sealed class XtreamLineupClientTests
     }
 
     [TestMethod]
+    public async Task BuildLineup_LiveChannels_CarryTheProviderStreamId()
+    {
+        var handler = new MultiRouteHandler
+        {
+            ["/player_api.php"] = AuthOk(),
+            ["/player_api.php?action=get_live_categories"] = """[{"category_id":"1","category_name":"News"}]""",
+            ["/player_api.php?action=get_live_streams"] =
+                """[{"stream_id":100,"name":"CNN","category_id":"1"},{"stream_id":"42","name":"BBC","category_id":"1"}]""",
+        };
+
+        var (client, _, _) = CreateClient(handler);
+        var result = await client.BuildLineupFromCredentialsAsync(
+            SimpleProvider("p1"), "http://panel.test:8080", "user", "pass", CancellationToken.None);
+
+        CollectionAssert.AreEquivalent(new[] { "100", "42" }, result.Channels.Select(x => x.ProviderStreamId).ToArray());
+    }
+
+    [TestMethod]
+    public async Task BuildLineup_SameStreamsOnANewHost_ProduceTheSameChannelLocators()
+    {
+        // The incident: the panel moved to a new host. Identity must follow the stream, not the URL.
+        static async Task<string[]> LocatorsAsync(string baseUrl, string username, string password)
+        {
+            var handler = new MultiRouteHandler
+            {
+                ["/player_api.php"] = AuthOk(),
+                ["/player_api.php?action=get_live_categories"] = """[{"category_id":"1","category_name":"News"}]""",
+                ["/player_api.php?action=get_live_streams"] =
+                    """[{"stream_id":100,"name":"CNN","category_id":"1"},{"stream_id":101,"name":"BBC","category_id":"1"}]""",
+            };
+            var (client, _, _) = CreateClient(handler);
+            var result = await client.BuildLineupFromCredentialsAsync(
+                SimpleProvider("p1"), baseUrl, username, password, CancellationToken.None);
+            return result.Channels
+                .Select(x => M3Undle.Core.Providers.ProviderChannelNormalizer.BuildStreamLocator(x.StreamUrl, x.ProviderStreamId))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        var before = await LocatorsAsync("http://old-panel.test:8080", "olduser", "oldpass");
+        var after = await LocatorsAsync("https://new-panel.test", "newuser", "newpass");
+
+        Assert.HasCount(2, before);
+        CollectionAssert.AreEqual(before, after);
+    }
+
+    [TestMethod]
     public async Task BuildLineup_MissingEpgChannelId_TvgIdIsNull()
     {
         var handler = new MultiRouteHandler

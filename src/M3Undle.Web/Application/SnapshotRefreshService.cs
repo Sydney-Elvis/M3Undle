@@ -434,7 +434,7 @@ public sealed class SnapshotRefreshService(
     }
 
     // -------------------------------------------------------------------------
-    // Data retention — keep last 2 fetch generations per provider
+    // Data retention — purge only unmapped, long-inactive channels; trim fetch-run history
     // -------------------------------------------------------------------------
 
     private async Task PurgeStaleProviderDataAsync(IEnumerable<string> fetchedProviderIds, CancellationToken ct)
@@ -444,19 +444,27 @@ public sealed class SnapshotRefreshService(
             await using var scope = scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
             var totalChannels = 0;
+            var totalProtected = 0;
             var totalRuns = 0;
+            var retentionDays = refreshOptions.Value.ChannelRetentionDays;
+            var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
 
             foreach (var providerId in fetchedProviderIds)
             {
-                var (channels, runs) = await PurgeProviderGenerationsAsync(db, providerId, ct);
-                totalChannels += channels;
-                totalRuns += runs;
+                var result = await PurgeProviderGenerationsAsync(db, providerId, retentionDays, nowUtc, ct);
+                totalChannels += result.Channels;
+                totalProtected += result.ProtectedChannels;
+                totalRuns += result.Runs;
             }
 
             if (totalChannels > 0 || totalRuns > 0)
                 logger.LogInformation(
-                    "Data retention: purged {ChannelCount} stale channel(s) and {RunCount} old fetch run(s).",
-                    totalChannels, totalRuns);
+                    "Data retention: purged {ChannelCount} stale channel(s), kept {ProtectedCount} inactive mapped channel(s), removed {RunCount} old fetch run(s).",
+                    totalChannels, totalProtected, totalRuns);
+            else if (totalProtected > 0)
+                logger.LogDebug(
+                    "Data retention: kept {ProtectedCount} inactive mapped channel(s); nothing to purge.",
+                    totalProtected);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -464,56 +472,83 @@ public sealed class SnapshotRefreshService(
         }
     }
 
-    private static async Task<(int Channels, int Runs)> PurgeProviderGenerationsAsync(
-        ApplicationDbContext db, string providerId, CancellationToken ct)
+    /// <summary>
+    /// Removes provider channels nobody depends on. A channel is purged only when it is inactive, has been
+    /// unseen for <paramref name="channelRetentionDays"/>, and carries no user intent: no included
+    /// selection or override, no custom-group membership, no channel source and no manual EPG mapping.
+    /// Fetch-run history is trimmed separately and never decides whether a channel survives, so a stretch
+    /// of failed fetches can no longer age out the last good lineup.
+    /// </summary>
+    internal static async Task<(int Channels, int ProtectedChannels, int Runs)> PurgeProviderGenerationsAsync(
+        ApplicationDbContext db, string providerId, int channelRetentionDays, DateTime nowUtc, CancellationToken ct)
     {
-        // Identify the 2 most recent fetch runs — these are the "live" generations to keep.
-        var recentRunIds = await db.FetchRuns
+        var cutoff = nowUtc.AddDays(-Math.Max(0, channelRetentionDays));
+
+        var expired = db.ProviderChannels
+            .Where(c => c.ProviderId == providerId && !c.Active && c.LastSeenUtc < cutoff);
+
+        var purgeable = expired.Where(c =>
+            !db.ProfileGroupChannelFilters.Any(f => f.ProviderChannelId == c.ProviderChannelId
+                && (f.State == LineupReviewSemantics.ChannelStateIncluded
+                    || f.DisplayNameOverride != null
+                    || f.OutputGroupName != null
+                    || f.ChannelNumber != null
+                    || f.TvgIdOverride != null))
+            && !db.ProfileCustomGroupChannels.Any(x => x.ProviderChannelId == c.ProviderChannelId)
+            && !db.ChannelSources.Any(x => x.ProviderChannelId == c.ProviderChannelId)
+            && !db.EpgChannelMappings.Any(m => m.ProviderChannelId == c.ProviderChannelId && m.MappingMode == "manual"));
+
+        // Subqueries instead of loading IDs into memory — avoids SQLite's 999-parameter limit.
+        var purgeableIds = purgeable.Select(c => c.ProviderChannelId);
+
+        var expiredCount = await expired.CountAsync(ct);
+        var purgeCount = expiredCount == 0 ? 0 : await purgeable.CountAsync(ct);
+
+        if (purgeCount > 0)
+        {
+            // Child rows are deleted explicitly — SQLite FK cascade requires PRAGMA foreign_keys = ON
+            // which is not enabled. Whatever remains on a purgeable channel is unedited review state
+            // (pending/excluded, no overrides) or an automatic EPG mapping, so nothing of the user's goes.
+            await db.ProfileGroupChannelFilters
+                .Where(x => purgeableIds.Contains(x.ProviderChannelId))
+                .ExecuteDeleteAsync(ct);
+
+            await db.EpgChannelMappings
+                .Where(x => purgeableIds.Contains(x.ProviderChannelId))
+                .ExecuteDeleteAsync(ct);
+
+            await db.ProviderChannels
+                .Where(c => purgeableIds.Contains(c.ProviderChannelId))
+                .ExecuteDeleteAsync(ct);
+        }
+
+        // Keep the newest run of any status, the 2 newest successful runs, and any run a surviving
+        // channel still points at. FetchRun → ProviderChannel FK is Restrict, so a run in use stays.
+        var newestRunId = await db.FetchRuns
             .AsNoTracking()
             .Where(x => x.ProviderId == providerId)
+            .OrderByDescending(x => x.StartedUtc)
+            .Select(x => x.FetchRunId)
+            .FirstOrDefaultAsync(ct);
+
+        var recentOkRunIds = await db.FetchRuns
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId && x.Status == "ok")
             .OrderByDescending(x => x.StartedUtc)
             .Take(2)
             .Select(x => x.FetchRunId)
             .ToListAsync(ct);
 
-        // Fewer than 2 runs means there is no older generation to purge.
-        if (recentRunIds.Count < 2)
-            return (0, 0);
+        if (newestRunId is not null)
+            recentOkRunIds.Add(newestRunId);
 
-        // Use a subquery instead of loading IDs into memory — avoids SQLite's 999-parameter
-        // limit when a provider has a large channel list with multiple old fetch runs.
-        var staleChannelQuery = db.ProviderChannels
-            .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.LastFetchRunId))
-            .Select(x => x.ProviderChannelId);
-
-        var staleCount = await staleChannelQuery.CountAsync(ct);
-        if (staleCount > 0)
-        {
-            // Delete child rows explicitly — SQLite FK cascade requires PRAGMA foreign_keys = ON
-            // which is not enabled; follow the same explicit-delete pattern as DeleteProfileAsync.
-            await db.ProfileGroupChannelFilters
-                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
-                .ExecuteDeleteAsync(ct);
-
-            await db.ChannelSources
-                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
-                .ExecuteDeleteAsync(ct);
-
-            await db.ProfileCustomGroupChannels
-                .Where(x => staleChannelQuery.Contains(x.ProviderChannelId))
-                .ExecuteDeleteAsync(ct);
-
-            await db.ProviderChannels
-                .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.LastFetchRunId))
-                .ExecuteDeleteAsync(ct);
-        }
-
-        // FetchRun → ProviderChannel FK is Restrict, so delete runs only after channels are gone.
         var deletedRuns = await db.FetchRuns
-            .Where(x => x.ProviderId == providerId && !recentRunIds.Contains(x.FetchRunId))
+            .Where(x => x.ProviderId == providerId
+                        && !recentOkRunIds.Contains(x.FetchRunId)
+                        && !db.ProviderChannels.Any(c => c.LastFetchRunId == x.FetchRunId))
             .ExecuteDeleteAsync(ct);
 
-        return (staleCount, deletedRuns);
+        return (purgeCount, expiredCount - purgeCount, deletedRuns);
     }
 
     private async Task RunBuildOnlyAsync(CancellationToken stoppingToken)
