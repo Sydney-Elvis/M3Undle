@@ -28,7 +28,7 @@ public sealed class NotificationCatalogAndContractTests
             .ToList();
         var mapped = NotificationCatalog.Definitions.SelectMany(d => d.LegacyEventTypes).ToList();
 
-        Assert.HasCount(13, eventTypes);
+        Assert.HasCount(15, eventTypes);
         CollectionAssert.AreEquivalent(eventTypes, mapped, "Every existing event type must map to exactly one catalog row.");
     }
 
