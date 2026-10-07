@@ -269,6 +269,7 @@ public sealed class XtreamLineupClient(
                     channels.Add(new ParsedProviderChannel
                     {
                         ProviderChannelKey = ProviderFetcher.NormalizeProviderChannelKey(epgId),
+                        ProviderStreamId = streamId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                         DisplayName = name,
                         TvgId = string.IsNullOrWhiteSpace(epgId) ? null : epgId,
                         TvgName = name,

@@ -134,7 +134,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
 
             var profileProviderIds = profileProviderMap.GetValueOrDefault(profile.ProfileId, []);
             var profileHasFailed = profileProviderIds.Any(pid =>
-                latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
+                latestRunsByProvider.TryGetValue(pid, out var s) && s is "fail" or "suspect");
 
             if (snapshot is not null && profileHasFailed)
                 health = ProfileHealthStatus.Degraded;
@@ -188,7 +188,7 @@ internal sealed class DashboardStatsService(IServiceScopeFactory scopeFactory)
             ? profileProviderMap.GetValueOrDefault(activeProfileId, [])
             : [];
         var refreshFailed = activeProviderIds.Any(pid =>
-            latestRunsByProvider.TryGetValue(pid, out var s) && s == "fail");
+            latestRunsByProvider.TryGetValue(pid, out var s) && s is "fail" or "suspect");
 
         var now = DateTime.UtcNow;
         var expiryThreshold = now.AddDays(30);

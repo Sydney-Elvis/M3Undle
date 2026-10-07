@@ -181,4 +181,60 @@ public sealed class ProviderChannelNormalizerTests
         var result = ProviderChannelNormalizer.NormalizeStreamUrl("https://provider.example.com:80/live/s?user=a&pass=b");
         Assert.AreEqual("http://provider.example.com:80/live/s?user=a&pass=b", result);
     }
+
+    // -------------------------------------------------------------------------
+    // BuildStreamLocator — identity that survives host/credential changes
+    // -------------------------------------------------------------------------
+
+    [TestMethod]
+    public void BuildStreamLocator_ProviderStreamId_WinsOverUrl()
+        => Assert.AreEqual("xtream:4242", ProviderChannelNormalizer.BuildStreamLocator("http://anything.test/whatever", " 4242 "));
+
+    [TestMethod]
+    public void BuildStreamLocator_XtreamLiveUrl_ReducesToStreamId()
+        => Assert.AreEqual("xtream:101", ProviderChannelNormalizer.BuildStreamLocator("http://old-host.test:8080/live/user/pass/101.ts"));
+
+    [TestMethod]
+    public void BuildStreamLocator_XtreamUrlWithoutLiveSegment_ReducesToStreamId()
+        => Assert.AreEqual("xtream:101", ProviderChannelNormalizer.BuildStreamLocator("http://old-host.test/user/pass/101"));
+
+    [TestMethod]
+    public void BuildStreamLocator_XtreamUrlUnderSubPath_ReducesToStreamId()
+        => Assert.AreEqual("xtream:101", ProviderChannelNormalizer.BuildStreamLocator("https://host.test/panel/live/user/pass/101.m3u8"));
+
+    [TestMethod]
+    public void BuildStreamLocator_HostSchemePortAndCredentialChanges_ProduceSameLocator()
+    {
+        var a = ProviderChannelNormalizer.BuildStreamLocator("http://old-host.test:80/live/olduser/oldpass/777.ts");
+        var b = ProviderChannelNormalizer.BuildStreamLocator("https://new-host.test:8443/live/newuser/newpass/777.ts");
+        Assert.AreEqual(a, b);
+    }
+
+    [TestMethod]
+    public void BuildStreamLocator_DifferentStreamIds_ProduceDifferentLocators()
+        => Assert.AreNotEqual(
+            ProviderChannelNormalizer.BuildStreamLocator("http://h.test/live/u/p/1.ts"),
+            ProviderChannelNormalizer.BuildStreamLocator("http://h.test/live/u/p/2.ts"));
+
+    [TestMethod]
+    public void BuildStreamLocator_NonXtreamUrl_KeepsPathAndDropsHost()
+        => Assert.AreEqual("/stream/cnn", ProviderChannelNormalizer.BuildStreamLocator("http://example.com:9000/stream/cnn"));
+
+    [TestMethod]
+    public void BuildStreamLocator_CredentialQueryParameters_AreStripped()
+        => Assert.AreEqual(
+            "/play/channel.m3u8?quality=hd",
+            ProviderChannelNormalizer.BuildStreamLocator("http://h.test/play/channel.m3u8?username=a&quality=hd&PASSWORD=b&user=c&pass=d"));
+
+    [TestMethod]
+    public void BuildStreamLocator_OnlyCredentialQuery_LeavesBarePath()
+        => Assert.AreEqual("/play/channel.m3u8", ProviderChannelNormalizer.BuildStreamLocator("http://h.test/play/channel.m3u8?username=a&password=b"));
+
+    [TestMethod]
+    public void BuildStreamLocator_UnparseableUrl_ReturnsRawValue()
+        => Assert.AreEqual("not a url", ProviderChannelNormalizer.BuildStreamLocator("not a url"));
+
+    [TestMethod]
+    public void BuildStreamLocator_Empty_ReturnsEmpty()
+        => Assert.AreEqual(string.Empty, ProviderChannelNormalizer.BuildStreamLocator(""));
 }

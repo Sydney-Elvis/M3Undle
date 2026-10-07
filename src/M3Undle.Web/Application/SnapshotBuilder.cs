@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using M3Undle.Core.Epg;
 using M3Undle.Core.Events;
 using M3Undle.Core.M3u;
+using M3Undle.Core.Providers;
 using M3Undle.Web.Application.Epg;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -326,6 +327,12 @@ public sealed class SnapshotBuilder(
             sw.ElapsedMilliseconds, playlistResult.Channels.Count, provider.ProviderId);
         metrics?.RecordProviderRefresh(provider.ProviderId, success: true, sw.Elapsed);
         sw.Restart();
+
+        // 3b. A fetch that "succeeds" but looks wrong (empty, or a fraction of the lineup we already
+        // have) is treated like a failed one: write nothing and keep the last known-good lineup.
+        var heldSummary = await HoldSuspectFetchAsync(provider, profileId, fetchRun, playlistResult, cancellationToken);
+        if (heldSummary is not null)
+            return (false, heldSummary, [], null, new HashSet<string>());
 
         // 4. Probe Xtream API for capability/expiry (non-fatal, updates fields in place)
         if (provider.XtreamBaseUrl is null)
@@ -1855,16 +1862,40 @@ public sealed class SnapshotBuilder(
         }
 
         // Categories the provider has permanently dropped (e.g. a genre it no longer serves)
-        // are removed rather than left as 0-channel "missing" rows forever. A group someone has
-        // notifications on (e.g. NFL, expected back next season) is deliberately spared here —
-        // see the IsEmptyStale + TrackNewChannels prompt surfaced in the group review UI instead.
-        var staleGroups = existingGroups
+        // are removed rather than left as 0-channel "missing" rows forever — but only when nobody
+        // is using them. A group with user intent (a reviewed include decision, naming/numbering,
+        // tracking, a custom-group link) or channel rows still pointing at it stays, so the user's
+        // mapping survives a provider outage or rename. See the IsEmptyStale + TrackNewChannels
+        // prompt surfaced in the group review UI for how the user is told about missing groups.
+        var staleCandidates = existingGroups
             .Where(g => LineupReviewSemantics.IsEmptyStale(g.Active, g.ChannelCount, g.LastSeenUtc, now)
-                        && !g.ProfileGroupFilters.Any(f => f.TrackNewChannels))
+                        && !g.ProfileGroupFilters.Any(HasGroupUserIntent))
             .ToList();
 
-        if (staleGroups.Count > 0)
-            db.ProviderGroups.RemoveRange(staleGroups);
+        if (staleCandidates.Count > 0)
+        {
+            var linkedGroupIds = (await db.ProfileCustomGroupProviderLinks
+                .AsNoTracking()
+                .Where(l => l.ProviderGroup.ProviderId == providerId)
+                .Select(l => l.ProviderGroupId)
+                .Distinct()
+                .ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+
+            var groupIdsWithChannels = (await db.ProviderChannels
+                .AsNoTracking()
+                .Where(c => c.ProviderId == providerId && c.ProviderGroupId != null)
+                .Select(c => c.ProviderGroupId!)
+                .Distinct()
+                .ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+
+            var staleGroups = staleCandidates
+                .Where(g => !linkedGroupIds.Contains(g.ProviderGroupId)
+                            && !groupIdsWithChannels.Contains(g.ProviderGroupId))
+                .ToList();
+
+            if (staleGroups.Count > 0)
+                db.ProviderGroups.RemoveRange(staleGroups);
+        }
 
         await db.SaveChangesAsync(cancellationToken);
 
@@ -1873,6 +1904,24 @@ public sealed class SnapshotBuilder(
             .Where(x => x.ProviderId == providerId)
             .ToDictionaryAsync(x => new ProviderGroupKey(x.RawName, x.ContentType), x => x.ProviderGroupId, cancellationToken);
     }
+
+    /// <summary>
+    /// True when a profile's filter row for a provider group carries a decision or setting the user
+    /// made. Such a group must never be removed by stale-group cleanup. A filter that is merely
+    /// "new" (never reviewed) or an excluded group with no settings is not user intent.
+    /// </summary>
+    internal static bool HasGroupUserIntent(ProfileGroupFilter filter)
+        => filter.TrackNewChannels
+           || (LineupReviewSemantics.IsGroupIncluded(filter.Decision) && !filter.IsNew)
+           || !string.IsNullOrWhiteSpace(filter.OutputName)
+           || filter.AutoNumStart is not null
+           || filter.AutoNumEnd is not null
+           || filter.SortOverride is not null
+           || !string.IsNullOrWhiteSpace(filter.TrackingKeywords)
+           || !string.Equals(
+               LineupReviewSemantics.NormalizeTrackingPolicy(filter.TrackingPolicy),
+               LineupReviewSemantics.TrackingPolicyReview,
+               StringComparison.Ordinal);
 
     /// <summary>
     /// Identity of a provider group: the raw category name plus the kind of content it carries.
@@ -2307,6 +2356,173 @@ public sealed class SnapshotBuilder(
             providerId);
     }
 
+    // Below this many active channels a percentage means little (4 -> 1 is noise), so only an empty
+    // fetch is treated as suspect.
+    internal const int SuspectRatioMinPreviousChannels = 10;
+
+    /// <summary>
+    /// True when a fetch looks like a failure rather than a real lineup change: it returned nothing, or
+    /// (for a lineup big enough for ratios to mean something) kept less than <paramref name="minRetainedRatio"/>
+    /// of the channels currently active. Compared against what we already have, so 30 -> 20 is a normal
+    /// change while 10,000 -> 30 is not. Growth is never suspect — it only adds rows.
+    /// </summary>
+    internal static bool IsSuspectLineupDrop(int previousActive, int incoming, double minRetainedRatio)
+    {
+        if (previousActive <= 0)
+            return false;
+
+        if (incoming == 0)
+            return true;
+
+        return previousActive >= SuspectRatioMinPreviousChannels
+               && incoming < previousActive * minRetainedRatio;
+    }
+
+    private static bool IsSimilarCount(int a, int b)
+        => Math.Abs(a - b) <= Math.Max(a, b) * 0.05;
+
+    /// <summary>
+    /// Returns a summary when the fetch should be held (nothing written, last lineup kept), otherwise null.
+    /// A held fetch is accepted after <see cref="SnapshotOptions.SuspectFetchAcceptAfterRuns"/> consecutive
+    /// refreshes return the same reduced lineup, so a provider that genuinely shrinks is not stuck forever.
+    /// </summary>
+    private async Task<string?> HoldSuspectFetchAsync(
+        Provider provider,
+        string profileId,
+        FetchRun fetchRun,
+        PlaylistFetchResult playlist,
+        CancellationToken cancellationToken)
+    {
+        var options = snapshotOptions.Value;
+
+        // Channels in groups the user excluded are never synced, so they count on neither side.
+        var excludedGroups = (await db.ProfileGroupFilters
+            .AsNoTracking()
+            .Where(x => x.ProfileId == profileId
+                     && x.Decision == "exclude"
+                     && x.ProviderGroup.ProviderId == provider.ProviderId
+                     && x.ProviderGroup.ContentType == "live")
+            .Select(x => x.ProviderGroup.RawName)
+            .ToListAsync(cancellationToken)).ToHashSet(StringComparer.Ordinal);
+
+        var activeByGroup = await db.ProviderChannels
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.Active && x.ContentType == "live")
+            .GroupBy(x => x.GroupTitle)
+            .Select(g => new { Group = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        var previousActive = activeByGroup
+            .Where(g => g.Group is null || !excludedGroups.Contains(g.Group))
+            .Sum(g => g.Count);
+
+        var incoming = playlist.Channels.Count(ch =>
+            !string.IsNullOrWhiteSpace(ch.DisplayName)
+            && !string.IsNullOrWhiteSpace(ch.StreamUrl)
+            && LiveClassifier.ClassifyContent(ch.StreamUrl) == "live"
+            && (ch.GroupTitle is null || !excludedGroups.Contains(ch.GroupTitle)));
+
+        if (!IsSuspectLineupDrop(previousActive, incoming, options.SuspectFetchMinRetainedRatio))
+            return null;
+
+        // Consecutive held runs so far. Network failures in between say nothing about the lineup.
+        var recent = await db.FetchRuns
+            .AsNoTracking()
+            .Where(x => x.ProviderId == provider.ProviderId && x.FetchRunId != fetchRun.FetchRunId && x.Type == "snapshot")
+            .OrderByDescending(x => x.StartedUtc)
+            .Take(20)
+            .Select(x => new { x.Status, x.ChannelCountSeen })
+            .ToListAsync(cancellationToken);
+
+        var priorHeldCounts = new List<int?>();
+        foreach (var run in recent)
+        {
+            if (run.Status is "fail" or "running") continue;
+            if (run.Status != "suspect") break;
+            priorHeldCounts.Add(run.ChannelCountSeen);
+        }
+
+        var acceptAfter = options.SuspectFetchAcceptAfterRuns;
+        var needed = acceptAfter - 1;
+        var total = playlist.Channels.Count;
+        var stable = acceptAfter > 0
+                     && priorHeldCounts.Count >= needed
+                     && priorHeldCounts.Take(needed).All(c => c is not null && IsSimilarCount(c.Value, total));
+
+        if (stable)
+        {
+            logger.LogWarning(
+                "Provider {ProviderId}: accepting a reduced lineup ({Incoming} live channel(s), was {Previous}) after {Runs} consecutive matching fetches.",
+                provider.ProviderId, incoming, previousActive, acceptAfter);
+            await PublishSystemEventBestEffortAsync(
+                SystemEventSeverity.Warning,
+                SystemEventTypes.ProviderFetchSuspect,
+                $"Provider '{provider.Name}' lineup change accepted",
+                $"The provider has consistently returned {incoming} live channels (was {previousActive}), so the new lineup was applied. Channels you mapped are kept even if the provider no longer lists them.",
+                providerId: provider.ProviderId);
+            return null;
+        }
+
+        var retry = acceptAfter > 0
+            ? $" It will be applied automatically if the next {acceptAfter - 1 - priorHeldCounts.Count} refresh(es) return the same lineup."
+            : string.Empty;
+        var summary = incoming == 0
+            ? $"The fetch returned no live channels but {previousActive} are currently active; the last known lineup was kept.{retry}"
+            : $"The fetch returned {incoming} live channel(s) but {previousActive} are currently active; the last known lineup was kept.{retry}";
+
+        fetchRun.FinishedUtc = DateTime.UtcNow;
+        fetchRun.Status = "suspect";
+        fetchRun.ErrorSummary = summary;
+        fetchRun.ChannelCountSeen = total;
+        fetchRun.PlaylistBytes = (int)Math.Min(playlist.Bytes, int.MaxValue);
+        // Use CancellationToken.None — must persist even if the run was cancelled
+        await db.SaveChangesAsync(CancellationToken.None);
+
+        logger.LogWarning("Provider {ProviderId}: holding suspect fetch — {Summary}", provider.ProviderId, summary);
+
+        // One event per streak, not one per refresh.
+        if (priorHeldCounts.Count == 0)
+        {
+            await PublishSystemEventBestEffortAsync(
+                SystemEventSeverity.Warning,
+                SystemEventTypes.ProviderFetchSuspect,
+                $"Provider '{provider.Name}' returned an incomplete lineup",
+                summary,
+                providerId: provider.ProviderId);
+        }
+
+        return summary;
+    }
+
+    private sealed class IncomingChannel(
+        ParsedProviderChannel parsed,
+        string contentType,
+        string? groupId,
+        EventChannelClassification eventClassification,
+        string locator,
+        string newKey,
+        string legacyKey)
+    {
+        public ParsedProviderChannel Parsed { get; } = parsed;
+        public string ContentType { get; } = contentType;
+        public string? GroupId { get; } = groupId;
+        public EventChannelClassification EventClassification { get; } = eventClassification;
+        public string Locator { get; } = locator;
+        public string NewKey { get; } = newKey;
+        public string LegacyKey { get; } = legacyKey;
+        public ProviderChannel? Match { get; set; }
+
+        /// <summary>
+        /// Set when the row was matched by its exact pre-v2 key. The published StreamKey that downstream
+        /// clients (Jellyfin, NextPVR, HDHR) track is a hash that includes this key, so rewriting it would
+        /// change every channel's identity on upgrade. Such rows keep their key until a URL or name change
+        /// moves them to v2 (their StreamKey would have changed then anyway).
+        /// </summary>
+        public bool KeepExistingKey { get; set; }
+    }
+
+    private const int MassChangeMinChannels = 50;
+
     private async Task SyncProviderChannelsAsync(
         string profileId,
         string providerId,
@@ -2316,10 +2532,17 @@ public sealed class SnapshotBuilder(
         DateTime now,
         CancellationToken cancellationToken)
     {
-        static string BuildStableIdentity(ParsedProviderChannel ch)
+        // Identity v2: the provider-native stream id (or the URL path with host, scheme and credentials
+        // stripped) + tvg-id + group. Host, credentials and display name are deliberately NOT part of it,
+        // so a provider URL change or a channel rename keeps the row — and every mapping attached to it.
+        static string BuildStableIdentity(ParsedProviderChannel ch, string locator)
+            => $"v2\u001f{ch.ProviderChannelKey}\u001f{locator}\u001f{ch.GroupTitle}";
+
+        // Pre-v2 identity (raw stream URL + display name). Kept only to recognise rows written before
+        // v2 existed so they are adopted in place instead of being orphaned by a mass rekey. Matched rows
+        // keep their key (see IncomingChannel.KeepExistingKey) so published stream keys do not change.
+        static string BuildLegacyIdentity(ParsedProviderChannel ch)
         {
-            // Include stream URL + display/group context to avoid collapsing distinct items
-            // that share tvg-id/URL across multiple provider groups.
             return !string.IsNullOrWhiteSpace(ch.ProviderChannelKey)
                 ? $"{ch.ProviderChannelKey}\u001f{ch.StreamUrl}\u001f{ch.GroupTitle}\u001f{ch.DisplayName}"
                 : $"{ch.DisplayName}\u001f{ch.StreamUrl}\u001f{ch.GroupTitle}";
@@ -2358,12 +2581,11 @@ public sealed class SnapshotBuilder(
             .Where(x => x.ProviderChannelKey is not null)
             .ToDictionary(x => x.ProviderChannelKey!, StringComparer.Ordinal);
 
+        // Pass 1 — filter the feed and compute each channel's identity.
+        var incoming = new List<IncomingChannel>(channels.Count);
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
         var occurrenceByStableIdentity = new Dictionary<string, int>(StringComparer.Ordinal);
-        var toUpdate = new List<ProviderChannel>();
-        var newCount = 0;
-        var updatedCount = 0;
-        var deactivatedCount = 0;
+        var occurrenceByLegacyIdentity = new Dictionary<string, int>(StringComparer.Ordinal);
 
         foreach (var ch in channels)
         {
@@ -2378,28 +2600,86 @@ public sealed class SnapshotBuilder(
             var groupId = ch.GroupTitle is not null
                           && groupNameToId.TryGetValue(new ProviderGroupKey(ch.GroupTitle, contentType), out var gid)
                 ? (string?)gid : null;
-            var eventClassification = EventChannelClassifier.Classify(ch.DisplayName, ch.GroupTitle);
 
             // Lazy: skip channels from excluded groups entirely.
             if (groupId is not null && excludedGroupIds.Contains(groupId)) continue;
 
-            var stableIdentity = BuildStableIdentity(ch);
+            var locator = ProviderChannelNormalizer.BuildStreamLocator(ch.StreamUrl, ch.ProviderStreamId);
+            var stableIdentity = BuildStableIdentity(ch, locator);
             var occurrence = occurrenceByStableIdentity.GetValueOrDefault(stableIdentity) + 1;
             occurrenceByStableIdentity[stableIdentity] = occurrence;
 
             var key = DeriveChannelKey(stableIdentity, occurrence);
             if (!seenKeys.Add(key)) continue;
 
-            if (byKey.TryGetValue(key, out var entity))
+            var legacyIdentity = BuildLegacyIdentity(ch);
+            var legacyOccurrence = occurrenceByLegacyIdentity.GetValueOrDefault(legacyIdentity) + 1;
+            occurrenceByLegacyIdentity[legacyIdentity] = legacyOccurrence;
+
+            incoming.Add(new IncomingChannel(
+                ch,
+                contentType,
+                groupId,
+                EventChannelClassifier.Classify(ch.DisplayName, ch.GroupTitle),
+                locator,
+                key,
+                DeriveChannelKey(legacyIdentity, legacyOccurrence)));
+        }
+
+        // Pass 2 — match incoming channels to existing rows. A claimed row keeps its ProviderChannelId,
+        // which is what every selection, custom-group membership, number and EPG mapping points at.
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var inc in incoming)
+        {
+            if (byKey.TryGetValue(inc.NewKey, out var existing) && claimed.Add(existing.ProviderChannelId))
+                inc.Match = existing;
+        }
+
+        var adoptedByLegacyKey = 0;
+        foreach (var inc in incoming.Where(x => x.Match is null))
+        {
+            if (byKey.TryGetValue(inc.LegacyKey, out var existing) && claimed.Add(existing.ProviderChannelId))
             {
+                inc.Match = existing;
+                inc.KeepExistingKey = true;
+                adoptedByLegacyKey++;
+            }
+        }
+
+        // Fallback tiers for rows whose key no longer matches (provider renumbered or changed its
+        // URL scheme). Only an unambiguous 1:1 match is adopted; anything ambiguous is left alone and
+        // the old row is protected from deletion by the reference-aware retention purge.
+        var adoptedByFallback = AdoptUnambiguousMatches(incoming, existingChannels, claimed, useLocator: true);
+        adoptedByFallback += AdoptUnambiguousMatches(incoming, existingChannels, claimed, useLocator: false);
+
+        // Captured before pass 3 mutates the tracked rows. Channels in groups the user excluded
+        // deactivate by design, so they don't count toward the mass-change check.
+        bool InScope(ProviderChannel c) => c.ProviderGroupId is null || !excludedGroupIds.Contains(c.ProviderGroupId);
+        var previouslyActive = existingChannels.Count(c => c.Active && InScope(c));
+
+        // Pass 3 — apply.
+        var toUpdate = new List<ProviderChannel>();
+        var newCount = 0;
+        var updatedCount = 0;
+
+        foreach (var inc in incoming)
+        {
+            var ch = inc.Parsed;
+            var eventClassification = inc.EventClassification;
+
+            if (inc.Match is { } entity)
+            {
+                if (!inc.KeepExistingKey)
+                    entity.ProviderChannelKey = inc.NewKey;
                 entity.DisplayName = ch.DisplayName;
                 entity.TvgId = ch.TvgId;
                 entity.TvgName = ch.TvgName;
                 entity.LogoUrl = ch.LogoUrl;
                 entity.StreamUrl = ch.StreamUrl;
                 entity.GroupTitle = ch.GroupTitle;
-                entity.ProviderGroupId = groupId;
-                entity.ContentType = contentType;
+                entity.ProviderGroupId = inc.GroupId;
+                entity.ContentType = inc.ContentType;
                 entity.IsEvent = eventClassification.IsEvent;
                 entity.IsPlaceholder = eventClassification.IsPlaceholder;
                 entity.EventSlotKey = eventClassification.EventSlotKey;
@@ -2422,15 +2702,15 @@ public sealed class SnapshotBuilder(
                 {
                     ProviderChannelId = Guid.NewGuid().ToString(),
                     ProviderId = providerId,
-                    ProviderChannelKey = key,
+                    ProviderChannelKey = inc.NewKey,
                     DisplayName = ch.DisplayName,
                     TvgId = ch.TvgId,
                     TvgName = ch.TvgName,
                     LogoUrl = ch.LogoUrl,
                     StreamUrl = ch.StreamUrl,
                     GroupTitle = ch.GroupTitle,
-                    ProviderGroupId = groupId,
-                    ContentType = contentType,
+                    ProviderGroupId = inc.GroupId,
+                    ContentType = inc.ContentType,
                     IsEvent = eventClassification.IsEvent,
                     IsPlaceholder = eventClassification.IsPlaceholder,
                     EventSlotKey = eventClassification.EventSlotKey,
@@ -2450,11 +2730,15 @@ public sealed class SnapshotBuilder(
             }
         }
 
-        foreach (var entity in existingChannels.Where(x => x.ProviderChannelKey is not null && !seenKeys.Contains(x.ProviderChannelKey!)))
+        // Anything not claimed this run is no longer in the feed. Deactivate (never delete here) the
+        // rows that are still active; already-inactive rows are left untouched.
+        var deactivated = new List<ProviderChannel>();
+        foreach (var entity in existingChannels)
         {
+            if (claimed.Contains(entity.ProviderChannelId) || !entity.Active) continue;
             entity.Active = false;
             toUpdate.Add(entity);
-            deactivatedCount++;
+            deactivated.Add(entity);
         }
 
         // Attach all modified untracked entities explicitly — bypasses EF change detection on large sets.
@@ -2462,8 +2746,93 @@ public sealed class SnapshotBuilder(
             db.ProviderChannels.UpdateRange(toUpdate);
 
         await db.SaveChangesAsync(cancellationToken);
-        logger.LogInformation("Synced {Count} live channel(s) for provider {ProviderId} ({New} new, {Updated} updated, {Deactivated} deactivated).",
-            seenKeys.Count, providerId, newCount, updatedCount, deactivatedCount);
+        logger.LogInformation(
+            "Synced {Count} live channel(s) for provider {ProviderId} ({New} new, {Updated} updated, {Deactivated} deactivated, {AdoptedLegacy} adopted by legacy key, {AdoptedFallback} adopted by locator/name).",
+            incoming.Count, providerId, newCount, updatedCount, deactivated.Count, adoptedByLegacyKey, adoptedByFallback);
+
+        await WarnOnMassDeactivationAsync(
+            providerId, previouslyActive, deactivated.Count(InScope), newCount, adoptedByLegacyKey + adoptedByFallback);
+    }
+
+    /// <summary>
+    /// Adopts an existing, unclaimed row for an incoming channel when exactly one candidate and
+    /// exactly one incoming channel share the tier key. <paramref name="useLocator"/> selects the tier:
+    /// stream locator + group, or display name + group.
+    /// </summary>
+    private static int AdoptUnambiguousMatches(
+        List<IncomingChannel> incoming,
+        List<ProviderChannel> existingChannels,
+        HashSet<string> claimed,
+        bool useLocator)
+    {
+        var unmatched = incoming.Where(x => x.Match is null).ToList();
+        if (unmatched.Count == 0)
+            return 0;
+
+        static string TierKey(string locatorOrName, string? group) => $"{locatorOrName}\u001f{group}";
+
+        var incomingCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var inc in unmatched)
+        {
+            var key = TierKey(useLocator ? inc.Locator : inc.Parsed.DisplayName, inc.Parsed.GroupTitle);
+            incomingCounts[key] = incomingCounts.GetValueOrDefault(key) + 1;
+        }
+
+        var candidates = new Dictionary<string, List<ProviderChannel>>(StringComparer.Ordinal);
+        foreach (var e in existingChannels)
+        {
+            if (claimed.Contains(e.ProviderChannelId)) continue;
+            var key = TierKey(
+                useLocator ? ProviderChannelNormalizer.BuildStreamLocator(e.StreamUrl) : e.DisplayName,
+                e.GroupTitle);
+            if (!incomingCounts.ContainsKey(key)) continue;
+            if (!candidates.TryGetValue(key, out var list))
+                candidates[key] = list = [];
+            list.Add(e);
+        }
+
+        var adopted = 0;
+        foreach (var inc in unmatched)
+        {
+            var key = TierKey(useLocator ? inc.Locator : inc.Parsed.DisplayName, inc.Parsed.GroupTitle);
+            if (incomingCounts[key] != 1) continue;
+            if (!candidates.TryGetValue(key, out var list) || list.Count != 1) continue;
+            if (!claimed.Add(list[0].ProviderChannelId)) continue;
+
+            inc.Match = list[0];
+            adopted++;
+        }
+
+        return adopted;
+    }
+
+    private async Task WarnOnMassDeactivationAsync(
+        string providerId,
+        int previouslyActive,
+        int deactivatedInScope,
+        int newCount,
+        int adoptedCount)
+    {
+        if (previouslyActive < MassChangeMinChannels || deactivatedInScope * 2 <= previouslyActive)
+            return;
+
+        logger.LogWarning(
+            "Provider {ProviderId}: {Deactivated} of {Previous} active channel(s) were not found in the latest feed ({New} new, {Adopted} adopted). Mapped channels are preserved.",
+            providerId, deactivatedInScope, previouslyActive, newCount, adoptedCount);
+
+        var providerName = await db.Providers
+            .AsNoTracking()
+            .Where(x => x.ProviderId == providerId)
+            .Select(x => x.Name)
+            .FirstOrDefaultAsync() ?? providerId;
+
+        await PublishSystemEventBestEffortAsync(
+            SystemEventSeverity.Warning,
+            SystemEventTypes.ProviderLineupMassChange,
+            $"Most channels for provider '{providerName}' changed",
+            $"{deactivatedInScope} of {previouslyActive} active channels were missing from the latest fetch ({newCount} new, {adoptedCount} matched to existing channels). " +
+            "Channels you have mapped are kept even when the provider no longer lists them.",
+            providerId: providerId);
     }
 
     private static string DeriveStreamKey(string stableKey, string profileId)
@@ -2546,6 +2915,21 @@ public sealed class SnapshotBuilder(
             .ToListAsync(cancellationToken);
 
         var toDelete = allSnapshots.Skip(retention).ToList();
+
+        // Rebuilds can run minutes apart (a refresh storm, a provider fix followed by retries), which
+        // would rotate every pre-incident snapshot out of the newest-N window. Always hold on to the
+        // newest snapshot that is at least SafetySnapshotAgeHours old so there is a known-good lineup
+        // from before whatever just changed.
+        var safetyAgeHours = snapshotOptions.Value.SafetySnapshotAgeHours;
+        if (safetyAgeHours > 0)
+        {
+            var threshold = timeProvider.GetUtcNow().UtcDateTime.AddHours(-safetyAgeHours);
+            var safetySnapshot = allSnapshots.FirstOrDefault(x =>
+                x.CreatedUtc <= threshold && (x.Status is "active" or "archived"));
+            if (safetySnapshot is not null)
+                toDelete.Remove(safetySnapshot);
+        }
+
         if (toDelete.Count == 0)
             return;
 

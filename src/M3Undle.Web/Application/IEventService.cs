@@ -22,6 +22,8 @@ public static class SystemEventTypes
     public const string ProviderStreamUnstable = "ProviderStreamUnstable";
     public const string ProviderStreamRecovered = "ProviderStreamRecovered";
     public const string BreakingLineupChange = "BreakingLineupChange";
+    public const string ProviderLineupMassChange = "ProviderLineupMassChange";
+    public const string ProviderFetchSuspect = "ProviderFetchSuspect";
     public const string DownstreamNotificationFailed = "DownstreamNotificationFailed";
     public const string LoginFailed = "LoginFailed";
     public const string AccountLocked = "AccountLocked";

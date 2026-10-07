@@ -8,6 +8,13 @@ public static class ProviderChannelNormalizer
     private static readonly Regex MetadataAttributeRegex =
         new("(?<key>[A-Za-z0-9\\-]+)=\"(?<value>[^\"]*)\"", RegexOptions.Compiled);
 
+    // Xtream stream paths: {prefix}/[live/]{user}/{pass}/{numericId}[.ext]. Anchored to the end so a
+    // panel hosted under a sub-path still matches.
+    private static readonly Regex XtreamStreamPathRegex =
+        new(@"/(?:live/)?[^/]+/[^/]+/(?<id>\d+)(?:\.[A-Za-z0-9]+)?/?$", RegexOptions.Compiled);
+
+    private static readonly string[] CredentialQueryKeys = ["username", "password", "user", "pass"];
+
     public static NormalizedProviderChannel ParseEntry(M3uEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
@@ -44,6 +51,42 @@ public static class ProviderChannelNormalizer
             LogoUrl: string.IsNullOrWhiteSpace(logoUrl) ? null : logoUrl.Trim(),
             StreamUrl: NormalizeStreamUrl(entry.Url.Trim()),
             GroupTitle: groupTitle);
+    }
+
+    /// <summary>
+    /// A stable locator for a stream that does not change when the provider moves host, switches
+    /// scheme/port, or rotates credentials. Used as the channel identity instead of the raw URL so
+    /// user mappings survive a provider URL change.
+    /// </summary>
+    public static string BuildStreamLocator(string streamUrl, string? providerStreamId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(providerStreamId))
+            return $"xtream:{providerStreamId.Trim()}";
+
+        if (string.IsNullOrWhiteSpace(streamUrl))
+            return streamUrl ?? string.Empty;
+
+        if (!Uri.TryCreate(streamUrl.Trim(), UriKind.Absolute, out var uri))
+            return streamUrl;
+
+        var match = XtreamStreamPathRegex.Match(uri.AbsolutePath);
+        if (match.Success)
+            return $"xtream:{match.Groups["id"].Value}";
+
+        return uri.AbsolutePath + StripCredentialQuery(uri.Query);
+    }
+
+    private static string StripCredentialQuery(string query)
+    {
+        if (string.IsNullOrEmpty(query) || query == "?")
+            return string.Empty;
+
+        var kept = query.TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Where(pair => !CredentialQueryKeys.Contains(pair.Split('=', 2)[0], StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        return kept.Count == 0 ? string.Empty : "?" + string.Join('&', kept);
     }
 
     public static string? NormalizeProviderChannelKey(string? value)
