@@ -358,6 +358,8 @@ public sealed record XtreamAccountInfo(
 public sealed class ParsedProviderChannel
 {
     public string? ProviderChannelKey { get; init; }
+    /// <summary>Provider-native stream id (Xtream <c>stream_id</c>); null for plain M3U entries.</summary>
+    public string? ProviderStreamId { get; init; }
     public string DisplayName { get; init; } = string.Empty;
     public string? TvgId { get; init; }
     public string? TvgName { get; init; }

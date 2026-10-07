@@ -1630,13 +1630,15 @@ public sealed class SnapshotHandlingTests
         "#EXTINF:-1 tvg-id=\"ny.shared\" group-title=\"USA ABC\",NY - NEW YORK\n" +
         "http://example.com/live/user/pass/901.ts\n";
 
-    private static SnapshotBuilder CreateBuilder(
+    internal static SnapshotBuilder CreateBuilder(
         ApplicationDbContext db,
         HttpStatusCode statusCode,
         string content,
         string tempDir,
         IEventService? eventService = null,
-        HttpMessageHandler? handler = null)
+        HttpMessageHandler? handler = null,
+        SnapshotOptions? snapshotOptions = null,
+        TimeProvider? timeProvider = null)
     {
         var effectiveHandler = handler ?? new FakeHttpMessageHandler(statusCode, content);
         var factory = new FakeHttpClientFactory(effectiveHandler);
@@ -1686,11 +1688,11 @@ public sealed class SnapshotHandlingTests
         var refreshScheduleService = new M3Undle.Web.Tests.Stubs.NullRefreshScheduleService();
         return new SnapshotBuilder(
             db, fetcher, epgSourceFetcher, epgChannelMapper, epgCompiler, xmltvParser,
-            runtimePaths, env, Options.Create(new SnapshotOptions()), customGroupService,
-            refreshScheduleService, eventService ?? new NullEventService(), TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
+            runtimePaths, env, Options.Create(snapshotOptions ?? new SnapshotOptions()), customGroupService,
+            refreshScheduleService, eventService ?? new NullEventService(), timeProvider ?? TimeProvider.System, NullLogger<SnapshotBuilder>.Instance);
     }
 
-    private static async Task<TestFixture> CreateFixtureAsync()
+    internal static async Task<TestFixture> CreateFixtureAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -1704,7 +1706,7 @@ public sealed class SnapshotHandlingTests
         return fixture;
     }
 
-    private static Profile NewProfile(string id) => new()
+    internal static Profile NewProfile(string id) => new()
     {
         ProfileId = id,
         Name = id,
@@ -1715,7 +1717,7 @@ public sealed class SnapshotHandlingTests
         UpdatedUtc = DateTime.UtcNow,
     };
 
-    private static Provider NewProvider(string id) => new()
+    internal static Provider NewProvider(string id) => new()
     {
         ProviderId = id,
         Name = id,
@@ -1727,7 +1729,7 @@ public sealed class SnapshotHandlingTests
         UpdatedUtc = DateTime.UtcNow,
     };
 
-    private static ProfileProvider NewProfileProvider(string providerId, string profileId) => new()
+    internal static ProfileProvider NewProfileProvider(string providerId, string profileId) => new()
     {
         ProviderId = providerId,
         ProfileId = profileId,
@@ -1735,7 +1737,7 @@ public sealed class SnapshotHandlingTests
         Enabled = true,
     };
 
-    private static FetchRun NewFetchRun(string id, string providerId) => new()
+    internal static FetchRun NewFetchRun(string id, string providerId) => new()
     {
         FetchRunId = id,
         ProviderId = providerId,
@@ -1750,7 +1752,7 @@ public sealed class SnapshotHandlingTests
         GroupTitle = groupTitle,
     };
 
-    private sealed class TestFixture(SqliteConnection connection, DbContextOptions<ApplicationDbContext> options) : IAsyncDisposable
+    internal sealed class TestFixture(SqliteConnection connection, DbContextOptions<ApplicationDbContext> options) : IAsyncDisposable
     {
         public ApplicationDbContext CreateDbContext() => new(options);
         public ValueTask DisposeAsync() => connection.DisposeAsync();
