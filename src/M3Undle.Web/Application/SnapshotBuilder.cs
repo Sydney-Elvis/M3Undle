@@ -2511,6 +2511,14 @@ public sealed class SnapshotBuilder(
         public string NewKey { get; } = newKey;
         public string LegacyKey { get; } = legacyKey;
         public ProviderChannel? Match { get; set; }
+
+        /// <summary>
+        /// Set when the row was matched by its exact pre-v2 key. The published StreamKey that downstream
+        /// clients (Jellyfin, NextPVR, HDHR) track is a hash that includes this key, so rewriting it would
+        /// change every channel's identity on upgrade. Such rows keep their key until a URL or name change
+        /// moves them to v2 (their StreamKey would have changed then anyway).
+        /// </summary>
+        public bool KeepExistingKey { get; set; }
     }
 
     private const int MassChangeMinChannels = 50;
@@ -2531,7 +2539,8 @@ public sealed class SnapshotBuilder(
             => $"v2\u001f{ch.ProviderChannelKey}\u001f{locator}\u001f{ch.GroupTitle}";
 
         // Pre-v2 identity (raw stream URL + display name). Kept only to recognise rows written before
-        // v2 existed so they are adopted in place instead of being orphaned by a mass rekey.
+        // v2 existed so they are adopted in place instead of being orphaned by a mass rekey. Matched rows
+        // keep their key (see IncomingChannel.KeepExistingKey) so published stream keys do not change.
         static string BuildLegacyIdentity(ParsedProviderChannel ch)
         {
             return !string.IsNullOrWhiteSpace(ch.ProviderChannelKey)
@@ -2633,6 +2642,7 @@ public sealed class SnapshotBuilder(
             if (byKey.TryGetValue(inc.LegacyKey, out var existing) && claimed.Add(existing.ProviderChannelId))
             {
                 inc.Match = existing;
+                inc.KeepExistingKey = true;
                 adoptedByLegacyKey++;
             }
         }
@@ -2660,7 +2670,8 @@ public sealed class SnapshotBuilder(
 
             if (inc.Match is { } entity)
             {
-                entity.ProviderChannelKey = inc.NewKey;
+                if (!inc.KeepExistingKey)
+                    entity.ProviderChannelKey = inc.NewKey;
                 entity.DisplayName = ch.DisplayName;
                 entity.TvgId = ch.TvgId;
                 entity.TvgName = ch.TvgName;

@@ -89,7 +89,7 @@ public sealed class ChannelMappingProtectionTests
     }
 
     [TestMethod]
-    public async Task Sync_WhenRowsCarryLegacyKeys_AdoptsThemInPlace()
+    public async Task Sync_WhenRowsCarryLegacyKeys_AdoptsThemInPlaceAndKeepsTheirKeys()
     {
         await using var fixture = await CreateSeededFixtureAsync();
         using var temp = new TempDir();
@@ -97,16 +97,8 @@ public sealed class ChannelMappingProtectionTests
 
         await RunRefreshAsync(fixture, temp, feed);
         var before = await ChannelIdsByStreamAsync(fixture);
-
-        // Rewrite the keys to what the pre-v2 identity formula produced for this exact feed.
-        await using (var db = fixture.CreateDbContext())
-        {
-            foreach (var channel in await db.ProviderChannels.ToListAsync())
-            {
-                channel.ProviderChannelKey = LegacyKey($"ch{StreamId(channel.StreamUrl)}", channel.StreamUrl, channel.GroupTitle, channel.DisplayName);
-            }
-            await db.SaveChangesAsync();
-        }
+        await RewriteKeysToLegacyAsync(fixture);
+        var legacyKeys = await ChannelKeysAsync(fixture);
 
         await RunRefreshAsync(fixture, temp, feed);
 
@@ -115,12 +107,47 @@ public sealed class ChannelMappingProtectionTests
         Assert.HasCount(2, channels, "legacy rows must be adopted, not duplicated");
         Assert.IsTrue(channels.All(x => x.Active));
         Assert.AreEqual(before["101"], (await ChannelIdsByStreamAsync(fixture))["101"]);
+        CollectionAssert.AreEqual(legacyKeys, await ChannelKeysAsync(fixture),
+            "the key feeds the published StreamKey, so an exact legacy match must not rewrite it");
 
-        // Keys were rewritten to v2, so the next run matches directly.
-        var keysAfterAdoption = channels.Select(x => x.ProviderChannelKey).OrderBy(x => x).ToList();
+        // Still matched on the following refresh.
         await RunRefreshAsync(fixture, temp, feed);
         await using var again = fixture.CreateDbContext();
-        CollectionAssert.AreEqual(keysAfterAdoption, await again.ProviderChannels.Select(x => x.ProviderChannelKey).OrderBy(x => x).ToListAsync());
+        Assert.AreEqual(2, await again.ProviderChannels.CountAsync());
+    }
+
+    [TestMethod]
+    public async Task Upgrade_DoesNotChangePublishedStreamKeys()
+    {
+        // Downstream clients track the published StreamKey. Deploying the identity change must not
+        // make every channel look new to Jellyfin / NextPVR / HDHR.
+        await using var fixture = await CreateSeededFixtureAsync();
+        using var temp = new TempDir();
+        var feed = Feed("host.test", "u/p", (101, "Alpha", "News"), (102, "Beta", "News"));
+
+        await RunRefreshAsync(fixture, temp, feed);
+        await using (var modeDb = fixture.CreateDbContext())
+        {
+            await modeDb.ProfileGroupFilters.ExecuteUpdateAsync(s => s.SetProperty(x => x.ChannelMode, LineupReviewSemantics.GroupModeAutoUpdate));
+        }
+
+        // The state a pre-upgrade deployment is in: legacy keys, snapshot published from them.
+        await RewriteKeysToLegacyAsync(fixture);
+        await using (var buildDb = fixture.CreateDbContext())
+        {
+            var built = await CreateBuilder(buildDb, HttpStatusCode.OK, feed, temp.Path).BuildOnlyAsync(CancellationToken.None);
+            Assert.IsTrue(built.Succeeded);
+        }
+        var before = await PublishedStreamKeysAsync(fixture);
+        Assert.HasCount(2, before);
+
+        // First refresh on the new code, with a changed lineup so a new snapshot is published.
+        await RunRefreshAsync(fixture, temp, Feed("host.test", "u/p", (101, "Alpha", "News"), (102, "Beta", "News"), (103, "Gamma", "News")));
+
+        var after = await PublishedStreamKeysAsync(fixture);
+        Assert.HasCount(3, after);
+        Assert.AreEqual(before["Alpha"], after["Alpha"]);
+        Assert.AreEqual(before["Beta"], after["Beta"]);
     }
 
     [TestMethod]
@@ -611,6 +638,38 @@ public sealed class ChannelMappingProtectionTests
         var identity = $"{tvgId}\u001f{streamUrl}\u001f{group}\u001f{displayName}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(identity));
         return Convert.ToBase64String(hash).Replace('+', '-').Replace('/', '_').TrimEnd('=')[..16];
+    }
+
+    // The pre-upgrade state: rows keyed by the old identity formula (raw URL and name in the hash).
+    private static async Task RewriteKeysToLegacyAsync(TestFixture fixture)
+    {
+        await using var db = fixture.CreateDbContext();
+        foreach (var channel in await db.ProviderChannels.ToListAsync())
+            channel.ProviderChannelKey = LegacyKey($"ch{StreamId(channel.StreamUrl)}", channel.StreamUrl, channel.GroupTitle, channel.DisplayName);
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task<List<string?>> ChannelKeysAsync(TestFixture fixture)
+    {
+        await using var db = fixture.CreateDbContext();
+        return (await db.ProviderChannels.Select(x => x.ProviderChannelKey).ToListAsync()).Order(StringComparer.Ordinal).ToList();
+    }
+
+    // DisplayName -> StreamKey from the active snapshot's channel index.
+    private static async Task<Dictionary<string, string>> PublishedStreamKeysAsync(TestFixture fixture)
+    {
+        await using var db = fixture.CreateDbContext();
+        var path = await db.Snapshots.Where(x => x.Status == "active").OrderByDescending(x => x.CreatedUtc).Select(x => x.ChannelIndexPath).FirstAsync();
+        var keys = new Dictionary<string, string>();
+        foreach (var line in await File.ReadAllLinesAsync(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            string Read(string name) => doc.RootElement.EnumerateObject()
+                .First(p => string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)).Value.GetString()!;
+            keys[Read("displayName")] = Read("streamKey");
+        }
+        return keys;
     }
 
     private static async Task MapChannelAsync(TestFixture fixture, string providerChannelId, string groupName, int channelNumber)
