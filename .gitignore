@@ -114,3 +114,4 @@ src/M3Undle.Web/Data/snapshots/
 .DS_Store
 .ai_docs/
 m3undle.db*
+.playwright-mcp/

@@ -41,8 +41,7 @@ public sealed class BackupScheduleBackgroundService(
         await using var scope = scopeFactory.CreateAsyncScope();
         var scheduleService = scope.ServiceProvider.GetRequiredService<IBackupScheduleService>();
 
-        var nextDue = await scheduleService.GetNextScheduledBackupUtcAsync(cancellationToken);
-        if (nextDue is null || nextDue > DateTime.UtcNow)
+        if (!await scheduleService.IsBackupDueAsync(cancellationToken))
             return;
 
         var backupService = scope.ServiceProvider.GetRequiredService<PortableBackupService>();

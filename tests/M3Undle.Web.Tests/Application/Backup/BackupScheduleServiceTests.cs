@@ -117,6 +117,38 @@ public sealed class BackupScheduleServiceTests
         Assert.IsTrue(next!.Value >= before.AddDays(7) && next.Value <= after.AddDays(7));
     }
 
+    [TestMethod]
+    [DataRow(false, -20, false)] // disabled never due
+    [DataRow(true, -20, true)]   // overdue — the production regression: must report due, not roll forward
+    [DataRow(true, -8, true)]
+    [DataRow(true, -2, false)]
+    public async Task IsBackupDueAsync_ReflectsEnabledAndElapsedInterval(bool enabled, int lastRunDaysAgo, bool expectedDue)
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var service = new BackupScheduleService(db);
+            await service.SetEnabledAsync(enabled);
+            await service.RecordRunAsync(DateTime.UtcNow.AddDays(lastRunDaysAgo));
+        }
+
+        await using var verify = fixture.CreateDbContext();
+        Assert.AreEqual(expectedDue, await new BackupScheduleService(verify).IsBackupDueAsync());
+    }
+
+    [TestMethod]
+    public async Task IsBackupDueAsync_EnabledWithNoPriorRun_IsDue()
+    {
+        await using var fixture = await CreateFixtureAsync();
+
+        await using (var db = fixture.CreateDbContext())
+            await new BackupScheduleService(db).SetEnabledAsync(true);
+
+        await using var verify = fixture.CreateDbContext();
+        Assert.IsTrue(await new BackupScheduleService(verify).IsBackupDueAsync());
+    }
+
     private static async Task<TestFixture> CreateFixtureAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");

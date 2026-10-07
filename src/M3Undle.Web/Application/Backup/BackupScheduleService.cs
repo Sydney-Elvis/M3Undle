@@ -14,6 +14,13 @@ public interface IBackupScheduleService
 
     /// <summary>Null if disabled. A fixed weekly cadence — see plan §6, no cron/day-of-week configuration.</summary>
     Task<DateTime?> GetNextScheduledBackupUtcAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// True when enabled and a full interval has elapsed since the last run (or there has never been one).
+    /// Separate from <see cref="GetNextScheduledBackupUtcAsync"/>, which rolls overdue times forward for display
+    /// and therefore can never report "due".
+    /// </summary>
+    Task<bool> IsBackupDueAsync(CancellationToken ct = default);
 }
 
 public sealed class BackupScheduleService(ApplicationDbContext db) : IBackupScheduleService
@@ -61,6 +68,15 @@ public sealed class BackupScheduleService(ApplicationDbContext db) : IBackupSche
         }
 
         return next;
+    }
+
+    public async Task<bool> IsBackupDueAsync(CancellationToken ct = default)
+    {
+        var settings = await GetSettingsAsync(ct);
+        if (!settings.Enabled)
+            return false;
+
+        return settings.LastRunUtc is null || settings.LastRunUtc.Value + Interval <= DateTime.UtcNow;
     }
 
     private async Task<SiteSettings> GetOrCreateRowAsync(CancellationToken ct)
