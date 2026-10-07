@@ -42,6 +42,10 @@ The live output included measurements for:
 
 See [Metrics](../reference/metrics.md) for the exact metric names.
 
+## Alerts
+
+Metrics are for dashboards you watch. To be told when something needs attention — a guide source failing, a provider refresh failing, sustained stream instability, failed sign-ins — configure [Administrator Notifications](../guides/notifications.md) to send Matrix or email messages. They work independently of metrics and the in-app event panel.
+
 ## Access behavior
 
 With **Local only** selected and no allowed CIDR matching the requester, `/metrics` returns `403`. With **Public** access, it returns Prometheus text with HTTP `200`.

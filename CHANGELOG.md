@@ -4,9 +4,19 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
-## [Unreleased]
+## [v1.0.0-beta.11] — 2026-10-07
 
-Administrator notifications by Matrix and email, and a fix to how EPG health is measured.
+Administrator notifications by Matrix and email, a fix for channel mappings being lost when a provider goes offline or changes its URL, and a fix to how EPG health is measured.
+
+### Channel mapping protection
+
+- **Mappings now survive provider URL, credential and name changes.** A channel's identity no longer includes the provider host, scheme, username, password or display name, so changing a provider's URL or password, or a channel being renamed (event channels do this constantly), keeps the existing row and everything attached to it: selections, custom-group memberships, numbers, overrides and EPG mappings. Xtream channels are matched by the provider's own stream id
+- **No re-keying on upgrade.** Existing channels are adopted in place on the first refresh after upgrading, and their published stream keys do not change, so Jellyfin, NextPVR and HDHomeRun clients keep their channel identities. Where a provider renumbers or changes URL format, a channel is re-matched by stream locator or by name within its group, but only when the match is unambiguous
+- **Retention no longer deletes mapped channels.** Inactive channels are purged only after 30 days unseen (`M3Undle__Refresh__ChannelRetentionDays`) and only when nothing depends on them — no included selection or override, custom-group membership, channel source or manual EPG mapping. Failed fetch runs no longer age out the last good lineup, and fetch-run history that a surviving channel still references is kept
+- **Incomplete provider responses are held, not applied.** A fetch that returns no live channels, or less than half of the channels currently active, is treated like a failed fetch: nothing is written and the last known lineup is kept. A **Provider returned an incomplete lineup** event explains what happened. If the provider returns the same reduced lineup on three consecutive refreshes it is accepted as a real change. The dashboard and profile health now treat a held fetch as a refresh problem
+- A **Most channels changed** warning event is raised when a refresh deactivates more than half of a large provider's channels, so a mass change is visible rather than silent
+- Provider groups you have configured — included, renamed, numbered, or linked to a custom group — are no longer removed by stale-group cleanup when the provider stops listing them
+- Snapshot retention always keeps the newest snapshot that is at least 24 hours old (`M3Undle__Snapshot__SafetySnapshotAgeHours`), in addition to the newest three, so a burst of rebuilds cannot rotate out the last known-good lineup
 
 ### Added
 
@@ -26,6 +36,17 @@ Administrator notifications by Matrix and email, and a fix to how EPG health is 
 
 - Encryption status and key rotation include notification credentials (`notificationSecretsOnActiveKey`, `notificationSecretsOnOtherKey`, `notificationSecretsMigrated` in the API)
 - Portable backups exclude notification delivery history, incidents, observations and coverage facts; notification configuration is included
+
+### Testing
+
+- Added regression coverage for channel identity across host, credential and name changes, legacy-key adoption, reference-aware retention, held provider fetches, stale-group protection and snapshot retention, plus notification persistence, routing, delivery, lifecycle, API, SMTP and Matrix transports (including a fake Matrix homeserver)
+
+**Container images**
+
+```text
+ghcr.io/sydney-elvis/m3undle:v1.0.0-beta.11
+ghcr.io/sydney-elvis/m3undle:beta
+```
 
 ---
 

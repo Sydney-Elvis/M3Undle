@@ -42,6 +42,10 @@ curl -s http://<host>:8080/api/admin/diagnostics/lineup
 curl -s http://<host>:8080/api/admin/diagnostics/epg
 ```
 
+## Notifications API
+
+`/api/v1/notifications` exposes the same operations as **Settings → Notifications**: reading and saving the Matrix and email methods, testing and enabling them, routing each notification, and retrying or dismissing history entries. It follows the same access rules as the web interface, so it is open when UI Authentication is disabled and requires an authenticated session when it is enabled. Every change must send an `X-Requested-With` header, and requests are rate limited. Secrets (the Matrix access token and SMTP password) are write-only and never returned. See [Administrator Notifications](../guides/notifications.md).
+
 ### Test-mode RCA bundle
 
 When `M3UNDLE_TEST_MODE=true`, an additional `GET /debug/streams/rca` endpoint (UI admin auth required) returns a compact root-cause-analysis bundle: active/recent stream sessions, clients, provider streams, cooldowns, and recent stream diagnostic events in one payload. Combine it with the container's application logs when investigating playback stalls or provider failures.

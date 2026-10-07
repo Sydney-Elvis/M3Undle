@@ -57,13 +57,25 @@ The server's certificate is checked like any browser would check it: it must cha
 
 ## Set up Matrix
 
-1. Create a bot account on your homeserver and log in as it normally to obtain an **access token**. Use a normal login, so the token belongs to a device.
-2. Create a **private, unencrypted** room and invite the bot. Accept the invitation as the bot.
-3. Open **Settings → Notifications → Methods → Matrix** and enter the **homeserver URL** (HTTPS), the **room ID** (it starts with `!`, for example `!abc123:example.org`; newer room versions have no `:server` part — never a `#alias`) and the token.
+1. Create a bot account on your homeserver and log in as it normally to obtain an **access token**. Use a normal login, so the token belongs to a device. From a terminal:
 
-Messages are plain-text `m.notice` events. M3Undle does not create rooms, read the room, accept commands, or work in encrypted rooms: the test fails, and any send is refused, if the room is — or becomes — encrypted.
+    ```bash
+    curl -s -X POST https://matrix.example.org/_matrix/client/v3/login \
+      -H "Content-Type: application/json" \
+      -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"m3undle-bot"},"password":"<bot password>","initial_device_display_name":"M3Undle"}'
+    ```
 
-When you test, M3Undle looks up the bot's identity and device, checks that it has joined the room and may post, and that the room is not encrypted. Redirects from the homeserver are never followed, because the request carries your token.
+    The `access_token` in the reply is the value to give M3Undle. Treat it like a password. Some clients (for example Element, under **Settings → Help & About → Advanced**) can also show a session's token, but logging in as shown above gives M3Undle its own device, so you can revoke it without signing the bot out elsewhere.
+2. Create a **private, unencrypted** room — turn off end-to-end encryption when you create it, because it cannot be turned off afterwards — and invite the bot. Accept the invitation as the bot, and make sure it is allowed to send messages in the room.
+3. Find the **room ID**: in Element, open the room's **Settings → Advanced**. It starts with `!`, for example `!abc123:example.org`; newer room versions have no `:server` part. A `#alias` will not work.
+4. Open **Settings → Notifications → Methods → Matrix** and enter the **homeserver URL** (HTTPS), the **room ID** and the token.
+
+Messages are plain-text `m.notice` events, which Matrix clients show as a notice rather than a chat message and which do not trigger bots. M3Undle does not create rooms, read the room, accept commands, or work in encrypted rooms: the test fails, and any send is refused, if the room is — or becomes — encrypted.
+
+When you test, M3Undle looks up the bot's identity and device, checks that it has joined the room and may post, and that the room is not encrypted. Redirects from the homeserver are never followed, because the request carries your token. A message that has to be retried is not posted twice: the homeserver recognises the repeat and ignores it.
+
+!!! note "Plain HTTP is for isolated labs only"
+    The homeserver must use HTTPS. The Matrix form shows an **Allow plain HTTP** switch only when the container sets `M3UNDLE_NOTIFICATIONS_ALLOW_INSECURE_MATRIX_HTTP=true`, and both must be set to use an `http://` homeserver. Leave both off in production, because your access token would be sent unencrypted. See [Environment Variables](../reference/environment-variables.md).
 
 ## Save, test, enable
 

@@ -189,7 +189,7 @@ Indexes:
 Tracks the volatile world.
 - provider_channel_id (PK, TEXT, uuid)
 - provider_id (FK providers)
-- provider_channel_key (TEXT) -- best-effort stable key if available
+- provider_channel_key (TEXT) -- stable identity: a `v2` hash of tvg-id + stream locator + group. The locator is the provider stream id (`xtream:{id}`) or the stream URL path with host, scheme and credentials removed, so provider URL, password and display-name changes keep the row. Rows written before v2 are matched by their legacy key and keep it, so published stream keys do not change; rows are never purged while referenced by selections, overrides, custom-group membership, channel sources or manual EPG mappings
 - display_name (TEXT)
 - tvg_id (TEXT, nullable)
 - tvg_name (TEXT, nullable)

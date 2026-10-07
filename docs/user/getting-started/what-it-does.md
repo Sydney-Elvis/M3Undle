@@ -20,7 +20,9 @@ Instead of every client parsing the full 30,000-channel provider list, each clie
 - **A published, versioned lineup.** M3Undle builds versioned output and serves the last-known-good version — if a refresh fails, your clients keep working on what was already published.
 - **A stream proxy, not a redirect.** Client stream URLs point at M3Undle, never at the raw provider URL. Provider credentials are never exposed to clients, and the same upstream connection is shared across multiple viewers of the same channel.
 - **Stable channel identity.** Published stream keys and channel numbers stay stable across refreshes, so DVR mappings and client configurations don't break just because a provider reordered their playlist.
+- **Mappings that survive provider changes.** Your selections, numbers and custom groups stay attached to a channel when the provider changes its URL, password or channel names, and an empty or sharply reduced provider response is held rather than applied — see [Providers](../concepts/providers.md).
 - **Visibility into what's happening.** Health probes, Prometheus-compatible metrics, and admin diagnostics are built in — see [Observability](../concepts/observability.md).
+- **Alerts when something needs attention.** Optional Matrix or email messages for guide, provider, stream, sign-in and system problems, with recovery messages when they clear — see [Administrator Notifications](../guides/notifications.md).
 
 ## What it isn't
 

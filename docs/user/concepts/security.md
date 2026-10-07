@@ -57,6 +57,10 @@ Expand **Advanced Options** to configure:
 
 The Security page's visible list doesn't name HDHomeRun explicitly, but HDHomeRun endpoints (discovery, lineup, tuning) are actually covered by **both** protections: the same endpoint-credential enforcement as M3U/XMLTV/streams/Xtream when it's enabled, *and* the separate network restriction under **Settings → HDHomeRun → Allowed Networks**. Don't assume HDHomeRun is exempt from endpoint credentials just because the Security page's UI text doesn't spell it out — enabling credential enforcement protects it too. Use both screens together when exposing M3Undle beyond a single trusted LAN, since Allowed Networks is a separate, additional layer, not a replacement.
 
+## Notification credentials
+
+The SMTP password and Matrix access token used by [Administrator Notifications](../guides/notifications.md) are encrypted with your encryption key, never shown again after saving, and covered by key rotation. Without an encryption key they are refused rather than stored in the clear. SMTP always uses TLS with certificate validation, and a Matrix homeserver must use HTTPS. Sign-in alerts contain only a count and a short account reference — never the name typed, the client address or the browser. The `/api/v1/notifications` API follows UI Authentication, so enable it if the instance is reachable beyond a trusted LAN.
+
 ## Verify after a change
 
 After applying endpoint credentials, test the same URL your client uses. An unauthenticated M3U, XMLTV, stream, or Xtream request should no longer behave like it did with enforcement disabled. Then configure the client with the M3Undle endpoint credential—not the upstream provider's username and password.

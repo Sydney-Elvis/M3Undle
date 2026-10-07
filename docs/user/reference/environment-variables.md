@@ -70,9 +70,13 @@ Most stream proxy settings are managed from **Settings → Streaming**, and rest
 | Variable | Default | Description |
 |---|---|---|
 | `ASPNETCORE_HTTP_PORTS` | `5004;8080` | Ports the app listens on inside the container. `5004` is used for HDHomeRun-compatible tuning and `8080` for the web UI and general endpoints. |
-| `M3Undle__Refresh__TimeoutMinutes` | `5` | Provider fetch timeout |
+| `M3Undle__Refresh__TimeoutMinutes` | `30` | Maximum time a single refresh or build run may take before it is cancelled |
 | `M3Undle__Refresh__StartupDelaySeconds` | `30` | Delay before first refresh after startup |
 | `M3Undle__Snapshot__RetentionCount` | `3` | Number of snapshots to retain |
+| `M3Undle__Snapshot__SafetySnapshotAgeHours` | `24` | In addition to the newest snapshots, always keep the newest snapshot at least this many hours old, so a burst of rebuilds cannot discard the last known-good lineup. `0` disables it. |
+| `M3Undle__Snapshot__SuspectFetchMinRetainedRatio` | `0.5` | A provider fetch whose live channel count falls below this fraction of the currently active channels is held instead of applied (an empty fetch is always held). |
+| `M3Undle__Snapshot__SuspectFetchAcceptAfterRuns` | `3` | A held fetch is accepted as a real change after this many consecutive refreshes return the same reduced lineup. `0` never accepts automatically. |
+| `M3Undle__Refresh__ChannelRetentionDays` | `30` | How long an inactive provider channel is kept before it can be purged. Channels you have mapped, numbered, overridden or added to a custom group are never purged. |
 | `M3Undle__Cors__ApplicationAllowedOrigins__0` | *(unset)* | First allowed CORS origin for the application surface (`/api`, UI, `/Account/*`). Add more with `__1`, `__2`, etc. |
 | `M3UNDLE_DATA_DIR` | `/data` (in image) | Override the data directory (database, logs, snapshots). Rarely needed with the standard Docker volume layout. |
 | `M3UNDLE_CONFIG_DIR` | `/config` (in image) | Path M3Undle looks in for `config.yaml` and `/config/.env`. |

@@ -84,6 +84,8 @@ No provider credentials handy? Use the credential-free IPTV.org example in **[Ad
 - **Stream proxying** — provider credentials never reach clients; live streams are shared across viewers, not duplicated per connection
 - **Stream health tracking** — per-channel Stable/Cautious/Unstable classification with configurable relay policy for noisy providers
 - **Observability** — Prometheus-compatible metrics, health probes, and authenticated diagnostics APIs
+- **Administrator notifications** — optional Matrix or email (SMTP) alerts for guide, provider, stream, sign-in and system problems, chosen per notification, with recovery messages when a problem clears
+- **Mapping protection** — your channel selections, numbers and custom groups survive provider URL, credential and name changes, and an empty or sharply reduced provider response is held instead of applied
 - **Profiles** — named lineups with published history and automatic fallback to last-known-good output
 
 See **[Core Concepts](https://sydney-elvis.github.io/M3Undle/concepts/providers/)** for how these fit together, or **[Guides](https://sydney-elvis.github.io/M3Undle/guides/build-a-lineup/)** for step-by-step workflows.
