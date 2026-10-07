@@ -6,7 +6,9 @@ Open **Settings → Backup & Restore** to create, download, inspect, upload, and
 
 The page states that a backup includes configuration, mappings, users, and credentials. Credentials remain encrypted under the host's encryption key.
 
-Provider and EPG history, logs, and caches are excluded because they rebuild after restore. The backup report lists excluded rows from fetch runs, EPG fetch runs, the Xtream series cache, and snapshots.
+Provider and EPG history, logs, and caches are excluded because they rebuild after restore. The backup report lists excluded rows from fetch runs, EPG fetch runs, the Xtream series cache, snapshots, and notification delivery history, incidents and coverage data.
+
+[Administrator notification](notifications.md) methods, mailboxes and routes are included as configuration. After a restore they are **held**: nothing is sent until you re-test each method and turn sending back on, and earlier alerts are never replayed.
 
 ## Create a backup
 
@@ -43,6 +45,7 @@ A successful restore displays a confirmation message for the archive that was re
 - **Channel Mapping** and the published lineup
 - **EPG** source and mapping status
 - **Settings → Security**
+- **Settings → Notifications** — re-test each method, then turn sending back on
 - dashboard endpoints and published counts
 
 History and caches excluded from the archive may need time or a scheduled refresh to rebuild.

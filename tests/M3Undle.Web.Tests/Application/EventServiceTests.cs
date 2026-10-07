@@ -48,6 +48,49 @@ public sealed class EventServiceTests
     }
 
     [TestMethod]
+    public async Task PublishAsync_EpgFailuresAreTrackedPerSource_AndRecoveryOnlyClearsItsOwnSource()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = fixture.Services.GetRequiredService<IEventService>();
+
+        await service.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.EpgFetchFailed, "A failed",
+            providerId: "provider-1", epgSourceId: "src-a");
+        await service.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.EpgFetchFailed, "B failed",
+            providerId: "provider-1", epgSourceId: "src-b");
+        await service.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.EpgFetchFailed, "A failed again",
+            providerId: "provider-1", epgSourceId: "src-a");
+
+        var failures = (await service.GetAllAsync()).Where(e => e.EventType == SystemEventTypes.EpgFetchFailed).ToList();
+        Assert.HasCount(2, failures, "Two sources under one provider must not collapse into one event.");
+        Assert.AreEqual(2, failures.Single(e => e.EpgSourceId == "src-a").OccurrenceCount);
+
+        await service.PublishAsync(SystemEventSeverity.Info, SystemEventTypes.EpgBackOnline, "A recovered",
+            providerId: "provider-1", epgSourceId: "src-a");
+
+        Assert.IsFalse(await service.HasEventAsync(SystemEventTypes.EpgFetchFailed, epgSourceId: "src-a"));
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.EpgFetchFailed, epgSourceId: "src-b"),
+            "Recovering one source must not clear its sibling's failure.");
+        Assert.IsTrue(await service.HasEventAsync(SystemEventTypes.EpgBackOnline, epgSourceId: "src-a"));
+        Assert.IsFalse(await service.HasEventAsync(SystemEventTypes.EpgBackOnline, epgSourceId: "src-b"));
+    }
+
+    [TestMethod]
+    public async Task PublishAsync_StandaloneEpgSourceFailureIsTrackedBySourceIdentity()
+    {
+        await using var fixture = await CreateFixtureAsync();
+        var service = fixture.Services.GetRequiredService<IEventService>();
+
+        await service.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.EpgFetchFailed, "Standalone failed",
+            epgSourceId: "standalone-1");
+        await service.PublishAsync(SystemEventSeverity.Warning, SystemEventTypes.EpgFetchFailed, "Other standalone failed",
+            epgSourceId: "standalone-2");
+
+        var failures = (await service.GetAllAsync()).Where(e => e.EventType == SystemEventTypes.EpgFetchFailed).ToList();
+        Assert.HasCount(2, failures);
+        Assert.IsTrue(failures.All(e => e.ProviderId is null));
+    }
+
+    [TestMethod]
     public async Task PublishAsync_EpgBackOnlineClearsOutstandingEpgFailure()
     {
         await using var fixture = await CreateFixtureAsync();

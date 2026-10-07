@@ -4,7 +4,11 @@ public static class SettingsArchiveFormat
 {
     public const string Identifier = "m3undle-settings";
     public const int CurrentVersion = 2;
-    public const int CurrentDocumentVersion = 1;
+
+    /// <summary>Document 2 adds notification configuration. The encrypted envelope stays at version 2.</summary>
+    public const int CurrentDocumentVersion = 2;
+
+    public static bool IsSupportedDocumentVersion(int version) => version is 1 or 2;
 }
 
 public sealed record SettingsArchiveHeader
@@ -56,6 +60,64 @@ public sealed record SettingsDocument
     public IReadOnlyList<SettingsProfile> Profiles { get; init; } = [];
     public IReadOnlyList<SettingsProfileProvider> ProfileProviders { get; init; } = [];
     public IReadOnlyList<SettingsDownstreamIntegration> DownstreamIntegrations { get; init; } = [];
+
+    /// <summary>Absent in version 1 documents, which import as disabled and empty notifications.</summary>
+    public SettingsNotifications? Notifications { get; init; }
+}
+
+/// <summary>
+/// Notification configuration as user intent. Verification state, delivery history, incidents and the activation epoch
+/// are deliberately absent: an imported setup must be re-tested and explicitly resumed before it can send anything.
+/// </summary>
+public sealed record SettingsNotifications
+{
+    public bool SendingEnabled { get; init; }
+    public SettingsNotificationPolicy Policy { get; init; } = new();
+    public IReadOnlyList<SettingsNotificationDestination> Destinations { get; init; } = [];
+    public IReadOnlyList<SettingsNotificationRoute> Routes { get; init; } = [];
+}
+
+public sealed record SettingsNotificationPolicy
+{
+    public int FailureDelayMinutes { get; init; } = 10;
+    public int OverdueGraceMinutes { get; init; } = 15;
+    public int ReminderIntervalHours { get; init; } = 6;
+    public int CoverageWarnHours { get; init; } = 12;
+    public int CoverageWarnPercent { get; init; } = 90;
+    public int CoverageRecoverHours { get; init; } = 14;
+    public int CoverageRecoverPercent { get; init; } = 95;
+    public int CoverageGapMinutes { get; init; } = 30;
+    public int RetentionDays { get; init; } = 30;
+}
+
+public sealed record SettingsNotificationDestination
+{
+    public required string SourceId { get; init; }
+    public required string Kind { get; init; }
+    public bool Enabled { get; init; }
+    public string? HomeserverUrl { get; init; }
+    public string? RoomId { get; init; }
+    public string? AccessTokenEncrypted { get; init; }
+    public bool AllowInsecureHttp { get; init; }
+    public string? Host { get; init; }
+    public int Port { get; init; } = 587;
+    public string? TlsMode { get; init; }
+    public string? AuthMode { get; init; }
+    public string? Username { get; init; }
+    public string? PasswordEncrypted { get; init; }
+    public string? SenderAddress { get; init; }
+    public string? SenderName { get; init; }
+    public IReadOnlyList<string> Recipients { get; init; } = [];
+}
+
+public sealed record SettingsNotificationRoute
+{
+    public required string NotificationKey { get; init; }
+    public string? DestinationSourceId { get; init; }
+    public bool SendRecovery { get; init; } = true;
+    public bool SendReminders { get; init; } = true;
+    public int? FailureDelayMinutes { get; init; }
+    public int? ReminderIntervalHours { get; init; }
 }
 
 public sealed record SettingsSiteSettings

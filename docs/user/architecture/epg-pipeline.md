@@ -16,6 +16,8 @@ flowchart LR
 
 Every enabled EPG source for a provider is fetched in parallel each refresh cycle — but "fetched" often means "served from cache." Each source has an effective refresh cadence (a per-source override if you've set one, otherwise the global schedule), and if the cache file on disk is still within that window, the network fetch is skipped entirely and the cached XML is parsed as-is. This is why a source configured for a 12-hour cadence doesn't generate a real HTTP request on every hourly lineup refresh.
 
+Serving from cache is **not** a health check. Only a real upstream check — a download, a genuine HTTP 304 Not Modified, reading a local file, or a failure — updates a source's last-checked and last-success times, clears a failure, or counts as a recovery. Because the cadence is measured from the last real success, frequent lineup refreshes can no longer keep postponing the next real fetch. The same evidence drives the optional [administrator notifications](../guides/notifications.md) for failing, overdue and low-coverage guide sources. A source that has not had a real check since upgrading shows an unknown last check until its next refresh.
+
 If no EPG sources exist yet for a provider, one is lazily created from whatever `xmltv_url` the provider already has configured (or from the Xtream panel's own guide, if that provider is Xtream-capable) — so a freshly added provider gets *some* guide data without a separate setup step.
 
 ## Parse: one catalogue per source

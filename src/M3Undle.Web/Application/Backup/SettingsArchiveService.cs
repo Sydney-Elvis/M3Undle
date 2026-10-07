@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using M3Undle.Core;
 using M3Undle.Web.Application;
+using M3Undle.Web.Application.Notifications;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,8 @@ public sealed class SettingsArchiveService(
             var backupId = Guid.NewGuid().ToString("N");
             var createdUtc = DateTime.UtcNow;
             var hasEncryptedValues = document.Providers.Any(x => x.XtreamEncryptedPassword is not null)
-                || document.DownstreamIntegrations.Any(x => x.ApiKeyEncrypted is not null);
+                || document.DownstreamIntegrations.Any(x => x.ApiKeyEncrypted is not null)
+                || (document.Notifications?.Destinations.Any(x => x.AccessTokenEncrypted is not null || x.PasswordEncrypted is not null) ?? false);
 
             var appliedMigrations = await db.Database.GetAppliedMigrationsAsync(cancellationToken);
             var manifest = new SettingsArchiveManifest
@@ -55,7 +57,7 @@ public sealed class SettingsArchiveService(
                 CreatedUtc = createdUtc,
                 EncryptionKeyId = hasEncryptedValues ? encryption.ActiveKeyId : null,
                 EncryptionKeyFingerprint = hasEncryptedValues ? encryption.ActiveKeyFingerprint : null,
-                SettingsEntities = ["SiteSettings", "Providers", "Profiles", "ProfileProviders", "DownstreamIntegrations"],
+                SettingsEntities = ["SiteSettings", "Providers", "Profiles", "ProfileProviders", "DownstreamIntegrations", "Notifications"],
             };
             var archiveBytes = EncryptPayload(new SettingsArchivePayload { Manifest = manifest, Document = document }, passphrase);
 
@@ -141,7 +143,7 @@ public sealed class SettingsArchiveService(
                 {
                     errors.Add("Settings archive payload has an unsupported format.");
                 }
-                if (manifest.DocumentVersion != SettingsArchiveFormat.CurrentDocumentVersion)
+                if (!SettingsArchiveFormat.IsSupportedDocumentVersion(manifest.DocumentVersion))
                     errors.Add($"Unsupported settings document version '{manifest.DocumentVersion}'.");
                 try
                 {
@@ -206,6 +208,13 @@ public sealed class SettingsArchiveService(
             if (siteSettings is null)
                 return SettingsImportResult.Failed("Target database does not contain the required SiteSettings singleton.");
 
+            if (document.Notifications is not null)
+            {
+                await NotificationConfigurationService.EnsureSeededAsync(db, DateTime.UtcNow, cancellationToken);
+                if (!await IsNotificationConfigurationCleanAsync(cancellationToken))
+                    return SettingsImportResult.Failed("Settings import requires a clean target with no notification destinations, recipients or routes configured.");
+            }
+
             ApplySiteSettings(siteSettings, document.SiteSettings);
             var now = DateTime.UtcNow;
             var providerIds = document.Providers.ToDictionary(x => x.SourceId, _ => Guid.NewGuid().ToString("N"), StringComparer.Ordinal);
@@ -238,10 +247,15 @@ public sealed class SettingsArchiveService(
                 TriggerOnGuideUpdate = x.TriggerOnGuideUpdate, Enabled = x.Enabled, CreatedUtc = now, UpdatedUtc = now,
             }));
 
+            var notificationCounts = document.Notifications is null
+                ? 0
+                : await ApplyNotificationsAsync(document.Notifications, now, cancellationToken);
+
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return SettingsImportResult.Succeeded(new Dictionary<string, int>
             {
+                ["Notifications"] = notificationCounts,
                 ["SiteSettings"] = 1,
                 ["Providers"] = document.Providers.Count,
                 ["Profiles"] = document.Profiles.Count,
@@ -257,6 +271,100 @@ public sealed class SettingsArchiveService(
         }
     }
 
+    private async Task<bool> IsNotificationConfigurationCleanAsync(CancellationToken cancellationToken)
+    {
+        if (await db.NotificationRoutes.AnyAsync(x => x.DestinationId != null, cancellationToken)
+            || await db.NotificationEmailRecipients.AnyAsync(cancellationToken))
+            return false;
+
+        var matrixConfigured = await db.NotificationMatrixSettings
+            .AnyAsync(x => x.HomeserverUrl != null || x.RoomId != null || x.AccessTokenEncrypted != null, cancellationToken);
+        var smtpConfigured = await db.NotificationSmtpSettings
+            .AnyAsync(x => x.Host != null || x.SenderAddress != null || x.PasswordEncrypted != null, cancellationToken);
+        return !matrixConfigured && !smtpConfigured;
+    }
+
+    /// <summary>
+    /// Imports notification configuration as intent but leaves it inert: verification is cleared and the global gate requires
+    /// an explicit activation, so a restored or cloned instance cannot send to copied destinations until re-tested and resumed.
+    /// </summary>
+    private async Task<int> ApplyNotificationsAsync(SettingsNotifications notifications, DateTime now, CancellationToken cancellationToken)
+    {
+        var settings = await db.NotificationSettings.SingleAsync(cancellationToken);
+        var p = notifications.Policy;
+        settings.FailureDelayMinutes = p.FailureDelayMinutes; settings.OverdueGraceMinutes = p.OverdueGraceMinutes;
+        settings.ReminderIntervalHours = p.ReminderIntervalHours; settings.CoverageWarnHours = p.CoverageWarnHours;
+        settings.CoverageWarnPercent = p.CoverageWarnPercent; settings.CoverageRecoverHours = p.CoverageRecoverHours;
+        settings.CoverageRecoverPercent = p.CoverageRecoverPercent; settings.CoverageGapMinutes = p.CoverageGapMinutes;
+        settings.RetentionDays = p.RetentionDays;
+        settings.SendingEnabled = notifications.SendingEnabled;
+        settings.RequiresActivation = true;
+        settings.ActivationEpoch++;
+        settings.Revision++;
+        settings.UpdatedUtc = now;
+
+        var targets = await db.NotificationDestinations
+            .Include(x => x.Matrix).Include(x => x.Smtp).Include(x => x.Recipients)
+            .ToDictionaryAsync(x => x.Kind, StringComparer.Ordinal, cancellationToken);
+        var idMap = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var imported in notifications.Destinations)
+        {
+            var destination = targets[imported.Kind];
+            idMap[imported.SourceId] = destination.DestinationId;
+            destination.Enabled = imported.Enabled;
+            destination.ConfigRevision++;
+            destination.VerifiedRevision = null;
+            destination.VerifiedUtc = null;
+            destination.VerificationStatus = NotificationVerificationStates.Unverified;
+            destination.VerificationDetail = null;
+            destination.UpdatedUtc = now;
+
+            if (imported.Kind == NotificationProviderKinds.Matrix)
+            {
+                var matrix = destination.Matrix ??= new NotificationMatrixSettings { DestinationId = destination.DestinationId };
+                matrix.HomeserverUrl = imported.HomeserverUrl;
+                matrix.RoomId = imported.RoomId;
+                matrix.AccessTokenEncrypted = imported.AccessTokenEncrypted;
+                matrix.AllowInsecureHttp = imported.AllowInsecureHttp;
+                matrix.BotUserId = null;
+                matrix.DeviceId = null;
+            }
+            else
+            {
+                var smtp = destination.Smtp ??= new NotificationSmtpSettings { DestinationId = destination.DestinationId };
+                smtp.Host = imported.Host; smtp.Port = imported.Port; smtp.TlsMode = imported.TlsMode ?? "starttls";
+                smtp.AuthMode = imported.AuthMode ?? "password"; smtp.Username = imported.Username;
+                smtp.PasswordEncrypted = imported.PasswordEncrypted; smtp.SenderAddress = imported.SenderAddress; smtp.SenderName = imported.SenderName;
+
+                NotificationValidation.ValidateRecipients(imported.Recipients, out var recipients);
+                for (var i = 0; i < recipients.Count; i++)
+                {
+                    db.NotificationEmailRecipients.Add(new NotificationEmailRecipient
+                    {
+                        RecipientId = Guid.NewGuid().ToString("N"), DestinationId = destination.DestinationId,
+                        Address = recipients[i].Address, CanonicalKey = recipients[i].CanonicalKey, SortOrder = i,
+                    });
+                }
+            }
+        }
+
+        var routes = await db.NotificationRoutes.ToDictionaryAsync(x => x.NotificationKey, StringComparer.Ordinal, cancellationToken);
+        foreach (var imported in notifications.Routes)
+        {
+            var route = routes[imported.NotificationKey];
+            route.DestinationId = imported.DestinationSourceId is not null ? idMap[imported.DestinationSourceId] : null;
+            route.SendRecovery = imported.SendRecovery;
+            route.SendReminders = imported.SendReminders;
+            route.FailureDelayMinutes = imported.FailureDelayMinutes;
+            route.ReminderIntervalHours = imported.ReminderIntervalHours;
+            route.Revision++;
+            route.UpdatedUtc = now;
+        }
+
+        return notifications.Destinations.Count + notifications.Routes.Count;
+    }
+
     private async Task<SettingsDocument> CreateDocumentAsync(CancellationToken cancellationToken)
     {
         var siteSettings = await db.SiteSettings.AsNoTracking().SingleAsync(x => x.Id == 1, cancellationToken);
@@ -267,6 +375,7 @@ public sealed class SettingsArchiveService(
 
         return new SettingsDocument
         {
+            Notifications = await CreateNotificationsAsync(cancellationToken),
             SiteSettings = ToSettingsSiteSettings(siteSettings),
             Providers = providers.Select(x => new SettingsProvider
             {
@@ -295,6 +404,67 @@ public sealed class SettingsArchiveService(
         };
     }
 
+    private async Task<SettingsNotifications?> CreateNotificationsAsync(CancellationToken cancellationToken)
+    {
+        var settings = await db.NotificationSettings.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        if (settings is null)
+            return null;
+
+        var destinations = await db.NotificationDestinations.AsNoTracking()
+            .Include(x => x.Matrix).Include(x => x.Smtp).Include(x => x.Recipients)
+            .OrderBy(x => x.Kind)
+            .ToListAsync(cancellationToken);
+        var routes = await db.NotificationRoutes.AsNoTracking().OrderBy(x => x.NotificationKey).ToListAsync(cancellationToken);
+
+        var exported = new List<SettingsNotificationDestination>();
+        foreach (var d in destinations)
+        {
+            var configured = d.Kind == NotificationProviderKinds.Matrix
+                ? !string.IsNullOrWhiteSpace(d.Matrix?.HomeserverUrl) || !string.IsNullOrWhiteSpace(d.Matrix?.RoomId)
+                : !string.IsNullOrWhiteSpace(d.Smtp?.Host) || d.Recipients.Count > 0;
+            if (!configured)
+                continue;
+
+            exported.Add(new SettingsNotificationDestination
+            {
+                SourceId = d.DestinationId, Kind = d.Kind, Enabled = d.Enabled,
+                HomeserverUrl = d.Matrix?.HomeserverUrl, RoomId = d.Matrix?.RoomId,
+                AccessTokenEncrypted = RewrapSecret(d.Matrix?.AccessTokenEncrypted), AllowInsecureHttp = d.Matrix?.AllowInsecureHttp ?? false,
+                Host = d.Smtp?.Host, Port = d.Smtp?.Port ?? 587, TlsMode = d.Smtp?.TlsMode, AuthMode = d.Smtp?.AuthMode,
+                Username = d.Smtp?.Username, PasswordEncrypted = RewrapSecret(d.Smtp?.PasswordEncrypted),
+                SenderAddress = d.Smtp?.SenderAddress, SenderName = d.Smtp?.SenderName,
+                Recipients = d.Recipients.OrderBy(r => r.SortOrder).Select(r => r.Address).ToList(),
+            });
+        }
+
+        var exportedIds = exported.Select(x => x.SourceId).ToHashSet(StringComparer.Ordinal);
+        var exportedRoutes = routes
+            .Where(r => r.DestinationId is not null || !r.SendRecovery || !r.SendReminders || r.FailureDelayMinutes is not null || r.ReminderIntervalHours is not null)
+            .Select(r => new SettingsNotificationRoute
+            {
+                NotificationKey = r.NotificationKey,
+                DestinationSourceId = r.DestinationId is not null && exportedIds.Contains(r.DestinationId) ? r.DestinationId : null,
+                SendRecovery = r.SendRecovery, SendReminders = r.SendReminders,
+                FailureDelayMinutes = r.FailureDelayMinutes, ReminderIntervalHours = r.ReminderIntervalHours,
+            })
+            .ToList();
+
+        return new SettingsNotifications
+        {
+            SendingEnabled = settings.SendingEnabled,
+            Policy = new SettingsNotificationPolicy
+            {
+                FailureDelayMinutes = settings.FailureDelayMinutes, OverdueGraceMinutes = settings.OverdueGraceMinutes,
+                ReminderIntervalHours = settings.ReminderIntervalHours, CoverageWarnHours = settings.CoverageWarnHours,
+                CoverageWarnPercent = settings.CoverageWarnPercent, CoverageRecoverHours = settings.CoverageRecoverHours,
+                CoverageRecoverPercent = settings.CoverageRecoverPercent, CoverageGapMinutes = settings.CoverageGapMinutes,
+                RetentionDays = settings.RetentionDays,
+            },
+            Destinations = exported,
+            Routes = exportedRoutes,
+        };
+    }
+
     private string? RewrapSecret(string? encryptedValue)
     {
         if (encryptedValue is null)
@@ -306,6 +476,8 @@ public sealed class SettingsArchiveService(
     {
         var encryptedValues = document.Providers.Select(x => x.XtreamEncryptedPassword)
             .Concat(document.DownstreamIntegrations.Select(x => x.ApiKeyEncrypted))
+            .Concat(document.Notifications?.Destinations.Select(x => x.AccessTokenEncrypted) ?? [])
+            .Concat(document.Notifications?.Destinations.Select(x => x.PasswordEncrypted) ?? [])
             .Where(x => x is not null)
             .Cast<string>()
             .ToList();
@@ -332,8 +504,10 @@ public sealed class SettingsArchiveService(
     private static IReadOnlyList<string> ValidateDocument(SettingsDocument document)
     {
         var errors = new List<string>();
-        if (document.DocumentVersion != SettingsArchiveFormat.CurrentDocumentVersion)
+        if (!SettingsArchiveFormat.IsSupportedDocumentVersion(document.DocumentVersion))
             errors.Add($"Unsupported settings document version '{document.DocumentVersion}'.");
+        if (document.DocumentVersion == 1 && document.Notifications is not null)
+            errors.Add("A version 1 settings document cannot contain notification configuration.");
         if (document.SiteSettings is null)
             errors.Add("Settings document is missing SiteSettings.");
         ValidateIds(document.Providers.Select(x => x.SourceId), "provider", errors);
@@ -362,6 +536,76 @@ public sealed class SettingsArchiveService(
         }
         if (document.Profiles.Count(x => x.IsActive) > 1)
             errors.Add("Settings document contains more than one active profile.");
+        if (document.Notifications is not null)
+            errors.AddRange(ValidateNotifications(document.Notifications));
+        return errors;
+    }
+
+    private static IReadOnlyList<string> ValidateNotifications(SettingsNotifications notifications)
+    {
+        var errors = new List<string>();
+        if (notifications.Policy is null || notifications.Destinations is null || notifications.Routes is null)
+            return ["Settings document contains an invalid notification section."];
+
+        var policy = notifications.Policy;
+        var policyErrors = NotificationValidation.ValidatePolicy(new NotificationSettings
+        {
+            FailureDelayMinutes = policy.FailureDelayMinutes, OverdueGraceMinutes = policy.OverdueGraceMinutes,
+            ReminderIntervalHours = policy.ReminderIntervalHours, CoverageWarnHours = policy.CoverageWarnHours,
+            CoverageWarnPercent = policy.CoverageWarnPercent, CoverageRecoverHours = policy.CoverageRecoverHours,
+            CoverageRecoverPercent = policy.CoverageRecoverPercent, CoverageGapMinutes = policy.CoverageGapMinutes,
+            RetentionDays = policy.RetentionDays,
+        });
+        if (!policyErrors.IsValid)
+            errors.Add("Settings document contains invalid notification policy values.");
+
+        ValidateIds(notifications.Destinations.Select(x => x.SourceId), "notification destination", errors);
+        if (notifications.Destinations.GroupBy(x => x.Kind, StringComparer.Ordinal).Any(g => g.Count() > 1))
+            errors.Add("Settings document contains more than one notification destination of the same kind.");
+
+        foreach (var destination in notifications.Destinations)
+        {
+            if (destination.Kind == NotificationProviderKinds.Matrix)
+            {
+                var matrix = new NotificationMatrixSettings
+                {
+                    HomeserverUrl = destination.HomeserverUrl, RoomId = destination.RoomId, AllowInsecureHttp = destination.AllowInsecureHttp,
+                };
+                // Plain HTTP is a lab-only runtime gate; it is judged where the setup is saved and tested, not at import.
+                if (!NotificationValidation.ValidateMatrix(matrix, destination.AccessTokenEncrypted is not null, insecureHttpPermitted: destination.AllowInsecureHttp).IsValid)
+                    errors.Add("A Matrix notification destination in the settings document is invalid.");
+            }
+            else if (destination.Kind == NotificationProviderKinds.Smtp)
+            {
+                var smtp = new NotificationSmtpSettings
+                {
+                    Host = destination.Host, Port = destination.Port, TlsMode = destination.TlsMode ?? string.Empty,
+                    AuthMode = destination.AuthMode ?? string.Empty, Username = destination.Username,
+                    SenderAddress = destination.SenderAddress, SenderName = destination.SenderName,
+                };
+                if (!NotificationValidation.ValidateSmtp(smtp, destination.PasswordEncrypted is not null).IsValid
+                    || !NotificationValidation.ValidateRecipients(destination.Recipients ?? [], out _).IsValid)
+                    errors.Add("An SMTP notification destination in the settings document is invalid.");
+            }
+            else
+            {
+                errors.Add($"Unsupported notification destination kind '{destination.Kind}'.");
+            }
+        }
+
+        var destinationIds = notifications.Destinations.Select(x => x.SourceId).ToHashSet(StringComparer.Ordinal);
+        if (notifications.Routes.GroupBy(x => x.NotificationKey, StringComparer.Ordinal).Any(g => g.Count() > 1))
+            errors.Add("Settings document contains duplicate notification routes.");
+        foreach (var route in notifications.Routes)
+        {
+            if (!NotificationCatalog.IsKnown(route.NotificationKey))
+                errors.Add($"Unknown notification '{route.NotificationKey}' in the settings document.");
+            if (route.DestinationSourceId is not null && !destinationIds.Contains(route.DestinationSourceId))
+                errors.Add("A notification route references a destination outside this settings archive.");
+            if (route.FailureDelayMinutes is < 0 or > 1440 || route.ReminderIntervalHours is < 1 or > 168)
+                errors.Add("A notification route has an out-of-range threshold.");
+        }
+
         return errors;
     }
 
@@ -379,7 +623,7 @@ public sealed class SettingsArchiveService(
             errors.Add($"Settings document contains blank or duplicate {entityName} names.");
     }
 
-    private static byte[] EncryptPayload(SettingsArchivePayload payload, string passphrase)
+    internal static byte[] EncryptPayload(SettingsArchivePayload payload, string passphrase)
     {
         ValidatePassphrase(passphrase);
         var plaintext = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);

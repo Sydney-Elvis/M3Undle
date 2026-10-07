@@ -40,6 +40,16 @@ These constraints held for Alpha 1 (pass-through) and continue to apply in curre
 
 Note: Alpha 1 published all provider channels as-is (pass-through). Alpha 2 added group filtering and channel numbering. Alpha 5 added channel reorder, custom tvg-id, HLS compatibility, CORS, dashboard redesign, profile UX, new-channel inbox/review queue, dynamic event-tracking groups, custom groups, configurable refresh schedule, downstream integrations, and active profile switching.
 
+## Administrator Notifications
+
+Optional Matrix and SMTP alerts, configured on **Settings → Notifications** (`/settings?section=notifications`) and `/api/v1/notifications`. Design and behaviour: [NOTIFICATIONS.md](NOTIFICATIONS.md); schema: [DB_SCHEMA.md](DB_SCHEMA.md#notifications).
+
+- Producers (EPG source outcomes, provider fetches, downstream results, snapshot publication, series sync, startup, sign-in) stage neutral **observations** and **occurrences** in the same commit as the business outcome. Nothing in a producer calls a transport.
+- A 30-second `NotificationReconciler` turns evidence into incidents (sustained delay, hysteresis, recurrence generations, reminders, per-target opening/recovery) and materializes per-target deliveries from current routing.
+- A `NotificationDeliveryWorker` runs one independent loop per registered provider kind. It claims due deliveries atomically, marks transport start separately, and persists accepted/retry/failed/uncertain outcomes in short transactions.
+- Providers (`SmtpNotificationProvider`, `MatrixNotificationProvider`) only classify a send. Routing, incidents and the worker never switch on provider kind; adding a provider is a registration plus an `INotificationDestinationAdapter`.
+- Failure of a transport never reaches refresh, publication or streaming.
+
 ## Observability Architecture
 
 - `M3UndleMetrics` owns the `M3Undle` meter and records provider, stream, lineup, EPG, HDHomeRun, application, and HTTP metrics.

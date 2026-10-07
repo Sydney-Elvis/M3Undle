@@ -101,6 +101,12 @@
                        OnClick="@(() => NavigateToSection("system"))">System</MudButton>
 
             <MudButton FullWidth="true" Class="justify-start mb-1"
+                       StartIcon="@Icons.Material.Filled.NotificationsActive"
+                       Variant="@(_section == "notifications" ? Variant.Filled : Variant.Text)"
+                       Color="@(_section == "notifications" ? Color.Primary : Color.Default)"
+                       OnClick="@(() => NavigateToSection("notifications"))">Notifications</MudButton>
+
+            <MudButton FullWidth="true" Class="justify-start mb-1"
                        StartIcon="@Icons.Material.Filled.Backup"
                        Variant="@(_section == "backup" ? Variant.Filled : Variant.Text)"
                        Color="@(_section == "backup" ? Color.Primary : Color.Default)"
@@ -1352,6 +1358,15 @@
             </MudPaper>
         }
 
+        @* ════════════════════════════════════════ NOTIFICATIONS ═════════ *@
+        @* Rendered only while selected, so none of its data or network checks load with the rest of Settings. *@
+        @if (_section == "notifications")
+        {
+            <MudPaper Elevation="1" Class="pa-6">
+                <NotificationsSection />
+            </MudPaper>
+        }
+
         @* ════════════════════════════════════════ BACKUP & RESTORE ═══════ *@
         @if (_section == "backup")
         {
@@ -1501,7 +1516,7 @@
         {
             var requested = sectionParam.ToString().ToLowerInvariant();
             if (requested is "schedule" or "security" or "streaming" or "hdhr"
-                         or "endpoints" or "integrations" or "observability" or "system" or "backup")
+                         or "endpoints" or "integrations" or "observability" or "system" or "notifications" or "backup")
                 _section = requested;
         }
 

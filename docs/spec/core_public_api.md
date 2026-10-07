@@ -31,7 +31,7 @@ These namespaces are the accepted package surface for the first private Core pac
 | `M3Undle.Core.IO` | `GroupSelectionFile`, `GroupSelectionFile.GroupSelection`, `GroupsFileValidator`, `GroupsFileValidator.ValidationResult` | Group selection file parsing and validation. |
 | `M3Undle.Core.Providers` | `ProviderRequestHeader`, `ProviderRequestHeaders`, `NormalizedProviderChannel`, `ProviderChannelNormalizer`, `XtreamProviderUrls` | Provider channel normalization, request header parsing, stream URL normalization, and Xtream URL construction. |
 | `M3Undle.Core.Net` | `UrlRedactor` | URL redaction helpers for logs and diagnostics. |
-| `M3Undle.Core.Epg` | `XmltvParser`, `EpgCatalogue`, `EpgChannelRecord`, `EpgProgrammeRecord`, `EpgChannelIndex`, `EpgChannelMatch`, `EpgChannelMatchCandidate`, `EpgChannelMatcher`, `EpgCoverageAnalyzer` | XMLTV parsing, EPG catalogue modeling, channel matching, and coverage checks. |
+| `M3Undle.Core.Epg` | `XmltvParser`, `EpgCatalogue`, `EpgChannelRecord`, `EpgProgrammeRecord`, `EpgChannelIndex`, `EpgChannelMatch`, `EpgChannelMatchCandidate`, `EpgChannelMatcher`, `EpgCoverageAnalyzer`, `EpgWindowCoverageAnalyzer`, `EpgInterval`, `EpgWindowCoverageResult` | XMLTV parsing, EPG catalogue modeling, channel matching, any-overlap coverage checks, and continuous future-window coverage evaluation. |
 | `M3Undle.Core.Events` | `EventChannelClassifier`, `EventChannelClassification` | Event and PPV channel classification. |
 | `M3Undle.Core.MpegTs` | `MpegTsBoundaryScanner`, `MpegTsPacketBatch`, `MpegTsStartupKind` | MPEG-TS startup/boundary detection helpers. |
 

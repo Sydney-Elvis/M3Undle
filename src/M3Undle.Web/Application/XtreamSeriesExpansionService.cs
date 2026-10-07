@@ -636,6 +636,29 @@ public sealed class XtreamSeriesExpansionService(
 
     private async Task PublishCompletionEventAsync(XtreamSeriesExpansionJob job, int completed, int failed)
     {
+        // One durable occurrence per completed run, captured under the policy in force now. The run has no stable id of its
+        // own, so each completion gets one; the UI event below stays best effort.
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var writer = new Notifications.NotificationOccurrenceWriter(db, TimeProvider.System);
+            await writer.StageOneTimeAsync(new Notifications.OneTimeNotification(
+                Notifications.NotificationKeys.SeriesSyncCompleted,
+                $"{Notifications.NotificationKeys.SeriesSyncCompleted}:{job.ProviderId}:{Guid.NewGuid():N}",
+                failed > 0 ? "Warning" : "Info",
+                $"Series sync complete for '{job.ProviderName}'",
+                failed > 0
+                    ? $"{completed:N0} series expanded, {failed:N0} failed. The failures are retried on the next refresh."
+                    : $"{completed:N0} series expanded.",
+                job.ProviderName, null, DateTime.UtcNow), CancellationToken.None);
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to capture the series sync completion for notifications (provider {ProviderId}).", job.ProviderId);
+        }
+
         try
         {
             await eventService.PublishAsync(

@@ -44,6 +44,72 @@ public sealed class EncryptionRotationServiceTests
     }
 
     [TestMethod]
+    public async Task RotateAsync_ReencryptsNotificationSecrets_WithoutChangingRevisionsOrDeliveryIdentity()
+    {
+        var oldKey = RandomKey();
+        await using var fixture = await CreateFixtureAsync();
+        var now = DateTime.UtcNow;
+
+        await using (var setup = fixture.CreateDbContext())
+        {
+            setup.NotificationDestinations.AddRange(
+                new NotificationDestination
+                {
+                    DestinationId = "dm", Kind = NotificationProviderKinds.Matrix, Enabled = true, ConfigRevision = 4, DeliveryIdentityRevision = 3,
+                    VerifiedRevision = 4, VerificationStatus = NotificationVerificationStates.Verified, CreatedUtc = now, UpdatedUtc = now,
+                    Matrix = new NotificationMatrixSettings { DestinationId = "dm", HomeserverUrl = "https://m.example", RoomId = "!r:m.example", AccessTokenEncrypted = EncryptLegacyFormat("matrix-token", oldKey) },
+                },
+                new NotificationDestination
+                {
+                    DestinationId = "ds", Kind = NotificationProviderKinds.Smtp, Enabled = true, ConfigRevision = 2, DeliveryIdentityRevision = 2,
+                    VerifiedRevision = 2, VerificationStatus = NotificationVerificationStates.Verified, CreatedUtc = now, UpdatedUtc = now,
+                    Smtp = new NotificationSmtpSettings { DestinationId = "ds", Host = "smtp.example", PasswordEncrypted = EncryptLegacyFormat("smtp-password", oldKey) },
+                });
+            await setup.SaveChangesAsync();
+        }
+
+        var newKey = RandomKey();
+        using var env = new EnvScope(keys: $"new:{newKey},old:{oldKey}");
+        var rotation = CreateRotationService(fixture, out var tempDataDir, out var db);
+        await using var dbGuard = db;
+
+        try
+        {
+            var before = await rotation.GetStatusAsync(CancellationToken.None);
+            Assert.AreEqual(0, before.NotificationSecretsOnActiveKey);
+            Assert.AreEqual(2, before.NotificationSecretsOnOtherKey);
+
+            var result = await rotation.RotateAsync(CancellationToken.None);
+            Assert.IsTrue(result.Success);
+            Assert.AreEqual(2, result.NotificationSecretsMigrated);
+
+            await using var verify = fixture.CreateDbContext();
+            var encryption = CreateService();
+            var matrix = await verify.NotificationMatrixSettings.SingleAsync();
+            var smtp = await verify.NotificationSmtpSettings.SingleAsync();
+            Assert.AreEqual("new", encryption.Peek(matrix.AccessTokenEncrypted!).KeyId);
+            Assert.AreEqual("new", encryption.Peek(smtp.PasswordEncrypted!).KeyId);
+            Assert.AreEqual("matrix-token", encryption.Decrypt(matrix.AccessTokenEncrypted!));
+            Assert.AreEqual("smtp-password", encryption.Decrypt(smtp.PasswordEncrypted!));
+
+            var destinations = await verify.NotificationDestinations.ToDictionaryAsync(d => d.Kind);
+            Assert.AreEqual(4, destinations[NotificationProviderKinds.Matrix].ConfigRevision);
+            Assert.AreEqual(3, destinations[NotificationProviderKinds.Matrix].DeliveryIdentityRevision);
+            Assert.AreEqual(4, destinations[NotificationProviderKinds.Matrix].VerifiedRevision, "Re-encrypting the same credential keeps verification intact.");
+            Assert.AreEqual(2, destinations[NotificationProviderKinds.Smtp].DeliveryIdentityRevision);
+
+            var after = await rotation.GetStatusAsync(CancellationToken.None);
+            Assert.AreEqual(2, after.NotificationSecretsOnActiveKey);
+            Assert.AreEqual(0, after.NotificationSecretsOnOtherKey);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDataDir))
+                Directory.Delete(tempDataDir, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task RotateAsync_MigratesBothTables_AndCreatesBackup()
     {
         var oldKey = RandomKey();

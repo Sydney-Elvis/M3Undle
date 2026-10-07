@@ -2,6 +2,7 @@ using M3Undle.Web.Application;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Tests.Stubs;
+using M3Undle.Web.Tests;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -39,6 +40,33 @@ public sealed class XtreamSeriesExpansionServiceTests
         Assert.AreEqual(200L, row2!.LastModifiedEpoch);
 
         Assert.AreEqual(1, refreshTrigger.RefreshCount, "Completion must trigger a snapshot refresh so episodes publish.");
+    }
+
+    [TestMethod]
+    public async Task ExpandJob_CapturesOneSeriesSyncOccurrencePerCompletedRun_OnlyWhenRouted()
+    {
+        var handler = new SeriesInfoHandler
+        {
+            [1001] = """{"info":{"name":"Breaking Bad"},"episodes":{"1":[{"id":"1","episode_num":1,"title":"Pilot","container_extension":"mkv"}]}}""",
+        };
+        var (service, scopeFactory, _) = CreateService(handler, seedProviderId: "p1");
+
+        await service.ExpandJobAsync(Job("p1", [new(1001, 100L)]), CancellationToken.None);
+        await using (var scope = scopeFactory.CreateAsyncScope())
+            Assert.AreEqual(0, await scope.ServiceProvider.GetRequiredService<ApplicationDbContext>().NotificationOccurrences.CountAsync(), "Rows Off retain nothing.");
+
+        await using (var scope = scopeFactory.CreateAsyncScope())
+            await Notifications.NotificationPolicyHelper.EnableAsync(scope.ServiceProvider.GetRequiredService<ApplicationDbContext>(), "series.sync_completed");
+
+        await service.ExpandJobAsync(Job("p1", [new(1001, 200L)]), CancellationToken.None);
+        await service.ExpandJobAsync(Job("p1", [new(1001, 300L)]), CancellationToken.None);
+
+        await using var verify = scopeFactory.CreateAsyncScope();
+        var occurrences = await verify.ServiceProvider.GetRequiredService<ApplicationDbContext>().NotificationOccurrences
+            .Where(o => o.NotificationKey == "series.sync_completed").ToListAsync();
+        Assert.HasCount(2, occurrences, "One per completed run.");
+        Assert.AreEqual(2, occurrences.Select(o => o.OccurrenceKey).Distinct().Count());
+        StringAssert.Contains(occurrences[0].Body, "series expanded");
     }
 
     [TestMethod]

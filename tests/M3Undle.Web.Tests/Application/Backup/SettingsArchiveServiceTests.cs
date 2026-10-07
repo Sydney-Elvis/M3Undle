@@ -1,5 +1,6 @@
 using M3Undle.Web.Application;
 using M3Undle.Web.Application.Backup;
+using M3Undle.Web.Application.Notifications;
 using M3Undle.Core;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
@@ -219,6 +220,224 @@ public sealed class SettingsArchiveServiceTests
         Assert.IsFalse(tampered.Success);
         Assert.AreEqual(wrongPassphrase.Errors.Single(), tampered.Errors.Single());
     }
+
+    // ---------------------------------------------------------------- notifications (document version 2)
+
+    private static async Task SeedNotificationsAsync(ApplicationDbContext db, SecretEncryptionService encryption, bool verifiedAndSending)
+    {
+        await NotificationConfigurationService.EnsureSeededAsync(db, DateTime.UtcNow, CancellationToken.None);
+        var smtp = await db.NotificationDestinations.Include(d => d.Smtp).Include(d => d.Recipients).SingleAsync(d => d.Kind == NotificationProviderKinds.Smtp);
+        var matrix = await db.NotificationDestinations.Include(d => d.Matrix).SingleAsync(d => d.Kind == NotificationProviderKinds.Matrix);
+
+        smtp.Smtp!.Host = "smtp.example.org"; smtp.Smtp.Port = 465; smtp.Smtp.TlsMode = "tls"; smtp.Smtp.AuthMode = "password";
+        smtp.Smtp.Username = "mailer"; smtp.Smtp.PasswordEncrypted = encryption.Encrypt("smtp-secret"); smtp.Smtp.SenderAddress = "m3undle@example.org";
+        smtp.Recipients.Add(new NotificationEmailRecipient { RecipientId = "r1", DestinationId = smtp.DestinationId, Address = "Admin@Example.org", CanonicalKey = "Admin@example.org", SortOrder = 0 });
+        smtp.Enabled = verifiedAndSending; smtp.ConfigRevision = 5; smtp.DeliveryIdentityRevision = 4;
+        if (verifiedAndSending) { smtp.VerifiedRevision = 5; smtp.VerificationStatus = NotificationVerificationStates.Verified; }
+
+        matrix.Matrix!.HomeserverUrl = "https://matrix.example.org"; matrix.Matrix.RoomId = "!room:example.org";
+        matrix.Matrix.AccessTokenEncrypted = encryption.Encrypt("matrix-secret"); matrix.Matrix.DeviceId = "DEV"; matrix.Matrix.BotUserId = "@bot:example.org";
+
+        var settings = await db.NotificationSettings.SingleAsync();
+        settings.SendingEnabled = verifiedAndSending; settings.FailureDelayMinutes = 22; settings.RetentionDays = 45;
+
+        var route = await db.NotificationRoutes.SingleAsync(r => r.NotificationKey == NotificationKeys.EpgFetchFailed);
+        route.DestinationId = smtp.DestinationId; route.SendReminders = false; route.ReminderIntervalHours = 12;
+        await db.SaveChangesAsync();
+
+        // Operational state that must never travel.
+        db.NotificationOccurrences.Add(new NotificationOccurrence { OccurrenceId = "o", OccurrenceKey = "o", NotificationKey = NotificationKeys.EpgFetchFailed, Title = "t", Body = "b", OccurredUtc = DateTime.UtcNow, CreatedUtc = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+    }
+
+    [TestMethod]
+    public async Task NotificationConfiguration_ExportsAsIntent_AndImportsInertWithRemappedIds()
+    {
+        using var keyScope = new EncryptionKeyScope(key: RandomKey());
+        await using var source = await TestDatabase.CreateAsync();
+        await using var target = await TestDatabase.CreateAsync();
+        var encryption = CreateEncryption();
+
+        await using (var db = source.CreateContext())
+            await SeedNotificationsAsync(db, encryption, verifiedAndSending: true);
+
+        await using var sourceDb = source.CreateContext();
+        var exported = await CreateService(sourceDb, source.DataDirectory, encryption).CreateAsync(Passphrase, CancellationToken.None);
+        Assert.IsTrue(exported.Success, exported.ErrorMessage);
+        Assert.AreEqual(SettingsArchiveFormat.CurrentDocumentVersion, exported.Manifest!.DocumentVersion);
+        Assert.AreEqual(2, exported.Manifest.FormatVersion, "The encrypted envelope version is unchanged.");
+        Assert.IsNotNull(exported.Manifest.EncryptionKeyId, "Notification-only secrets must still record the key they need.");
+        CollectionAssert.Contains(exported.Manifest.SettingsEntities.ToArray(), "Notifications");
+        Assert.DoesNotContain("smtp-secret", await File.ReadAllTextAsync(exported.FilePath!));
+
+        await using var targetDb = target.CreateContext();
+        var result = await CreateService(targetDb, target.DataDirectory, encryption).ApplyAsync(exported.FilePath!, Passphrase, CancellationToken.None);
+        Assert.IsTrue(result.Success, string.Join(" ", result.Errors));
+        Assert.IsGreaterThan(0, result.AppliedCounts["Notifications"]);
+
+        await using var verify = target.CreateContext();
+        var settings = await verify.NotificationSettings.SingleAsync();
+        Assert.IsTrue(settings.RequiresActivation, "An imported setup stays paused until explicitly resumed.");
+        Assert.IsFalse(NotificationRouting.IsSendingAllowed(settings));
+        Assert.AreEqual(22, settings.FailureDelayMinutes);
+        Assert.AreEqual(45, settings.RetentionDays);
+
+        var smtp = await verify.NotificationDestinations.Include(d => d.Smtp).Include(d => d.Recipients).SingleAsync(d => d.Kind == NotificationProviderKinds.Smtp);
+        Assert.IsNull(smtp.VerifiedRevision, "Verification is never trusted from an archive.");
+        Assert.AreEqual(NotificationVerificationStates.Unverified, smtp.VerificationStatus);
+        Assert.AreEqual("smtp-secret", encryption.Decrypt(smtp.Smtp!.PasswordEncrypted!));
+        Assert.AreEqual("Admin@Example.org", smtp.Recipients.Single().Address, "Recipient case is preserved.");
+        Assert.AreNotEqual("r1", smtp.Recipients.Single().RecipientId);
+
+        var route = await verify.NotificationRoutes.SingleAsync(r => r.NotificationKey == NotificationKeys.EpgFetchFailed);
+        Assert.AreEqual(smtp.DestinationId, route.DestinationId, "Route references are remapped to the target's destination.");
+        Assert.IsFalse(route.SendReminders);
+        Assert.AreEqual(12, route.ReminderIntervalHours);
+
+        var matrix = await verify.NotificationDestinations.Include(d => d.Matrix).SingleAsync(d => d.Kind == NotificationProviderKinds.Matrix);
+        Assert.IsNull(matrix.Matrix!.DeviceId, "The Matrix device is resolved again when tested.");
+        Assert.AreEqual(0, await verify.NotificationOccurrences.CountAsync(), "Operational state is not part of an archive.");
+    }
+
+    [TestMethod]
+    public async Task Version1Documents_StillImport_AsDisabledEmptyNotifications()
+    {
+        using var keyScope = new EncryptionKeyScope(key: RandomKey());
+        await using var target = await TestDatabase.CreateAsync();
+        var encryption = CreateEncryption();
+
+        var document = new SettingsDocument
+        {
+            DocumentVersion = 1,
+            SiteSettings = SettingsSiteSettingsDefaults(),
+        };
+        var manifest = new SettingsArchiveManifest
+        {
+            FormatIdentifier = SettingsArchiveFormat.Identifier, FormatVersion = SettingsArchiveFormat.CurrentVersion, DocumentVersion = 1,
+            Scope = "settings", AppVersion = "1.0", SchemaVersion = null, BackupId = "b", CreatedUtc = DateTime.UtcNow,
+            EncryptionKeyId = null, EncryptionKeyFingerprint = null, SettingsEntities = ["SiteSettings"],
+        };
+        var path = Path.Combine(Path.GetTempPath(), $"v1-{Guid.NewGuid():N}.m3ubackup");
+        await File.WriteAllBytesAsync(path, SettingsArchiveService.EncryptPayload(new SettingsArchivePayload { Manifest = manifest, Document = document }, Passphrase));
+        try
+        {
+            await using var db = target.CreateContext();
+            var result = await CreateService(db, target.DataDirectory, encryption).ApplyAsync(path, Passphrase, CancellationToken.None);
+            Assert.IsTrue(result.Success, string.Join(" ", result.Errors));
+
+            await using var verify = target.CreateContext();
+            Assert.AreEqual(0, await verify.NotificationRoutes.CountAsync(r => r.DestinationId != null));
+            Assert.AreEqual(0, await verify.NotificationEmailRecipients.CountAsync());
+            Assert.IsTrue(await verify.NotificationSettings.AllAsync(s => !s.SendingEnabled));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [TestMethod]
+    public async Task UnknownDocumentVersions_AndVersion1WithNotifications_AreRejected()
+    {
+        using var keyScope = new EncryptionKeyScope(key: RandomKey());
+        await using var target = await TestDatabase.CreateAsync();
+        var encryption = CreateEncryption();
+
+        foreach (var (version, withNotifications) in new[] { (3, false), (0, false), (1, true) })
+        {
+            var document = new SettingsDocument
+            {
+                DocumentVersion = version,
+                SiteSettings = SettingsSiteSettingsDefaults(),
+                Notifications = withNotifications ? new SettingsNotifications() : null,
+            };
+            var manifest = new SettingsArchiveManifest
+            {
+                FormatIdentifier = SettingsArchiveFormat.Identifier, FormatVersion = SettingsArchiveFormat.CurrentVersion, DocumentVersion = version,
+                Scope = "settings", AppVersion = "1.0", SchemaVersion = null, BackupId = "b", CreatedUtc = DateTime.UtcNow,
+                EncryptionKeyId = null, EncryptionKeyFingerprint = null, SettingsEntities = ["SiteSettings"],
+            };
+            var path = Path.Combine(Path.GetTempPath(), $"bad-{Guid.NewGuid():N}.m3ubackup");
+            await File.WriteAllBytesAsync(path, SettingsArchiveService.EncryptPayload(new SettingsArchivePayload { Manifest = manifest, Document = document }, Passphrase));
+            try
+            {
+                await using var db = target.CreateContext();
+                var preflight = await CreateService(db, target.DataDirectory, encryption).PreflightAsync(path, Passphrase, CancellationToken.None);
+                Assert.IsFalse(preflight.Success, $"Version {version} (notifications: {withNotifications}) must be rejected.");
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task NotificationOnlyArchive_NeedsItsEncryptionKey_AndInvalidNotificationSectionsAreRejected()
+    {
+        var sourceKey = RandomKey();
+        string archivePath;
+        await using (var source = await TestDatabase.CreateAsync())
+        {
+            using var sourceScope = new EncryptionKeyScope(key: sourceKey);
+            var encryption = CreateEncryption();
+            await using (var db = source.CreateContext())
+                await SeedNotificationsAsync(db, encryption, verifiedAndSending: false);
+            await using var sourceDb = source.CreateContext();
+            var exported = await CreateService(sourceDb, source.DataDirectory, encryption).CreateAsync(Passphrase, CancellationToken.None);
+            archivePath = Path.Combine(Path.GetTempPath(), Path.GetFileName(exported.FilePath!));
+            File.Copy(exported.FilePath!, archivePath, overwrite: true);
+        }
+
+        try
+        {
+            await using var target = await TestDatabase.CreateAsync();
+            using (var wrongKey = new EncryptionKeyScope(key: RandomKey()))
+            {
+                await using var db = target.CreateContext();
+                var preflight = await CreateService(db, target.DataDirectory, CreateEncryption()).PreflightAsync(archivePath, Passphrase, CancellationToken.None);
+                Assert.IsFalse(preflight.Success, "A destination secret that cannot be decrypted blocks the import.");
+            }
+
+            using (var rightKey = new EncryptionKeyScope(key: sourceKey))
+            {
+                await using var db = target.CreateContext();
+                var service = CreateService(db, target.DataDirectory, CreateEncryption());
+                Assert.IsTrue((await service.PreflightAsync(archivePath, Passphrase, CancellationToken.None)).Success);
+            }
+        }
+        finally
+        {
+            File.Delete(archivePath);
+        }
+    }
+
+    [TestMethod]
+    public async Task NotificationImport_RequiresACleanNotificationTarget()
+    {
+        using var keyScope = new EncryptionKeyScope(key: RandomKey());
+        await using var source = await TestDatabase.CreateAsync();
+        await using var target = await TestDatabase.CreateAsync();
+        var encryption = CreateEncryption();
+
+        await using (var db = source.CreateContext())
+            await SeedNotificationsAsync(db, encryption, verifiedAndSending: false);
+        await using (var db = target.CreateContext())
+            await SeedNotificationsAsync(db, encryption, verifiedAndSending: false);
+
+        await using var sourceDb = source.CreateContext();
+        var exported = await CreateService(sourceDb, source.DataDirectory, encryption).CreateAsync(Passphrase, CancellationToken.None);
+
+        await using var targetDb = target.CreateContext();
+        var result = await CreateService(targetDb, target.DataDirectory, encryption).ApplyAsync(exported.FilePath!, Passphrase, CancellationToken.None);
+        Assert.IsFalse(result.Success);
+        StringAssert.Contains(string.Join(" ", result.Errors), "notification");
+    }
+
+    private static SettingsSiteSettings SettingsSiteSettingsDefaults() => new()
+    {
+        RefreshScheduleKind = "manual", ObservabilityMetricsMode = "local",
+    };
 
     private static SettingsArchiveService CreateService(ApplicationDbContext db, string dataDirectory, SecretEncryptionService encryption)
         => new(db, new RuntimePaths(dataDirectory, string.Empty, string.Empty, string.Empty, string.Empty), encryption,

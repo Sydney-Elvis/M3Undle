@@ -207,11 +207,13 @@ public static class EpgApiEndpoints
         string id,
         ApplicationDbContext db,
         EpgSourceFetcher epgSourceFetcher,
+        EpgSourceOutcomeRecorder outcomeRecorder,
         XmltvParser xmltvParser,
         RuntimePaths runtimePaths,
         CancellationToken cancellationToken)
     {
         var source = await db.EpgSources
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.EpgSourceId == id, cancellationToken);
 
         if (source is null)
@@ -227,74 +229,14 @@ public static class EpgApiEndpoints
 
         var (result, xml) = await epgSourceFetcher.FetchAsync(source, provider, cacheFile, cancellationToken);
 
-        var finishedUtc = DateTime.UtcNow;
+        var catalogue = string.IsNullOrWhiteSpace(xml)
+            ? EpgCatalogue.Empty(source.EpgSourceId)
+            : xmltvParser.Parse(source.EpgSourceId, xml);
 
-        // Update source metadata columns
-        if (result.Status is "ok" or "not_modified")
-        {
-            source.LastSuccessUtc = finishedUtc;
-            source.ETag = result.ETag ?? source.ETag;
-            source.LastModifiedUtc = result.LastModifiedUtc ?? source.LastModifiedUtc;
-        }
-        else
-        {
-            source.LastFailureUtc = finishedUtc;
-        }
-        source.UpdatedUtc = finishedUtc;
+        var fetchRun = await outcomeRecorder.RecordAsync(source, result, catalogue, startedUtc, cancellationToken)
+            ?? throw new InvalidOperationException("A direct source fetch always consults the upstream source.");
 
-        // Upsert source channels from parsed catalogue
-        var channelCount = 0;
-        var programmeCount = 0;
-        if (!string.IsNullOrWhiteSpace(xml))
-        {
-            var catalogue = xmltvParser.Parse(source.EpgSourceId, xml);
-            channelCount = catalogue.Channels.Count;
-            programmeCount = catalogue.ProgrammesByChannel.Values.Sum(p => p.Count);
-
-            var now = DateTime.UtcNow;
-            var existing = await db.EpgSourceChannels
-                .Where(x => x.EpgSourceId == id)
-                .ToListAsync(cancellationToken);
-            var byId = existing.ToDictionary(x => x.XmltvChannelId, StringComparer.Ordinal);
-            var addedThisRun = new HashSet<string>(StringComparer.Ordinal);
-
-            foreach (var ch in catalogue.Channels)
-            {
-                if (byId.TryGetValue(ch.XmltvChannelId, out var row))
-                {
-                    row.DisplayName = ch.DisplayName;
-                    row.IconUrl = ch.IconUrl;
-                    row.LastSeenUtc = now;
-                }
-                else if (addedThisRun.Add(ch.XmltvChannelId))
-                {
-                    db.EpgSourceChannels.Add(new EpgSourceChannel
-                    {
-                        EpgSourceChannelId = Guid.NewGuid().ToString(),
-                        EpgSourceId = id,
-                        XmltvChannelId = ch.XmltvChannelId,
-                        DisplayName = ch.DisplayName,
-                        IconUrl = ch.IconUrl,
-                        LastSeenUtc = now,
-                    });
-                }
-            }
-        }
-
-        var fetchRun = new EpgFetchRun
-        {
-            EpgFetchRunId = Guid.NewGuid().ToString(),
-            EpgSourceId = id,
-            StartedUtc = startedUtc,
-            FinishedUtc = finishedUtc,
-            Status = result.Status,
-            Bytes = result.Bytes > 0 ? (int)Math.Min(result.Bytes, int.MaxValue) : null,
-            ChannelCount = channelCount > 0 ? channelCount : null,
-            ProgrammeCount = programmeCount > 0 ? programmeCount : null,
-            ErrorSummary = result.ErrorSummary,
-        };
-        db.EpgFetchRuns.Add(fetchRun);
-
+        await outcomeRecorder.StageSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
 
         return TypedResults.Ok(new EpgFetchRunDto
@@ -551,6 +493,7 @@ public static class EpgApiEndpoints
         UserAgent = s.UserAgent,
         TimeoutSeconds = s.TimeoutSeconds,
         LastSuccessUtc = s.LastSuccessUtc,
+        LastCheckedUtc = s.LastCheckedUtc,
         LastFailureUtc = s.LastFailureUtc,
         CreatedUtc = s.CreatedUtc,
         UpdatedUtc = s.UpdatedUtc,

@@ -32,6 +32,8 @@ public static class EncryptionApiEndpoints
             ProvidersOnOtherKey = result.ProvidersOnOtherKey,
             DownstreamIntegrationsOnActiveKey = result.DownstreamIntegrationsOnActiveKey,
             DownstreamIntegrationsOnOtherKey = result.DownstreamIntegrationsOnOtherKey,
+            NotificationSecretsOnActiveKey = result.NotificationSecretsOnActiveKey,
+            NotificationSecretsOnOtherKey = result.NotificationSecretsOnOtherKey,
         });
     }
 
@@ -49,6 +51,7 @@ public static class EncryptionApiEndpoints
             BackupFileName = result.BackupFilePath is null ? null : Path.GetFileName(result.BackupFilePath),
             ProvidersMigrated = result.ProvidersMigrated,
             DownstreamIntegrationsMigrated = result.DownstreamIntegrationsMigrated,
+            NotificationSecretsMigrated = result.NotificationSecretsMigrated,
             RowsAlreadyCurrent = result.RowsAlreadyCurrent,
         });
     }

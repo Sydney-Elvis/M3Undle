@@ -4,6 +4,31 @@ All notable changes to M3Undle are documented here. Newest release at the top.
 
 ---
 
+## [Unreleased]
+
+Administrator notifications by Matrix and email, and a fix to how EPG health is measured.
+
+### Added
+
+- **Settings → Notifications**: choose Off, Matrix or Email (SMTP) independently for each of 12 notifications — EPG source failing / overdue / coverage low, provider fetch failing, sustained stream instability, downstream integration failing, breaking lineup change, failed sign-ins, account locked, application restarted, migrations applied, and series sync completed. Problems that clear on their own send one recovery message and optional reminders
+- SMTP requires STARTTLS or TLS on connect with normal certificate validation (revocation included); supports username/password or a trusted relay; one message per mailbox (1–10 mailboxes). Matrix sends plain-text notices into a private unencrypted room and refuses encrypted rooms
+- Messages are queued durably and sent in the background with bounded retries; a slow or unreachable server never delays refresh, publishing or streaming. History distinguishes Accepted, Retrying, Failed and Uncertain, with explicit Retry (with a duplicate-risk acknowledgement) and Dismiss
+- Save → test (real messages to every target, bound to the exact saved settings) → enable. Editing a method switches it off and clears its test. Secrets are write-only and covered by key rotation, settings archives (document version 2) and portable backups
+- `/api/v1/notifications` for the same operations (UiAccess policy; mutations require `X-Requested-With`; rate limited)
+- Restored or imported instances keep their notification setup but send nothing until each method is re-tested and sending is resumed; delivery history is never carried over
+
+### Fixed
+
+- An EPG source's freshness was renewed by cache-only reads: when the lineup refreshed more often than a source's update interval, the cached copy was recorded as a successful `not_modified` check on every refresh, which could postpone real fetches indefinitely and publish a false recovery. Only real upstream checks (download, genuine 304, file read, failure) now count; `lastCheckedUtc` is added to the EPG source API. Sources show an unknown last check until their next real check
+- EPG failure and recovery events are now tracked per source, so two sources under one provider, and standalone sources, no longer overwrite each other. Provider-keyed legacy events that could not be attributed to a source are retired on upgrade
+
+### Changed
+
+- Encryption status and key rotation include notification credentials (`notificationSecretsOnActiveKey`, `notificationSecretsOnOtherKey`, `notificationSecretsMigrated` in the API)
+- Portable backups exclude notification delivery history, incidents, observations and coverage facts; notification configuration is included
+
+---
+
 ## [v1.0.0-beta.10.1] — 2026-10-03
 
 Makes failed guide updates visible when M3Undle falls back to cached EPG data, and fixes provider downloads that redirect from HTTPS to HTTP.

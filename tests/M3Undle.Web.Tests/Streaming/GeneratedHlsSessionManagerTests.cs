@@ -11,6 +11,11 @@ namespace M3Undle.Web.Tests.Streaming;
 [TestClass]
 public sealed class GeneratedHlsSessionManagerTests
 {
+    // FakeFfmpeg is a .NET app: each session cold-starts the runtime before it writes the manifest. Under the
+    // parallel full suite that can take several seconds. The manager returns as soon as the manifest exists, so
+    // this ceiling only stops slow process launches from failing tests; it does not slow passing runs.
+    private const int ReadyTimeoutSeconds = 30;
+
     [TestMethod]
     public async Task StartAsync_WhenFfmpegIsMissing_DisablesGeneratedHls()
     {
@@ -62,7 +67,7 @@ public sealed class GeneratedHlsSessionManagerTests
     public async Task CreateSessionAsync_WithFakeFfmpeg_ReturnsHandleAndServesManifestAsset()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds);
 
         await manager.StartAsync(CancellationToken.None);
         Assert.IsTrue(manager.IsEffectivelyEnabled);
@@ -97,7 +102,7 @@ public sealed class GeneratedHlsSessionManagerTests
     public async Task CreateSessionAsync_WithSameAdmissionKeyAndStream_ReusesExistingSession()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds);
         var key = new ChannelSessionKey("provider-1", "channel-1");
 
         await manager.StartAsync(CancellationToken.None);
@@ -152,7 +157,7 @@ public sealed class GeneratedHlsSessionManagerTests
     public async Task CreateSessionAsync_ForInternalRelay_MarksInputAsMpegTs()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds);
         var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
 
         await manager.StartAsync(CancellationToken.None);
@@ -180,7 +185,7 @@ public sealed class GeneratedHlsSessionManagerTests
     public async Task CreateSessionAsync_ForProviderHlsInput_AddsAllowedExtensions()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds);
         var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
 
         await manager.StartAsync(CancellationToken.None);
@@ -206,7 +211,7 @@ public sealed class GeneratedHlsSessionManagerTests
     public async Task CreateSessionAsync_ForProviderTsInput_DoesNotAddAllowedExtensions()
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds);
         var argsFile = Path.Combine(ffmpeg.Root, "args.txt");
 
         await manager.StartAsync(CancellationToken.None);
@@ -277,7 +282,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -312,7 +317,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -393,7 +398,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -419,7 +424,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -446,7 +451,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -481,7 +486,7 @@ public sealed class GeneratedHlsSessionManagerTests
         await using var manager = CreateManager(
             ffmpeg.Root,
             ffmpeg.ExePath,
-            startupTimeoutSeconds: 3,
+            startupTimeoutSeconds: ReadyTimeoutSeconds,
             registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
@@ -525,7 +530,7 @@ public sealed class GeneratedHlsSessionManagerTests
         // back-to-back with no delay — the former grace period prevented this.
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -567,7 +572,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -596,7 +601,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 
@@ -626,7 +631,7 @@ public sealed class GeneratedHlsSessionManagerTests
     {
         await using var ffmpeg = FakeFfmpegBinary.Create(writeManifest: true);
         var registry = new StreamingRegistry(Options.Create(new StreamProxyOptions()));
-        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: 3, registry: registry);
+        await using var manager = CreateManager(ffmpeg.Root, ffmpeg.ExePath, startupTimeoutSeconds: ReadyTimeoutSeconds, registry: registry);
 
         await manager.StartAsync(CancellationToken.None);
 

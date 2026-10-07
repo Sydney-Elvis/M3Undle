@@ -17,7 +17,8 @@ public sealed class EventService(
         string title,
         string? detail = null,
         string? providerId = null,
-        string? integrationId = null)
+        string? integrationId = null,
+        string? epgSourceId = null)
     {
         await _writeLock.WaitAsync();
         try
@@ -32,7 +33,14 @@ public sealed class EventService(
                     .ExecuteDeleteAsync(CancellationToken.None);
             }
 
-            if (eventType == SystemEventTypes.EpgFetchFailed && providerId is not null)
+            // EPG health is tracked per source. Provider-only rows are the legacy shape and keep their behaviour.
+            if (eventType == SystemEventTypes.EpgFetchFailed && epgSourceId is not null)
+            {
+                await db.SystemEvents
+                    .Where(e => e.EventType == SystemEventTypes.EpgBackOnline && e.EpgSourceId == epgSourceId)
+                    .ExecuteDeleteAsync(CancellationToken.None);
+            }
+            else if (eventType == SystemEventTypes.EpgFetchFailed && providerId is not null)
             {
                 await db.SystemEvents
                     .Where(e => e.EventType == SystemEventTypes.EpgBackOnline && e.ProviderId == providerId)
@@ -40,7 +48,13 @@ public sealed class EventService(
             }
 
             // Recovery clears the outstanding failure so the footer badge stops warning.
-            if (eventType == SystemEventTypes.EpgBackOnline && providerId is not null)
+            if (eventType == SystemEventTypes.EpgBackOnline && epgSourceId is not null)
+            {
+                await db.SystemEvents
+                    .Where(e => e.EventType == SystemEventTypes.EpgFetchFailed && e.EpgSourceId == epgSourceId)
+                    .ExecuteDeleteAsync(CancellationToken.None);
+            }
+            else if (eventType == SystemEventTypes.EpgBackOnline && providerId is not null)
             {
                 await db.SystemEvents
                     .Where(e => e.EventType == SystemEventTypes.EpgFetchFailed && e.ProviderId == providerId)
@@ -62,7 +76,10 @@ public sealed class EventService(
             }
 
             SystemEvent? existing = null;
-            if (providerId is not null)
+            if (epgSourceId is not null)
+                existing = await db.SystemEvents.FirstOrDefaultAsync(
+                    e => e.EventType == eventType && e.EpgSourceId == epgSourceId);
+            else if (providerId is not null)
                 existing = await db.SystemEvents.FirstOrDefaultAsync(
                     e => e.EventType == eventType && e.ProviderId == providerId);
             else if (integrationId is not null)
@@ -88,6 +105,7 @@ public sealed class EventService(
                     Detail = detail,
                     ProviderId = providerId,
                     IntegrationId = integrationId,
+                    EpgSourceId = epgSourceId,
                     OccurredAt = DateTime.UtcNow,
                     OccurrenceCount = 1,
                 });
@@ -181,7 +199,7 @@ public sealed class EventService(
         eventBus.Publish(AppEventKind.SystemEventPublished);
     }
 
-    public async Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default)
+    public async Task<bool> HasEventAsync(string eventType, string? providerId = null, string? integrationId = null, CancellationToken ct = default, string? epgSourceId = null)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -189,7 +207,9 @@ public sealed class EventService(
         IQueryable<SystemEvent> query = db.SystemEvents.AsNoTracking()
             .Where(e => e.EventType == eventType);
 
-        if (providerId is not null)
+        if (epgSourceId is not null)
+            query = query.Where(e => e.EpgSourceId == epgSourceId);
+        else if (providerId is not null)
             query = query.Where(e => e.ProviderId == providerId);
         else if (integrationId is not null)
             query = query.Where(e => e.IntegrationId == integrationId);

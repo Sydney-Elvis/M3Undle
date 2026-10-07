@@ -7,6 +7,7 @@ using M3Undle.Core.Events;
 using M3Undle.Core.M3u;
 using M3Undle.Core.Providers;
 using M3Undle.Web.Application.Epg;
+using M3Undle.Web.Application.Notifications;
 using M3Undle.Web.Data;
 using M3Undle.Web.Data.Entities;
 using M3Undle.Web.Observability;
@@ -24,6 +25,8 @@ public sealed class SnapshotBuilder(
     ApplicationDbContext db,
     ProviderFetcher fetcher,
     EpgSourceFetcher epgSourceFetcher,
+    EpgSourceOutcomeRecorder epgOutcomeRecorder,
+    NotificationOccurrenceWriter notificationWriter,
     EpgChannelMapper epgChannelMapper,
     EpgCompiler epgCompiler,
     XmltvParser xmltvParser,
@@ -313,6 +316,9 @@ public sealed class SnapshotBuilder(
         {
             logger.LogWarning(ex, "Playlist fetch/parse failed for provider \"{ProviderName}\" after {Elapsed}ms.", provider.Name, sw.ElapsedMilliseconds);
             metrics?.RecordProviderRefresh(provider.ProviderId, success: false, sw.Elapsed);
+            notificationWriter.StageObservation(
+                NotificationEvidenceKeys.ProviderFetch, NotificationSubjectKinds.Provider, provider.ProviderId,
+                NotificationObservationOutcomes.Failed, DateTime.UtcNow, ClassifyProviderFailure(ex));
             await FailFetchRunAsync(fetchRun, ex.Message);
             await PublishSystemEventBestEffortAsync(
                 SystemEventSeverity.Error,
@@ -404,6 +410,11 @@ public sealed class SnapshotBuilder(
         fetchRun.ChannelCountSeen = playlistResult.Channels.Count;
         fetchRun.PlaylistBytes = (int)Math.Min(playlistResult.Bytes, int.MaxValue);
         fetchRun.XmltvBytes = (int)Math.Min(xmltvBytes, int.MaxValue);
+
+        // Committed with the fetch run, so health evidence can never disagree with the recorded outcome.
+        notificationWriter.StageObservation(
+            NotificationEvidenceKeys.ProviderFetch, NotificationSubjectKinds.Provider, provider.ProviderId,
+            NotificationObservationOutcomes.Ok, fetchRun.FinishedUtc.Value);
         await db.SaveChangesAsync(cancellationToken);
 
         // 6. Build snapshot for each linked profile
@@ -962,6 +973,22 @@ public sealed class SnapshotBuilder(
 
         var lineupDeltas = await ComputeLineupMetricDeltasAsync(prevSnapshot, channelIndex, cancellationToken);
 
+        // Captured in the same commit that publishes the lineup, under the policy in force at that moment, and identified by
+        // the snapshot so a retry of anything downstream can never announce it twice.
+        if (changeClass == ChangeClasses.Breaking)
+        {
+            var profileName = await db.Profiles.AsNoTracking().Where(p => p.ProfileId == profileId).Select(p => p.Name).FirstOrDefaultAsync(cancellationToken) ?? "a profile";
+            await notificationWriter.StageOneTimeAsync(new OneTimeNotification(
+                NotificationKeys.LineupBreakingChange,
+                $"{NotificationKeys.LineupBreakingChange}:{snapshotId}",
+                "Warning",
+                $"Large lineup change for '{profileName}'",
+                $"More than 20% of the channels in '{profileName}' changed in the latest publication " +
+                $"({lineupDeltas.Added} added, {lineupDeltas.Removed} removed, {lineupDeltas.Renamed} renamed). " +
+                "Connected clients may need a lineup refresh or rescan.",
+                profileName, "/profiles", DateTime.UtcNow), cancellationToken);
+        }
+
         await PromoteSnapshotAsync(snapshot, profileId, cancellationToken);
         await PurgeOldSnapshotsAsync(profileId, cancellationToken);
         metrics?.RecordLineupPublish(
@@ -1283,8 +1310,7 @@ public sealed class SnapshotBuilder(
     /// successful fetch is less than <paramref name="intervalHours"/>.
     /// </summary>
     internal static bool IsEpgCacheFresh(DateTime? lastSuccessUtc, int intervalHours, DateTimeOffset utcNow)
-        => lastSuccessUtc.HasValue
-           && (utcNow.UtcDateTime - lastSuccessUtc.Value).TotalHours < intervalHours;
+        => EpgCheckSchedule.IsCacheFresh(lastSuccessUtc, intervalHours, utcNow);
 
     // -------------------------------------------------------------------------
     // EPG fetch + compile
@@ -1328,8 +1354,7 @@ public sealed class SnapshotBuilder(
                     "EPG source {EpgSourceId} ({Name}): cadence not elapsed ({H}h since last success {Last:u}) — using cached data.",
                     source.EpgSourceId, source.Name, effectiveInterval.Value, source.LastSuccessUtc!.Value);
                 var cachedXml = await File.ReadAllTextAsync(cacheFile, cancellationToken);
-                var cachedResult = new EpgSourceFetcher.FetchResult(
-                    null, "not_modified", 0, source.ETag, source.LastModifiedUtc, null);
+                var cachedResult = EpgSourceFetcher.FetchResult.CacheReused(source.ETag, source.LastModifiedUtc);
                 return (Source: source, Result: cachedResult, Xml: (string?)cachedXml, StartedUtc: startedUtc);
             }
 
@@ -1351,11 +1376,10 @@ public sealed class SnapshotBuilder(
 
             catalogues[source.EpgSourceId] = catalogue;
 
-            await PersistEpgFetchRunAsync(source, result, catalogue, startedUtc, cancellationToken);
+            await epgOutcomeRecorder.RecordAsync(source, result, catalogue, startedUtc, cancellationToken);
 
             // Upsert source channels discovered from XMLTV
-            if (catalogue.Channels.Count > 0)
-                await UpsertEpgSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
+            await epgOutcomeRecorder.StageSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
         }
 
         await db.SaveChangesAsync(cancellationToken);
@@ -1365,7 +1389,7 @@ public sealed class SnapshotBuilder(
             profileId,
             sources,
             catalogues,
-            recordRefreshMetrics: fetchResults.Any(x => x.Result.Status is "ok" or "not_modified"),
+            recordRefreshMetrics: fetchResults.Any(x => x.Result.Status is "ok" or "not_modified" or "cache_reused"),
             sw,
             cancellationToken);
     }
@@ -1412,9 +1436,8 @@ public sealed class SnapshotBuilder(
                 : xmltvParser.Parse(source.EpgSourceId, xml);
             catalogues[source.EpgSourceId] = catalogue;
 
-            await PersistEpgFetchRunAsync(source, result, catalogue, startedUtc, cancellationToken);
-            if (catalogue.Channels.Count > 0)
-                await UpsertEpgSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
+            await epgOutcomeRecorder.RecordAsync(source, result, catalogue, startedUtc, cancellationToken);
+            await epgOutcomeRecorder.StageSourceChannelsAsync(source.EpgSourceId, catalogue.Channels, cancellationToken);
             fetchedMissingCache = true;
         }
 
@@ -1651,96 +1674,6 @@ public sealed class SnapshotBuilder(
             source.EpgSourceId, provider.ProviderId);
 
         return [source];
-    }
-
-    private async Task PersistEpgFetchRunAsync(
-        EpgSource source,
-        EpgSourceFetcher.FetchResult result,
-        EpgCatalogue catalogue,
-        DateTime startedUtc,
-        CancellationToken cancellationToken)
-    {
-        var finishedUtc = DateTime.UtcNow;
-
-        // Update source status columns
-        var tracked = await db.EpgSources.FindAsync([source.EpgSourceId], cancellationToken);
-        if (tracked is not null)
-        {
-            if (result.Status is "ok" or "not_modified")
-            {
-                tracked.LastSuccessUtc = finishedUtc;
-                tracked.ETag = result.ETag ?? tracked.ETag;
-                tracked.LastModifiedUtc = result.LastModifiedUtc ?? tracked.LastModifiedUtc;
-                await PublishEpgBackOnlineIfNeededAsync(tracked, cancellationToken);
-            }
-            else
-            {
-                tracked.LastFailureUtc = finishedUtc;
-                logger.LogWarning(
-                    "EPG source {EpgSourceId} ({Name}) fetch failed: {Error}",
-                    source.EpgSourceId, source.Name, result.ErrorSummary ?? "unknown error");
-                await PublishEpgFetchFailedAsync(tracked, result.ErrorSummary, cancellationToken);
-            }
-            tracked.UpdatedUtc = finishedUtc;
-        }
-
-        var channelCount = catalogue.Channels.Count;
-        var programmeCount = catalogue.ProgrammesByChannel.Values.Sum(p => p.Count);
-
-        db.EpgFetchRuns.Add(new EpgFetchRun
-        {
-            EpgFetchRunId = Guid.NewGuid().ToString(),
-            EpgSourceId = source.EpgSourceId,
-            StartedUtc = startedUtc,
-            FinishedUtc = finishedUtc,
-            Status = result.Status,
-            Bytes = result.Bytes > 0 ? (int)Math.Min(result.Bytes, int.MaxValue) : null,
-            ChannelCount = channelCount > 0 ? channelCount : null,
-            ProgrammeCount = programmeCount > 0 ? programmeCount : null,
-            ErrorSummary = result.ErrorSummary,
-        });
-    }
-
-    private async Task UpsertEpgSourceChannelsAsync(
-        string epgSourceId,
-        IReadOnlyList<EpgChannelRecord> channels,
-        CancellationToken cancellationToken)
-    {
-        var now = DateTime.UtcNow;
-        var existing = await db.EpgSourceChannels
-            .Where(x => x.EpgSourceId == epgSourceId)
-            .ToListAsync(cancellationToken);
-
-        var byId = existing.ToDictionary(x => x.XmltvChannelId, StringComparer.Ordinal);
-
-        // Track IDs added during this call so XMLTV sources with duplicate channel
-        // entries don't trigger a second Add for the same (epg_source_id, xmltv_channel_id).
-        var addedThisRun = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var ch in channels)
-        {
-            if (byId.TryGetValue(ch.XmltvChannelId, out var row))
-            {
-                row.DisplayName = ch.DisplayName;
-                row.IconUrl = ch.IconUrl;
-                row.LastSeenUtc = now;
-            }
-            else if (addedThisRun.Add(ch.XmltvChannelId))
-            {
-                db.EpgSourceChannels.Add(new EpgSourceChannel
-                {
-                    EpgSourceChannelId = Guid.NewGuid().ToString(),
-                    EpgSourceId = epgSourceId,
-                    XmltvChannelId = ch.XmltvChannelId,
-                    DisplayName = ch.DisplayName,
-                    IconUrl = ch.IconUrl,
-                    LastSeenUtc = now,
-                });
-            }
-        }
-
-        // Deactivate channels no longer in the source (mark by setting LastSeenUtc far in past is optional;
-        // here we just let them persist for UI visibility unless explicitly deleted)
     }
 
     private async Task<string?> GetPreviousActiveXmltvPathAsync(string profileId, CancellationToken cancellationToken)
@@ -2959,6 +2892,17 @@ public sealed class SnapshotBuilder(
         return Path.Combine(baseDir, "m3undle", snapshotId);
     }
 
+    // Observations may leave the instance, so they carry a class of failure and never provider text or URLs.
+    internal static string ClassifyProviderFailure(Exception ex) => ex switch
+    {
+        ProviderParseException => "parse",
+        TaskCanceledException or TimeoutException => "timeout",
+        HttpRequestException => "http",
+        ProviderFetchException when ex.InnerException is HttpRequestException or TaskCanceledException => "http",
+        ProviderFetchException => "provider",
+        _ => "error",
+    };
+
     private async Task FailFetchRunAsync(FetchRun fetchRun, string errorSummary)
     {
         fetchRun.FinishedUtc = DateTime.UtcNow;
@@ -2966,51 +2910,6 @@ public sealed class SnapshotBuilder(
         fetchRun.ErrorSummary = errorSummary;
         // Use CancellationToken.None — must persist even if run was cancelled
         await db.SaveChangesAsync(CancellationToken.None);
-    }
-
-    // The guide silently falls back to the cached payload when a source fails, so raise an event
-    // (events panel + footer badge) — otherwise a broken source is invisible. Global sources
-    // without a provider are skipped: events are de-duplicated per provider.
-    private async Task PublishEpgFetchFailedAsync(EpgSource source, string? error, CancellationToken cancellationToken)
-    {
-        if (source.ProviderId is null)
-            return;
-
-        var providerName = await db.Providers
-            .AsNoTracking()
-            .Where(p => p.ProviderId == source.ProviderId)
-            .Select(p => p.Name)
-            .FirstOrDefaultAsync(cancellationToken) ?? source.ProviderId;
-
-        var staleness = EpgHealth.DescribeStale(source.LastSuccessUtc, DateTime.UtcNow);
-        await PublishSystemEventBestEffortAsync(
-            SystemEventSeverity.Warning,
-            SystemEventTypes.EpgFetchFailed,
-            $"Guide update failed for '{providerName}' — serving cached guide data",
-            $"{source.Name}: {error ?? "unknown error"} ({staleness}).",
-            providerId: source.ProviderId);
-    }
-
-    private async Task PublishEpgBackOnlineIfNeededAsync(EpgSource source, CancellationToken cancellationToken)
-    {
-        if (source.ProviderId is null)
-            return;
-
-        try
-        {
-            if (!await eventService.HasEventAsync(SystemEventTypes.EpgFetchFailed, providerId: source.ProviderId, ct: cancellationToken))
-                return;
-
-            await eventService.PublishAsync(
-                SystemEventSeverity.Info,
-                SystemEventTypes.EpgBackOnline,
-                $"Guide updates recovered for source '{source.Name}'",
-                providerId: source.ProviderId);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            logger.LogWarning(ex, "Failed to publish EpgBackOnline event for source {EpgSourceId}.", source.EpgSourceId);
-        }
     }
 
     private async Task PublishProviderBackOnlineIfNeededAsync(Provider provider, CancellationToken cancellationToken)

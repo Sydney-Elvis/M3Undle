@@ -16,7 +16,10 @@ public sealed class EpgSourceDto
     public string? HeadersJson { get; set; }
     public string? UserAgent { get; set; }
     public int TimeoutSeconds { get; set; }
+    /// <summary>Last successful real upstream check (download, 304, file read). Cache-only reuse no longer renews it.</summary>
     public DateTime? LastSuccessUtc { get; set; }
+    /// <summary>Completion of the last real upstream check of any outcome; null until genuine evidence arrives.</summary>
+    public DateTime? LastCheckedUtc { get; set; }
     public DateTime? LastFailureUtc { get; set; }
     public string? LastErrorSummary { get; set; }
     // null = follow global schedule; 6 | 12 | 24 | 48 | 168 = hours

@@ -442,6 +442,10 @@ public sealed class PortableRestoreService(
             // immediately rather than at the default 30-minute revalidation.
             await RotateSecurityStampsAsync(extractedDbPath, cancellationToken);
 
+            // A restored timeline must not send to the destinations it copied. Operational notification state is dropped,
+            // verification is cleared, and the global gate requires an explicit activation before anything is sent.
+            await ResetNotificationStateAsync(extractedDbPath, cancellationToken);
+
             // --- Point of no return: everything past here touches the live database file. ---
             checkpointPath = await CreateRollbackCheckpointAsync(cancellationToken);
             stateStore.Write(new RestoreStateMarker
@@ -540,6 +544,35 @@ public sealed class PortableRestoreService(
         {
             if (Directory.Exists(workDir))
                 Directory.Delete(workDir, recursive: true);
+        }
+    }
+
+    private static async Task ResetNotificationStateAsync(string databasePath, CancellationToken cancellationToken)
+    {
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
+        var connection = new SqliteConnection(connectionString);
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            foreach (var table in PortableBackupExcludedTables.NotificationOperationalTables)
+            {
+                await using var delete = connection.CreateCommand();
+                delete.CommandText = $"DELETE FROM \"{table}\"";
+                await delete.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var reset = connection.CreateCommand();
+            reset.CommandText =
+                "UPDATE \"notification_settings\" SET requires_activation = 1, activation_epoch = activation_epoch + 1, " +
+                "revision = revision + 1, capacity_suppressed_utc = NULL; " +
+                "UPDATE \"notification_destinations\" SET verified_revision = NULL, verified_utc = NULL, " +
+                "verification_status = 'Unverified', verification_detail = NULL, config_revision = config_revision + 1;";
+            await reset.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+            SqliteConnection.ClearPool(connection);
         }
     }
 

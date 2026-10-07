@@ -1,0 +1,740 @@
+@using M3Undle.Web.Application.Notifications
+@using M3Undle.Web.Contracts.Notifications
+@using M3Undle.Web.Data.Entities
+@inject NotificationsPageService Notifications
+@inject IDialogService DialogService
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+    <MudText Typo="Typo.h6" Class="flex-grow-1">Notifications</MudText>
+    <MudTooltip Text="Reload notification settings and status">
+        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" Disabled="@_loading" OnClick="LoadAsync" aria-label="Reload notification settings and status" />
+    </MudTooltip>
+</MudStack>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+    Send administrator alerts by Matrix or email. Set each notification to Off, Matrix or Email below. Both methods share the same
+    queue and retry rules. A message marked <b>Accepted</b> was taken by the Matrix homeserver or SMTP server; that is not proof that
+    anyone received or read it. The in-app event panel and downstream integrations are unaffected by these settings.
+</MudText>
+
+@if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-3">@_loadError</MudAlert>
+}
+
+@if (_overview is null)
+{
+    @if (_loading)
+    {
+        <MudProgressCircular Indeterminate="true" />
+    }
+}
+else
+{
+    @* ───────────────────────────── Global state ───────────────────────────── *@
+    <MudText Typo="Typo.subtitle1" Class="mb-1">Sending</MudText>
+
+    @if (_overview.Settings.RequiresActivation)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-3">
+            This configuration was restored or imported, so sending is held until you confirm it. Re-test each method below, then turn
+            sending on to resume. Earlier alerts are not replayed.
+        </MudAlert>
+    }
+    @if (_overview.Summary.CapacityReached)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-3">
+            The delivery queue is full, so new notifications are being rejected until it drains. Check the failed and uncertain deliveries below.
+        </MudAlert>
+    }
+    @if (_overview.Destinations.All(d => !d.Enabled) && _overview.Routes.Any(r => r.DestinationKind is not null))
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-3">No method is enabled, so nothing is sent even though some notifications are routed.</MudAlert>
+    }
+
+    <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center" Class="mb-2" Wrap="Wrap.Wrap">
+        <MudSwitch T="bool" Label="Send notifications" @bind-Value="_sendingEnabled" Color="Color.Primary" Disabled="@_savingSettings" />
+        <MudSwitch T="bool" Label="Pause" @bind-Value="_paused" Color="Color.Warning" Disabled="@(_savingSettings || !_sendingEnabled)" />
+        <TooltipChip Label="@SendingChipLabel" Color="@SendingChipColor" Variant="Variant.Outlined"
+                     TooltipText="Whether anything is allowed to leave this server right now. Each method must also be enabled and tested." />
+        <TooltipChip Label="@($"{_overview.Summary.Pending} queued")" Color="Color.Default" Variant="Variant.Outlined"
+                     TooltipText="Deliveries waiting for a send attempt or in progress." />
+        <TooltipChip Label="@($"{_overview.Summary.RetryScheduled} retrying")" Color="@(_overview.Summary.RetryScheduled > 0 ? Color.Warning : Color.Default)" Variant="Variant.Outlined"
+                     TooltipText="Deliveries that failed temporarily and will be retried automatically." />
+        <TooltipChip Label="@($"{_overview.Summary.Failed} failed")" Color="@(_overview.Summary.Failed > 0 ? Color.Error : Color.Default)" Variant="Variant.Outlined"
+                     TooltipText="Deliveries that were rejected or ran out of retries. Use Retry or Dismiss in the history." />
+        <TooltipChip Label="@($"{_overview.Summary.Uncertain} uncertain")" Color="@(_overview.Summary.Uncertain > 0 ? Color.Warning : Color.Default)" Variant="Variant.Outlined"
+                     TooltipText="The server may already have accepted these. Retrying can send a duplicate." />
+    </MudStack>
+
+    <MudExpansionPanels Class="mb-3" Elevation="0">
+        <MudExpansionPanel Text="Timing and thresholds">
+            <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                Defaults for every notification. A setting here applies only to the conditions that use it; the history is kept for the retention period.
+            </MudText>
+            <MudGrid>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Failure delay (minutes)" @bind-Value="_failureDelay" Min="0" Max="1440" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="How long a failure must last before it is announced." Error="@HasSettingsError("failureDelayMinutes")" ErrorText="@SettingsError("failureDelayMinutes")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Overdue grace (minutes)" @bind-Value="_overdueGrace" Min="0" Max="1440" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Extra time after a refresh is due." Error="@HasSettingsError("overdueGraceMinutes")" ErrorText="@SettingsError("overdueGraceMinutes")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Reminder interval (hours)" @bind-Value="_reminderHours" Min="1" Max="168" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="How often an unresolved problem is repeated." Error="@HasSettingsError("reminderIntervalHours")" ErrorText="@SettingsError("reminderIntervalHours")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Coverage warning horizon (hours)" @bind-Value="_warnHours" Min="1" Max="168" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasSettingsError("coverageWarnHours")" ErrorText="@SettingsError("coverageWarnHours")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Coverage warning below (%)" @bind-Value="_warnPercent" Min="1" Max="100" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Warn when fewer relevant channels than this have guide data." Error="@HasSettingsError("coverageWarnPercent")" ErrorText="@SettingsError("coverageWarnPercent")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Allowed gap (minutes)" @bind-Value="_gapMinutes" Min="0" Max="120" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Gaps between programmes up to this long still count as covered." Error="@HasSettingsError("coverageGapMinutes")" ErrorText="@SettingsError("coverageGapMinutes")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Recovery horizon (hours)" @bind-Value="_recoverHours" Min="1" Max="168" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Must be at least the warning horizon." Error="@HasSettingsError("coverageRecoverHours")" ErrorText="@SettingsError("coverageRecoverHours")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="Recovery at least (%)" @bind-Value="_recoverPercent" Min="1" Max="100" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Must be at least the warning percentage." Error="@HasSettingsError("coverageRecoverPercent")" ErrorText="@SettingsError("coverageRecoverPercent")" /></MudItem>
+                <MudItem xs="12" sm="6" md="4"><MudNumericField T="int" Label="History retention (days)" @bind-Value="_retentionDays" Min="1" Max="365" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasSettingsError("retentionDays")" ErrorText="@SettingsError("retentionDays")" /></MudItem>
+            </MudGrid>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
+
+    @if (_settingsError is not null)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_settingsError</MudAlert>
+    }
+    @if (_settingsMessage is not null)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_settingsMessage</MudAlert>
+    }
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@_savingSettings" OnClick="SaveSettingsAsync" Class="mb-4">
+        @(_savingSettings ? "Saving..." : "Save sending settings")
+    </MudButton>
+
+    @* ───────────────────────────── Methods ───────────────────────────── *@
+    <MudText Typo="Typo.subtitle1" Class="mb-1 mt-2">Methods</MudText>
+    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+        Set each method up once. Saving never sends or enables anything: save, test the saved settings (this sends a real test message),
+        then enable. Editing a method switches it off and clears its test.
+    </MudText>
+
+    <MudGrid>
+        @foreach (var destination in _overview.Destinations)
+        {
+            <MudItem xs="12" lg="6">
+                <MudPaper Outlined="true" Class="pa-4">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2" Wrap="Wrap.Wrap">
+                        <MudText Typo="Typo.subtitle2" Class="flex-grow-1">@destination.DisplayName</MudText>
+                        <TooltipChip Label="@DestinationStatusLabel(destination)" Color="@DestinationStatusColor(destination)" Variant="Variant.Outlined"
+                                     TooltipText="@DestinationStatusTooltip(destination)" Icon="@DestinationStatusIcon(destination)" />
+                        <TooltipChip Label="@(destination.Enabled ? "Enabled" : "Disabled")" Color="@(destination.Enabled ? Color.Success : Color.Default)" Variant="Variant.Outlined"
+                                     TooltipText="@(destination.Enabled ? "This method can be selected for notifications." : "This method cannot be selected until it is tested and enabled.")" />
+                    </MudStack>
+
+                    @if (destination.Kind == NotificationProviderKinds.Smtp)
+                    {
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" sm="8"><MudTextField T="string" Label="SMTP server" @bind-Value="_smtpHost" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("host")" ErrorText="@DestinationError("host")" HelperText="Host name only, for example smtp.example.org." /></MudItem>
+                            <MudItem xs="12" sm="4"><MudNumericField T="int" Label="Port" @bind-Value="_smtpPort" Min="1" Max="65535" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("port")" ErrorText="@DestinationError("port")" /></MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="string" Label="Encryption" @bind-Value="_smtpTls" Variant="Variant.Outlined" Margin="Margin.Dense" HelperText="Encryption is always required; there is no plaintext mode.">
+                                    <MudSelectItem Value="@("starttls")">Required STARTTLS (usually port 587)</MudSelectItem>
+                                    <MudSelectItem Value="@("tls")">TLS on connect (usually port 465)</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="string" Label="Authentication" @bind-Value="_smtpAuth" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="@("password")">Username and password</MudSelectItem>
+                                    <MudSelectItem Value="@("none")">None (trusted relay)</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            @if (_smtpAuth == "password")
+                            {
+                                <MudItem xs="12" sm="6"><MudTextField T="string" Label="Username" @bind-Value="_smtpUser" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("username")" ErrorText="@DestinationError("username")" autocomplete="off" /></MudItem>
+                                <MudItem xs="12" sm="6">
+                                    <MudTextField T="string" Label="Password" @bind-Value="_smtpPassword" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                                  Placeholder="@(destination.Smtp?.HasPassword == true ? "Saved — leave blank to keep" : string.Empty)"
+                                                  HelperText="@(destination.Smtp?.HasPassword == true ? "A password is saved. Enter a new one to replace it." : "Used exactly as typed, including spaces.")"
+                                                  Error="@HasDestinationError("password")" ErrorText="@DestinationError("password")" autocomplete="new-password" />
+                                </MudItem>
+                            }
+                            <MudItem xs="12" sm="6"><MudTextField T="string" Label="Sender address" @bind-Value="_smtpSenderAddress" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("senderAddress")" ErrorText="@DestinationError("senderAddress")" /></MudItem>
+                            <MudItem xs="12" sm="6"><MudTextField T="string" Label="Sender name (optional)" @bind-Value="_smtpSenderName" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("senderName")" ErrorText="@DestinationError("senderName")" /></MudItem>
+                            <MudItem xs="12">
+                                <MudTextField T="string" Label="Administrator mailboxes" @bind-Value="_smtpRecipients" Lines="3" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                              HelperText="One address per line, up to 10. Each gets its own message. A distribution list counts as one recipient."
+                                              Error="@HasDestinationError("recipients")" ErrorText="@DestinationError("recipients")" />
+                            </MudItem>
+                            @if (destination.Smtp?.HasPassword == true && _smtpAuth == "password")
+                            {
+                                <MudItem xs="12"><MudCheckBox T="bool" @bind-Value="_smtpClearPassword" Label="Remove the saved password" Color="Color.Error" Dense="true" /></MudItem>
+                            }
+                        </MudGrid>
+                    }
+                    else if (destination.Kind == NotificationProviderKinds.Matrix)
+                    {
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12"><MudTextField T="string" Label="Homeserver URL" @bind-Value="_matrixHomeserver" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("homeserverUrl")" ErrorText="@DestinationError("homeserverUrl")" HelperText="For example https://matrix.example.org. HTTPS is required." /></MudItem>
+                            <MudItem xs="12"><MudTextField T="string" Label="Room ID" @bind-Value="_matrixRoom" Variant="Variant.Outlined" Margin="Margin.Dense" Error="@HasDestinationError("roomId")" ErrorText="@DestinationError("roomId")" HelperText="A private, unencrypted room that the bot has joined. It starts with ! (for example !abc123:example.org), not #." /></MudItem>
+                            <MudItem xs="12">
+                                <MudTextField T="string" Label="Bot access token" @bind-Value="_matrixToken" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                              Placeholder="@(destination.Matrix?.HasAccessToken == true ? "Saved — leave blank to keep" : string.Empty)"
+                                              HelperText="@(destination.Matrix?.HasAccessToken == true ? "A token is saved. Enter a new one to replace it." : "From a normal login of the bot account. It is stored encrypted and never shown again.")"
+                                              Error="@HasDestinationError("accessToken")" ErrorText="@DestinationError("accessToken")" autocomplete="new-password" />
+                            </MudItem>
+                            @if (destination.Matrix?.InsecureHttpPermitted == true)
+                            {
+                                <MudItem xs="12"><MudSwitch T="bool" Label="Allow plain HTTP (isolated lab only)" @bind-Value="_matrixAllowHttp" Color="Color.Warning" /></MudItem>
+                            }
+                            @if (destination.Matrix?.HasAccessToken == true)
+                            {
+                                <MudItem xs="12"><MudCheckBox T="bool" @bind-Value="_matrixClearToken" Label="Remove the saved token" Color="Color.Error" Dense="true" /></MudItem>
+                            }
+                            @if (destination.Matrix?.DeviceId is { } device)
+                            {
+                                <MudItem xs="12"><MudText Typo="Typo.caption" Color="Color.Secondary">Bot @(destination.Matrix.BotUserId ?? "account") · device @device (found when last tested)</MudText></MudItem>
+                            }
+                        </MudGrid>
+                    }
+
+                    @if (DestinationMessage(destination.Kind) is { } message)
+                    {
+                        <MudAlert Severity="@message.Severity" Variant="Variant.Outlined" Dense="true" Class="mt-3">@message.Text</MudAlert>
+                    }
+                    @if (_testResults.TryGetValue(destination.Kind, out var test))
+                    {
+                        <MudAlert Severity="@(test.VerificationApplied ? Severity.Success : Severity.Warning)" Variant="Variant.Outlined" Dense="true" Class="mt-3">
+                            <MudText Typo="Typo.body2">@test.Summary</MudText>
+                            @foreach (var target in test.Targets)
+                            {
+                                <MudText Typo="Typo.caption" Class="d-block">@target.Label — @target.Outcome@(target.ErrorCode is null ? string.Empty : $" ({target.ErrorCode})")</MudText>
+                            }
+                        </MudAlert>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(destination.VerificationDetail) && !_testResults.ContainsKey(destination.Kind))
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mt-2">Last test: @destination.VerificationDetail</MudText>
+                    }
+
+                    <MudStack Row="true" Spacing="2" Class="mt-3" Wrap="Wrap.Wrap">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" Disabled="@IsBusy(destination.Kind)" OnClick="@(() => SaveDestinationAsync(destination))">
+                            @(_busy == $"save:{destination.Kind}" ? "Saving..." : "Save")
+                        </MudButton>
+                        <MudTooltip Text="Sends a real test message to every configured target using the saved settings">
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" Disabled="@(IsBusy(destination.Kind) || !destination.Complete)" OnClick="@(() => TestAsync(destination))">
+                                @(_busy == $"test:{destination.Kind}" ? "Testing..." : "Test saved settings")
+                            </MudButton>
+                        </MudTooltip>
+                        @if (destination.Enabled)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small" Disabled="@IsBusy(destination.Kind)" OnClick="@(() => SetEnabledAsync(destination, false))">Disable</MudButton>
+                        }
+                        else
+                        {
+                            <MudTooltip Text="@(destination.VerifiedCurrent ? "Make this method selectable for notifications" : "Test the saved settings successfully first")">
+                                <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small" Disabled="@(IsBusy(destination.Kind) || !destination.VerifiedCurrent)" OnClick="@(() => SetEnabledAsync(destination, true))">Enable</MudButton>
+                            </MudTooltip>
+                        }
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        }
+    </MudGrid>
+
+    @* ───────────────────────────── Catalog ───────────────────────────── *@
+    <MudText Typo="Typo.subtitle1" Class="mb-1 mt-6">What to send, and how</MudText>
+    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+        Choose Off, Matrix or Email for each notification independently. Off only stops the external message. Problems that clear on their own
+        send one recovery message to the method that received the alert. New-channel review stays in the
+        <MudLink Href="/channels">Channels</MudLink> review workflow.
+    </MudText>
+
+    <MudTable Items="_overview.Routes" Dense="true" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
+        <HeaderContent>
+            <MudTh>Notification</MudTh>
+            <MudTh>Send by</MudTh>
+            <MudTh>Follow-ups</MudTh>
+            <MudTh>Status</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Notification">
+                <MudText Typo="Typo.body2"><b>@context.Label</b></MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@context.Trigger</MudText>
+            </MudTd>
+            <MudTd DataLabel="Send by">
+                <MudSelect T="string" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="min-width:140px"
+                           Value="@(context.DestinationKind ?? string.Empty)"
+                           ValueChanged="@(value => OnMethodChangedAsync(context, value))"
+                           Disabled="@(!context.Available || _busy is not null)"
+                           aria-label="@($"Method for {context.Label}")">
+                    <MudSelectItem Value="@string.Empty">Off</MudSelectItem>
+                    <MudSelectItem Value="@NotificationProviderKinds.Matrix">Matrix</MudSelectItem>
+                    <MudSelectItem Value="@NotificationProviderKinds.Smtp">Email</MudSelectItem>
+                </MudSelect>
+                @if (_rowErrors.TryGetValue(context.Key, out var rowError))
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Error">@rowError</MudText>
+                }
+            </MudTd>
+            <MudTd DataLabel="Follow-ups">
+                @if (context.IsIncident)
+                {
+                    <MudStack Spacing="0">
+                        <MudSwitch T="bool" Size="Size.Small" Label="Recovery" Value="@context.SendRecovery" ValueChanged="@(v => OnFlagChangedAsync(context, v, context.SendReminders))" Color="Color.Primary"
+                                   Disabled="@(!context.Available || context.DestinationKind is null || _busy is not null)" />
+                        <MudSwitch T="bool" Size="Size.Small" Label="Reminders" Value="@context.SendReminders" ValueChanged="@(v => OnFlagChangedAsync(context, context.SendRecovery, v))" Color="Color.Primary"
+                                   Disabled="@(!context.Available || context.DestinationKind is null || _busy is not null)" />
+                    </MudStack>
+                }
+                else
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">One message per event</MudText>
+                }
+            </MudTd>
+            <MudTd DataLabel="Status">
+                @if (!context.Available)
+                {
+                    <TooltipChip Label="Not available yet" Color="Color.Default" Variant="Variant.Outlined" TooltipText="This notification cannot be sent externally yet." />
+                }
+                else if (context.Issue is not null)
+                {
+                    <TooltipChip Label="Waiting" Color="Color.Warning" Variant="Variant.Outlined" TooltipText="@context.Issue" Icon="@Icons.Material.Filled.HourglassTop" />
+                }
+                else if (context.DestinationKind is null)
+                {
+                    <TooltipChip Label="Off" Color="Color.Default" Variant="Variant.Outlined" TooltipText="Nothing is sent externally for this notification." />
+                }
+                else
+                {
+                    <TooltipChip Label="On" Color="Color.Success" Variant="Variant.Outlined" TooltipText="@($"Delivered by {(context.DestinationKind == NotificationProviderKinds.Matrix ? "Matrix" : "email")}.")" Icon="@Icons.Material.Filled.CheckCircle" />
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+
+    @* ───────────────────────────── History ───────────────────────────── *@
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-6 mb-1">
+        <MudText Typo="Typo.subtitle1" Class="flex-grow-1">Delivery history</MudText>
+        <MudSelect T="string" Label="Show" Dense="true" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:200px"
+                   Value="@_stateFilter" ValueChanged="OnFilterChangedAsync">
+            <MudSelectItem Value="@string.Empty">All</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.Pending">Queued</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.RetryScheduled">Retrying</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.Accepted">Accepted</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.Failed">Failed</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.Uncertain">Uncertain</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.Suppressed">Suppressed</MudSelectItem>
+            <MudSelectItem Value="@NotificationDeliveryStates.Dismissed">Dismissed</MudSelectItem>
+        </MudSelect>
+    </MudStack>
+
+    @if (_historyError is not null)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Outlined" Dense="true" Class="mb-2">@_historyError</MudAlert>
+    }
+    @if (_deliveries.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Color="Color.Secondary">No deliveries to show.</MudText>
+    }
+    else
+    {
+        <MudTable Items="_deliveries" Dense="true" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>When</MudTh>
+                <MudTh>Notification</MudTh>
+                <MudTh>To</MudTh>
+                <MudTh>State</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="When">@context.CreatedUtc.ToLocalTime().ToString("d MMM h:mm tt")</MudTd>
+                <MudTd DataLabel="Notification">
+                    <MudText Typo="Typo.body2">@context.Title</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@context.NotificationLabel · @context.Kind</MudText>
+                </MudTd>
+                <MudTd DataLabel="To">@(context.ProviderKind == NotificationProviderKinds.Matrix ? "Matrix" : "Email") · @context.Target</MudTd>
+                <MudTd DataLabel="State">
+                    <TooltipChip Label="@StateLabel(context)" Color="@StateColor(context.State)" Variant="Variant.Outlined" TooltipText="@StateTooltip(context)" />
+                    @if (context.ErrorText is not null)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block">@context.ErrorText</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (context.CanRetry)
+                    {
+                        <MudStack Row="true" Spacing="1" Justify="Justify.FlexEnd">
+                            <MudButton Size="Size.Small" Disabled="@(_busy is not null)" OnClick="@(() => RetryAsync(context))">Retry</MudButton>
+                            <MudTooltip Text="Remove this record from the problem list. Incident health is not changed.">
+                                <MudButton Size="Size.Small" Color="Color.Error" Disabled="@(_busy is not null)" OnClick="@(() => DismissAsync(context))">Dismiss</MudButton>
+                            </MudTooltip>
+                        </MudStack>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-2">
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="flex-grow-1">@_total deliveries · page @_page of @TotalPages</MudText>
+            <MudButton Size="Size.Small" Disabled="@(_page <= 1 || _loading)" OnClick="PreviousPageAsync">Previous</MudButton>
+            <MudButton Size="Size.Small" Disabled="@(_page >= TotalPages || _loading)" OnClick="NextPageAsync">Next</MudButton>
+        </MudStack>
+    }
+    @if (_actionMessage is not null)
+    {
+        <MudAlert Severity="@_actionSeverity" Variant="Variant.Outlined" Dense="true" Class="mt-2">@_actionMessage</MudAlert>
+    }
+}
+
+@code {
+    private sealed record PanelMessage(Severity Severity, string Text);
+
+    private const int PageSize = 15;
+
+    private NotificationsOverviewResponse? _overview;
+    private bool _loading;
+    private string? _loadError;
+    private string? _busy;
+
+    // Sending settings form
+    private bool _sendingEnabled, _paused;
+    private int _failureDelay, _overdueGrace, _reminderHours, _warnHours, _warnPercent, _recoverHours, _recoverPercent, _gapMinutes, _retentionDays;
+    private bool _savingSettings;
+    private string? _settingsError, _settingsMessage;
+    private IDictionary<string, string[]> _settingsFieldErrors = new Dictionary<string, string[]>();
+
+    // SMTP form
+    private string? _smtpHost, _smtpUser, _smtpPassword, _smtpSenderAddress, _smtpSenderName, _smtpRecipients;
+    private string _smtpTls = "starttls", _smtpAuth = "password";
+    private int _smtpPort = 587;
+    private bool _smtpClearPassword;
+
+    // Matrix form
+    private string? _matrixHomeserver, _matrixRoom, _matrixToken;
+    private bool _matrixAllowHttp, _matrixClearToken;
+
+    private readonly Dictionary<string, PanelMessage> _destinationMessages = new();
+    private IDictionary<string, string[]> _fieldErrors = new Dictionary<string, string[]>();
+    private readonly Dictionary<string, NotificationTestResult> _testResults = new();
+    private readonly Dictionary<string, string> _rowErrors = new(StringComparer.Ordinal);
+
+    // History
+    private List<NotificationDeliveryDto> _deliveries = [];
+    private int _total, _page = 1;
+    private string _stateFilter = string.Empty;
+    private string? _historyError, _actionMessage;
+    private Severity _actionSeverity = Severity.Info;
+
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_total / (double)PageSize));
+    private string SendingChipLabel => _overview!.Settings.SendingAllowed ? "Sending on" : _overview.Settings.RequiresActivation ? "Held after restore" : _overview.Settings.Paused ? "Paused" : "Sending off";
+    private Color SendingChipColor => _overview!.Settings.SendingAllowed ? Color.Success : _overview.Settings.RequiresActivation || _overview.Settings.Paused ? Color.Warning : Color.Default;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _overview = await Notifications.GetOverviewAsync(CancellationToken.None);
+            ApplyOverview(_overview);
+            await LoadDeliveriesAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _loadError = "Could not load notification settings. Reload to try again.";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyOverview(NotificationsOverviewResponse overview)
+    {
+        var s = overview.Settings;
+        _sendingEnabled = s.SendingEnabled; _paused = s.Paused;
+        _failureDelay = s.FailureDelayMinutes; _overdueGrace = s.OverdueGraceMinutes; _reminderHours = s.ReminderIntervalHours;
+        _warnHours = s.CoverageWarnHours; _warnPercent = s.CoverageWarnPercent; _recoverHours = s.CoverageRecoverHours;
+        _recoverPercent = s.CoverageRecoverPercent; _gapMinutes = s.CoverageGapMinutes; _retentionDays = s.RetentionDays;
+
+        if (overview.Destinations.FirstOrDefault(d => d.Kind == NotificationProviderKinds.Smtp)?.Smtp is { } smtp)
+        {
+            _smtpHost = smtp.Host; _smtpPort = smtp.Port; _smtpTls = smtp.TlsMode; _smtpAuth = smtp.AuthMode; _smtpUser = smtp.Username;
+            _smtpSenderAddress = smtp.SenderAddress; _smtpSenderName = smtp.SenderName; _smtpRecipients = string.Join("\n", smtp.Recipients);
+            _smtpPassword = null; _smtpClearPassword = false;
+        }
+
+        if (overview.Destinations.FirstOrDefault(d => d.Kind == NotificationProviderKinds.Matrix)?.Matrix is { } matrix)
+        {
+            _matrixHomeserver = matrix.HomeserverUrl; _matrixRoom = matrix.RoomId; _matrixAllowHttp = matrix.AllowInsecureHttp;
+            _matrixToken = null; _matrixClearToken = false;
+        }
+    }
+
+    private async Task LoadDeliveriesAsync()
+    {
+        _historyError = null;
+        try
+        {
+            var page = await Notifications.GetDeliveriesAsync(string.IsNullOrEmpty(_stateFilter) ? null : _stateFilter, null, null, _page, PageSize, CancellationToken.None);
+            _deliveries = page.Items.ToList();
+            _total = page.Total;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _historyError = "Could not load delivery history.";
+        }
+    }
+
+    // ------------------------------------------------------------------ sending settings
+
+    private async Task SaveSettingsAsync()
+    {
+        _savingSettings = true;
+        _settingsError = _settingsMessage = null;
+        _settingsFieldErrors = new Dictionary<string, string[]>();
+        try
+        {
+            var result = await Notifications.UpdateSettingsAsync(new NotificationSettingsRequest(
+                _overview!.Settings.Revision, _sendingEnabled, _paused, _failureDelay, _overdueGrace, _reminderHours,
+                _warnHours, _warnPercent, _recoverHours, _recoverPercent, _gapMinutes, _retentionDays), CancellationToken.None);
+            if (result.Succeeded)
+            {
+                _settingsMessage = "Sending settings saved.";
+                await LoadAsync();
+            }
+            else
+            {
+                _settingsError = result.Message ?? "The settings could not be saved.";
+                _settingsFieldErrors = result.Errors ?? new Dictionary<string, string[]>();
+                if (result.Status == NotificationOperationStatus.Conflict)
+                    await LoadAsync();
+            }
+        }
+        finally
+        {
+            _savingSettings = false;
+        }
+    }
+
+    private bool HasSettingsError(string field) => _settingsFieldErrors.ContainsKey(field);
+    private string? SettingsError(string field) => _settingsFieldErrors.TryGetValue(field, out var e) ? string.Join(" ", e) : null;
+
+    // ------------------------------------------------------------------ methods
+
+    private bool IsBusy(string kind) => _busy is not null;
+
+    private PanelMessage? DestinationMessage(string kind) => _destinationMessages.GetValueOrDefault(kind);
+    private bool HasDestinationError(string field) => _fieldErrors.ContainsKey(field);
+    private string? DestinationError(string field) => _fieldErrors.TryGetValue(field, out var e) ? string.Join(" ", e) : null;
+
+    private async Task SaveDestinationAsync(NotificationDestinationDto destination)
+    {
+        _busy = $"save:{destination.Kind}";
+        _destinationMessages.Remove(destination.Kind);
+        _fieldErrors = new Dictionary<string, string[]>();
+        _testResults.Remove(destination.Kind);
+        try
+        {
+            var request = destination.Kind == NotificationProviderKinds.Smtp
+                ? new NotificationDestinationRequest(destination.ConfigRevision,
+                    new SmtpDestinationRequest(_smtpHost, _smtpPort, _smtpTls, _smtpAuth, _smtpAuth == "password" ? _smtpUser : null, _smtpPassword,
+                        _smtpClearPassword, _smtpSenderAddress, _smtpSenderName,
+                        (_smtpRecipients ?? string.Empty).Split(['\n', '\r', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)), null)
+                : new NotificationDestinationRequest(destination.ConfigRevision, null,
+                    new MatrixDestinationRequest(_matrixHomeserver, _matrixRoom, _matrixToken, _matrixClearToken, _matrixAllowHttp));
+
+            var result = await Notifications.SaveDestinationAsync(destination.Kind, request, CancellationToken.None);
+            if (result.Succeeded)
+            {
+                _destinationMessages[destination.Kind] = new PanelMessage(Severity.Success, result.Message ?? "Saved.");
+                await LoadAsync();
+            }
+            else
+            {
+                _destinationMessages[destination.Kind] = new PanelMessage(Severity.Error, result.Message ?? "The settings could not be saved.");
+                _fieldErrors = result.Errors ?? new Dictionary<string, string[]>();
+                if (result.Status == NotificationOperationStatus.Conflict)
+                    await LoadAsync();
+            }
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task TestAsync(NotificationDestinationDto destination)
+    {
+        _busy = $"test:{destination.Kind}";
+        _destinationMessages.Remove(destination.Kind);
+        _testResults.Remove(destination.Kind);
+        try
+        {
+            var result = await Notifications.TestDestinationAsync(destination.Kind, destination.ConfigRevision, CancellationToken.None);
+            if (result.Status == NotificationOperationStatus.Ok)
+                _testResults[destination.Kind] = result;
+            else
+                _destinationMessages[destination.Kind] = new PanelMessage(
+                    result.Status == NotificationOperationStatus.RateLimited ? Severity.Warning : Severity.Error, result.Summary);
+
+            var overview = await Notifications.GetOverviewAsync(CancellationToken.None);
+            _overview = overview;
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private async Task SetEnabledAsync(NotificationDestinationDto destination, bool enabled)
+    {
+        _busy = $"enable:{destination.Kind}";
+        try
+        {
+            var result = await Notifications.SetEnabledAsync(destination.Kind, enabled, destination.ConfigRevision, CancellationToken.None);
+            if (!result.Succeeded)
+                _destinationMessages[destination.Kind] = new PanelMessage(Severity.Error, result.Message ?? "The change could not be applied.");
+            else
+                _destinationMessages.Remove(destination.Kind);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private static string DestinationStatusLabel(NotificationDestinationDto d) => d.VerifiedCurrent ? "Tested" : d.VerificationStatus switch
+    {
+        NotificationVerificationStates.Failed => "Test failed",
+        NotificationVerificationStates.Partial => "Partly tested",
+        NotificationVerificationStates.Uncertain => "Test uncertain",
+        _ => d.Complete ? "Needs test" : "Not set up",
+    };
+
+    private static Color DestinationStatusColor(NotificationDestinationDto d) => d.VerifiedCurrent ? Color.Success : d.VerificationStatus switch
+    {
+        NotificationVerificationStates.Failed => Color.Error,
+        NotificationVerificationStates.Partial or NotificationVerificationStates.Uncertain => Color.Warning,
+        _ => d.Complete ? Color.Warning : Color.Default,
+    };
+
+    private static string DestinationStatusIcon(NotificationDestinationDto d) => d.VerifiedCurrent
+        ? Icons.Material.Filled.CheckCircle
+        : d.VerificationStatus is NotificationVerificationStates.Failed ? Icons.Material.Filled.Error : Icons.Material.Filled.HelpOutline;
+
+    private static string DestinationStatusTooltip(NotificationDestinationDto d) => d.VerifiedCurrent
+        ? "The saved settings were tested successfully: every target accepted the test message."
+        : d.Complete
+            ? "These saved settings have not been tested successfully yet. Test them before enabling."
+            : "Finish the setup to be able to test it.";
+
+    // ------------------------------------------------------------------ routes
+
+    private async Task OnMethodChangedAsync(NotificationRouteDto row, string? value)
+    {
+        await SaveRouteAsync(row, string.IsNullOrEmpty(value) ? null : value, row.SendRecovery, row.SendReminders);
+    }
+
+    private Task OnFlagChangedAsync(NotificationRouteDto row, bool recovery, bool reminders) =>
+        SaveRouteAsync(row, row.DestinationKind, recovery, reminders);
+
+    private async Task SaveRouteAsync(NotificationRouteDto row, string? method, bool recovery, bool reminders)
+    {
+        _busy = $"route:{row.Key}";
+        _rowErrors.Remove(row.Key);
+        try
+        {
+            var result = await Notifications.UpdateRouteAsync(row.Key,
+                new NotificationRouteRequest(row.Revision, method, recovery, reminders, row.FailureDelayMinutes, row.ReminderIntervalHours), CancellationToken.None);
+            if (!result.Succeeded)
+                _rowErrors[row.Key] = result.Message ?? "The change could not be applied.";
+            _overview = await Notifications.GetOverviewAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    // ------------------------------------------------------------------ history
+
+    private async Task OnFilterChangedAsync(string value)
+    {
+        _stateFilter = value ?? string.Empty;
+        _page = 1;
+        await LoadDeliveriesAsync();
+    }
+
+    private async Task PreviousPageAsync() { _page = Math.Max(1, _page - 1); await LoadDeliveriesAsync(); }
+    private async Task NextPageAsync() { _page = Math.Min(TotalPages, _page + 1); await LoadDeliveriesAsync(); }
+
+    private async Task RetryAsync(NotificationDeliveryDto delivery)
+    {
+        var acknowledge = false;
+        if (delivery.RetryNeedsAcknowledgement)
+        {
+            var confirmed = await DialogService.ShowMessageBoxAsync(
+                "Retry an uncertain delivery?",
+                "The server may already have accepted this message. Retrying can deliver it a second time.",
+                yesText: "Retry anyway", cancelText: "Cancel");
+            if (confirmed != true)
+                return;
+            acknowledge = true;
+        }
+
+        await RunDeliveryActionAsync(() => Notifications.RetryDeliveryAsync(delivery.Id, delivery.Revision, acknowledge, CancellationToken.None), "Retry queued.");
+    }
+
+    private Task DismissAsync(NotificationDeliveryDto delivery) =>
+        RunDeliveryActionAsync(() => Notifications.DismissDeliveryAsync(delivery.Id, delivery.Revision, CancellationToken.None), "Delivery dismissed.");
+
+    private async Task RunDeliveryActionAsync(Func<Task<NotificationOperationResult>> action, string successMessage)
+    {
+        _busy = "delivery";
+        _actionMessage = null;
+        try
+        {
+            var result = await action();
+            _actionSeverity = result.Succeeded ? Severity.Success : result.Status == NotificationOperationStatus.RateLimited ? Severity.Warning : Severity.Error;
+            _actionMessage = result.Succeeded ? successMessage : result.Message ?? "The action could not be applied. Reload and try again.";
+            await LoadDeliveriesAsync();
+            _overview = await Notifications.GetOverviewAsync(CancellationToken.None);
+        }
+        finally
+        {
+            _busy = null;
+        }
+    }
+
+    private static string StateLabel(NotificationDeliveryDto d) => d.State switch
+    {
+        NotificationDeliveryStates.Pending or NotificationDeliveryStates.Claimed => "Queued",
+        NotificationDeliveryStates.RetryScheduled => "Retrying",
+        NotificationDeliveryStates.Accepted => "Accepted",
+        NotificationDeliveryStates.Failed => "Failed",
+        NotificationDeliveryStates.Uncertain => "Uncertain",
+        NotificationDeliveryStates.Suppressed => "Not sent",
+        NotificationDeliveryStates.Dismissed => "Dismissed",
+        _ => d.State,
+    };
+
+    private static Color StateColor(string state) => state switch
+    {
+        NotificationDeliveryStates.Accepted => Color.Success,
+        NotificationDeliveryStates.Failed => Color.Error,
+        NotificationDeliveryStates.Uncertain or NotificationDeliveryStates.RetryScheduled => Color.Warning,
+        NotificationDeliveryStates.Pending or NotificationDeliveryStates.Claimed => Color.Info,
+        _ => Color.Default,
+    };
+
+    private static string StateTooltip(NotificationDeliveryDto d) => d.State switch
+    {
+        NotificationDeliveryStates.Accepted => "The Matrix homeserver or SMTP server accepted the message. This does not prove anyone received or read it.",
+        NotificationDeliveryStates.Failed => "The message was rejected or ran out of retries.",
+        NotificationDeliveryStates.Uncertain => "The server may already have accepted this message, so it was not retried automatically.",
+        NotificationDeliveryStates.RetryScheduled => $"A temporary problem occurred; it will be tried again after {d.DueUtc.ToLocalTime():h:mm tt}.",
+        NotificationDeliveryStates.Suppressed => $"Not sent: {SuppressedText(d.SuppressedReason)}",
+        NotificationDeliveryStates.Dismissed => "You dismissed this record.",
+        _ => "Waiting to be sent.",
+    };
+
+    private static string SuppressedText(string? reason) => reason switch
+    {
+        NotificationSuppressionReasons.Paused => "sending was paused.",
+        NotificationSuppressionReasons.RouteChanged => "the notification's method changed.",
+        NotificationSuppressionReasons.ConfigChanged => "the method's settings changed.",
+        NotificationSuppressionReasons.Resolved => "the problem was resolved before it was sent.",
+        NotificationSuppressionReasons.NoLongerMonitored => "the item is no longer monitored.",
+        NotificationSuppressionReasons.DestinationUnavailable => "the method was disabled.",
+        _ => "it was no longer current.",
+    };
+}

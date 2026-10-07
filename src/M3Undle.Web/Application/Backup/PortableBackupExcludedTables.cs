@@ -10,6 +10,21 @@ namespace M3Undle.Web.Application.Backup;
 /// </summary>
 public static class PortableBackupExcludedTables
 {
+    /// <summary>
+    /// Notification operational state is regenerable and must never replay on a restored instance. Children come before
+    /// parents because deletes run in this order with foreign keys enforced; the configuration tables (destinations, routes,
+    /// settings) are user intent and are backed up.
+    /// </summary>
+    public static readonly IReadOnlyList<string> NotificationOperationalTables =
+    [
+        "notification_deliveries",
+        "notification_incident_targets",
+        "notification_occurrences",
+        "notification_incidents",
+        "notification_condition_observations",
+        "epg_notification_coverage",
+    ];
+
     public static readonly IReadOnlyList<string> TableNames =
     [
         "fetch_runs",
@@ -19,5 +34,6 @@ public static class PortableBackupExcludedTables
         "xtream_series_cache",
         "catalog_items",
         "snapshots",
+        .. NotificationOperationalTables,
     ];
 }
