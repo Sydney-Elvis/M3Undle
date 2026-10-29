@@ -24,6 +24,11 @@ not_in_nav: |
 
 theme:
   name: material
+  # Adds the cookie-settings link and the analytics notice to the footer.
+  custom_dir: docs/overrides
+  # No web fonts: the theme would otherwise ask Google's font servers for the
+  # typeface on every visit, before and regardless of the cookie banner.
+  font: false
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -53,6 +58,25 @@ extra:
   analytics:
     provider: google
     property: G-2GH3CEEX92
+  # Google Analytics runs only after the reader accepts this banner: until
+  # then the script is not loaded and no request goes to Google. The repository
+  # widget, which asks api.github.com for stars and releases, waits for the
+  # same choice (the theme lists it as the GitHub cookie).
+  consent:
+    title: Cookie consent
+    description: >-
+      This site would like to use Google Analytics to count which help pages
+      are read, so that pages nobody uses can be trimmed or rewritten, and to
+      show the repository's stars and latest release from GitHub. Nothing is
+      sent to Google or GitHub and no cookie is set unless you accept. See the
+      Privacy page for details.
+    actions:
+      - accept
+      - reject
+      - manage
+    cookies:
+      analytics: Google Analytics
+      github: GitHub
 
 markdown_extensions:
   - admonition
@@ -67,6 +91,9 @@ markdown_extensions:
 
 plugins:
   - search
+
+extra_javascript:
+  - javascripts/consent.js
 
 nav:
   - Home: index.md
@@ -120,3 +147,4 @@ nav:
       - EPG Pipeline: architecture/epg-pipeline.md
       - Profile and Security Model: architecture/profile-and-security-model.md
       - Failure and Cooldown Model: architecture/failure-and-cooldown-model.md
+  - Privacy: privacy.md

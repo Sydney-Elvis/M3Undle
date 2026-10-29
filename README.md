@@ -8,7 +8,7 @@
 [![Release](https://badgen.net/github/release/Sydney-Elvis/M3Undle?icon=github)](https://github.com/Sydney-Elvis/M3Undle/releases/latest)
 [![License](https://badgen.net/github/license/Sydney-Elvis/M3Undle)](LICENSE)
 
-[**Documentation**](https://sydney-elvis.github.io/M3Undle/) | [**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](CHANGELOG.md) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
+[**Documentation**](https://sydney-elvis.github.io/M3Undle/) | [**Privacy**](https://sydney-elvis.github.io/M3Undle/privacy/) | [**Sponsor**](https://github.com/sponsors/Sydney-Elvis) | [**Buy Me a Coffee**](https://buymeacoffee.com/jake1164s) | [**Changelog**](CHANGELOG.md) | [**Docker**](https://github.com/Sydney-Elvis/M3Undle/pkgs/container/m3undle)
 
 </div>
 
@@ -97,7 +97,7 @@ See **[Core Concepts](https://sydney-elvis.github.io/M3Undle/concepts/providers/
 
 ## Documentation
 
-Full documentation — installation, concepts, guides, client setup, troubleshooting, and reference — is published at **[sydney-elvis.github.io/M3Undle](https://sydney-elvis.github.io/M3Undle/)**. Source lives under [`docs/user/`](docs/user/index.md) in this repo if you'd rather browse or edit it directly.
+Full documentation — installation, concepts, guides, client setup, troubleshooting, and reference — is published at **[sydney-elvis.github.io/M3Undle](https://sydney-elvis.github.io/M3Undle/)**. Source lives under [`docs/user/`](docs/user/index.md) in this repo if you'd rather browse or edit it directly. The documentation website counts page views with Google Analytics, only if you accept its cookie banner; see its [privacy page](https://sydney-elvis.github.io/M3Undle/privacy/).
 
 Start here:
 
