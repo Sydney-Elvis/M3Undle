@@ -19,16 +19,15 @@ internal static class XtreamEpisodeParser
         {
             using var doc = JsonDocument.Parse(episodesJson);
             if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty("episodes", out var episodesObj)
-                || episodesObj.ValueKind != JsonValueKind.Object)
+                || !doc.RootElement.TryGetProperty("episodes", out var episodesEl))
                 return result;
 
-            foreach (var season in episodesObj.EnumerateObject())
+            foreach (var (seasonName, seasonEpisodes) in EnumerateSeasons(episodesEl))
             {
-                if (season.Value.ValueKind != JsonValueKind.Array)
+                if (seasonEpisodes.ValueKind != JsonValueKind.Array)
                     continue;
 
-                foreach (var ep in season.Value.EnumerateArray())
+                foreach (var ep in seasonEpisodes.EnumerateArray())
                 {
                     var epId = ReadInt(ep, "id");
                     if (epId <= 0) continue;
@@ -37,7 +36,7 @@ internal static class XtreamEpisodeParser
                     var ext = ReadString(ep, "container_extension") ?? "mkv";
                     var epNum = ReadInt(ep, "episode_num");
 
-                    var episodeMarker = $"S{season.Name.PadLeft(2, '0')}E{epNum:D2}";
+                    var episodeMarker = $"S{seasonName.PadLeft(2, '0')}E{epNum:D2}";
                     var displayName = string.IsNullOrWhiteSpace(epTitle)
                         ? $"{seriesName} {episodeMarker}"
                         : $"{seriesName} {episodeMarker} — {epTitle}";
@@ -53,6 +52,25 @@ internal static class XtreamEpisodeParser
         // whole snapshot refresh.
         catch (Exception) { }
         return result;
+    }
+
+    // Xtream panels are PHP: episodes is normally an object keyed by season number, but PHP encodes
+    // a map whose keys are exactly 0..n-1 as a JSON array, so a series with seasons 0-5 (or 0-n)
+    // arrives as an array of per-season arrays. The array index is then the season number.
+    private static IEnumerable<(string Season, JsonElement Episodes)> EnumerateSeasons(JsonElement episodes)
+    {
+        switch (episodes.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var season in episodes.EnumerateObject())
+                    yield return (season.Name, season.Value);
+                break;
+            case JsonValueKind.Array:
+                var index = 0;
+                foreach (var season in episodes.EnumerateArray())
+                    yield return ((index++).ToString(), season);
+                break;
+        }
     }
 
     private static int ReadInt(JsonElement el, string property)
